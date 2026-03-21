@@ -19,7 +19,16 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     }
   };
 
-  const {isActive, isFirst, isLast, borderColor, hasActivity} = props;
+  const {isActive, isFirst, isLast, borderColor, hasActivity, agentStatus} = props;
+
+  // Agent dot color: red=working, amber=wants input (humanPercent < 100 && !working), green=connected idle, none=no agent
+  const agentDotColor = agentStatus?.working
+    ? '#ff3333'
+    : agentStatus?.connected && agentStatus.humanPercent !== undefined && agentStatus.humanPercent < 100
+      ? '#ffaa00'
+      : agentStatus?.connected
+        ? '#00ff64'
+        : null;
 
   return (
     <>
@@ -37,6 +46,12 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           onClick={handleClick}
           onMouseUp={handleMouseUp}
         >
+          {agentDotColor && (
+            <span
+              className={`tab_agentDot ${agentStatus?.working ? 'tab_agentDotPulse' : ''}`}
+              style={{backgroundColor: agentDotColor}}
+            />
+          )}
           <span title={props.text} className="tab_textInner">
             {props.text}
           </span>
@@ -51,37 +66,34 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
 
       <style jsx>{`
         .tab_tab {
-          color: #ccc;
-          border-color: #ccc;
-          border-bottom-width: 1px;
-          border-bottom-style: solid;
-          border-left-width: 1px;
-          border-left-style: solid;
+          color: #999;
           list-style-type: none;
-          flex-grow: 1;
+          flex: 1 1 33%;
+          min-width: 120px;
+          max-width: 33vw;
           position: relative;
+          background: #1a1a1a;
+          border-right: 1px solid #333;
         }
 
         .tab_tab:hover {
           color: #ccc;
+          background: #252525;
         }
 
         .tab_first {
-          border-left-width: 0;
-          padding-left: 1px;
         }
 
         .tab_firstActive {
-          border-left-width: 1px;
-          padding-left: 0;
         }
 
         .tab_active {
           color: #fff;
-          border-bottom-width: 0;
+          background: #000;
         }
         .tab_active:hover {
           color: #fff;
+          background: #000;
         }
 
         .tab_hasActivity {
@@ -111,6 +123,33 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           text-overflow: ellipsis;
           white-space: nowrap;
           overflow: hidden;
+        }
+
+        .tab_agentDot {
+          position: absolute;
+          left: 8px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          z-index: 1;
+        }
+
+        .tab_agentDotPulse {
+          animation: tab-agent-pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes tab-agent-pulse {
+          0%,
+          100% {
+            opacity: 1;
+            transform: translateY(-50%) scale(1);
+          }
+          50% {
+            opacity: 0.6;
+            transform: translateY(-50%) scale(1.3);
+          }
         }
 
         .tab_icon {

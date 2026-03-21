@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-call */
 import React, {forwardRef} from 'react';
 
 import type {NotificationsProps} from '../../typings/hyper';
@@ -130,3 +131,4 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>((props, ref
 Notifications.displayName = 'Notifications';
 
 export default Notifications;
+/* eslint-enable @typescript-eslint/no-unsafe-call */

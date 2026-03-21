@@ -102,6 +102,7 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
       >
         <HeaderContainer />
         <TermsContainer ref_={onTermsRef} />
+        {/* Status bar removed — agent status shown per-tab via dot indicators */}
         {props.customInnerChildren}
       </div>
 
@@ -139,16 +140,18 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
 Hyper.displayName = 'Hyper';
 
 const mapStateToProps = (state: HyperState) => {
+  const activeUid = state.sessions.activeUid;
   return {
     isMac,
     customCSS: state.ui.css,
     uiFontFamily: state.ui.uiFontFamily,
     borderColor: state.ui.borderColor,
-    activeSession: state.sessions.activeUid,
+    activeSession: activeUid,
     backgroundColor: state.ui.backgroundColor,
     maximized: state.ui.maximized,
     fullScreen: state.ui.fullScreen,
-    lastConfigUpdate: state.ui._lastUpdate
+    lastConfigUpdate: state.ui._lastUpdate,
+    activeAgentStatus: activeUid ? state.ui.agentStatuses[activeUid] : undefined
   };
 };
 

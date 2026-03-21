@@ -2,11 +2,17 @@ import {exec} from 'child_process';
 
 import {shell} from 'electron';
 
-import * as Registry from 'native-reg';
+let Registry: typeof import('native-reg') | null = null;
+try {
+  Registry = require('native-reg');
+} catch {
+  console.warn('native-reg not available. Registry-based editor detection disabled.');
+}
 
 import {cfgPath} from './paths';
 
 const getUserChoiceKey = () => {
+  if (!Registry) return;
   try {
     // Load FileExts keys for .js files
     const fileExtsKeys = Registry.openKey(
@@ -30,7 +36,7 @@ const getUserChoiceKey = () => {
 
 const hasDefaultSet = () => {
   const userChoice = getUserChoiceKey();
-  if (!userChoice) return false;
+  if (!userChoice || !Registry) return false;
 
   try {
     // Load key values

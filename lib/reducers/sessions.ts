@@ -15,6 +15,51 @@ import {
 import type {sessionState, session, Mutable, ISessionReducer} from '../../typings/hyper';
 import {decorateSessionsReducer} from '../utils/plugins';
 
+const TAB_NAMES = [
+  'Axolotl',
+  'Quokka',
+  'Pika',
+  'Capybara',
+  'Fennec',
+  'Pangolin',
+  'Numbat',
+  'Chinchilla',
+  'Tamarin',
+  'Loris',
+  'Dugong',
+  'Kinkajou',
+  'Bushbaby',
+  'Puffin',
+  'Wombat',
+  'Hedgehog',
+  'Otter',
+  'Narwhal',
+  'Void Kraken',
+  'Star Reaver',
+  'Nebula Fang',
+  'Pulsar Maw',
+  'Gravity Wyrm',
+  'Plasma Hydra',
+  'Cosmic Talon',
+  'Dark Leviathan',
+  'Rift Stalker',
+  'Nova Scorpion',
+  'Quasar Beast',
+  'Ion Viper',
+  'Warp Mantis',
+  'Singularity Eel',
+  'Flux Raptor',
+  'Solar Barb',
+  'Eclipse Shark',
+  'Photon Wolf',
+  'Comet Drake',
+  'Aether Wasp'
+];
+let nameIndex = Math.floor(Math.random() * TAB_NAMES.length);
+function nextTabName(): string {
+  return TAB_NAMES[nameIndex++ % TAB_NAMES.length];
+}
+
 const initialState: sessionState = Immutable<Mutable<sessionState>>({
   sessions: {},
   activeUid: null
@@ -52,6 +97,7 @@ const reducer: ISessionReducer = (state = initialState, action) => {
           cols: action.cols,
           rows: action.rows,
           uid: action.uid,
+          title: nextTabName(),
           shell: action.shell ? action.shell.split('/').pop() : null,
           pid: action.pid,
           profile: action.profile
@@ -103,13 +149,14 @@ const reducer: ISessionReducer = (state = initialState, action) => {
     case SESSION_USER_EXIT:
       return deleteSession(state, action.uid);
 
-    case SESSION_SET_XTERM_TITLE:
-      return state.setIn(
-        ['sessions', action.uid, 'title'],
-        // we need to trim the title because `cmd.exe`
-        // likes to report ' ' as the title
-        action.title.trim()
-      );
+    case SESSION_SET_XTERM_TITLE: {
+      const newTitle = action.title.trim();
+      // Ignore shell path titles — keep the cute name
+      if (!newTitle || /[/\\]/.test(newTitle) || /^(cmd|powershell|bash|sh|zsh|Command Prompt)/i.test(newTitle)) {
+        return state;
+      }
+      return state.setIn(['sessions', action.uid, 'title'], newTitle);
+    }
 
     case SESSION_RESIZE:
       return state.setIn(

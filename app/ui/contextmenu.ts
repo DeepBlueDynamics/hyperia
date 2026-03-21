@@ -1,7 +1,6 @@
 import type {MenuItemConstructorOptions, BrowserWindow} from 'electron';
 
 import {execCommand} from '../commands';
-import {getProfiles} from '../config';
 import editMenu from '../menus/menus/edit';
 import shellMenu from '../menus/menus/shell';
 import {getDecoratedKeymaps} from '../plugins';
@@ -28,14 +27,14 @@ const contextMenuTemplate = (
   selection: string
 ) => {
   const commandKeys = getCommandKeys(getDecoratedKeymaps());
-  const _shell = shellMenu(
+  const _shellFull = shellMenu(
     commandKeys,
     execCommand,
-    getProfiles().map((p) => p.name)
+    [] // no profiles in context menu — keep it clean for terminal actions only
   ).submenu as MenuItemConstructorOptions[];
   const _edit = editMenu(commandKeys, execCommand).submenu.filter(filterCutCopy.bind(null, selection));
   return _edit
-    .concat(separator, _shell)
+    .concat(separator, _shellFull)
     .filter((menuItem) => !Object.prototype.hasOwnProperty.call(menuItem, 'enabled') || menuItem.enabled);
 };
 

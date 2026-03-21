@@ -21,3 +21,9 @@ plugins
 .vscode/*
 !.vscode/launch.json
 .idea
+
+# per-machine config
+.mcp.json
+
+# TypeScript build info
+*.tsbuildinfo

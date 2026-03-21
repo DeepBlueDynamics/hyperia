@@ -11,6 +11,7 @@
     "removeComments": false,
     "resolveJsonModule": true,
     "sourceMap": true,
+    "skipLibCheck": true,
     "strict": true,
     "target": "ES2022",
     "typeRoots": [

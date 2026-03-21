@@ -2,7 +2,7 @@
   "$schema": "./schema.json",
   "config": {
     "updateChannel": "stable",
-    "fontSize": 12,
+    "fontSize": 16,
     "fontFamily": "Menlo, \"DejaVu Sans Mono\", Consolas, \"Lucida Console\", monospace",
     "fontWeight": "normal",
     "fontWeightBold": "bold",
@@ -63,11 +63,187 @@
     "preserveCWD": true,
     "screenReaderMode": false,
     "imageSupport": true,
-    "defaultProfile": "default",
+    "defaultProfile": "PowerShell",
     "profiles": [
       {
-        "name": "default",
-        "config": {}
+        "name": "PowerShell",
+        "config": {
+          "shell": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+          "shellArgs": []
+        }
+      },
+      {
+        "name": "CMD",
+        "config": {
+          "shell": "C:\\Windows\\System32\\cmd.exe",
+          "shellArgs": []
+        }
+      },
+      {
+        "name": "Ubuntu (WSL)",
+        "config": {
+          "shell": "C:\\Windows\\System32\\wsl.exe",
+          "shellArgs": ["-d", "Ubuntu"]
+        }
+      },
+      {
+        "name": "Nemesis8",
+        "config": {
+          "shell": "C:\\Windows\\System32\\cmd.exe",
+          "shellArgs": ["/c", "cd C:\\Users\\kordl\\Code\\Gnosis\\nemesis8 && .\\target\\debug\\nemisis8.exe interactive"]
+        }
+      },
+      {
+        "name": "Claude",
+        "config": {
+          "shell": "C:\\Windows\\System32\\cmd.exe",
+          "shellArgs": ["/c", "claude"]
+        }
+      },
+      {
+        "name": "Ember",
+        "config": {
+          "foregroundColor": "#E8DCC8",
+          "backgroundColor": "#1A1410",
+          "cursorColor": "rgba(217, 119, 62, 0.8)",
+          "cursorAccentColor": "#1A1410",
+          "selectionColor": "rgba(217, 119, 62, 0.25)",
+          "borderColor": "#3D2E1F",
+          "colors": {
+            "black": "#1A1410",
+            "red": "#D9773E",
+            "green": "#8A9A5B",
+            "yellow": "#D4A847",
+            "blue": "#7B9EC4",
+            "magenta": "#C4836A",
+            "cyan": "#6BA3A0",
+            "white": "#E8DCC8",
+            "lightBlack": "#5C4A3A",
+            "lightRed": "#E89B6A",
+            "lightGreen": "#A3B574",
+            "lightYellow": "#E0C06E",
+            "lightBlue": "#95B5D4",
+            "lightMagenta": "#D4A08A",
+            "lightCyan": "#88BDB8",
+            "lightWhite": "#F5EDE0"
+          }
+        }
+      },
+      {
+        "name": "Phosphor",
+        "config": {
+          "foregroundColor": "#B0E0B0",
+          "backgroundColor": "#0A0F0A",
+          "cursorColor": "rgba(0, 255, 100, 0.8)",
+          "cursorAccentColor": "#0A0F0A",
+          "selectionColor": "rgba(0, 255, 100, 0.2)",
+          "borderColor": "#1A3A1A",
+          "colors": {
+            "black": "#0A0F0A",
+            "red": "#FF4444",
+            "green": "#00FF64",
+            "yellow": "#AAFF00",
+            "blue": "#44AAFF",
+            "magenta": "#AA44FF",
+            "cyan": "#00FFAA",
+            "white": "#B0E0B0",
+            "lightBlack": "#2A4A2A",
+            "lightRed": "#FF6666",
+            "lightGreen": "#66FF88",
+            "lightYellow": "#CCFF44",
+            "lightBlue": "#66CCFF",
+            "lightMagenta": "#CC66FF",
+            "lightCyan": "#44FFCC",
+            "lightWhite": "#D0F0D0"
+          }
+        }
+      },
+      {
+        "name": "Signal",
+        "config": {
+          "foregroundColor": "#C8D8E8",
+          "backgroundColor": "#0B1422",
+          "cursorColor": "rgba(70, 140, 255, 0.8)",
+          "cursorAccentColor": "#0B1422",
+          "selectionColor": "rgba(70, 140, 255, 0.25)",
+          "borderColor": "#1A2A44",
+          "colors": {
+            "black": "#0B1422",
+            "red": "#E06060",
+            "green": "#60C080",
+            "yellow": "#D4C070",
+            "blue": "#468CFF",
+            "magenta": "#A07CCC",
+            "cyan": "#50B0C0",
+            "white": "#C8D8E8",
+            "lightBlack": "#3A4A5E",
+            "lightRed": "#FF8080",
+            "lightGreen": "#80E0A0",
+            "lightYellow": "#E8D888",
+            "lightBlue": "#70AAFF",
+            "lightMagenta": "#C0A0E0",
+            "lightCyan": "#70D0E0",
+            "lightWhite": "#E0ECF8"
+          }
+        }
+      },
+      {
+        "name": "Archive",
+        "config": {
+          "foregroundColor": "#D4C8B0",
+          "backgroundColor": "#18140E",
+          "cursorColor": "rgba(200, 160, 80, 0.8)",
+          "cursorAccentColor": "#18140E",
+          "selectionColor": "rgba(200, 160, 80, 0.2)",
+          "borderColor": "#3A2E20",
+          "colors": {
+            "black": "#18140E",
+            "red": "#CC6644",
+            "green": "#88AA66",
+            "yellow": "#C8A050",
+            "blue": "#6688AA",
+            "magenta": "#AA7788",
+            "cyan": "#669988",
+            "white": "#D4C8B0",
+            "lightBlack": "#4A4030",
+            "lightRed": "#DD8866",
+            "lightGreen": "#AACC88",
+            "lightYellow": "#DDBB77",
+            "lightBlue": "#88AACC",
+            "lightMagenta": "#CC99AA",
+            "lightCyan": "#88BBAA",
+            "lightWhite": "#EAE0D0"
+          }
+        }
+      },
+      {
+        "name": "Prism",
+        "config": {
+          "foregroundColor": "#E0D0F0",
+          "backgroundColor": "#10081A",
+          "cursorColor": "rgba(160, 80, 255, 0.8)",
+          "cursorAccentColor": "#10081A",
+          "selectionColor": "rgba(160, 80, 255, 0.2)",
+          "borderColor": "#2A1840",
+          "colors": {
+            "black": "#10081A",
+            "red": "#FF5577",
+            "green": "#80DD80",
+            "yellow": "#DDAA55",
+            "blue": "#6688EE",
+            "magenta": "#A050FF",
+            "cyan": "#55BBDD",
+            "white": "#E0D0F0",
+            "lightBlack": "#3A2850",
+            "lightRed": "#FF7799",
+            "lightGreen": "#A0EEA0",
+            "lightYellow": "#EECC77",
+            "lightBlue": "#88AAFF",
+            "lightMagenta": "#BB77FF",
+            "lightCyan": "#77DDEE",
+            "lightWhite": "#F0E8FF"
+          }
+        }
       }
     ]
   },

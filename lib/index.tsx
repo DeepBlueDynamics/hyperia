@@ -233,6 +233,14 @@ rpc.on('leave full screen', () => {
   store_.dispatch(uiActions.leaveFullScreen());
 });
 
+rpc.on('agent status', ({sessionUid, connected, working, label, humanPercent}) => {
+  // If no sessionUid provided, fall back to active session
+  const uid = sessionUid || store_.getState().sessions.activeUid;
+  if (uid) {
+    store_.dispatch(uiActions.setAgentStatus(uid, {connected, working, label, humanPercent}));
+  }
+});
+
 const root = createRoot(document.getElementById('mount')!);
 
 root.render(

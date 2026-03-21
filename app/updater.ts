@@ -85,9 +85,9 @@ const updater = (win: BrowserWindow) => {
   };
 
   if (isLinux) {
-    autoUpdater.on('update-available', onupdate);
+    (autoUpdater as NodeJS.EventEmitter).on('update-available', onupdate);
   } else {
-    autoUpdater.on('update-downloaded', onupdate);
+    (autoUpdater as NodeJS.EventEmitter).on('update-downloaded', onupdate);
   }
 
   rpc.once('quit and install', () => {
@@ -110,9 +110,9 @@ const updater = (win: BrowserWindow) => {
 
   win.on('close', () => {
     if (isLinux) {
-      autoUpdater.removeListener('update-available', onupdate);
+      (autoUpdater as NodeJS.EventEmitter).removeListener('update-available', onupdate);
     } else {
-      autoUpdater.removeListener('update-downloaded', onupdate);
+      (autoUpdater as NodeJS.EventEmitter).removeListener('update-downloaded', onupdate);
     }
   });
 };

@@ -22,6 +22,7 @@ export const UI_ENTER_FULLSCREEN = 'UI_ENTER_FULLSCREEN';
 export const UI_LEAVE_FULLSCREEN = 'UI_LEAVE_FULLSCREEN';
 export const UI_CONTEXTMENU_OPEN = 'UI_CONTEXTMENU_OPEN';
 export const UI_COMMAND_EXEC = 'UI_COMMAND_EXEC';
+export const SESSION_AGENT_STATUS = 'SESSION_AGENT_STATUS';
 
 export interface UIFontSizeSetAction {
   type: typeof UI_FONT_SIZE_SET;
@@ -99,6 +100,14 @@ export interface UICommandExecAction {
   type: typeof UI_COMMAND_EXEC;
   command: string;
 }
+export interface SessionAgentStatusAction {
+  type: typeof SESSION_AGENT_STATUS;
+  uid: string;
+  connected: boolean;
+  working?: boolean;
+  label?: string;
+  humanPercent?: number;
+}
 
 export type UIActions =
   | UIFontSizeSetAction
@@ -124,4 +133,5 @@ export type UIActions =
   | UIEnterFullscreenAction
   | UILeaveFullscreenAction
   | UIContextmenuOpenAction
-  | UICommandExecAction;
+  | UICommandExecAction
+  | SessionAgentStatusAction;

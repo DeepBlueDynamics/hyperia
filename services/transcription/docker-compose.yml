@@ -1,0 +1,17 @@
+services:
+  transcription:
+    build:
+      context: .
+      args:
+        WHISPER_MODEL: ${WHISPER_MODEL:-base}
+    container_name: hyperia-transcription
+    ports:
+      - "8765:8765"
+    volumes:
+      - transcription-data:/data
+    environment:
+      - WHISPER_MODEL=${WHISPER_MODEL:-base}
+    restart: unless-stopped
+
+volumes:
+  transcription-data:

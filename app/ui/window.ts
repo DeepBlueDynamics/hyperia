@@ -2,16 +2,22 @@ import {existsSync} from 'fs';
 import {isAbsolute, normalize, sep} from 'path';
 import {URL, fileURLToPath} from 'url';
 
-import {app, BrowserWindow, shell, Menu} from 'electron';
+import {app, BrowserWindow, shell, Menu, nativeImage} from 'electron';
 import type {BrowserWindowConstructorOptions} from 'electron';
 
 import {enable as remoteEnable} from '@electron/remote/main';
 import isDev from 'electron-is-dev';
-import {getWorkingDirectoryFromPID} from 'native-process-working-directory';
+let getWorkingDirectoryFromPID: (pid: number) => string | null = () => null;
+try {
+  ({getWorkingDirectoryFromPID} = require('native-process-working-directory'));
+} catch {
+  console.warn('native-process-working-directory not available (Python needed to build). CWD detection disabled.');
+}
 import {v4 as uuidv4} from 'uuid';
 
 import type {sessionExtraOptions} from '../../typings/common';
 import type {configOptions} from '../../typings/config';
+import {registerSession, notifyResize, notifyUserActivity} from '../bridge';
 import {execCommand} from '../commands';
 import {getDefaultProfile} from '../config';
 import {icon, homeDirectory} from '../config/paths';
@@ -26,6 +32,67 @@ import toElectronBackgroundColor from '../utils/to-electron-background-color';
 
 import contextMenuTemplate from './contextmenu';
 
+const TAB_NAMES = [
+  // Cute animals
+  'Axolotl',
+  'Quokka',
+  'Pika',
+  'Capybara',
+  'Fennec',
+  'Pangolin',
+  'Numbat',
+  'Chinchilla',
+  'Tamarin',
+  'Loris',
+  'Dugong',
+  'Kinkajou',
+  'Bushbaby',
+  'Puffin',
+  'Wombat',
+  'Hedgehog',
+  'Otter',
+  'Narwhal',
+  // Violent space creatures
+  'Void Kraken',
+  'Star Reaver',
+  'Nebula Fang',
+  'Pulsar Maw',
+  'Gravity Wyrm',
+  'Plasma Hydra',
+  'Cosmic Talon',
+  'Dark Leviathan',
+  'Rift Stalker',
+  'Nova Scorpion',
+  'Quasar Beast',
+  'Ion Viper',
+  'Warp Mantis',
+  'Singularity Eel',
+  'Flux Raptor',
+  'Solar Barb',
+  'Eclipse Shark',
+  'Photon Wolf',
+  'Comet Drake',
+  'Aether Wasp'
+];
+let nameIndex = 0;
+
+function nextTabName(): string {
+  const name = TAB_NAMES[nameIndex % TAB_NAMES.length];
+  nameIndex++;
+  return name;
+}
+
+function makeLetterIcon(letter: string): Electron.NativeImage {
+  // Generate a 32x32 PNG with a single letter via canvas-free SVG→PNG
+  const ch = (letter || 'H').charAt(0).toUpperCase();
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+    <rect width="32" height="32" rx="6" fill="#1a1a2e"/>
+    <text x="16" y="23" text-anchor="middle" font-family="sans-serif"
+          font-size="20" font-weight="bold" fill="#fff">${ch}</text>
+  </svg>`;
+  return nativeImage.createFromBuffer(Buffer.from(svg));
+}
+
 export function newWindow(
   options_: BrowserWindowConstructorOptions,
   cfg: configOptions,
@@ -39,11 +106,20 @@ export function newWindow(
     minWidth: 370,
     minHeight: 190,
     backgroundColor: toElectronBackgroundColor(cfg.backgroundColor || '#000'),
-    titleBarStyle: 'hiddenInset',
-    title: 'Hyper.app',
-    // we want to go frameless on Windows and Linux
-    frame: process.platform === 'darwin',
+    titleBarStyle: process.platform === 'win32' ? 'hidden' : 'hiddenInset',
+    title: 'Hyperia',
+    // Frameless on Linux, native overlay on Windows for snap layouts, inset on Mac
+    frame: process.platform !== 'linux',
     transparent: process.platform === 'darwin',
+    ...(process.platform === 'win32'
+      ? {
+          titleBarOverlay: {
+            color: '#1a1a1a',
+            symbolColor: '#ffffff',
+            height: 34
+          }
+        }
+      : {}),
     icon,
     show: Boolean(process.env.HYPER_DEBUG || process.env.HYPERTERM_DEBUG || isDev),
     acceptFirstMouse: true,
@@ -60,6 +136,17 @@ export function newWindow(
 
   // Enable remote module on this window
   remoteEnable(window.webContents);
+
+  // Log renderer crashes and console errors
+  window.webContents.on('console-message', (_ev, level, message, line, sourceId) => {
+    if (level >= 2) {
+      // warnings and errors
+      console.error(`[renderer] ${message} (${sourceId}:${line})`);
+    }
+  });
+  window.webContents.on('render-process-gone', (_ev, details) => {
+    console.error('[renderer] Process gone:', details.reason);
+  });
 
   window.uid = classOpts.uid;
 
@@ -183,6 +270,7 @@ export function newWindow(
     const {session, options} = createSession(extraOptions);
 
     sessions.set(options.uid, session);
+    nextTabName(); // advance counter for tab naming
     rpc.emit('session add', {
       rows: options.rows,
       cols: options.cols,
@@ -193,6 +281,9 @@ export function newWindow(
       activeUid: options.activeUid ?? undefined,
       profile: options.profile
     });
+
+    // Register with sidecar bridge for agent control
+    registerSession(options.uid, session, options.rows || 24, options.cols || 80, session.shell || 'shell');
 
     session.on('data', (data: string) => {
       rpc.emit('session data', data);
@@ -224,9 +315,11 @@ export function newWindow(
     const session = sessions.get(uid);
     if (session) {
       session.resize({cols, rows});
+      notifyResize(uid, rows, cols);
     }
   });
   rpc.on('data', ({uid, data, escaped}) => {
+    if (uid) notifyUserActivity(uid);
     const session = uid && sessions.get(uid);
     if (session) {
       if (escaped) {
@@ -253,6 +346,20 @@ export function newWindow(
   });
   rpc.on('open hamburger menu', ({x, y}) => {
     Menu.getApplicationMenu()!.popup({x: Math.ceil(x), y: Math.ceil(y)});
+  });
+  // Update Electron window title + taskbar icon when active session title changes
+  rpc.on('session set xterm title', ({title}: {title: string}) => {
+    if (title) {
+      window.setTitle(`${title} — Hyperia`);
+      if (process.platform === 'win32') {
+        window.setIcon(makeLetterIcon(title));
+      }
+    } else {
+      window.setTitle('Hyperia');
+      if (process.platform === 'win32') {
+        window.setIcon(icon);
+      }
+    }
   });
   // Same deal as above, grabbing the window titlebar when the window
   // is maximized on Windows results in unmaximize, without hitting any

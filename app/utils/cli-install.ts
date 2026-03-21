@@ -14,7 +14,7 @@ import notify from '../notify';
 
 const readLink = promisify(readlink);
 const symLink = promisify(symlink);
-const sudoExec = promisify(sudoPrompt.exec);
+const sudoExec = promisify(sudoPrompt.exec) as (cmd: string, options: {name: string}) => Promise<void>;
 
 const checkInstall = () => {
   return readLink(cliLinkPath)
@@ -31,10 +31,10 @@ const addSymlink = async (silent: boolean) => {
   try {
     const isInstalled = await checkInstall();
     if (isInstalled) {
-      console.log('Hyper CLI already in PATH');
+      console.log('Hyperia CLI already in PATH');
       return;
     }
-    console.log('Linking HyperCLI');
+    console.log('Linking HyperiaCLI');
     if (!existsSync(path.dirname(cliLinkPath))) {
       try {
         mkdirpSync(path.dirname(cliLinkPath));
@@ -54,7 +54,7 @@ const addSymlink = async (silent: boolean) => {
     // Need sudo access to create symlink
     if (err.code === 'EACCES' && !silent) {
       const result = await dialog.showMessageBox({
-        message: `You need to grant elevated privileges to add Hyper CLI to PATH
+        message: `You need to grant elevated privileges to add Hyperia CLI to PATH
 Or you can run
 sudo ln -sf "${cliScriptPath}" "${cliLinkPath}"`,
         type: 'info',
@@ -62,7 +62,7 @@ sudo ln -sf "${cliScriptPath}" "${cliLinkPath}"`,
       });
       if (result.response === 0) {
         try {
-          await sudoExec(`ln -sf "${cliScriptPath}" "${cliLinkPath}"`, {name: 'Hyper'});
+          await sudoExec(`ln -sf "${cliScriptPath}" "${cliLinkPath}"`, {name: 'Hyperia'});
           return;
         } catch (_error) {
           error = (_error as any[])[0];
@@ -80,9 +80,9 @@ const addBinToUserPath = () => {
     try {
       const envKey = Registry.openKey(Registry.HKCU, 'Environment', Registry.Access.ALL_ACCESS)!;
 
-      // C:\Users\<user>\AppData\Local\Programs\hyper\resources\bin
+      // C:\Users\<user>\AppData\Local\Programs\hyperia\resources\bin
       const binPath = path.dirname(cliScriptPath);
-      // C:\Users\<user>\AppData\Local\hyper
+      // C:\Users\<user>\AppData\Local\hyper (legacy path to clean up)
       const oldPath = path.resolve(process.env.LOCALAPPDATA!, 'hyper');
 
       const items = Registry.enumValueNames(envKey);
@@ -102,7 +102,7 @@ const addBinToUserPath = () => {
         const existingPath = pathParts.includes(binPath);
         const existingOldPath = pathParts.some((pathPart) => pathPart.startsWith(oldPath));
         if (existingPath && !existingOldPath) {
-          console.log('Hyper CLI already in PATH');
+          console.log('Hyperia CLI already in PATH');
           Registry.closeKey(envKey);
           resolve();
           return;
@@ -114,7 +114,7 @@ const addBinToUserPath = () => {
         if (!pathParts.includes(binPath)) pathParts.push(binPath);
         newPathValue = pathParts.join(';');
       }
-      console.log('Adding HyperCLI path (registry)');
+      console.log('Adding HyperiaCLI path (registry)');
       Registry.setValueRaw(envKey, pathItemName, type, Registry.formatString(newPathValue));
       Registry.closeKey(envKey);
       resolve();
@@ -135,11 +135,15 @@ export const installCLI = async (withNotification: boolean) => {
       await addBinToUserPath();
       logNotify(
         withNotification,
-        'Hyper CLI installed',
+        'Hyperia CLI installed',
         'You may need to restart your computer to complete this installation process.'
       );
     } catch (err) {
-      logNotify(withNotification, 'Hyper CLI installation failed', `Failed to add Hyper CLI path to user PATH ${err}`);
+      logNotify(
+        withNotification,
+        'Hyperia CLI installation failed',
+        `Failed to add Hyperia CLI path to user PATH ${err}`
+      );
     }
   } else if (process.platform === 'darwin' || process.platform === 'linux') {
     // AppImages are mounted on run at a temporary path, don't create symlink
@@ -149,11 +153,11 @@ export const installCLI = async (withNotification: boolean) => {
     }
     try {
       await addSymlink(!withNotification);
-      logNotify(withNotification, 'Hyper CLI installed', `Symlink created at ${cliLinkPath}`);
+      logNotify(withNotification, 'Hyperia CLI installed', `Symlink created at ${cliLinkPath}`);
     } catch (error) {
-      logNotify(withNotification, 'Hyper CLI installation failed', `${error}`);
+      logNotify(withNotification, 'Hyperia CLI installation failed', `${error}`);
     }
   } else {
-    logNotify(withNotification, 'Hyper CLI installation failed', `Unsupported platform ${process.platform}`);
+    logNotify(withNotification, 'Hyperia CLI installation failed', `Unsupported platform ${process.platform}`);
   }
 };

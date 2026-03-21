@@ -1,116 +1,99 @@
-![](https://assets.vercel.com/image/upload/v1549723846/repositories/hyper/hyper-3-repo-banner.png)
+# Hyperia
 
-<p align="center">
-  <a aria-label="Vercel logo" href="https://vercel.com">
-    <img src="https://img.shields.io/badge/MADE%20BY%20Vercel-000000.svg?style=for-the-badge&logo=vercel&labelColor=000000&logoWidth=20">
-  </a>
- </p>
-  
-[![Node CI](https://github.com/vercel/hyper/workflows/Node%20CI/badge.svg?event=push)](https://github.com/vercel/hyper/actions?query=workflow%3A%22Node+CI%22+branch%3Acanary+event%3Apush)
-[![Changelog #213](https://img.shields.io/badge/changelog-%23213-lightgrey.svg)](https://changelog.com/213)
+**A terminal built for agents and humans.**
 
-For more details, head to: https://hyper.is
+<!-- TODO: drop hero image in assets/ and uncomment -->
+<!-- ![Hyperia](assets/hero.png) -->
 
-## Project goals
+Hyperia is a modern terminal emulator forked from [Hyper](https://github.com/vercel/hyper), extended with a Rust sidecar that turns it into a first-class platform for AI agents. Agents connect via MCP or the HTTP/WebSocket API and operate terminals as peers — typing, reading screens, splitting panes, and signaling status — while humans stay in control.
 
-The goal of the project is to create a beautiful and extensible experience for command-line interface users, built on open web standards. In the beginning, our focus will be primarily around speed, stability and the development of the correct API for extension authors.
+---
 
-In the future, we anticipate the community will come up with innovative additions to enhance what could be the simplest, most powerful and well-tested interface for productivity.
+## What makes it different
 
-## Usage
+- **Agent-native** — AI agents connect through the sidecar and drive terminal sessions alongside you. A per-session queue defers agent input while you're actively typing.
+- **MCP server built in** — Claude Code, or any MCP-compatible client, can open tabs, split panes, run commands, read screens, and toggle the status light out of the box.
+- **Status bar** — A live indicator shows whether an agent is connected and the human interaction percentage, so you always know who's driving.
+- **Sidecar architecture** — A Rust process (`hyperia-sidecar`) exposes a local HTTP + WebSocket API. The Electron shell and the sidecar communicate over a bridge, keeping the agent layer decoupled and fast.
+- **Styles** — Whole-window visual styles you can create, clone, and delete via MCP or the config file.
+- **Dynamic window title** — The taskbar shows the active session title and a letter icon, not a generic "H".
+- **Stream Deck support** — Optional integration for hardware control surfaces.
+- **Cross-platform** — Windows, macOS, Linux.
 
-[Download the latest release!](https://hyper.is/#installation)
+---
 
-### Linux
-#### Arch and derivatives
-Hyper is available in the [AUR](https://aur.archlinux.org/packages/hyper/). Use an AUR [package manager](https://wiki.archlinux.org/index.php/AUR_helpers) e.g. [paru](https://github.com/Morganamilo/paru)
-
-```sh
-paru -S hyper
-```
-
-#### NixOS
-Hyper is available as [Nix package](https://github.com/NixOS/nixpkgs/blob/master/pkgs/applications/misc/hyper/default.nix), to install the app run this command:
-
-```sh
-nix-env -i hyper
-```
-
-### macOS
-
-Use [Homebrew Cask](https://brew.sh) to download the app by running these commands:
+## Quick start
 
 ```bash
-brew update
-brew install --cask hyper
+# Clone and install
+git clone https://github.com/anthropics/hyperia.git
+cd hyperia
+yarn install
+
+# Build the sidecar
+cd sidecar
+cargo build
+cd ..
+
+# Run in dev mode
+yarn run dev
 ```
 
-### Windows
+The sidecar starts automatically with the Electron app.
 
-Use [chocolatey](https://chocolatey.org/) to install the app by running the following command (package information can be found [here](https://chocolatey.org/packages/hyper/)):
+---
 
-```bash
-choco install hyper
+## MCP tools
+
+When connected as an MCP server, Hyperia exposes:
+
+| Tool | Description |
+|------|-------------|
+| `terminal_keys` | Type keystrokes into a pane |
+| `terminal_run` | Run a command and return screen output |
+| `terminal_screen` | Read current screen content |
+| `terminal_status` | List all open panes |
+| `terminal_split` | Split the focused pane |
+| `terminal_focus` | Focus a specific pane |
+| `terminal_close` | Close the focused pane |
+| `terminal_new_tab` | Open a new tab |
+| `agent_status` | Set the status light (connected, label, human %) |
+| `style_list` | List available styles |
+| `style_create` | Create or clone a style |
+| `style_delete` | Delete a style |
+| `sidecar_logs` | Read sidecar log output |
+
+---
+
+## Configuration
+
+User config lives at `~/.hyperia/hyperia.json` (Windows: `%USERPROFILE%\.hyperia\hyperia.json`).
+
+Key settings: `fontSize`, `fontFamily`, `backgroundColor`, `foregroundColor`, `cursorColor`, `colors`, `shell`, `shellArgs`.
+
+Styles are stored in the `config.styles` array and apply per-window.
+
+---
+
+## Architecture
+
+```
+Electron (UI + PTY sessions)
+    |
+    |--- WebSocket bridge ---> hyperia-sidecar (Rust)
+                                    |
+                                    |--- HTTP API (localhost:9800)
+                                    |--- MCP server (stdio)
+                                    |--- Stream Deck (optional)
 ```
 
-**Note:** The version available on [Homebrew Cask](https://brew.sh), [Chocolatey](https://chocolatey.org), [Snapcraft](https://snapcraft.io/store) or the [AUR](https://aur.archlinux.org) may not be the latest. Please consider downloading it from [here](https://hyper.is/#installation) if that's the case.
+The bridge streams PTY output to the sidecar and relays commands (keystrokes, splits, focus, status) back to Electron. Agents never touch the PTY directly.
 
-## Contribute
+---
 
-Regardless of the platform you are working on, you will need to have Yarn installed. If you have never installed Yarn before, you can find out how at: https://yarnpkg.com/en/docs/install.
+## License
 
-1. Install necessary packages:
-  * Windows
-    - Be sure to run  `yarn global add windows-build-tools` from an elevated prompt (as an administrator) to install `windows-build-tools`.
-  * macOS
-    - Once you have installed Yarn, you can skip this section!
-  * Linux (You can see [here](https://en.wikipedia.org/wiki/List_of_Linux_distributions) what your Linux is based on.)
-    - RPM-based
-        + `GraphicsMagick`
-        + `libicns-utils`
-        + `xz` (Installed by default on some distributions.)
-    - Debian-based
-        + `graphicsmagick`
-        + `icnsutils`
-        + `xz-utils`
-2. [Fork](https://help.github.com/articles/fork-a-repo/) this repository to your own GitHub account and then [clone](https://help.github.com/articles/cloning-a-repository/) it to your local device
-3. Install the dependencies: `yarn`
-4. Build the code and watch for changes: `yarn run dev`
-5. To run `hyper`
-  * `yarn run app` from another terminal tab/window/pane
-  * If you are using **Visual Studio Code**, select `Launch Hyper` in debugger configuration to launch a new Hyper instance with debugger attached.
-  * If you interrupt `yarn run dev`, you'll need to relaunch it each time you want to test something. Webpack will watch changes and will rebuild renderer code when needed (and only what have changed). You'll just have to relaunch electron by using yarn run app or VSCode launch task.
+MIT -- see [LICENSE](LICENSE)
 
-To make sure that your code works in the finished application, you can generate the binaries like this:
-
-```bash
-yarn run dist
-```
-
-After that, you will see the binary in the `./dist` folder!
-
-#### Known issues that can happen during development
-
-##### Error building `node-pty`
-
-If after building during development you get an alert dialog related to `node-pty` issues,
-make sure its build process is working correctly by running `yarn run rebuild-node-pty`.
-
-If you are on macOS, this typically is related to Xcode issues (like not having agreed
-to the Terms of Service by running `sudo xcodebuild` after a fresh Xcode installation).
-
-##### Error with `C++` on macOS when running `yarn`
-
-If you are getting compiler errors when running `yarn` add the environment variable `export CXX=clang++`
-
-##### Error with `codesign` on macOS when running `yarn run dist`
-
-If you have issues in the `codesign` step when running `yarn run dist` on macOS, you can temporarily disable code signing locally by setting
-`export CSC_IDENTITY_AUTO_DISCOVERY=false` for the current terminal session.
-
-## Related Repositories
-
-- [Website](https://github.com/vercel/hyper-site)
-- [Sample Extension](https://github.com/vercel/hyperpower)
-- [Sample Theme](https://github.com/vercel/hyperyellow)
-- [Awesome Hyper](https://github.com/bnb/awesome-hyper)
+Based on [Hyper](https://github.com/vercel/hyper) by Vercel.
+Copyright (c) 2018 Vercel, Inc.

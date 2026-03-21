@@ -37,6 +37,10 @@ const config: webpack.Configuration[] = [
             to: '[name][ext]'
           },
           {
+            from: './app/splash-preload.js',
+            to: 'splash-preload.js'
+          },
+          {
             from: './app/*.json',
             globOptions: {ignore: ['**/node_modules/**']},
             to: '[name][ext]'

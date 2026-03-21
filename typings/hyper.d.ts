@@ -110,6 +110,7 @@ export type uiState = Immutable<{
   windowsPty?: IWindowsPty;
   defaultProfile: string;
   profiles: configOptions['profiles'];
+  agentStatuses: Record<string, AgentStatus>;
 }>;
 
 export type session = {
@@ -230,13 +231,22 @@ export type TabProps = {
   onClose: () => void;
   onSelect: () => void;
   text: string;
+  agentStatus?: AgentStatus;
 } & extensionProps;
+
+export type AgentStatus = {
+  connected: boolean;
+  working?: boolean;
+  label?: string;
+  humanPercent?: number;
+};
 
 export type ITab = {
   uid: string;
   title: string;
   isActive: boolean;
   hasActivity: boolean;
+  agentStatus?: AgentStatus;
 };
 
 export type TabsProps = {

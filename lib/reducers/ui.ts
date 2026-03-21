@@ -21,7 +21,8 @@ import {
   UI_WINDOW_UNMAXIMIZE,
   UI_WINDOW_GEOMETRY_CHANGED,
   UI_ENTER_FULLSCREEN,
-  UI_LEAVE_FULLSCREEN
+  UI_LEAVE_FULLSCREEN,
+  SESSION_AGENT_STATUS
 } from '../../typings/constants/ui';
 import {UPDATE_AVAILABLE} from '../../typings/constants/updater';
 import type {uiState, Mutable, IUiReducer} from '../../typings/hyper';
@@ -117,7 +118,8 @@ const initial: uiState = Immutable<Mutable<uiState>>({
   disableLigatures: true,
   screenReaderMode: false,
   defaultProfile: '',
-  profiles: []
+  profiles: [],
+  agentStatuses: {}
 });
 
 const reducer: IUiReducer = (state = initial, action) => {
@@ -343,7 +345,28 @@ const reducer: IUiReducer = (state = initial, action) => {
           const markers_ = markers.asMutable();
           delete markers_[action.uid];
           return markers_;
+        })
+        .updateIn(['agentStatuses'], (statuses: ImmutableType<Record<string, unknown>>) => {
+          const statuses_ = statuses.asMutable();
+          delete statuses_[action.uid];
+          return statuses_;
         });
+      break;
+
+    case SESSION_AGENT_STATUS:
+      state_ = state.merge(
+        {
+          agentStatuses: {
+            [action.uid]: {
+              connected: action.connected,
+              working: action.working,
+              label: action.label,
+              humanPercent: action.humanPercent
+            }
+          }
+        },
+        {deep: true}
+      );
       break;
 
     case SESSION_SET_ACTIVE:

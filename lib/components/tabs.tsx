@@ -1,4 +1,4 @@
-import React, {forwardRef} from 'react';
+import React, {forwardRef, useEffect, useRef, useCallback} from 'react';
 
 import type {TabsProps} from '../../typings/hyper';
 import {decorate, getTabProps} from '../utils/plugins';
@@ -11,41 +11,59 @@ const isMac = /Mac/.test(navigator.userAgent);
 
 const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   const {tabs = [], borderColor, onChange, onClose, fullScreen} = props;
+  const listRef = useRef<HTMLUListElement>(null);
 
-  const hide = !isMac && tabs.length === 1;
+  // Scroll active tab into view
+  useEffect(() => {
+    if (listRef.current) {
+      const active = listRef.current.querySelector('.tab_active');
+      if (active) {
+        active.scrollIntoView({block: 'nearest', inline: 'nearest'});
+      }
+    }
+  }, [tabs.find((t) => t.isActive)?.uid]);
+
+  // Horizontal scroll with mouse wheel
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (listRef.current) {
+      listRef.current.scrollLeft += e.deltaY;
+    }
+  }, []);
 
   return (
-    <nav className={`tabs_nav ${hide ? 'tabs_hiddenNav' : ''}`} ref={ref}>
+    <nav className="tabs_nav" ref={ref}>
       {props.customChildrenBefore}
       {tabs.length === 1 && isMac ? <div className="tabs_title">{tabs[0].title}</div> : null}
-      {tabs.length > 1 ? (
-        <>
-          <ul key="list" className={`tabs_list ${fullScreen && isMac ? 'tabs_fullScreen' : ''}`}>
-            {tabs.map((tab, i) => {
-              const {uid, title, isActive, hasActivity} = tab;
-              const tabProps = getTabProps(tab, props, {
-                text: title === '' ? 'Shell' : title,
-                isFirst: i === 0,
-                isLast: tabs.length - 1 === i,
-                borderColor,
-                isActive,
-                hasActivity,
-                onSelect: onChange.bind(null, uid),
-                onClose: onClose.bind(null, uid)
-              });
-              return <Tab key={`tab-${uid}`} {...tabProps} />;
-            })}
-          </ul>
-          {isMac && (
-            <div
-              key="shim"
-              style={{borderColor}}
-              className={`tabs_borderShim ${fullScreen ? 'tabs_borderShimUndo' : ''}`}
-            />
-          )}
-        </>
-      ) : null}
-      <DropdownButton {...props} tabsVisible={tabs.length > 1} />
+      <ul
+        key="list"
+        ref={listRef}
+        onWheel={handleWheel}
+        className={`tabs_list ${fullScreen && isMac ? 'tabs_fullScreen' : ''}`}
+      >
+        {tabs.map((tab, i) => {
+          const {uid, title, isActive, hasActivity, agentStatus} = tab;
+          const tabProps = getTabProps(tab, props, {
+            text: title === '' ? 'Shell' : title,
+            isFirst: i === 0,
+            isLast: tabs.length - 1 === i,
+            borderColor,
+            isActive,
+            hasActivity,
+            agentStatus,
+            onSelect: onChange.bind(null, uid),
+            onClose: onClose.bind(null, uid)
+          });
+          return <Tab key={`tab-${uid}`} {...tabProps} />;
+        })}
+      </ul>
+      {isMac && tabs.length > 1 && (
+        <div
+          key="shim"
+          style={{borderColor}}
+          className={`tabs_borderShim ${fullScreen ? 'tabs_borderShimUndo' : ''}`}
+        />
+      )}
+      <DropdownButton {...props} tabsVisible={true} />
       {props.customChildren}
 
       <style jsx>{`
@@ -58,14 +76,11 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           cursor: default;
           position: relative;
           -webkit-user-select: none;
-          -webkit-app-region: ${isMac ? 'drag' : ''};
-          top: ${isMac ? '0px' : '34px'};
           display: flex;
           flex-flow: row;
-        }
-
-        .tabs_hiddenNav {
-          display: none;
+          align-items: stretch;
+          flex-shrink: 1;
+          min-width: 0;
         }
 
         .tabs_title {
@@ -84,7 +99,15 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           display: flex;
           flex-flow: row;
           margin-left: ${isMac ? '76px' : '0'};
-          flex-grow: 1;
+          flex-shrink: 1;
+          min-width: 0;
+          overflow-x: auto;
+          overflow-y: hidden;
+          scrollbar-width: none;
+        }
+
+        .tabs_list::-webkit-scrollbar {
+          display: none;
         }
 
         .tabs_fullScreen {

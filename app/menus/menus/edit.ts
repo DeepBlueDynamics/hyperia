@@ -1,9 +1,10 @@
-import type {BrowserWindow, MenuItemConstructorOptions} from 'electron';
+import type {BaseWindow, BrowserWindow, MenuItemConstructorOptions} from 'electron';
 
 const editMenu = (
   commandKeys: Record<string, string>,
-  execCommand: (command: string, focusedWindow?: BrowserWindow) => void
+  _execCommand: (command: string, focusedWindow?: BrowserWindow) => void
 ) => {
+  const execCommand = (cmd: string, win?: BaseWindow) => _execCommand(cmd, win as BrowserWindow);
   const submenu: MenuItemConstructorOptions[] = [
     {
       label: 'Undo',

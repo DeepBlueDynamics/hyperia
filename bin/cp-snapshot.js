@@ -8,9 +8,15 @@ function copySnapshot(pathToElectron, archToCopy) {
   const pathToBlob = path.resolve(__dirname, '..', 'cache', archToCopy, snapshotFileName);
   const pathToBlobV8 = path.resolve(__dirname, '..', 'cache', archToCopy, v8ContextFileName);
 
+  if (!fs.existsSync(pathToBlob)) {
+    console.log('No cached v8 snapshots found at', pathToBlob, '— skipping');
+    return;
+  }
   console.log('Copying v8 snapshots from', pathToBlob, 'to', pathToElectron);
   fs.copyFileSync(pathToBlob, path.join(pathToElectron, snapshotFileName));
-  fs.copyFileSync(pathToBlobV8, path.join(pathToElectron, v8ContextFileName));
+  if (fs.existsSync(pathToBlobV8)) {
+    fs.copyFileSync(pathToBlobV8, path.join(pathToElectron, v8ContextFileName));
+  }
 }
 
 function getPathToElectron() {
@@ -39,7 +45,7 @@ exports.default = async (context) => {
   const archToCopy = Arch[context.arch];
   const pathToElectron =
     process.platform === 'darwin'
-      ? `${context.appOutDir}/Hyper.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources`
+      ? `${context.appOutDir}/Hyperia.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources`
       : context.appOutDir;
   copySnapshot(pathToElectron, archToCopy);
 };

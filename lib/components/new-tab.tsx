@@ -1,7 +1,5 @@
-import React, {useRef, useState} from 'react';
-
-import {VscChevronDown} from '@react-icons/all-files/vsc/VscChevronDown';
-import useClickAway from 'react-use/lib/useClickAway';
+/* eslint-disable @typescript-eslint/no-unsafe-argument */
+import React, {useState, useRef, useEffect} from 'react';
 
 import type {configOptions} from '../../typings/config';
 
@@ -9,141 +7,152 @@ interface Props {
   defaultProfile: string;
   profiles: configOptions['profiles'];
   openNewTab: (name: string) => void;
-  backgroundColor: string;
   borderColor: string;
   tabsVisible: boolean;
+  [key: string]: any;
 }
-const isMac = /Mac/.test(navigator.userAgent);
 
-const DropdownButton = ({defaultProfile, profiles, openNewTab, backgroundColor, borderColor, tabsVisible}: Props) => {
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const ref = useRef(null);
+const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
 
-  const toggleDropdown = () => {
-    setDropdownOpen(!dropdownOpen);
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  // Only show profiles that define a shell — visual-only profiles are not shell choices
+  const shellProfiles = (profiles || []).filter((p: any) => p.config?.shell);
+
+  const handleClick = () => {
+    openNewTab(defaultProfile);
   };
 
-  useClickAway(ref, () => {
-    setDropdownOpen(false);
-  });
+  const handleChevronClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setOpen(!open);
+  };
+
+  const handleSelect = (name: string) => {
+    setOpen(false);
+    openNewTab(name);
+  };
 
   return (
-    <div
-      ref={ref}
-      title="New Tab"
-      className={`new_tab ${tabsVisible ? 'tabs_visible' : 'tabs_hidden'}`}
-      onClick={toggleDropdown}
-      onDoubleClick={(e) => e.stopPropagation()}
-      onBlur={() => setDropdownOpen(false)}
-    >
-      <VscChevronDown style={{verticalAlign: 'middle'}} />
+    <div className="new_tab_wrapper" ref={ref}>
+      <div className="new_tab_split" onDoubleClick={(e) => e.stopPropagation()}>
+        <div className="new_tab_plus" onClick={handleClick} title={`New ${defaultProfile} Tab`}>
+          <svg viewBox="0 0 12 12" width="10" height="10">
+            <line x1="6" y1="1" x2="6" y2="11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </div>
+        {shellProfiles.length > 1 && (
+          <div className="new_tab_arrow" onClick={handleChevronClick} title="Choose shell">
+            <svg viewBox="0 0 6 4" width="6" height="4">
+              <path d="M0 0 L3 3 L6 0" stroke="currentColor" strokeWidth="1.2" fill="none" strokeLinecap="round" />
+            </svg>
+          </div>
+        )}
+      </div>
 
-      {dropdownOpen && (
-        <ul
-          key="dropdown"
-          className="profile_dropdown"
-          style={{
-            borderColor,
-            backgroundColor
-          }}
-        >
-          {profiles.map((profile) => (
-            <li
-              key={profile.name}
-              onClick={() => {
-                openNewTab(profile.name);
-                setDropdownOpen(false);
-              }}
-              className={`profile_dropdown_item ${
-                profile.name === defaultProfile && profiles.length > 1 ? 'profile_dropdown_item_default' : ''
-              }`}
+      {open && shellProfiles.length > 0 && (
+        <div className="new_tab_dropdown">
+          {shellProfiles.map((p: any) => (
+            <div
+              key={p.name}
+              className={`new_tab_option ${p.name === defaultProfile ? 'new_tab_option_default' : ''}`}
+              onClick={() => handleSelect(p.name)}
             >
-              {profile.name}
-            </li>
+              {p.name}
+            </div>
           ))}
-        </ul>
+        </div>
       )}
 
       <style jsx>{`
-        .profile_dropdown {
-          border-width: 1px;
-          border-style: solid;
-          border-bottom-width: 0px;
-          border-right-width: 0px;
-          position: absolute;
-          top: 33px;
-          right: 0px;
-          z-index: 1000;
-          padding: 0px;
-          margin: 0px;
-          list-style-type: none;
-          white-space: nowrap;
-          min-width: 120px;
-        }
-
-        .profile_dropdown_item {
-          padding: 0px 20px;
-          height: 34px;
-          line-height: 34px;
-          cursor: pointer;
-          font-size: 12px;
-          color: #fff;
-          background-color: transparent;
-          border-width: 0px;
-          border-style: solid;
-          border-color: transparent;
-          border-bottom-width: 1px;
-          border-bottom-style: solid;
-          border-bottom-color: ${borderColor};
-          text-align: start;
-          text-transform: capitalize;
-        }
-
-        .profile_dropdown_item:hover {
-          background-color: ${borderColor};
-        }
-
-        .profile_dropdown_item_default {
-          font-weight: bold;
-        }
-
-        .new_tab {
-          background: transparent;
-          color: #fff;
-          border-left: 1px;
-          border-bottom: 1px;
-          border-left-style: solid;
-          border-bottom-style: solid;
-          border-left-width: 1px;
-          border-bottom-width: 1px;
-          cursor: pointer;
-          font-size: 12px;
-          height: 34px;
-          line-height: 34px;
-          padding: 0 16px;
+        .new_tab_wrapper {
           position: relative;
-          text-align: center;
-          -webkit-user-select: none;
-          ${isMac ? '-webkit-app-region: drag;' : ''}
-          top: '0px';
+          flex-shrink: 0;
         }
 
-        .tabs_visible {
-          border-color: ${borderColor};
+        .new_tab_split {
+          display: flex;
+          align-items: stretch;
+          height: 34px;
+          -webkit-app-region: no-drag;
         }
 
-        .tabs_hidden {
-          border-color: transparent;
+        .new_tab_plus {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 28px;
+          cursor: pointer;
+          color: #888;
+        }
+
+        .new_tab_plus:hover {
+          color: #fff;
+          background: #252525;
+        }
+
+        .new_tab_arrow {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 16px;
+          cursor: pointer;
+          color: #666;
+          border-right: 1px solid #333;
+        }
+
+        .new_tab_arrow:hover {
+          color: #fff;
+          background: #303030;
+        }
+
+        .new_tab_dropdown {
           position: absolute;
-          right: 0px;
+          top: 34px;
+          left: 0;
+          min-width: 160px;
+          background: #1a1a1a;
+          border: 1px solid #333;
+          border-radius: 4px;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+          z-index: 1000;
+          padding: 4px 0;
+          -webkit-app-region: no-drag;
         }
 
-        .tabs_hidden:hover {
-          border-color: ${borderColor};
+        .new_tab_option {
+          padding: 6px 12px;
+          font-size: 12px;
+          color: #ccc;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+
+        .new_tab_option:hover {
+          background: #333;
+          color: #fff;
+        }
+
+        .new_tab_option_default {
+          color: #fff;
         }
       `}</style>
     </div>
   );
 };
 
-export default DropdownButton;
+export default NewTabButton;
+/* eslint-enable @typescript-eslint/no-unsafe-argument */

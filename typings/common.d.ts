@@ -44,6 +44,7 @@ export type MainEvents = {
   'open hamburger menu': {x: number; y: number};
   'quit and install': never;
   resize: {uid: string; cols: number; rows: number};
+  'session set xterm title': {uid: string; title: string};
   unmaximize: never;
 };
 
@@ -90,6 +91,7 @@ export type RendererEvents = {
   'enter full screen': never;
   'leave full screen': never;
   'session data send': {uid: string | null; data: string; escaped?: boolean};
+  'agent status': {sessionUid?: string; connected: boolean; working?: boolean; label?: string; humanPercent?: number};
 };
 
 /**

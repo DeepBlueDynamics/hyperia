@@ -12,8 +12,6 @@ import TermGroup_ from './term-group';
 const TermGroup = decorate(TermGroup_, 'TermGroup');
 const StyleSheet = decorate(StyleSheet_, 'StyleSheet');
 
-const isMac = /Mac/.test(navigator.userAgent);
-
 export default class Terms extends React.Component<React.PropsWithChildren<TermsProps>> {
   terms: Record<string, Term>;
   registerCommands: (cmds: Record<string, (e: any, dispatch: HyperDispatch) => void>) => void;
@@ -62,7 +60,11 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
   componentDidUpdate(prevProps: TermsProps) {
     for (const uid in prevProps.sessions) {
       if (!this.props.sessions[uid]) {
-        this.terms[uid].term.dispose();
+        try {
+          this.terms[uid]?.term?.dispose();
+        } catch (e) {
+          console.warn('[terms] Error disposing term:', uid, e);
+        }
         delete this.terms[uid];
       }
     }
@@ -73,9 +75,8 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
   }
 
   render() {
-    const shift = !isMac && this.props.termGroups.length > 1;
     return (
-      <div className={`terms_terms ${shift ? 'terms_termsShifted' : 'terms_termsNotShifted'}`}>
+      <div className="terms_terms terms_termsNotShifted">
         {this.props.customChildrenBefore}
         {this.props.termGroups.map((termGroup) => {
           const {uid} = termGroup;
@@ -148,7 +149,7 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
             top: 0;
             right: 0;
             left: 0;
-            bottom: 0;
+            bottom: 22px;
             color: #fff;
           }
 

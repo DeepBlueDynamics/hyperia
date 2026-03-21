@@ -22,7 +22,8 @@ import {
   UI_LEAVE_FULLSCREEN,
   UI_OPEN_SSH_URL,
   UI_CONTEXTMENU_OPEN,
-  UI_COMMAND_EXEC
+  UI_COMMAND_EXEC,
+  SESSION_AGENT_STATUS
 } from '../../typings/constants/ui';
 import type {HyperState, HyperDispatch, HyperActions, ITermGroups} from '../../typings/hyper';
 import rpc from '../rpc';
@@ -331,4 +332,15 @@ export function execCommand(command: string, fn: (e: any, dispatch: HyperDispatc
         }
       }
     });
+}
+
+export function setAgentStatus(
+  uid: string,
+  data: {connected: boolean; working?: boolean; label?: string; humanPercent?: number}
+) {
+  return {
+    type: SESSION_AGENT_STATUS,
+    uid,
+    ...data
+  } as const;
 }

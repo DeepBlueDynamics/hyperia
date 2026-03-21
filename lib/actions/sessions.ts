@@ -108,6 +108,8 @@ export function clearActiveSession(): HyperActions {
 }
 
 export function setSessionXtermTitle(uid: string, title: string): HyperActions {
+  // Notify main process so Electron window title + taskbar update
+  window.rpc.emit('session set xterm title', {uid, title});
   return {
     type: SESSION_SET_XTERM_TITLE,
     uid,

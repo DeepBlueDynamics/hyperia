@@ -1,13 +1,13 @@
 // eslint-disable-next-line import/order
 import {cfgPath} from './config/paths';
 
-// Print diagnostic information for a few arguments instead of running Hyper.
+// Print diagnostic information for a few arguments instead of running Hyperia.
 if (['--help', '-v', '--version'].includes(process.argv[1])) {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const {version} = require('./package');
-  console.log(`Hyper version ${version}`);
-  console.log('Hyper does not accept any command line arguments. Please modify the config file instead.');
-  console.log(`Hyper configuration file located at: ${cfgPath}`);
+  console.log(`Hyperia version ${version}`);
+  console.log('Hyperia does not accept any command line arguments. Please modify the config file instead.');
+  console.log(`Hyperia configuration file located at: ${cfgPath}`);
   process.exit();
 }
 
@@ -22,22 +22,101 @@ import * as config from './config';
 config.setup();
 
 // Native
+import {spawn} from 'child_process';
+import type {ChildProcess} from 'child_process';
 import {resolve} from 'path';
 
 // Packages
-import {app, BrowserWindow, Menu, screen} from 'electron';
+import {app, BrowserWindow, Menu, screen, ipcMain} from 'electron';
 
 import isDev from 'electron-is-dev';
 import {gitDescribe} from 'git-describe';
 import parseUrl from 'parse-url';
 
+import {startBridge, stopBridge} from './bridge';
 import * as AppMenu from './menus/menu';
+import {initTray, destroyTray} from './notify';
 import * as plugins from './plugins';
 import {newWindow} from './ui/window';
 import {installCLI} from './utils/cli-install';
 import * as windowUtils from './utils/window-utils';
 
 const windowSet = new Set<BrowserWindow>([]);
+
+// --- Sidecar process (Rust agent engine, Stream Deck, MCP) ---
+let sidecarProcess: ChildProcess | null = null;
+const SIDECAR_PORT = 9800;
+
+function spawnSidecar() {
+  // Look for sidecar binary in known locations
+  // __dirname at runtime is 'target/', so '../../sidecar' reaches the repo's sidecar dir.
+  // Also try '../sidecar' in case cwd or packaging differs.
+  // Try multiple locations: dev (target/), packaged (dist/win-unpacked/), repo root
+  const exeDir = process.platform === 'win32' ? resolve(process.execPath, '..') : __dirname;
+  const candidates = [
+    // From dev __dirname (target/)
+    resolve(__dirname, '../../sidecar/target/release/hyperia-sidecar.exe'),
+    resolve(__dirname, '../../sidecar/target/debug/hyperia-sidecar.exe'),
+    resolve(__dirname, '../sidecar/target/release/hyperia-sidecar.exe'),
+    resolve(__dirname, '../sidecar/target/debug/hyperia-sidecar.exe'),
+    // From packaged exe dir (dist/win-unpacked/) back to repo
+    resolve(exeDir, '../../sidecar/target/release/hyperia-sidecar.exe'),
+    resolve(exeDir, '../../sidecar/target/debug/hyperia-sidecar.exe'),
+    // Bundled next to exe
+    resolve(exeDir, 'sidecar/hyperia-sidecar.exe'),
+    resolve(exeDir, 'hyperia-sidecar.exe'),
+    // Non-Windows
+    resolve(__dirname, '../../sidecar/target/release/hyperia-sidecar'),
+    resolve(__dirname, '../../sidecar/target/debug/hyperia-sidecar'),
+    resolve(exeDir, '../../sidecar/target/release/hyperia-sidecar'),
+    resolve(exeDir, '../../sidecar/target/debug/hyperia-sidecar')
+  ];
+
+  isDev && console.log(`[sidecar] __dirname = ${__dirname}`);
+
+  let sidecarPath: string | null = null;
+  for (const candidate of candidates) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call
+      require('fs').accessSync(candidate);
+      sidecarPath = candidate;
+      break;
+    } catch {
+      // not found, try next
+    }
+  }
+
+  if (!sidecarPath) {
+    isDev && console.log('Sidecar binary not found. Checked:');
+    isDev && candidates.forEach((c) => console.log(`  ${c}`));
+    isDev && console.log('Run: cd sidecar && cargo build');
+    return;
+  }
+
+  isDev && console.log(`Spawning sidecar: ${sidecarPath} --port ${SIDECAR_PORT} --deck`);
+  sidecarProcess = spawn(sidecarPath, ['--port', String(SIDECAR_PORT), '--deck'], {
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  sidecarProcess.stdout?.on('data', (data: Buffer) => {
+    isDev && console.log(`[sidecar] ${data.toString().trim()}`);
+  });
+  sidecarProcess.stderr?.on('data', (data: Buffer) => {
+    isDev && console.error(`[sidecar] ${data.toString().trim()}`);
+  });
+  sidecarProcess.on('exit', (code: number | null) => {
+    isDev && console.log(`Sidecar exited with code ${code}`);
+    sidecarProcess = null;
+  });
+}
+
+function killSidecar() {
+  if (sidecarProcess) {
+    isDev && console.log('Shutting down sidecar');
+    sidecarProcess.kill();
+    sidecarProcess = null;
+  }
+}
 
 // expose to plugins
 app.config = config;
@@ -55,8 +134,12 @@ app.getLastFocusedWindow = () => {
   });
 };
 
-console.log('Disabling Chromium GPU blacklist');
+// GPU acceleration (see GPU.md)
+isDev && console.log('Enabling GPU acceleration');
 app.commandLine.appendSwitch('ignore-gpu-blacklist');
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+app.commandLine.appendSwitch('enable-native-gpu-memory-buffers');
 
 if (isDev) {
   console.log('running in dev mode');
@@ -67,12 +150,10 @@ if (isDev) {
       app.setVersion(gitInfo.raw);
     }
   });
-} else {
-  console.log('running in prod mode');
 }
 
 const url = `file://${resolve(isDev ? __dirname : app.getAppPath(), 'index.html')}`;
-console.log('electron will open', url);
+isDev && console.log('electron will open', url);
 
 async function installDevExtensions(isDev_: boolean) {
   if (!isDev_) {
@@ -84,13 +165,83 @@ async function installDevExtensions(isDev_: boolean) {
   const forceDownload = Boolean(process.env.UPGRADE_EXTENSIONS);
 
   return Promise.all(
-    extensions.map((extension) => installer(extension, {forceDownload, loadExtensionOptions: {allowFileAccess: true}}))
+    extensions.map((extension) =>
+      installer(extension, {forceDownload, loadExtensionOptions: {allowFileAccess: true}}).catch((err: Error) => {
+        isDev && console.warn(`Failed to install devtools extension: ${err.message}`);
+      })
+    )
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _showSplash(winBounds: {x: number; y: number; width: number; height: number}): Promise<void> {
+  return new Promise((resolve_) => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const {icon: appIcon} = require('./config/paths');
+    const splash = new BrowserWindow({
+      x: winBounds.x,
+      y: winBounds.y,
+      width: winBounds.width,
+      height: winBounds.height,
+      frame: false,
+      transparent: true,
+      resizable: false,
+      skipTaskbar: true,
+      backgroundColor: '#00000000',
+      alwaysOnTop: true,
+      icon: appIcon,
+      title: 'Hyperia',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: resolve(__dirname, 'splash-preload.js')
+      }
+    });
+
+    void splash.loadFile(resolve(isDev ? __dirname : app.getAppPath(), 'splash.html'));
+
+    let resolved = false;
+    const done = () => {
+      if (resolved) return;
+      resolved = true;
+      if (!splash.isDestroyed()) {
+        let opacity = 1;
+        const fadeInterval = setInterval(() => {
+          opacity -= 0.05;
+          if (opacity <= 0 || splash.isDestroyed()) {
+            clearInterval(fadeInterval);
+            if (!splash.isDestroyed()) {
+              splash.destroy();
+            }
+          } else {
+            try {
+              splash.setOpacity(opacity);
+            } catch {
+              /* already gone */
+            }
+          }
+        }, 30);
+      }
+      resolve_();
+    };
+
+    ipcMain.once('splash-done', done);
+    setTimeout(done, 8000);
+  });
+}
+
 // eslint-disable-next-line @typescript-eslint/no-misused-promises
-app.on('ready', () =>
-  installDevExtensions(isDev)
+app.on('ready', () => {
+  // System tray icon
+  initTray();
+
+  // Launch sidecar (agent engine, Stream Deck, MCP)
+  spawnSidecar();
+
+  // Connect bridge to sidecar (auto-reconnects until connected)
+  startBridge(SIDECAR_PORT);
+
+  return installDevExtensions(isDev)
     .then(() => {
       function createWindow(
         fn?: (win: BrowserWindow) => void,
@@ -152,8 +303,10 @@ app.on('ready', () =>
         return hwin;
       }
 
-      // when opening create a new window
+      // Create the terminal window
       createWindow();
+      // Splash screen available but skipped for reliability
+      // To re-enable: const firstWin = createWindow(); firstWin.once('show', () => void _showSplash(firstWin.getBounds()));
 
       // expose to plugins
       app.createWindow = createWindow;
@@ -169,8 +322,15 @@ app.on('ready', () =>
 
       app.on('window-all-closed', () => {
         if (process.platform !== 'darwin') {
+          destroyTray();
+          stopBridge();
+          killSidecar();
           app.quit();
         }
+      });
+
+      app.on('before-quit', () => {
+        destroyTray();
       });
 
       const makeMenu = () => {
@@ -199,10 +359,10 @@ app.on('ready', () =>
       if (!isDev) {
         // check if should be set/removed as default ssh protocol client
         if (config.getConfig().defaultSSHApp && !app.isDefaultProtocolClient('ssh')) {
-          console.log('Setting Hyper as default client for ssh:// protocol');
+          isDev && console.log('Setting Hyperia as default client for ssh:// protocol');
           app.setAsDefaultProtocolClient('ssh');
         } else if (!config.getConfig().defaultSSHApp && app.isDefaultProtocolClient('ssh')) {
-          console.log('Removing Hyper from default client for ssh:// protocol');
+          isDev && console.log('Removing Hyperia from default client for ssh:// protocol');
           app.removeAsDefaultProtocolClient('ssh');
         }
         void installCLI(false);
@@ -210,8 +370,8 @@ app.on('ready', () =>
     })
     .catch((err) => {
       console.error('Error while loading devtools extensions', err);
-    })
-);
+    });
+});
 
 /**
  * Get last focused BrowserWindow or create new if none and callback

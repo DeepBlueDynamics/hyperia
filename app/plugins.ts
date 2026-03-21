@@ -10,6 +10,7 @@ import {app, dialog, ipcMain as _ipcMain} from 'electron';
 import type {BrowserWindow, App, MenuItemConstructorOptions} from 'electron';
 import React from 'react';
 
+import isDev from 'electron-is-dev';
 import Config from 'electron-store';
 import ms from 'ms';
 import ReactDom from 'react-dom';
@@ -190,7 +191,7 @@ export const getLoadedPluginVersions = () => {
 // to prevent slowness
 if (cache.get('hyper.plugins') !== id || process.env.HYPER_FORCE_UPDATE) {
   // install immediately if the user changed plugins
-  console.log('plugins have changed / not init, scheduling plugins installation');
+  isDev && console.log('plugins have changed / not init, scheduling plugins installation');
   setTimeout(() => {
     updatePlugins();
   }, 1000);
@@ -299,7 +300,7 @@ function requirePlugins(): any[] {
       } catch (err) {
         console.warn(`No package.json found in ${path_}`);
       }
-      console.log(`Plugin ${mod._name} (${mod._version}) loaded.`);
+      isDev && console.log(`Plugin ${mod._name} (${mod._version}) loaded.`);
 
       return mod;
     } catch (_err) {
