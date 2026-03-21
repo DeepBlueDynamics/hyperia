@@ -1,4 +1,4 @@
-# Hyperia
+# Hyperia™
 
 **The shell that remembers everything — and acts on it.**
 
