@@ -113,6 +113,12 @@ pub struct ShellConfirmRequest {
     pub pane: Option<usize>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct AutoDescribeRequest {
+    /// Pane index to auto-describe (default: 0)
+    pub pane: Option<usize>,
+}
+
 // -- Stream Deck request schemas --
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -569,6 +575,16 @@ impl HyperiaMcp {
             }
         }
         Ok(CallToolResult::success(vec![Content::text(actions.join("\n"))]))
+    }
+
+    #[tool(description = "Auto-describe a pane using local ollama. Reads screen content, generates a short description, and stores it on the tab.")]
+    async fn auto_describe(
+        &self,
+        Parameters(req): Parameters<AutoDescribeRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pane = req.pane.unwrap_or(0);
+        let resp = self.post_text(&format!("/api/pane/describe/{}", pane), "").await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
     // -- Stream Deck tools --

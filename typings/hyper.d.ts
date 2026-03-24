@@ -122,6 +122,8 @@ export type session = {
   search: boolean;
   shell: string | null;
   title: string;
+  tabName: string;
+  description: string;
   uid: string;
   splitDirection?: 'HORIZONTAL' | 'VERTICAL';
   activeUid?: string;
@@ -230,7 +232,10 @@ export type TabProps = {
   onClick?: (event: React.MouseEvent<HTMLElement, MouseEvent>) => void;
   onClose: () => void;
   onSelect: () => void;
+  onDescribe: (description: string) => void;
   text: string;
+  tabName: string;
+  description: string;
   agentStatus?: AgentStatus;
 } & extensionProps;
 
@@ -244,6 +249,8 @@ export type AgentStatus = {
 export type ITab = {
   uid: string;
   title: string;
+  tabName: string;
+  description: string;
   isActive: boolean;
   hasActivity: boolean;
   agentStatus?: AgentStatus;
@@ -255,6 +262,7 @@ export type TabsProps = {
   backgroundColor: string;
   onChange: (uid: string) => void;
   onClose: (uid: string) => void;
+  onDescribe: (uid: string, description: string) => void;
   fullScreen: boolean;
   defaultProfile: string;
   profiles: configOptions['profiles'];

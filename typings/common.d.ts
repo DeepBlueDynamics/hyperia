@@ -45,6 +45,7 @@ export type MainEvents = {
   'quit and install': never;
   resize: {uid: string; cols: number; rows: number};
   'session set xterm title': {uid: string; title: string};
+  'session set description': {uid: string; description: string};
   unmaximize: never;
 };
 

@@ -17,7 +17,7 @@ import {v4 as uuidv4} from 'uuid';
 
 import type {sessionExtraOptions} from '../../typings/common';
 import type {configOptions} from '../../typings/config';
-import {registerSession, notifyResize, notifyUserActivity} from '../bridge';
+import {registerSession, notifyResize, notifyUserActivity, updateSessionDescription} from '../bridge';
 import {execCommand} from '../commands';
 import {getDefaultProfile} from '../config';
 import {icon, homeDirectory} from '../config/paths';
@@ -332,6 +332,9 @@ export function newWindow(
         session.write(data);
       }
     }
+  });
+  rpc.on('session set description', ({uid, description}: {uid: string; description: string}) => {
+    updateSessionDescription(uid, description);
   });
   rpc.on('info renderer', ({uid, type}) => {
     // Used in the "About" dialog

@@ -10,7 +10,7 @@ const Tab = decorate(Tab_, 'Tab');
 const isMac = /Mac/.test(navigator.userAgent);
 
 const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
-  const {tabs = [], borderColor, onChange, onClose, fullScreen} = props;
+  const {tabs = [], borderColor, onChange, onClose, onDescribe, fullScreen} = props;
   const listRef = useRef<HTMLUListElement>(null);
 
   // Scroll active tab into view
@@ -41,9 +41,11 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         className={`tabs_list ${fullScreen && isMac ? 'tabs_fullScreen' : ''}`}
       >
         {tabs.map((tab, i) => {
-          const {uid, title, isActive, hasActivity, agentStatus} = tab;
+          const {uid, title, isActive, hasActivity, agentStatus, tabName, description} = tab;
           const tabProps = getTabProps(tab, props, {
-            text: title === '' ? 'Shell' : title,
+            text: tabName || title || 'Shell',
+            tabName: tabName || title || 'Shell',
+            description: description || '',
             isFirst: i === 0,
             isLast: tabs.length - 1 === i,
             borderColor,
@@ -51,7 +53,8 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             hasActivity,
             agentStatus,
             onSelect: onChange.bind(null, uid),
-            onClose: onClose.bind(null, uid)
+            onClose: onClose.bind(null, uid),
+            onDescribe: (desc: string) => onDescribe(uid, desc)
           });
           return <Tab key={`tab-${uid}`} {...tabProps} />;
         })}
@@ -79,7 +82,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           display: flex;
           flex-flow: row;
           align-items: stretch;
-          flex-shrink: 1;
+          flex: 1 1 auto;
           min-width: 0;
         }
 
@@ -99,7 +102,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           display: flex;
           flex-flow: row;
           margin-left: ${isMac ? '76px' : '0'};
-          flex-shrink: 1;
+          flex: 1 1 auto;
           min-width: 0;
           overflow-x: auto;
           overflow-y: hidden;

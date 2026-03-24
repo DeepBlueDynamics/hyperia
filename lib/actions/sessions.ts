@@ -11,7 +11,8 @@ import {
   SESSION_CLEAR_ACTIVE,
   SESSION_USER_DATA,
   SESSION_SET_XTERM_TITLE,
-  SESSION_SEARCH
+  SESSION_SEARCH,
+  SESSION_SET_DESCRIPTION
 } from '../../typings/constants/sessions';
 import type {HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
@@ -104,6 +105,15 @@ export function setActiveSession(uid: string) {
 export function clearActiveSession(): HyperActions {
   return {
     type: SESSION_CLEAR_ACTIVE
+  };
+}
+
+export function setSessionDescription(uid: string, description: string): HyperActions {
+  window.rpc.emit('session set description', {uid, description});
+  return {
+    type: SESSION_SET_DESCRIPTION,
+    uid,
+    description
   };
 }
 

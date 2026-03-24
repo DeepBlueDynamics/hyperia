@@ -28,12 +28,14 @@ let reconnectDelay = RECONNECT_BASE_MS;
 let sidecarPort = 9800;
 let stopped = false;
 
-// Session registry: uid → { session, rows, cols, name }
+// Session registry: uid → { session, rows, cols, name, tabName, description }
 interface TrackedSession {
   session: Session;
   rows: number;
   cols: number;
   name: string;
+  tabName: string;
+  description: string;
 }
 const trackedSessions = new Map<string, TrackedSession>();
 
@@ -134,6 +136,8 @@ function sendSessionRegister(uid: string, tracked: TrackedSession) {
     type: 'SessionRegister',
     uid,
     name: tracked.name,
+    tabName: tracked.tabName,
+    description: tracked.description,
     rows: tracked.rows,
     cols: tracked.cols,
     pid: tracked.session.pty?.pid ?? 0
@@ -426,8 +430,8 @@ export function stopBridge() {
 }
 
 /** Register a PTY session with the bridge. Call after session creation. */
-export function registerSession(uid: string, session: Session, rows: number, cols: number, name: string = 'shell') {
-  const tracked: TrackedSession = {session, rows, cols, name};
+export function registerSession(uid: string, session: Session, rows: number, cols: number, name: string = 'shell', tabName: string = '') {
+  const tracked: TrackedSession = {session, rows, cols, name, tabName: tabName || name, description: ''};
   trackedSessions.set(uid, tracked);
 
   // Stream PTY output to sidecar as base64-encoded SessionData
@@ -463,6 +467,15 @@ export function registerSession(uid: string, session: Session, rows: number, col
     const cmd = pendingCommand;
     pendingCommand = null;
     cmd(uid, session);
+  }
+}
+
+/** Update the description for a session. */
+export function updateSessionDescription(uid: string, description: string) {
+  const tracked = trackedSessions.get(uid);
+  if (tracked) {
+    tracked.description = description;
+    send({type: 'SessionDescribe', uid, description});
   }
 }
 

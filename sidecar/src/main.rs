@@ -66,6 +66,42 @@ async fn get_screen(State(state): State<AppState>, Path(pane): Path<usize>) -> S
     state.bridge.get_screen_text(Some(pane)).await
 }
 
+async fn post_auto_describe(
+    State(state): State<AppState>,
+    Path(pane): Path<usize>,
+) -> (StatusCode, String) {
+    let screen = state.bridge.get_screen_text(Some(pane)).await;
+    if screen.trim().is_empty() {
+        return (StatusCode::OK, "empty".into());
+    }
+
+    // Hit local ollama to describe what's happening in this terminal
+    let ollama_url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
+    let prompt = format!(
+        "In 10 words or fewer, describe what this terminal is doing:\n\n{}",
+        &screen[..screen.len().min(2000)]
+    );
+    let body = serde_json::json!({
+        "model": "llama3.2",
+        "prompt": prompt,
+        "stream": false,
+    });
+
+    let client = reqwest::Client::new();
+    match client.post(format!("{}/api/generate", ollama_url)).json(&body).send().await {
+        Ok(resp) => match resp.json::<serde_json::Value>().await {
+            Ok(json) => {
+                let description = json["response"].as_str().unwrap_or("").trim().to_string();
+                // Update the session description in the bridge
+                state.bridge.set_description(pane, &description).await;
+                (StatusCode::OK, description)
+            }
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Parse: {e}")),
+        },
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Ollama: {e}")),
+    }
+}
+
 /// Unescape backslash sequences so MCP tools can send Enter, Tab, Esc, etc.
 fn unescape_keys(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
@@ -346,6 +382,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pane/close", axum::routing::post(post_close))
         .route("/api/pane/new", axum::routing::post(post_new_tab))
         .route("/api/agent/status", axum::routing::post(post_agent_status))
+        .route("/api/pane/describe/{pane}", axum::routing::post(post_auto_describe))
         // Voice (Auracle) endpoints
         .route("/api/voice/status", axum::routing::get(get_voice_status))
         .route("/api/voice/start", axum::routing::post(post_voice_start))

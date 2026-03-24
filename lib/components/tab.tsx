@@ -19,7 +19,15 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     }
   };
 
-  const {isActive, isFirst, isLast, borderColor, hasActivity, agentStatus} = props;
+  const handleContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    const desc = window.prompt('Describe this tab:', description || '');
+    if (desc !== null && props.onDescribe) {
+      props.onDescribe(desc);
+    }
+  };
+
+  const {isActive, isFirst, isLast, borderColor, hasActivity, agentStatus, tabName, description} = props;
 
   // Agent dot color: red=working, amber=wants input (humanPercent < 100 && !working), green=connected idle, none=no agent
   const agentDotColor = agentStatus?.working
@@ -34,6 +42,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     <>
       <li
         onClick={props.onClick}
+        onContextMenu={handleContextMenu}
         style={{borderColor}}
         className={`tab_tab ${isFirst ? 'tab_first' : ''} ${isActive ? 'tab_active' : ''} ${
           isFirst && isActive ? 'tab_firstActive' : ''
@@ -52,8 +61,8 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
               style={{backgroundColor: agentDotColor}}
             />
           )}
-          <span title={props.text} className="tab_textInner">
-            {props.text}
+          <span title={description || tabName || props.text} className="tab_textInner">
+            {tabName || props.text}
           </span>
         </span>
         <i className="tab_icon" onClick={props.onClose}>
@@ -68,9 +77,11 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         .tab_tab {
           color: #999;
           list-style-type: none;
-          flex: 1 1 33%;
-          min-width: 120px;
-          max-width: 33vw;
+          flex-grow: 1;
+          flex-shrink: 1;
+          flex-basis: 100px;
+          min-width: 60px;
+          max-width: 250px;
           position: relative;
           background: #1a1a1a;
           border-right: 1px solid #333;

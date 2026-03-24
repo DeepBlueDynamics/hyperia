@@ -90,6 +90,7 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
             backgroundColor: props.backgroundColor,
             onClose: props.onCloseTab,
             onChange: onChangeIntent,
+            onDescribe: props.onDescribe,
             fullScreen: props.fullScreen,
             defaultProfile: props.defaultProfile,
             profiles: props.profiles.asMutable({deep: true}),

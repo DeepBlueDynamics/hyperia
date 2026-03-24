@@ -18,6 +18,8 @@ use crate::AppState;
 
 pub struct SessionInfo {
     pub name: String,
+    pub tab_name: String,
+    pub description: String,
     pub rows: u16,
     pub cols: u16,
     pub pid: u32,
@@ -120,6 +122,14 @@ impl Bridge {
         }
     }
 
+    /// Set description for a pane by index.
+    pub async fn set_description(&self, pane: usize, description: &str) {
+        let mut sessions = self.inner.sessions.lock().await;
+        if let Some((_uid, info)) = sessions.iter_mut().nth(pane) {
+            info.description = description.to_string();
+        }
+    }
+
     /// Resolve a pane index to its session uid.
     pub async fn pane_uid(&self, pane: usize) -> Option<String> {
         let sessions = self.inner.sessions.lock().await;
@@ -137,6 +147,8 @@ impl Bridge {
                     "id": idx,
                     "uid": uid,
                     "name": info.name,
+                    "tabName": info.tab_name,
+                    "description": info.description,
                     "rows": info.rows,
                     "cols": info.cols,
                     "pid": info.pid,
@@ -162,20 +174,33 @@ impl Bridge {
             "SessionRegister" => {
                 let uid = msg["uid"].as_str().unwrap_or("").to_string();
                 let name = msg["name"].as_str().unwrap_or("shell").to_string();
+                let tab_name = msg["tabName"].as_str().unwrap_or(&name).to_string();
+                let description = msg["description"].as_str().unwrap_or("").to_string();
                 let rows = msg["rows"].as_u64().unwrap_or(24) as u16;
                 let cols = msg["cols"].as_u64().unwrap_or(80) as u16;
                 let pid = msg["pid"].as_u64().unwrap_or(0) as u32;
-                tracing::info!("Session registered: {uid} ({name}) {cols}x{rows} pid={pid}");
+                tracing::info!("Session registered: {uid} ({tab_name}) {cols}x{rows} pid={pid}");
                 self.inner.sessions.lock().await.insert(
                     uid,
                     SessionInfo {
                         name,
+                        tab_name,
+                        description,
                         rows,
                         cols,
                         pid,
                         screen: ScreenBuffer::new(rows, cols, 1000),
                     },
                 );
+            }
+
+            "SessionDescribe" => {
+                let uid = msg["uid"].as_str().unwrap_or("");
+                let description = msg["description"].as_str().unwrap_or("").to_string();
+                if let Some(info) = self.inner.sessions.lock().await.get_mut(uid) {
+                    info.description = description.clone();
+                    tracing::info!("Session {uid} described: {description}");
+                }
             }
 
             "SessionData" => {

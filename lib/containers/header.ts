@@ -2,6 +2,7 @@ import {createSelector} from 'reselect';
 
 import type {HyperState, HyperDispatch, ITab} from '../../typings/hyper';
 import {closeTab, changeTab, maximize, openHamburgerMenu, unmaximize, minimize, close} from '../actions/header';
+import {setSessionDescription} from '../actions/sessions';
 import {requestTermGroup} from '../actions/term-groups';
 import Header from '../components/header';
 import {getRootGroups} from '../selectors';
@@ -23,6 +24,8 @@ const getTabs = createSelector(
       return {
         uid: t.uid,
         title: session.title,
+        tabName: session.tabName || session.title,
+        description: session.description || '',
         isActive: t.uid === activeRootGroup,
         hasActivity: activityMarkers[session.uid],
         agentStatus: agentStatuses[session.uid]
@@ -79,6 +82,10 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
 
     openNewTab: (profile: string) => {
       dispatch(requestTermGroup(undefined, profile));
+    },
+
+    onDescribe: (uid: string, description: string) => {
+      dispatch(setSessionDescription(uid, description) as any);
     }
   };
 };

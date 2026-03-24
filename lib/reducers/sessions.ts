@@ -10,7 +10,8 @@ import {
   SESSION_RESIZE,
   SESSION_SET_XTERM_TITLE,
   SESSION_SET_CWD,
-  SESSION_SEARCH
+  SESSION_SEARCH,
+  SESSION_SET_DESCRIPTION
 } from '../../typings/constants/sessions';
 import type {sessionState, session, Mutable, ISessionReducer} from '../../typings/hyper';
 import {decorateSessionsReducer} from '../utils/plugins';
@@ -69,6 +70,8 @@ function Session(obj: Immutable.DeepPartial<session>) {
   const x: session = {
     uid: '',
     title: '',
+    tabName: '',
+    description: '',
     cols: null,
     rows: null,
     cleared: false,
@@ -90,19 +93,23 @@ function deleteSession(state: sessionState, uid: string) {
 
 const reducer: ISessionReducer = (state = initialState, action) => {
   switch (action.type) {
-    case SESSION_ADD:
+    case SESSION_ADD: {
+      const name = nextTabName();
       return state.set('activeUid', action.uid).setIn(
         ['sessions', action.uid],
         Session({
           cols: action.cols,
           rows: action.rows,
           uid: action.uid,
-          title: nextTabName(),
+          title: name,
+          tabName: name,
+          description: '',
           shell: action.shell ? action.shell.split('/').pop() : null,
           pid: action.pid,
           profile: action.profile
         })
       );
+    }
 
     case SESSION_SET_ACTIVE:
       return state.set('activeUid', action.uid);
@@ -157,6 +164,9 @@ const reducer: ISessionReducer = (state = initialState, action) => {
       }
       return state.setIn(['sessions', action.uid, 'title'], newTitle);
     }
+
+    case SESSION_SET_DESCRIPTION:
+      return state.setIn(['sessions', action.uid, 'description'], action.description);
 
     case SESSION_RESIZE:
       return state.setIn(
