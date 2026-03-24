@@ -35,7 +35,8 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
     openNewTab(defaultProfile);
   };
 
-  const handleChevronClick = (e: React.MouseEvent) => {
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
     e.stopPropagation();
     setOpen(!open);
   };
@@ -48,19 +49,12 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
   return (
     <div className="new_tab_wrapper" ref={ref}>
       <div className="new_tab_split" onDoubleClick={(e) => e.stopPropagation()}>
-        <div className="new_tab_plus" onClick={handleClick} title={`New ${defaultProfile} Tab`}>
+        <div className="new_tab_plus" onClick={handleClick} onContextMenu={handleContextMenu} title={`New Tab (right-click for profiles)`}>
           <svg viewBox="0 0 12 12" width="10" height="10">
             <line x1="6" y1="1" x2="6" y2="11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             <line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </div>
-        {shellProfiles.length > 1 && (
-          <div className="new_tab_arrow" onClick={handleChevronClick} title="Choose shell">
-            <svg viewBox="0 0 6 4" width="6" height="4">
-              <path d="M0 0 L3 3 L6 0" stroke="currentColor" strokeWidth="1.2" fill="none" strokeLinecap="round" />
-            </svg>
-          </div>
-        )}
       </div>
 
       {open && shellProfiles.length > 0 && (
@@ -80,7 +74,9 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
       <style jsx>{`
         .new_tab_wrapper {
           position: relative;
-          flex-shrink: 0;
+          flex: 0 0 auto;
+          z-index: 10;
+          -webkit-app-region: no-drag;
         }
 
         .new_tab_split {

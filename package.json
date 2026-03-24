@@ -41,6 +41,7 @@
     "open": "8.4.2",
     "ora": "8.0.1",
     "php-escape-shell": "1.0.0",
+    "rcedit": "^5.0.2",
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "react-redux": "8.1.3",

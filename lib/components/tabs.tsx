@@ -66,7 +66,9 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           className={`tabs_borderShim ${fullScreen ? 'tabs_borderShimUndo' : ''}`}
         />
       )}
-      <DropdownButton {...props} tabsVisible={true} />
+      <div className="tabs_newTabWrap">
+        <DropdownButton {...props} tabsVisible={true} />
+      </div>
       {props.customChildren}
 
       <style jsx>{`
@@ -84,6 +86,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           align-items: stretch;
           flex: 1 1 auto;
           min-width: 0;
+          -webkit-app-region: drag;
         }
 
         .tabs_title {
@@ -101,12 +104,15 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           max-height: 34px;
           display: flex;
           flex-flow: row;
-          margin-left: ${isMac ? '76px' : '0'};
+          margin: 0 0 0 ${isMac ? '76px' : '0'};
+          padding: 0;
           flex: 1 1 auto;
           min-width: 0;
           overflow-x: auto;
           overflow-y: hidden;
           scrollbar-width: none;
+          list-style: none;
+          -webkit-app-region: no-drag;
         }
 
         .tabs_list::-webkit-scrollbar {
@@ -115,6 +121,11 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
 
         .tabs_fullScreen {
           margin-left: -1px;
+        }
+
+        .tabs_newTabWrap {
+          flex: 0 0 auto;
+          -webkit-app-region: no-drag;
         }
 
         .tabs_borderShim {

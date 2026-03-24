@@ -35,7 +35,7 @@
         "arm64"
       ]
     },
-    "signAndEditExecutable": false,
+    "signAndEditExecutable": true,
     "rfc3161TimeStampServer": "http://timestamp.comodoca.com"
   },
   "nsis": {

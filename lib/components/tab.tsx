@@ -77,14 +77,13 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         .tab_tab {
           color: #999;
           list-style-type: none;
-          flex-grow: 1;
-          flex-shrink: 1;
-          flex-basis: 100px;
-          min-width: 60px;
-          max-width: 250px;
+          flex: 1 1 0;
+          min-width: 120px;
+          max-width: 240px;
           position: relative;
           background: #1a1a1a;
           border-right: 1px solid #333;
+          -webkit-app-region: no-drag;
         }
 
         .tab_tab:hover {
@@ -123,16 +122,20 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           width: 100%;
           position: relative;
           overflow: hidden;
+          padding-left: 8px;
+          padding-right: 28px;
+          box-sizing: border-box;
         }
 
         .tab_textInner {
-          padding: 0 24px;
+          padding: 0 12px;
           text-align: center;
           text-overflow: ellipsis;
           white-space: nowrap;
           overflow: hidden;
           flex: 1;
           line-height: 34px;
+          min-width: 0;
         }
 
         .tab_agentDot {

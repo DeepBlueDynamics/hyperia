@@ -81,7 +81,7 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
       onDoubleClick={handleMaximizeClick}
       ref={ref}
     >
-      {/* Single row: hamburger | tabs + new tab | drag region | window controls */}
+      {/* Single row: tabs + new tab */}
       <div className="header_bar" style={{borderColor}}>
         <Tabs
           {...getTabsProps(props, {
@@ -97,9 +97,6 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
             openNewTab: props.openNewTab
           })}
         />
-
-        {/* Drag region fills remaining space */}
-        <div className="header_dragRegion" />
       </div>
 
       {props.customChildrenBefore}
@@ -125,11 +122,6 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
           align-items: stretch;
           background: #1a1a1a;
           border-bottom: 1px solid #333;
-        }
-
-        .header_dragRegion {
-          flex: 0 0 40px;
-          -webkit-app-region: drag;
         }
 
         .header_shape,
