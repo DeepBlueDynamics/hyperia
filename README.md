@@ -81,12 +81,45 @@ npx electron-builder --linux
 
 ### Prerequisites
 
-- **Node.js** >= 18, **Yarn** 1.x
-- **Rust** (for sidecar): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- **Python** (for native module builds): Python 3.x with node-gyp
-- **macOS**: Xcode command line tools (`xcode-select --install`)
-- **Windows**: Visual Studio Build Tools with C++ workload
-- **Linux**: `build-essential`, `libx11-dev`, `libxkbfile-dev`
+**All platforms:**
+```bash
+# Node.js (>= 18) — https://nodejs.org or use nvm
+# Then install Yarn:
+npm install -g yarn
+
+# Rust (for sidecar)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+**macOS:**
+```bash
+# Xcode command line tools
+xcode-select --install
+
+# Homebrew (if you don't have it)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Node + Yarn via Homebrew (alternative to nvm)
+brew install node
+npm install -g yarn
+
+# Python (for native module builds)
+brew install python
+```
+
+**Windows:**
+- [Node.js](https://nodejs.org) — LTS installer, includes npm
+- `npm install -g yarn`
+- [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) — select "Desktop development with C++"
+- [Rust](https://rustup.rs)
+
+**Linux (Debian/Ubuntu):**
+```bash
+sudo apt install build-essential libx11-dev libxkbfile-dev python3
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install nodejs
+npm install -g yarn
+```
 
 ### MCP server for Claude Code
 
