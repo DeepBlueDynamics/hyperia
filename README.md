@@ -43,13 +43,50 @@ yarn run dev
 
 The sidecar starts automatically with the Electron app.
 
-### Packaged build (Windows)
+### Packaged builds
 
+**Windows:**
 ```bash
 yarn build
-npx electron-builder --win --x64 --dir
-# Output: dist/win-unpacked/Hyperia.exe
+npx electron-builder --win --x64
+# Output: dist/Hyperia-0.1.0-x64.exe (NSIS installer)
 ```
+
+**macOS:**
+```bash
+# Requires macOS with Xcode command line tools
+yarn build
+npx electron-builder --mac
+# Output: dist/Hyperia-0.1.0-mac-arm64.dmg (Apple Silicon)
+#         dist/Hyperia-0.1.0-mac-x64.dmg (Intel)
+```
+
+To build both architectures:
+```bash
+npx electron-builder --mac --arm64 --x64
+```
+
+Note: The sidecar must also be compiled for macOS:
+```bash
+cd sidecar
+cargo build --release
+```
+
+**Linux:**
+```bash
+yarn build
+npx electron-builder --linux
+# Output: dist/Hyperia-0.1.0.AppImage, .deb, .rpm
+```
+
+### Prerequisites
+
+- **Node.js** >= 18, **Yarn** 1.x
+- **Rust** (for sidecar): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- **Python** (for native module builds): Python 3.x with node-gyp
+- **macOS**: Xcode command line tools (`xcode-select --install`)
+- **Windows**: Visual Studio Build Tools with C++ workload
+- **Linux**: `build-essential`, `libx11-dev`, `libxkbfile-dev`
 
 ### MCP server for Claude Code
 
