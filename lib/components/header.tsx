@@ -128,9 +128,8 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
         }
 
         .header_dragRegion {
-          flex: 1;
+          flex: 0 0 40px;
           -webkit-app-region: drag;
-          min-width: 40px;
         }
 
         .header_shape,

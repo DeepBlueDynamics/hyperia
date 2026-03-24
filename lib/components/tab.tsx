@@ -118,22 +118,21 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         .tab_text {
           transition: color 0.2s ease;
           height: 34px;
-          display: block;
+          display: flex;
+          align-items: center;
           width: 100%;
           position: relative;
           overflow: hidden;
         }
 
         .tab_textInner {
-          position: absolute;
-          left: 24px;
-          right: 24px;
-          top: 0;
-          bottom: 0;
+          padding: 0 24px;
           text-align: center;
           text-overflow: ellipsis;
           white-space: nowrap;
           overflow: hidden;
+          flex: 1;
+          line-height: 34px;
         }
 
         .tab_agentDot {
