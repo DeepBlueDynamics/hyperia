@@ -125,7 +125,7 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
     if (group.sessionUid) return 1;
     const children = group.children || [];
     const {termGroups} = (this.props as any).parentProps || {};
-    if (!termGroups) return children.length || 1;
+    if (!termGroups) return (children.length || 1) as number;
     let count = 0;
     for (const cuid of children) {
       const child = termGroups[cuid];
@@ -181,7 +181,9 @@ const mapDispatchToProps = (dispatch: HyperDispatch, ownProps: TermGroupOwnProps
   }
 });
 
-const TermGroup = connect(mapStateToProps, mapDispatchToProps, null, {forwardRef: true})(TermGroup_);
+const TermGroup = connect(mapStateToProps, mapDispatchToProps, null, {
+  forwardRef: true
+})(TermGroup_);
 
 const DecoratedTermGroup = decorate(TermGroup, 'TermGroup');
 

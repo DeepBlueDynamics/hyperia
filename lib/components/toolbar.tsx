@@ -1,7 +1,7 @@
 import React, {useState, useRef, useEffect} from 'react';
-import {ipcRenderer} from '../utils/ipc';
 
 import type {configOptions} from '../../typings/config';
+import {ipcRenderer} from '../utils/ipc';
 
 export interface Props {
   defaultProfile: string;
@@ -68,7 +68,12 @@ const Toolbar = ({defaultProfile, profiles, openNewTab}: Props) => {
         {/* New sticky */}
         <div className="toolbar_btn" onClick={handleNewSticky} title="New Sticky">
           <svg viewBox="0 0 14 14" width="13" height="13">
-            <path d="M2 1h10a1 1 0 0 1 1 1v7l-4 4H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" strokeWidth="1.2" />
+            <path
+              d="M2 1h10a1 1 0 0 1 1 1v7l-4 4H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.2"
+            />
             <path d="M9 8v5l4-4H9z" fill="currentColor" opacity="0.35" />
             <line x1="4" y1="5" x2="10" y2="5" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
             <line x1="4" y1="7.5" x2="8" y2="7.5" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
@@ -78,7 +83,7 @@ const Toolbar = ({defaultProfile, profiles, openNewTab}: Props) => {
 
       {profileOpen && shellProfiles.length > 0 && (
         <div className="toolbar_dropdown">
-          {shellProfiles.map((p: any) => (
+          {shellProfiles.map((p: {name: string; config?: Record<string, unknown>}) => (
             <div
               key={p.name}
               className={`toolbar_option ${p.name === defaultProfile ? 'toolbar_option_active' : ''}`}
@@ -107,7 +112,11 @@ const Toolbar = ({defaultProfile, profiles, openNewTab}: Props) => {
           border-radius: 0 0 6px 6px;
           padding: 2px;
           opacity: 0.25;
-          transition: opacity 0.3s ease, background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+          transition:
+            opacity 0.3s ease,
+            background 0.3s ease,
+            border-color 0.3s ease,
+            box-shadow 0.3s ease;
         }
 
         .toolbar_wrap:hover .toolbar_bar {
@@ -129,7 +138,10 @@ const Toolbar = ({defaultProfile, profiles, openNewTab}: Props) => {
           cursor: pointer;
           color: #556;
           border-radius: 3px;
-          transition: color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+          transition:
+            color 0.2s ease,
+            background 0.2s ease,
+            box-shadow 0.2s ease;
           position: relative;
         }
 
@@ -185,7 +197,9 @@ const Toolbar = ({defaultProfile, profiles, openNewTab}: Props) => {
           color: #8af;
           cursor: pointer;
           white-space: nowrap;
-          transition: background 0.15s ease, color 0.15s ease;
+          transition:
+            background 0.15s ease,
+            color 0.15s ease;
         }
 
         .toolbar_option:hover {

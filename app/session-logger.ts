@@ -4,8 +4,9 @@
 
 import {createWriteStream} from 'fs';
 import type {WriteStream} from 'fs';
-import {mkdirpSync} from 'fs-extra';
 import {join} from 'path';
+
+import {mkdirpSync} from 'fs-extra';
 
 import {cfgDir} from './config/paths';
 
@@ -13,7 +14,13 @@ const logDir = join(cfgDir, 'logs');
 const activeLoggers = new Map<string, WriteStream>();
 
 function sanitizeFilename(name: string): string {
-  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/\s+/g, '_').substring(0, 60);
+  return (
+    name
+      // eslint-disable-next-line no-control-regex
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+      .replace(/\s+/g, '_')
+      .substring(0, 60)
+  );
 }
 
 function timestamp(): string {

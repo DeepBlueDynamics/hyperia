@@ -99,7 +99,11 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
               style={{backgroundColor: agentDotColor}}
             />
           )}
-          <span title={displayText} className={`tab_textInner ${isActive ? 'tab_textInnerActive' : ''}`} onDoubleClick={handleDoubleClick}>
+          <span
+            title={displayText}
+            className={`tab_textInner ${isActive ? 'tab_textInnerActive' : ''}`}
+            onDoubleClick={handleDoubleClick}
+          >
             {hasActivity && !isActive && <span className="tab_bell">🔔</span>}
             {renaming ? (
               <input
@@ -211,11 +215,22 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         }
 
         @keyframes tab-bell-ring {
-          0%, 100% { transform: rotate(0deg); }
-          20% { transform: rotate(14deg); }
-          40% { transform: rotate(-14deg); }
-          60% { transform: rotate(8deg); }
-          80% { transform: rotate(-8deg); }
+          0%,
+          100% {
+            transform: rotate(0deg);
+          }
+          20% {
+            transform: rotate(14deg);
+          }
+          40% {
+            transform: rotate(-14deg);
+          }
+          60% {
+            transform: rotate(8deg);
+          }
+          80% {
+            transform: rotate(-8deg);
+          }
         }
 
         .tab_textInner {
@@ -242,10 +257,12 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         }
 
         @keyframes tab-scroll {
-          0%, 20% {
+          0%,
+          20% {
             transform: translateX(0);
           }
-          80%, 100% {
+          80%,
+          100% {
             transform: translateX(var(--scroll-distance));
           }
         }

@@ -86,7 +86,7 @@ function updateTrayMenu() {
         (app as any).createWindow?.();
       }
     },
-    {type: 'separator'},
+    {type: 'separator'}
   ];
 
   // Recent events log
@@ -106,10 +106,7 @@ function updateTrayMenu() {
     });
   }
 
-  menuItems.push(
-    {type: 'separator'},
-    {label: 'Quit', click: () => app.quit()}
-  );
+  menuItems.push({type: 'separator'}, {label: 'Quit', click: () => app.quit()});
   tray.setContextMenu(Menu.buildFromTemplate(menuItems));
 }
 
@@ -140,5 +137,9 @@ export default function notify(title: string, body = '', details: {error?: any} 
 }
 
 const _createNotification = (title: string, body: string) => {
-  new Notification({title, body, ...(process.platform === 'linux' && {icon})}).show();
+  new Notification({
+    title,
+    body,
+    ...(process.platform === 'linux' && {icon})
+  }).show();
 };

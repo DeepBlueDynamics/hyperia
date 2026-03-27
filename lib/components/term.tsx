@@ -41,7 +41,10 @@ const isWebgl2Supported = (() => {
   return () => {
     if (isSupported === undefined) {
       const canvas = document.createElement('canvas');
-      const gl = canvas.getContext('webgl2', {depth: false, antialias: false});
+      const gl = canvas.getContext('webgl2', {
+        depth: false,
+        antialias: false
+      });
       isSupported = gl instanceof window.WebGL2RenderingContext;
     }
     return isSupported;
@@ -513,12 +516,14 @@ export default class Term extends React.PureComponent<
   render() {
     const splitLabel = this.props.splitLabel;
     return (
-      <div className={`term_fit ${this.props.isTermActive ? 'term_active' : ''}`} onMouseUp={this.onMouseUp} style={{position: 'relative'}}>
+      <div
+        className={`term_fit ${this.props.isTermActive ? 'term_active' : ''}`}
+        onMouseUp={this.onMouseUp}
+        style={{position: 'relative'}}
+      >
         {this.props.customChildrenBefore}
         <div ref={this.onTermWrapperRef} className="term_fit term_wrapper" />
-        {splitLabel && (
-          <div className="term_splitLabel">{splitLabel}</div>
-        )}
+        {splitLabel && <div className="term_splitLabel">{splitLabel}</div>}
         {this.props.customChildren}
         {this.props.search ? (
           <SearchBox
@@ -532,19 +537,28 @@ export default class Term extends React.PureComponent<
             toggleCaseSensitive={() =>
               this.setState({
                 ...this.state,
-                searchOptions: {...this.state.searchOptions, caseSensitive: !this.state.searchOptions.caseSensitive}
+                searchOptions: {
+                  ...this.state.searchOptions,
+                  caseSensitive: !this.state.searchOptions.caseSensitive
+                }
               })
             }
             toggleWholeWord={() =>
               this.setState({
                 ...this.state,
-                searchOptions: {...this.state.searchOptions, wholeWord: !this.state.searchOptions.wholeWord}
+                searchOptions: {
+                  ...this.state.searchOptions,
+                  wholeWord: !this.state.searchOptions.wholeWord
+                }
               })
             }
             toggleRegex={() =>
               this.setState({
                 ...this.state,
-                searchOptions: {...this.state.searchOptions, regex: !this.state.searchOptions.regex}
+                searchOptions: {
+                  ...this.state.searchOptions,
+                  regex: !this.state.searchOptions.regex
+                }
               })
             }
             selectionColor={this.props.selectionColor}

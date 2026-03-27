@@ -6,7 +6,7 @@ import Toolbar from '../components/toolbar';
 
 const mapStateToProps = (state: HyperState) => ({
   defaultProfile: state.ui.defaultProfile,
-  profiles: state.ui.profiles.asMutable({deep: true})
+  profiles: state.ui.profiles.asMutable({deep: true}) as any
 });
 
 const mapDispatchToProps = (dispatch: HyperDispatch) => ({

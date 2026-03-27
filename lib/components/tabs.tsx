@@ -43,15 +43,18 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
     e.dataTransfer.dropEffect = 'move';
   }, []);
 
-  const handleDrop = useCallback((targetUid: string) => {
-    const fromUid = dragUidRef.current;
-    dragUidRef.current = null;
-    if (!fromUid || fromUid === targetUid || !onMoveTab) return;
-    const targetIndex = tabs.findIndex((t) => t.uid === targetUid);
-    if (targetIndex >= 0) {
-      onMoveTab(fromUid, targetIndex);
-    }
-  }, [tabs, onMoveTab]);
+  const handleDrop = useCallback(
+    (targetUid: string) => {
+      const fromUid = dragUidRef.current;
+      dragUidRef.current = null;
+      if (!fromUid || fromUid === targetUid || !onMoveTab) return;
+      const targetIndex = tabs.findIndex((t) => t.uid === targetUid);
+      if (targetIndex >= 0) {
+        onMoveTab(fromUid, targetIndex);
+      }
+    },
+    [tabs, onMoveTab]
+  );
 
   const handleDragEnd = useCallback(() => {
     dragUidRef.current = null;

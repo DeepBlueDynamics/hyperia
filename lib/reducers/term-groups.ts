@@ -222,11 +222,9 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
     case TERM_GROUP_EXIT:
       return removeGroup(state, action.uid);
     case TERM_GROUP_REORDER: {
-      const {fromUid, toIndex} = action as any;
+      const {fromUid, toIndex} = action as unknown as {fromUid: string; toIndex: number};
       // Get root group UIDs in current order
-      const rootUids = Object.keys(state.termGroups).filter(
-        (uid) => !state.termGroups[uid].parentUid
-      );
+      const rootUids = Object.keys(state.termGroups).filter((uid) => !state.termGroups[uid].parentUid);
       const fromIndex = rootUids.indexOf(fromUid);
       if (fromIndex < 0 || fromIndex === toIndex || toIndex < 0 || toIndex >= rootUids.length) {
         return state;
@@ -235,9 +233,7 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       rootUids.splice(fromIndex, 1);
       rootUids.splice(toIndex, 0, fromUid);
       // Rebuild termGroups with root groups in new order, preserving child groups
-      const childUids = Object.keys(state.termGroups).filter(
-        (uid) => !!state.termGroups[uid].parentUid
-      );
+      const childUids = Object.keys(state.termGroups).filter((uid) => !!state.termGroups[uid].parentUid);
       const newOrder = [...rootUids, ...childUids];
       const reordered: Record<string, any> = {};
       for (const uid of newOrder) {

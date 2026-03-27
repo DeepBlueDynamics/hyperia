@@ -66,6 +66,7 @@ function findSidecarBinary(): string | null {
 
   for (const candidate of candidates) {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call
       require('fs').accessSync(candidate);
       return candidate;
     } catch {
@@ -79,18 +80,32 @@ function findSidecarBinary(): string | null {
 }
 
 function killProcessOnPort(port: number): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-shadow
   return new Promise((resolve) => {
     if (process.platform === 'win32') {
       // Find and kill any process using our port
-      const find = spawn('cmd', ['/c', `for /f "tokens=5" %a in ('netstat -aon ^| findstr :${port} ^| findstr LISTENING') do @echo %a`], {shell: true});
+      const find = spawn(
+        'cmd',
+        ['/c', `for /f "tokens=5" %a in ('netstat -aon ^| findstr :${port} ^| findstr LISTENING') do @echo %a`],
+        {shell: true}
+      );
       let pids = '';
-      find.stdout?.on('data', (d: Buffer) => { pids += d.toString(); });
+      find.stdout?.on('data', (d: Buffer) => {
+        pids += d.toString();
+      });
       find.on('close', () => {
-        const pidList = pids.trim().split(/\s+/).filter((p) => p && p !== '0');
+        const pidList = pids
+          .trim()
+          .split(/\s+/)
+          .filter((p) => p && p !== '0');
         if (pidList.length > 0) {
           isDev && console.log(`[sidecar] Killing processes on port ${port}: ${pidList.join(', ')}`);
           for (const pid of pidList) {
-            try { process.kill(parseInt(pid, 10), 'SIGTERM'); } catch { /* already dead */ }
+            try {
+              process.kill(parseInt(pid, 10), 'SIGTERM');
+            } catch {
+              /* already dead */
+            }
           }
           setTimeout(resolve, 1000);
         } else {
@@ -101,10 +116,16 @@ function killProcessOnPort(port: number): Promise<void> {
     } else {
       const find = spawn('lsof', ['-ti', `:${port}`]);
       let pids = '';
-      find.stdout?.on('data', (d: Buffer) => { pids += d.toString(); });
+      find.stdout?.on('data', (d: Buffer) => {
+        pids += d.toString();
+      });
       find.on('close', () => {
         for (const pid of pids.trim().split('\n').filter(Boolean)) {
-          try { process.kill(parseInt(pid, 10), 'SIGTERM'); } catch { /* already dead */ }
+          try {
+            process.kill(parseInt(pid, 10), 'SIGTERM');
+          } catch {
+            /* already dead */
+          }
         }
         setTimeout(resolve, 500);
       });
@@ -156,11 +177,17 @@ function killSidecar() {
     console.log('[sidecar] Shutting down');
     try {
       sidecarProcess.kill('SIGTERM');
-    } catch { /* already dead */ }
+    } catch {
+      /* already dead */
+    }
     const pid = sidecarProcess.pid;
     setTimeout(() => {
       if (pid) {
-        try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          /* already dead */
+        }
       }
     }, 2000);
     sidecarProcess = null;
@@ -215,7 +242,10 @@ async function installDevExtensions(isDev_: boolean) {
 
   return Promise.all(
     extensions.map((extension) =>
-      installer(extension, {forceDownload, loadExtensionOptions: {allowFileAccess: true}}).catch((err: Error) => {
+      installer(extension, {
+        forceDownload,
+        loadExtensionOptions: {allowFileAccess: true}
+      }).catch((err: Error) => {
         isDev && console.warn(`Failed to install devtools extension: ${err.message}`);
       })
     )
@@ -289,7 +319,9 @@ app.on('second-instance', () => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   const win = (app as any).getLastFocusedWindow?.();
   if (win) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     if (win.isMinimized()) win.restore();
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     win.focus();
   }
 });

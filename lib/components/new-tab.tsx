@@ -60,8 +60,14 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
     <div className="new_tab_wrapper" ref={ref}>
       <div className="new_tab_split" onDoubleClick={(e) => e.stopPropagation()}>
         {/* +> New terminal tab */}
-        <div className="new_tab_btn" onClick={handleClick} onContextMenu={handleContextMenu} title="New Tab (right-click for profiles)">
-          <span className="new_tab_icon">+</span><span className="new_tab_arrow_icon">&rsaquo;</span>
+        <div
+          className="new_tab_btn"
+          onClick={handleClick}
+          onContextMenu={handleContextMenu}
+          title="New Tab (right-click for profiles)"
+        >
+          <span className="new_tab_icon">+</span>
+          <span className="new_tab_arrow_icon">&rsaquo;</span>
         </div>
         {/* New window */}
         <div className="new_tab_btn" onClick={handleNewWindow} title="New Window">
@@ -73,7 +79,12 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
         {/* New sticky note */}
         <div className="new_tab_btn" onClick={handleNewNote} title="New Note">
           <svg viewBox="0 0 14 14" width="12" height="12">
-            <path d="M2 1h10a1 1 0 0 1 1 1v7l-4 4H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" strokeWidth="1.3" />
+            <path
+              d="M2 1h10a1 1 0 0 1 1 1v7l-4 4H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.3"
+            />
             <path d="M9 8v5l4-4H9z" fill="currentColor" opacity="0.4" />
             <line x1="4" y1="5" x2="10" y2="5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
             <line x1="4" y1="7.5" x2="8" y2="7.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />

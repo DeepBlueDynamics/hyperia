@@ -311,7 +311,11 @@ function handleCommand(msg: Record<string, unknown>) {
         // The renderer listens for 'session data send' with a uid to focus that pane.
         const targetUid = msg.uid as string | undefined;
         if (targetUid) {
-          win.rpc.emit('session data send', {uid: targetUid, data: '', escaped: false});
+          win.rpc.emit('session data send', {
+            uid: targetUid,
+            data: '',
+            escaped: false
+          });
         }
         sendResult(seq, 'ok');
       } else {
@@ -451,8 +455,24 @@ export function stopBridge() {
 }
 
 /** Register a PTY session with the bridge. Call after session creation. */
-export function registerSession(uid: string, session: Session, rows: number, cols: number, name: string = 'shell', tabName: string = '', rootTabUid: string = '') {
-  const tracked: TrackedSession = {session, rows, cols, name, tabName: tabName || name, description: '', rootTabUid: rootTabUid || uid};
+export function registerSession(
+  uid: string,
+  session: Session,
+  rows: number,
+  cols: number,
+  name: string = 'shell',
+  tabName: string = '',
+  rootTabUid: string = ''
+) {
+  const tracked: TrackedSession = {
+    session,
+    rows,
+    cols,
+    name,
+    tabName: tabName || name,
+    description: '',
+    rootTabUid: rootTabUid || uid
+  };
   trackedSessions.set(uid, tracked);
 
   // Stream PTY output to sidecar as base64-encoded SessionData
@@ -468,8 +488,8 @@ export function registerSession(uid: string, session: Session, rows: number, col
 
   // Clean up on exit
   session.on('exit', () => {
-    const tracked = trackedSessions.get(uid);
-    console.log(`[bridge] Session exit: ${uid} (${tracked?.tabName || 'unknown'})`);
+    const exitingSession = trackedSessions.get(uid);
+    console.log(`[bridge] Session exit: ${uid} (${exitingSession?.tabName || 'unknown'})`);
     trackedSessions.delete(uid);
     lastUserActivity.delete(uid);
     // Fail any queued agent writes

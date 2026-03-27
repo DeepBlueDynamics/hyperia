@@ -17,16 +17,24 @@ import {v4 as uuidv4} from 'uuid';
 
 import type {sessionExtraOptions} from '../../typings/common';
 import type {configOptions} from '../../typings/config';
-import {registerSession, notifyResize, notifyUserActivity, updateSessionDescription, updateSessionTabName, getSessionRootTab, forceRemoveSession} from '../bridge';
+import {
+  registerSession,
+  notifyResize,
+  notifyUserActivity,
+  updateSessionDescription,
+  updateSessionTabName,
+  getSessionRootTab,
+  forceRemoveSession
+} from '../bridge';
 import {execCommand} from '../commands';
 import {getDefaultProfile} from '../config';
 import {icon, homeDirectory} from '../config/paths';
 import fetchNotifications from '../notifications';
-import {startSessionLog, writeSessionLog, endSessionLog} from '../session-logger';
 import notify from '../notify';
 import {decorateSessionOptions, decorateSessionClass} from '../plugins';
 import createRPC from '../rpc';
 import Session from '../session';
+import {startSessionLog, writeSessionLog, endSessionLog} from '../session-logger';
 import updater from '../updater';
 import {setRendererType, unsetRendererType} from '../utils/renderer-utils';
 import toElectronBackgroundColor from '../utils/to-electron-background-color';
@@ -286,8 +294,16 @@ export function newWindow(
     // Register with sidecar bridge for agent control
     // If this is a split, inherit the rootTabUid from the parent session
     const parentRootTab = options.activeUid ? getSessionRootTab(options.activeUid) : '';
-    const rootTabUid = options.splitDirection ? (parentRootTab || options.activeUid || options.uid) : options.uid;
-    registerSession(options.uid, session, options.rows || 24, options.cols || 80, session.shell || 'shell', cuteTabName, rootTabUid);
+    const rootTabUid = options.splitDirection ? parentRootTab || options.activeUid || options.uid : options.uid;
+    registerSession(
+      options.uid,
+      session,
+      options.rows || 24,
+      options.cols || 80,
+      session.shell || 'shell',
+      cuteTabName,
+      rootTabUid
+    );
 
     // Start session logging if enabled
     if (cfg.sessionLogging) {
@@ -369,7 +385,9 @@ export function newWindow(
   });
   rpc.on('open context menu', (selection) => {
     const {createWindow} = app;
-    Menu.buildFromTemplate(contextMenuTemplate(createWindow, selection)).popup({window});
+    Menu.buildFromTemplate(contextMenuTemplate(createWindow, selection)).popup({
+      window
+    });
   });
   rpc.on('open hamburger menu', ({x, y}) => {
     Menu.getApplicationMenu()!.popup({x: Math.ceil(x), y: Math.ceil(y)});

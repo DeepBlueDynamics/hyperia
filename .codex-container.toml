@@ -1,0 +1,10 @@
+mcp_tools = ["time-tool.py", "calculate.py", "log-reader.py", "agentmail.py", "gnosis-files-basic.py", "gnosis-files-diff.py", "gnosis-files-search.py", "gnosis-crawl.py", "monitor-server.py", "session-tools.py", "mcp-config.py", "product-query-rewriter.py", "weather.py"]
+
+LAST_SESSION = '019d2125-4161-7531-b5b7-83ab3bad765b'
+
+[last_session]
+last_session_id = '019d2125-4161-7531-b5b7-83ab3bad765b'
+last_session_file = 'C:\Users\kordl\.codex-service\.codex\sessions\2026\03\24\rollout-2026-03-24T18-39-42-019d2125-4161-7531-b5b7-83ab3bad765b.jsonl'
+last_session_updated = '2026-03-24T18:42:20.8240609Z'
+last_session_when = 'exit'
+

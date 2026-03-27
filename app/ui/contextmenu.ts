@@ -1,5 +1,5 @@
-import type {MenuItemConstructorOptions, BrowserWindow} from 'electron';
 import {ipcMain} from 'electron';
+import type {MenuItemConstructorOptions, BrowserWindow} from 'electron';
 
 import {execCommand} from '../commands';
 import editMenu from '../menus/menus/edit';
