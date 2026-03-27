@@ -11,24 +11,24 @@ use rmcp::{
 pub struct KeysRequest {
     /// Keystrokes to type into the terminal. Use \n for Enter, \t for Tab.
     pub keys: String,
-    /// Pane index (default: 0 = first pane)
-    pub pane: Option<usize>,
+    /// Pane split label (e.g. "a", "b", "c"). Use terminal_status to see available panes and their labels. Omit for the first/focused pane.
+    pub pane: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RunRequest {
     /// Shell command to execute (Enter is appended automatically)
     pub command: String,
-    /// Pane index (default: 0)
-    pub pane: Option<usize>,
+    /// Pane split label (e.g. "a", "b"). Use terminal_status to see available panes and their labels. Omit for the first/focused pane.
+    pub pane: Option<String>,
     /// Milliseconds to wait for output before reading screen (default: 2000)
     pub wait_ms: Option<u64>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ScreenRequest {
-    /// Pane index to read (default: 0)
-    pub pane: Option<usize>,
+    /// Pane split label (e.g. "a", "b"). Use terminal_status to see available panes. Omit for the first pane.
+    pub pane: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -39,8 +39,8 @@ pub struct SplitRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct FocusRequest {
-    /// Pane index to focus
-    pub id: usize,
+    /// Pane split label to focus (e.g. "a", "b", "c"). Use terminal_status to see available panes.
+    pub pane: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -188,23 +188,24 @@ impl HyperiaMcp {
         }
     }
 
-    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\t for Tab.")]
+    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab. These are unescaped automatically. Hint: call terminal_status first to see pane labels (a, b, c...) and pick which pane to target.")]
     async fn terminal_keys(
         &self,
         Parameters(req): Parameters<KeysRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = req.pane.unwrap_or(0);
+        let pane = self.resolve_pane(req.pane.as_deref()).await?;
         self.focus_pane(pane).await;
-        let resp = self.post_text(&format!("/api/type/{}", pane), &req.keys).await?;
+        let keys = unescape_keys(&req.keys);
+        let resp = self.post_text(&format!("/api/type/{}", pane), &keys).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Run a shell command. Sends command + Enter, waits, returns screen content.")]
+    #[tool(description = "Run a shell command in a terminal pane. Sends command + Enter, waits, returns screen content. Hint: use terminal_status to list panes and their split labels, then pass the label (e.g. \"b\") to target a specific pane.")]
     async fn terminal_run(
         &self,
         Parameters(req): Parameters<RunRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = req.pane.unwrap_or(0);
+        let pane = self.resolve_pane(req.pane.as_deref()).await?;
         self.focus_pane(pane).await;
         let keys = format!("{}\r\n", req.command);
         self.post_text(&format!("/api/type/{}", pane), &keys).await?;
@@ -216,23 +217,23 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "Read the current screen content of a terminal pane.")]
+    #[tool(description = "Read the current screen content of a terminal pane. Hint: call terminal_status first to see available panes and their split labels (a, b, c...).")]
     async fn terminal_screen(
         &self,
         Parameters(req): Parameters<ScreenRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = req.pane.unwrap_or(0);
+        let pane = self.resolve_pane(req.pane.as_deref()).await?;
         let text = self.get(&format!("/api/screen/{}", pane)).await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "List all open panes with IDs, names, dimensions, and PIDs.")]
+    #[tool(description = "List all open terminal panes with their split labels, tab names, dimensions, and PIDs. Each pane in a split is labeled a, b, c, etc. Use these labels to address panes in other tools like terminal_run, terminal_keys, terminal_screen, and terminal_focus.")]
     async fn terminal_status(&self) -> Result<CallToolResult, ErrorData> {
         let text = self.get("/api/status").await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "Split the focused pane. Direction: 'horizontal' or 'vertical' (default).")]
+    #[tool(description = "Split the currently focused pane into two. Direction: 'horizontal' (top/bottom) or 'vertical' (left/right, default). The new panes will be labeled with the next available letters. Use terminal_status after splitting to see the updated labels.")]
     async fn terminal_split(
         &self,
         Parameters(req): Parameters<SplitRequest>,
@@ -244,12 +245,13 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Focus a specific pane by index.")]
+    #[tool(description = "Focus a specific pane by its split label (e.g. \"a\", \"b\", \"c\"). Hint: use terminal_status to see available panes and their labels.")]
     async fn terminal_focus(
         &self,
         Parameters(req): Parameters<FocusRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let body = serde_json::json!({"id": req.id});
+        let pane = self.resolve_pane(Some(&req.pane)).await?;
+        let body = serde_json::json!({"id": pane});
         let resp = self.post_json("/api/pane/focus", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
@@ -493,7 +495,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Read all pane screens in the current tab at once. Returns labeled output for each visible pane.")]
+    #[tool(description = "Read all pane screens in the current tab at once. Returns labeled output for each visible pane with their split labels (a, b, c...). Great for getting a holistic view of everything happening across splits.")]
     async fn tab_snapshot(&self) -> Result<CallToolResult, ErrorData> {
         let status_text = self.get("/api/status").await?;
         let status: serde_json::Value = serde_json::from_str(&status_text)
@@ -504,14 +506,22 @@ impl HyperiaMcp {
             for pane in panes {
                 let id = pane["id"].as_u64().unwrap_or(0);
                 let name = pane["name"].as_str().unwrap_or("unknown");
+                let label = pane["splitLabel"].as_str().unwrap_or("");
+                let tab_name = pane["tabName"].as_str().unwrap_or("");
                 let cols = pane["cols"].as_u64().unwrap_or(0);
                 let rows = pane["rows"].as_u64().unwrap_or(0);
                 let screen = self.get(&format!("/api/screen/{}", id)).await
                     .unwrap_or_else(|_| "(error reading screen)".into());
 
+                let pane_label = if label.is_empty() {
+                    format!("{}", tab_name)
+                } else {
+                    format!("{} ({})", tab_name, label)
+                };
+
                 output.push_str(&format!(
-                    "=== Pane {} | {} | {}x{} ===\n{}\n\n",
-                    id, name, cols, rows, screen.trim()
+                    "=== {} | {} | {}x{} ===\n{}\n\n",
+                    pane_label, name, cols, rows, screen.trim()
                 ));
             }
         }
@@ -660,6 +670,29 @@ impl HyperiaMcp {
     }
 }
 
+// -- Key unescaping --
+
+/// Convert literal escape sequences (\n, \r, \t) to actual control characters.
+fn unescape_keys(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push_str("\r\n"), // \n → Enter (CR+LF for terminal)
+                Some('r') => out.push('\r'),
+                Some('t') => out.push('\t'),
+                Some('\\') => out.push('\\'),
+                Some(other) => { out.push('\\'); out.push(other); }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 // -- Shell state detection --
 
 struct ShellStateInfo {
@@ -767,6 +800,38 @@ fn detect_shell_state(screen: &str) -> ShellStateInfo {
 // -- Helper methods --
 
 impl HyperiaMcp {
+    /// Resolve a pane label (e.g. "a", "b") to a pane index. Falls back to 0 if no label given.
+    async fn resolve_pane(&self, label: Option<&str>) -> Result<usize, ErrorData> {
+        let label = match label {
+            Some(l) if !l.is_empty() => l,
+            _ => return Ok(0),
+        };
+
+        // If it's a numeric string, use it directly as an index (backwards compat)
+        if let Ok(idx) = label.parse::<usize>() {
+            return Ok(idx);
+        }
+
+        let status_text = self.get("/api/status").await?;
+        let status: serde_json::Value = serde_json::from_str(&status_text)
+            .map_err(|e| ErrorData::internal_error(format!("Parse: {e}"), None))?;
+
+        if let Some(panes) = status["panes"].as_array() {
+            for pane in panes {
+                if pane["splitLabel"].as_str() == Some(label) {
+                    if let Some(id) = pane["id"].as_u64() {
+                        return Ok(id as usize);
+                    }
+                }
+            }
+        }
+
+        Err(ErrorData::invalid_params(
+            format!("No pane with label '{}'. Use terminal_status to see available panes.", label),
+            None,
+        ))
+    }
+
     /// Focus a pane by index (fire-and-forget, best-effort).
     async fn focus_pane(&self, pane: usize) {
         let body = serde_json::json!({"id": pane});
@@ -863,16 +928,21 @@ impl ServerHandler for HyperiaMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "Hyperia MCP server. Controls a running Hyperia terminal emulator. \
-                 Tools: terminal_keys, terminal_run, terminal_screen, terminal_status, \
-                 terminal_split, terminal_focus, terminal_close, terminal_new_tab, \
-                 sidecar_logs, agent_status, \
-                 voice_status, voice_start, voice_stop, voice_toggle, \
-                 style_list, style_create, style_delete, \
-                 telemetry_toggle, telemetry_snapshot, telemetry_record, telemetry_reset, \
-                 dashboard_widgets, tab_snapshot, shell_state, shell_confirm, \
-                 deck_info, deck_button_image, deck_button_color, deck_touchstrip, \
-                 deck_brightness, deck_knob, deck_screenshot."
+                "Hyperia MCP server — controls a running Hyperia terminal emulator. \
+                 \n\nGetting started: call terminal_status to see all open panes with their \
+                 split labels (a, b, c...) and tab names. Use these labels to address specific \
+                 panes in terminal_run, terminal_keys, terminal_screen, and terminal_focus. \
+                 For a full view of all pane contents at once, use tab_snapshot. \
+                 \n\nTerminal: terminal_keys, terminal_run, terminal_screen, terminal_status, \
+                 terminal_split, terminal_focus, terminal_close, terminal_new_tab, tab_snapshot, \
+                 shell_state, shell_confirm. \
+                 \n\nAgent: agent_status, auto_describe. \
+                 \n\nVoice (Auracle): voice_status, voice_start, voice_stop, voice_toggle. \
+                 \n\nStyles: style_list, style_create, style_delete. \
+                 \n\nTelemetry: telemetry_toggle, telemetry_snapshot, telemetry_record, telemetry_reset. \
+                 \n\nStream Deck: deck_info, deck_button_image, deck_button_color, deck_touchstrip, \
+                 deck_brightness, deck_knob, deck_screenshot. \
+                 \n\nLogs: sidecar_logs."
                     .into(),
             ),
             capabilities: ServerCapabilities::builder()

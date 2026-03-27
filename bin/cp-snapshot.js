@@ -48,6 +48,31 @@ exports.default = async (context) => {
       ? `${context.appOutDir}/Hyperia.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources`
       : context.appOutDir;
   copySnapshot(pathToElectron, archToCopy);
+
+  // Stamp custom icon into exe on Windows (since signAndEditExecutable is false)
+  if (process.platform === 'win32') {
+    const exePath = path.join(context.appOutDir, 'Hyperia.exe');
+    const icoPath = path.resolve(__dirname, '..', 'build', 'icon.ico');
+    if (fs.existsSync(exePath) && fs.existsSync(icoPath)) {
+      try {
+        const rcedit = require('rcedit');
+        console.log('Stamping icon into', exePath);
+        await rcedit(exePath, {'icon': icoPath});
+        console.log('Icon stamped successfully');
+      } catch (e) {
+        // Try direct binary as fallback
+        const rceditBin = path.resolve(__dirname, '..', 'node_modules', 'rcedit', 'bin', 'rcedit.exe');
+        if (fs.existsSync(rceditBin)) {
+          const {execFileSync} = require('child_process');
+          console.log('Stamping icon with rcedit binary');
+          execFileSync(rceditBin, [exePath, '--set-icon', icoPath]);
+          console.log('Icon stamped successfully (binary)');
+        } else {
+          console.warn('rcedit not available, icon not stamped:', e.message);
+        }
+      }
+    }
+  }
 };
 
 if (require.main === module) {

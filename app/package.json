@@ -1,8 +1,8 @@
 {
   "name": "hyperia",
   "productName": "Hyperia",
-  "description": "The shell that remembers everything — and acts on it",
-  "version": "0.1.0",
+  "description": "She's a ghost in your shell.",
+  "version": "0.3.1",
   "license": "MIT",
   "author": {
     "name": "Deep Blue Dynamics",

@@ -86,6 +86,10 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
 
     onDescribe: (uid: string, description: string) => {
       dispatch(setSessionDescription(uid, description) as any);
+    },
+
+    onMoveTab: (fromUid: string, toIndex: number) => {
+      dispatch({type: 'TERM_GROUP_REORDER', fromUid, toIndex} as any);
     }
   };
 };

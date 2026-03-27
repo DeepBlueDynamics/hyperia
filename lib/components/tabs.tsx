@@ -3,15 +3,18 @@ import React, {forwardRef, useEffect, useRef, useCallback} from 'react';
 import type {TabsProps} from '../../typings/hyper';
 import {decorate, getTabProps} from '../utils/plugins';
 
-import DropdownButton from './new-tab';
 import Tab_ from './tab';
 
 const Tab = decorate(Tab_, 'Tab');
 const isMac = /Mac/.test(navigator.userAgent);
+const isWindows = /Windows/.test(navigator.userAgent);
+const trailingDragWidth = isMac ? 0 : isWindows ? 140 : 40;
 
 const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   const {tabs = [], borderColor, onChange, onClose, onDescribe, fullScreen} = props;
+  const onMoveTab = (props as any).onMoveTab as ((fromUid: string, toIndex: number) => void) | undefined;
   const listRef = useRef<HTMLUListElement>(null);
+  const dragUidRef = useRef<string | null>(null);
 
   // Scroll active tab into view
   useEffect(() => {
@@ -28,6 +31,30 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
     if (listRef.current) {
       listRef.current.scrollLeft += e.deltaY;
     }
+  }, []);
+
+  // Tab drag-to-reorder
+  const handleDragStart = useCallback((uid: string) => {
+    dragUidRef.current = uid;
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  const handleDrop = useCallback((targetUid: string) => {
+    const fromUid = dragUidRef.current;
+    dragUidRef.current = null;
+    if (!fromUid || fromUid === targetUid || !onMoveTab) return;
+    const targetIndex = tabs.findIndex((t) => t.uid === targetUid);
+    if (targetIndex >= 0) {
+      onMoveTab(fromUid, targetIndex);
+    }
+  }, [tabs, onMoveTab]);
+
+  const handleDragEnd = useCallback(() => {
+    dragUidRef.current = null;
   }, []);
 
   return (
@@ -54,7 +81,11 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             agentStatus,
             onSelect: onChange.bind(null, uid),
             onClose: onClose.bind(null, uid),
-            onDescribe: (desc: string) => onDescribe(uid, desc)
+            onDescribe: (desc: string) => onDescribe(uid, desc),
+            onDragStart: () => handleDragStart(uid),
+            onDragOver: handleDragOver,
+            onDrop: () => handleDrop(uid),
+            onDragEnd: handleDragEnd
           });
           return <Tab key={`tab-${uid}`} {...tabProps} />;
         })}
@@ -66,9 +97,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           className={`tabs_borderShim ${fullScreen ? 'tabs_borderShimUndo' : ''}`}
         />
       )}
-      <div className="tabs_newTabWrap">
-        <DropdownButton {...props} tabsVisible={true} />
-      </div>
+      {!isMac && <div className="tabs_dragSpace" aria-hidden="true" />}
       {props.customChildren}
 
       <style jsx>{`
@@ -112,7 +141,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           overflow-y: hidden;
           scrollbar-width: none;
           list-style: none;
-          -webkit-app-region: no-drag;
+          -webkit-app-region: drag;
         }
 
         .tabs_list::-webkit-scrollbar {
@@ -123,9 +152,10 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           margin-left: -1px;
         }
 
-        .tabs_newTabWrap {
-          flex: 0 0 auto;
-          -webkit-app-region: no-drag;
+        .tabs_dragSpace {
+          flex: 0 0 ${trailingDragWidth}px;
+          min-width: ${trailingDragWidth}px;
+          -webkit-app-region: drag;
         }
 
         .tabs_borderShim {

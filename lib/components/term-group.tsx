@@ -59,10 +59,11 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
     this.props.ref_(uid, term);
   };
 
-  renderTerm(uid: string) {
+  renderTerm(uid: string, splitLabel?: string) {
     const session = this.props.sessions[uid];
     const termRef = this.props.terms[uid];
     const props = getTermProps(uid, this.props, {
+      splitLabel: splitLabel || '',
       isTermActive: uid === this.props.activeSession,
       term: termRef ? termRef.term : null,
       fitAddon: termRef ? termRef.fitAddon : null,
@@ -119,18 +120,49 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
     return <Term ref_={this.onTermRef} key={uid} {...props} />;
   }
 
+  // Count leaf (terminal) nodes in a group subtree
+  countLeaves(group: any): number {
+    if (group.sessionUid) return 1;
+    const children = group.children || [];
+    const {termGroups} = (this.props as any).parentProps || {};
+    if (!termGroups) return children.length || 1;
+    let count = 0;
+    for (const cuid of children) {
+      const child = termGroups[cuid];
+      if (child) count += this.countLeaves(child);
+      else count += 1;
+    }
+    return count;
+  }
+
   render() {
     const {childGroups, termGroup} = this.props;
+    const splitOffset = ((this.props as any).splitOffset as number) || 0;
+    const isRoot = !(this.props as any).splitLabel && !splitOffset;
+
     if (termGroup.sessionUid) {
-      return this.renderTerm(termGroup.sessionUid);
+      const label = (this.props as any).splitLabel as string | undefined;
+      return this.renderTerm(termGroup.sessionUid, label);
     }
 
+    // Count total leaves to decide if we need labels at all
+    const totalLeaves = this.countLeaves(termGroup);
+    const needLabels = totalLeaves > 1 || !isRoot;
+
+    let offset = splitOffset;
     const groups = childGroups.asMutable().map((child) => {
+      const leafCount = this.countLeaves(child);
+      const label = needLabels ? String.fromCharCode(97 + offset) : undefined;
       const props = getTermGroupProps(
         child.uid,
         this.props.parentProps,
-        Object.assign({}, this.props, {termGroup: child})
+        Object.assign({}, this.props, {
+          termGroup: child,
+          splitLabel: child.sessionUid ? label : undefined,
+          splitOffset: offset
+        })
       );
+      offset += leafCount;
 
       return <DecoratedTermGroup key={child.uid} {...props} />;
     });

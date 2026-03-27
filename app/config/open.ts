@@ -67,20 +67,16 @@ const openNotepad = (file: string) =>
   });
 
 const openConfig = () => {
-  // Windows opens .js files with  WScript.exe by default
-  // If the user hasn't set up an editor for .js files, we fallback to notepad.
-  if (process.platform === 'win32') {
-    try {
-      if (hasDefaultSet()) {
-        return shell.openPath(cfgPath).then((error) => error === '');
-      }
-      console.warn('No default app set for .js files, using notepad.exe fallback');
-    } catch (err) {
-      console.error('Open config with default app error:', err);
+  // Config is now JSON — shell.openPath works on all platforms.
+  // On Windows, .json files open in the user's preferred editor (VS Code, Notepad++, etc).
+  return shell.openPath(cfgPath).then((error) => {
+    if (error) {
+      // Fallback to notepad if no default .json handler
+      console.warn('shell.openPath failed, falling back to notepad:', error);
+      return openNotepad(cfgPath);
     }
-    return openNotepad(cfgPath);
-  }
-  return shell.openPath(cfgPath).then((error) => error === '');
+    return true;
+  });
 };
 
 export default openConfig;

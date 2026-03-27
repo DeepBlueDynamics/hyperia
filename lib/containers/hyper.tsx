@@ -13,6 +13,7 @@ import {connect} from '../utils/plugins';
 import {HeaderContainer} from './header';
 import NotificationsContainer from './notifications';
 import TermsContainer from './terms';
+import {ToolbarContainer} from './toolbar';
 
 const isMac = /Mac/.test(navigator.userAgent);
 
@@ -101,6 +102,7 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
         className={`hyper_main ${isMac_ && 'hyper_mainRounded'} ${fullScreen ? 'fullScreen' : ''}`}
       >
         <HeaderContainer />
+        <ToolbarContainer />
         <TermsContainer ref_={onTermsRef} />
         {/* Status bar removed — agent status shown per-tab via dot indicators */}
         {props.customInnerChildren}

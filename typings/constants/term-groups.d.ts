@@ -2,6 +2,7 @@ export const TERM_GROUP_REQUEST = 'TERM_GROUP_REQUEST';
 export const TERM_GROUP_EXIT = 'TERM_GROUP_EXIT';
 export const TERM_GROUP_RESIZE = 'TERM_GROUP_RESIZE';
 export const TERM_GROUP_EXIT_ACTIVE = 'TERM_GROUP_EXIT_ACTIVE';
+export const TERM_GROUP_REORDER = 'TERM_GROUP_REORDER';
 export enum DIRECTION {
   HORIZONTAL = 'HORIZONTAL',
   VERTICAL = 'VERTICAL'
@@ -22,9 +23,15 @@ export interface TermGroupResizeAction {
 export interface TermGroupExitActiveAction {
   type: typeof TERM_GROUP_EXIT_ACTIVE;
 }
+export interface TermGroupReorderAction {
+  type: typeof TERM_GROUP_REORDER;
+  fromUid: string;
+  toIndex: number;
+}
 
 export type TermGroupActions =
   | TermGroupRequestAction
   | TermGroupExitAction
   | TermGroupResizeAction
-  | TermGroupExitActiveAction;
+  | TermGroupExitActiveAction
+  | TermGroupReorderAction;

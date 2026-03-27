@@ -37,6 +37,7 @@ import {startBridge, stopBridge} from './bridge';
 import * as AppMenu from './menus/menu';
 import {initTray, destroyTray} from './notify';
 import * as plugins from './plugins';
+import {initSticky} from './sticky';
 import {newWindow} from './ui/window';
 import {installCLI} from './utils/cli-install';
 import * as windowUtils from './utils/window-utils';
@@ -47,53 +48,81 @@ const windowSet = new Set<BrowserWindow>([]);
 let sidecarProcess: ChildProcess | null = null;
 const SIDECAR_PORT = 9800;
 
-function spawnSidecar() {
-  // Look for sidecar binary in known locations
-  // __dirname at runtime is 'target/', so '../../sidecar' reaches the repo's sidecar dir.
-  // Also try '../sidecar' in case cwd or packaging differs.
-  // Try multiple locations: dev (target/), packaged (dist/win-unpacked/), repo root
+function findSidecarBinary(): string | null {
   const exeDir = process.platform === 'win32' ? resolve(process.execPath, '..') : __dirname;
+  const resDir = process.resourcesPath || resolve(exeDir, 'resources');
+  const sidecarName = process.platform === 'win32' ? 'hyperia-sidecar.exe' : 'hyperia-sidecar';
   const candidates = [
-    // From dev __dirname (target/)
-    resolve(__dirname, '../../sidecar/target/release/hyperia-sidecar.exe'),
-    resolve(__dirname, '../../sidecar/target/debug/hyperia-sidecar.exe'),
-    resolve(__dirname, '../sidecar/target/release/hyperia-sidecar.exe'),
-    resolve(__dirname, '../sidecar/target/debug/hyperia-sidecar.exe'),
-    // From packaged exe dir (dist/win-unpacked/) back to repo
-    resolve(exeDir, '../../sidecar/target/release/hyperia-sidecar.exe'),
-    resolve(exeDir, '../../sidecar/target/debug/hyperia-sidecar.exe'),
-    // Bundled next to exe
-    resolve(exeDir, 'sidecar/hyperia-sidecar.exe'),
-    resolve(exeDir, 'hyperia-sidecar.exe'),
-    // Non-Windows
-    resolve(__dirname, '../../sidecar/target/release/hyperia-sidecar'),
-    resolve(__dirname, '../../sidecar/target/debug/hyperia-sidecar'),
-    resolve(exeDir, '../../sidecar/target/release/hyperia-sidecar'),
-    resolve(exeDir, '../../sidecar/target/debug/hyperia-sidecar')
+    resolve(resDir, 'sidecar', sidecarName),
+    resolve(__dirname, '../../sidecar/target/release', sidecarName),
+    resolve(__dirname, '../../sidecar/target/debug', sidecarName),
+    resolve(__dirname, '../sidecar/target/release', sidecarName),
+    resolve(__dirname, '../sidecar/target/debug', sidecarName),
+    resolve(exeDir, '../../sidecar/target/release', sidecarName),
+    resolve(exeDir, '../../sidecar/target/debug', sidecarName),
+    resolve(exeDir, 'sidecar', sidecarName),
+    resolve(exeDir, sidecarName)
   ];
 
-  isDev && console.log(`[sidecar] __dirname = ${__dirname}`);
-
-  let sidecarPath: string | null = null;
   for (const candidate of candidates) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call
       require('fs').accessSync(candidate);
-      sidecarPath = candidate;
-      break;
+      return candidate;
     } catch {
-      // not found, try next
+      // not found
     }
   }
 
-  if (!sidecarPath) {
-    isDev && console.log('Sidecar binary not found. Checked:');
-    isDev && candidates.forEach((c) => console.log(`  ${c}`));
-    isDev && console.log('Run: cd sidecar && cargo build');
-    return;
-  }
+  isDev && console.log('[sidecar] Binary not found. Checked:');
+  isDev && candidates.forEach((c) => console.log(`  ${c}`));
+  return null;
+}
 
-  isDev && console.log(`Spawning sidecar: ${sidecarPath} --port ${SIDECAR_PORT} --deck`);
+function killProcessOnPort(port: number): Promise<void> {
+  return new Promise((resolve) => {
+    if (process.platform === 'win32') {
+      // Find and kill any process using our port
+      const find = spawn('cmd', ['/c', `for /f "tokens=5" %a in ('netstat -aon ^| findstr :${port} ^| findstr LISTENING') do @echo %a`], {shell: true});
+      let pids = '';
+      find.stdout?.on('data', (d: Buffer) => { pids += d.toString(); });
+      find.on('close', () => {
+        const pidList = pids.trim().split(/\s+/).filter((p) => p && p !== '0');
+        if (pidList.length > 0) {
+          isDev && console.log(`[sidecar] Killing processes on port ${port}: ${pidList.join(', ')}`);
+          for (const pid of pidList) {
+            try { process.kill(parseInt(pid, 10), 'SIGTERM'); } catch { /* already dead */ }
+          }
+          setTimeout(resolve, 1000);
+        } else {
+          resolve();
+        }
+      });
+      find.on('error', () => resolve());
+    } else {
+      const find = spawn('lsof', ['-ti', `:${port}`]);
+      let pids = '';
+      find.stdout?.on('data', (d: Buffer) => { pids += d.toString(); });
+      find.on('close', () => {
+        for (const pid of pids.trim().split('\n').filter(Boolean)) {
+          try { process.kill(parseInt(pid, 10), 'SIGTERM'); } catch { /* already dead */ }
+        }
+        setTimeout(resolve, 500);
+      });
+      find.on('error', () => resolve());
+    }
+  });
+}
+
+async function spawnSidecar() {
+  const sidecarPath = findSidecarBinary();
+  if (!sidecarPath) return;
+
+  isDev && console.log(`[sidecar] __dirname = ${__dirname}`);
+
+  // Kill any existing sidecar on our port before spawning
+  await killProcessOnPort(SIDECAR_PORT);
+
+  isDev && console.log(`[sidecar] Spawning: ${sidecarPath} --port ${SIDECAR_PORT} --deck`);
   sidecarProcess = spawn(sidecarPath, ['--port', String(SIDECAR_PORT), '--deck'], {
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -102,18 +131,38 @@ function spawnSidecar() {
     isDev && console.log(`[sidecar] ${data.toString().trim()}`);
   });
   sidecarProcess.stderr?.on('data', (data: Buffer) => {
-    isDev && console.error(`[sidecar] ${data.toString().trim()}`);
+    // Only log non-empty stderr
+    const msg = data.toString().trim();
+    if (msg) isDev && console.error(`[sidecar] ${msg}`);
   });
   sidecarProcess.on('exit', (code: number | null) => {
-    isDev && console.log(`Sidecar exited with code ${code}`);
+    console.log(`[sidecar] Exited with code ${code}`);
     sidecarProcess = null;
+    // Auto-restart unless we're shutting down
+    if (!stopped) {
+      console.log('[sidecar] Auto-restarting in 2s...');
+      setTimeout(() => {
+        if (!stopped) void spawnSidecar();
+      }, 2000);
+    }
   });
 }
 
+let stopped = false;
+
 function killSidecar() {
+  stopped = true; // prevent auto-restart
   if (sidecarProcess) {
-    isDev && console.log('Shutting down sidecar');
-    sidecarProcess.kill();
+    console.log('[sidecar] Shutting down');
+    try {
+      sidecarProcess.kill('SIGTERM');
+    } catch { /* already dead */ }
+    const pid = sidecarProcess.pid;
+    setTimeout(() => {
+      if (pid) {
+        try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+      }
+    }, 2000);
     sidecarProcess = null;
   }
 }
@@ -230,16 +279,35 @@ function _showSplash(winBounds: {x: number; y: number; width: number; height: nu
   });
 }
 
+// Single instance lock — prevent duplicate tray icons and sidecar spawns
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+}
+app.on('second-instance', () => {
+  // Focus existing window when a second instance tries to launch
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+  const win = (app as any).getLastFocusedWindow?.();
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
+});
+
 // eslint-disable-next-line @typescript-eslint/no-misused-promises
 app.on('ready', () => {
   // System tray icon
   initTray();
 
-  // Launch sidecar (agent engine, Stream Deck, MCP)
-  spawnSidecar();
+  // Sticky notes
+  initSticky();
 
-  // Connect bridge to sidecar (auto-reconnects until connected)
-  startBridge(SIDECAR_PORT);
+  // Launch sidecar (agent engine, Stream Deck, MCP)
+  // Kill any stale sidecar on our port, then spawn fresh, then connect bridge
+  void spawnSidecar().then(() => {
+    // Connect bridge to sidecar (auto-reconnects until connected)
+    startBridge(SIDECAR_PORT);
+  });
 
   return installDevExtensions(isDev)
     .then(() => {
@@ -310,6 +378,9 @@ app.on('ready', () => {
 
       // expose to plugins
       app.createWindow = createWindow;
+
+      // renderer can request a new window via IPC
+      ipcMain.on('new-window', () => createWindow());
 
       // mac only. when the dock icon is clicked
       // and we don't have any active windows open,

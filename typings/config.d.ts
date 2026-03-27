@@ -126,6 +126,8 @@ type profileConfigOptions = {
    */
   screenReaderMode: boolean;
   scrollback: number;
+  /** Enable per-tab session logging. Logs are saved to ~/.hyperia/logs/ as timestamped text files. */
+  sessionLogging: boolean;
   /** terminal selection color */
   selectionColor: string;
   /**

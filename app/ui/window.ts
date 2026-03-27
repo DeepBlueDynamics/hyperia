@@ -17,11 +17,12 @@ import {v4 as uuidv4} from 'uuid';
 
 import type {sessionExtraOptions} from '../../typings/common';
 import type {configOptions} from '../../typings/config';
-import {registerSession, notifyResize, notifyUserActivity, updateSessionDescription} from '../bridge';
+import {registerSession, notifyResize, notifyUserActivity, updateSessionDescription, updateSessionTabName, getSessionRootTab, forceRemoveSession} from '../bridge';
 import {execCommand} from '../commands';
 import {getDefaultProfile} from '../config';
 import {icon, homeDirectory} from '../config/paths';
 import fetchNotifications from '../notifications';
+import {startSessionLog, writeSessionLog, endSessionLog} from '../session-logger';
 import notify from '../notify';
 import {decorateSessionOptions, decorateSessionClass} from '../plugins';
 import createRPC from '../rpc';
@@ -270,7 +271,7 @@ export function newWindow(
     const {session, options} = createSession(extraOptions);
 
     sessions.set(options.uid, session);
-    nextTabName(); // advance counter for tab naming
+    const cuteTabName = nextTabName(); // advance counter for tab naming
     rpc.emit('session add', {
       rows: options.rows,
       cols: options.cols,
@@ -283,23 +284,46 @@ export function newWindow(
     });
 
     // Register with sidecar bridge for agent control
-    registerSession(options.uid, session, options.rows || 24, options.cols || 80, session.shell || 'shell');
+    // If this is a split, inherit the rootTabUid from the parent session
+    const parentRootTab = options.activeUid ? getSessionRootTab(options.activeUid) : '';
+    const rootTabUid = options.splitDirection ? (parentRootTab || options.activeUid || options.uid) : options.uid;
+    registerSession(options.uid, session, options.rows || 24, options.cols || 80, session.shell || 'shell', cuteTabName, rootTabUid);
+
+    // Start session logging if enabled
+    if (cfg.sessionLogging) {
+      startSessionLog(options.uid, cuteTabName);
+    }
 
     session.on('data', (data: string) => {
       rpc.emit('session data', data);
+      if (cfg.sessionLogging) writeSessionLog(options.uid, data);
     });
 
     session.on('exit', () => {
+      console.log(`[window] Session exit event: ${options.uid}`);
       rpc.emit('session exit', {uid: options.uid});
+      endSessionLog(options.uid);
       unsetRendererType(options.uid);
       sessions.delete(options.uid);
     });
   });
 
   rpc.on('exit', ({uid}) => {
+    console.log(`[window] RPC exit request: ${uid} (session exists: ${sessions.has(uid)})`);
     const session = sessions.get(uid);
     if (session) {
       session.exit();
+      // Safety net: if session.on('exit') doesn't fire within 3s, force cleanup
+      setTimeout(() => {
+        if (sessions.has(uid)) {
+          console.warn(`[window] Session ${uid} didn't exit cleanly — force removing`);
+          sessions.delete(uid);
+          forceRemoveSession(uid);
+        }
+      }, 3000);
+    } else {
+      // Session already gone from our map but might be stuck in the bridge
+      forceRemoveSession(uid);
     }
   });
   rpc.on('unmaximize', () => {
@@ -351,11 +375,15 @@ export function newWindow(
     Menu.getApplicationMenu()!.popup({x: Math.ceil(x), y: Math.ceil(y)});
   });
   // Update Electron window title + taskbar icon when active session title changes
-  rpc.on('session set xterm title', ({title}: {title: string}) => {
+  rpc.on('session set xterm title', ({uid, title}: {uid: string; title: string}) => {
     if (title) {
       window.setTitle(`${title} — Hyperia`);
       if (process.platform === 'win32') {
         window.setIcon(makeLetterIcon(title));
+      }
+      // Keep sidecar in sync with the display name — but skip raw shell paths
+      if (uid && !/[/\\]/.test(title) && !/^(cmd|powershell|pwsh|bash|sh|zsh|Command Prompt)/i.test(title)) {
+        updateSessionTabName(uid, title);
       }
     } else {
       window.setTitle('Hyperia');

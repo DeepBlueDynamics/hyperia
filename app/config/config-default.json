@@ -62,6 +62,7 @@
     "autoUpdatePlugins": true,
     "preserveCWD": true,
     "screenReaderMode": false,
+    "sessionLogging": false,
     "imageSupport": true,
     "defaultProfile": "PowerShell",
     "profiles": [

@@ -1,4 +1,5 @@
 import type {MenuItemConstructorOptions, BrowserWindow} from 'electron';
+import {ipcMain} from 'electron';
 
 import {execCommand} from '../commands';
 import editMenu from '../menus/menus/edit';
@@ -33,7 +34,22 @@ const contextMenuTemplate = (
     [] // no profiles in context menu — keep it clean for terminal actions only
   ).submenu as MenuItemConstructorOptions[];
   const _edit = editMenu(commandKeys, execCommand).submenu.filter(filterCutCopy.bind(null, selection));
-  return _edit
+
+  // Primary actions at the top
+  const topActions: MenuItemConstructorOptions[] = [
+    {
+      label: 'New Terminal',
+      click: () => createWindow()
+    },
+    {
+      label: 'New Note',
+      click: () => ipcMain.emit('new-sticky', {})
+    },
+    separator
+  ];
+
+  return topActions
+    .concat(_edit)
     .concat(separator, _shellFull)
     .filter((menuItem) => !Object.prototype.hasOwnProperty.call(menuItem, 'enabled') || menuItem.enabled);
 };

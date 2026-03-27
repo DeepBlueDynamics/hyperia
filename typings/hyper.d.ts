@@ -233,6 +233,10 @@ export type TabProps = {
   onClose: () => void;
   onSelect: () => void;
   onDescribe: (description: string) => void;
+  onDragStart?: () => void;
+  onDragOver?: (event: React.DragEvent) => void;
+  onDrop?: () => void;
+  onDragEnd?: () => void;
   text: string;
   tabName: string;
   description: string;
@@ -407,6 +411,7 @@ export type TermProps = {
   searchAddon: SearchAddon | null;
   selectionColor: string;
   term: Terminal | null;
+  splitLabel?: string;
   uid: string;
   uiFontFamily: string;
   webGLRenderer: boolean;

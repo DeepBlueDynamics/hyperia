@@ -4,7 +4,7 @@ import {v4 as uuidv4} from 'uuid';
 
 import {SESSION_ADD, SESSION_SET_ACTIVE} from '../../typings/constants/sessions';
 import type {SessionAddAction} from '../../typings/constants/sessions';
-import {TERM_GROUP_EXIT, TERM_GROUP_RESIZE} from '../../typings/constants/term-groups';
+import {TERM_GROUP_EXIT, TERM_GROUP_RESIZE, TERM_GROUP_REORDER} from '../../typings/constants/term-groups';
 import type {ITermGroup, ITermState, ITermGroups, ITermGroupReducer, Mutable} from '../../typings/hyper';
 import {decorateTermGroupsReducer} from '../utils/plugins';
 import findBySession from '../utils/term-groups';
@@ -221,6 +221,30 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       return resizeGroup(state, action.uid, action.sizes);
     case TERM_GROUP_EXIT:
       return removeGroup(state, action.uid);
+    case TERM_GROUP_REORDER: {
+      const {fromUid, toIndex} = action as any;
+      // Get root group UIDs in current order
+      const rootUids = Object.keys(state.termGroups).filter(
+        (uid) => !state.termGroups[uid].parentUid
+      );
+      const fromIndex = rootUids.indexOf(fromUid);
+      if (fromIndex < 0 || fromIndex === toIndex || toIndex < 0 || toIndex >= rootUids.length) {
+        return state;
+      }
+      // Move fromUid to toIndex
+      rootUids.splice(fromIndex, 1);
+      rootUids.splice(toIndex, 0, fromUid);
+      // Rebuild termGroups with root groups in new order, preserving child groups
+      const childUids = Object.keys(state.termGroups).filter(
+        (uid) => !!state.termGroups[uid].parentUid
+      );
+      const newOrder = [...rootUids, ...childUids];
+      const reordered: Record<string, any> = {};
+      for (const uid of newOrder) {
+        reordered[uid] = state.termGroups[uid];
+      }
+      return state.set('termGroups', Immutable(reordered as any));
+    }
     default:
       return state;
   }

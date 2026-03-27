@@ -511,10 +511,14 @@ export default class Term extends React.PureComponent<
   }
 
   render() {
+    const splitLabel = this.props.splitLabel;
     return (
-      <div className={`term_fit ${this.props.isTermActive ? 'term_active' : ''}`} onMouseUp={this.onMouseUp}>
+      <div className={`term_fit ${this.props.isTermActive ? 'term_active' : ''}`} onMouseUp={this.onMouseUp} style={{position: 'relative'}}>
         {this.props.customChildrenBefore}
         <div ref={this.onTermWrapperRef} className="term_fit term_wrapper" />
+        {splitLabel && (
+          <div className="term_splitLabel">{splitLabel}</div>
+        )}
         {this.props.customChildren}
         {this.props.search ? (
           <SearchBox
@@ -559,8 +563,35 @@ export default class Term extends React.PureComponent<
           }
 
           .term_wrapper {
-            /* TODO: decide whether to keep this or not based on understanding what xterm-selection is for */
             overflow: hidden;
+          }
+
+          /* Hide xterm scrollbar */
+          .term_wrapper .xterm-viewport {
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+          }
+          .term_wrapper .xterm-viewport::-webkit-scrollbar {
+            display: none;
+          }
+
+          .term_splitLabel {
+            position: absolute;
+            top: 4px;
+            right: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            color: #4af;
+            background: rgba(0, 20, 40, 0.7);
+            border: 1px solid rgba(0, 140, 255, 0.35);
+            border-radius: 4px;
+            padding: 1px 6px;
+            z-index: 5;
+            pointer-events: none;
+            text-shadow: 0 0 6px rgba(0, 140, 255, 0.6);
+            box-shadow:
+              0 0 6px rgba(0, 140, 255, 0.2),
+              0 0 12px rgba(0, 100, 220, 0.08);
           }
         `}</style>
       </div>

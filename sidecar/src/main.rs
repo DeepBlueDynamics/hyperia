@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports, unused_variables)]
+
 mod auracle;
 mod bridge;
 mod chat;

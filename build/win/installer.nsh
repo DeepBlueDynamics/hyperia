@@ -1,21 +1,21 @@
 !macro customInstall
-  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Hyper" "" "Open &Hyper here"
-  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Hyper" "Icon" `"$appExe"`
-  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Hyper\command" "" `"$appExe" "%V"`
+  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Hyperia" "" "Open &Hyperia here"
+  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Hyperia" "Icon" `"$appExe"`
+  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Hyperia\command" "" `"$appExe" "%V"`
 
-  WriteRegStr HKCU "Software\Classes\Directory\shell\Hyper" "" "Open &Hyper here"
-  WriteRegStr HKCU "Software\Classes\Directory\shell\Hyper" "Icon" `"$appExe"`
-  WriteRegStr HKCU "Software\Classes\Directory\shell\Hyper\command" "" `"$appExe" "%V"`
+  WriteRegStr HKCU "Software\Classes\Directory\shell\Hyperia" "" "Open &Hyperia here"
+  WriteRegStr HKCU "Software\Classes\Directory\shell\Hyperia" "Icon" `"$appExe"`
+  WriteRegStr HKCU "Software\Classes\Directory\shell\Hyperia\command" "" `"$appExe" "%V"`
 
-  WriteRegStr HKCU "Software\Classes\Drive\shell\Hyper" "" "Open &Hyper here"
-  WriteRegStr HKCU "Software\Classes\Drive\shell\Hyper" "Icon" `"$appExe"`
-  WriteRegStr HKCU "Software\Classes\Drive\shell\Hyper\command" "" `"$appExe" "%V"`
+  WriteRegStr HKCU "Software\Classes\Drive\shell\Hyperia" "" "Open &Hyperia here"
+  WriteRegStr HKCU "Software\Classes\Drive\shell\Hyperia" "Icon" `"$appExe"`
+  WriteRegStr HKCU "Software\Classes\Drive\shell\Hyperia\command" "" `"$appExe" "%V"`
 !macroend
 
 !macro customUnInstall
-  DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\Hyper"
-  DeleteRegKey HKCU "Software\Classes\Directory\shell\Hyper"
-  DeleteRegKey HKCU "Software\Classes\Drive\shell\Hyper"
+  DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\Hyperia"
+  DeleteRegKey HKCU "Software\Classes\Directory\shell\Hyperia"
+  DeleteRegKey HKCU "Software\Classes\Drive\shell\Hyperia"
 !macroend
 
 !macro customInstallMode
@@ -23,6 +23,7 @@
 !macroend
 
 !macro customInit
+  ; Clean up old Hyper Squirrel installs if upgrading
   IfFileExists $LOCALAPPDATA\Hyper\Update.exe 0 +2
   nsExec::Exec '"$LOCALAPPDATA\Hyper\Update.exe" --uninstall -s'
 !macroend

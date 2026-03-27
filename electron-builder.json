@@ -12,8 +12,12 @@
       "from": "./build/${os}/",
       "to": "./bin/",
       "filter": [
-        "hyper*"
+        "hyperia*"
       ]
+    },
+    {
+      "from": "./sidecar/target/release/hyperia-sidecar.exe",
+      "to": "./sidecar/hyperia-sidecar.exe"
     }
   ],
   "artifactName": "${productName}-${version}-${arch}.${ext}",
@@ -31,18 +35,20 @@
     "target": {
       "target": "nsis",
       "arch": [
-        "x64",
-        "arm64"
+        "x64"
       ]
     },
-    "signAndEditExecutable": true,
+    "signAndEditExecutable": false,
     "rfc3161TimeStampServer": "http://timestamp.comodoca.com"
   },
   "nsis": {
     "include": "build/win/installer.nsh",
     "oneClick": false,
     "perMachine": false,
-    "allowToChangeInstallationDirectory": true
+    "allowToChangeInstallationDirectory": true,
+    "installerSidebar": "build/installerSidebar.bmp",
+    "uninstallerSidebar": "build/installerSidebar.bmp",
+    "installerHeader": "build/installerHeader.bmp"
   },
   "mac": {
     "target": {

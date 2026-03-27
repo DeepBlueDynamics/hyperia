@@ -46,13 +46,37 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
     openNewTab(name);
   };
 
+  const handleNewWindow = () => {
+    // TODO: open new Hyperia window
+    console.log('new window');
+  };
+
+  const handleNewNote = () => {
+    // TODO: open new sticky note
+    console.log('new note');
+  };
+
   return (
     <div className="new_tab_wrapper" ref={ref}>
       <div className="new_tab_split" onDoubleClick={(e) => e.stopPropagation()}>
-        <div className="new_tab_plus" onClick={handleClick} onContextMenu={handleContextMenu} title={`New Tab (right-click for profiles)`}>
-          <svg viewBox="0 0 12 12" width="10" height="10">
-            <line x1="6" y1="1" x2="6" y2="11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            <line x1="1" y1="6" x2="11" y2="6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        {/* +> New terminal tab */}
+        <div className="new_tab_btn" onClick={handleClick} onContextMenu={handleContextMenu} title="New Tab (right-click for profiles)">
+          <span className="new_tab_icon">+</span><span className="new_tab_arrow_icon">&rsaquo;</span>
+        </div>
+        {/* New window */}
+        <div className="new_tab_btn" onClick={handleNewWindow} title="New Window">
+          <svg viewBox="0 0 14 14" width="12" height="12">
+            <rect x="1" y="3" width="10" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+            <rect x="3" y="1" width="10" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+          </svg>
+        </div>
+        {/* New sticky note */}
+        <div className="new_tab_btn" onClick={handleNewNote} title="New Note">
+          <svg viewBox="0 0 14 14" width="12" height="12">
+            <path d="M2 1h10a1 1 0 0 1 1 1v7l-4 4H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" strokeWidth="1.3" />
+            <path d="M9 8v5l4-4H9z" fill="currentColor" opacity="0.4" />
+            <line x1="4" y1="5" x2="10" y2="5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+            <line x1="4" y1="7.5" x2="8" y2="7.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
           </svg>
         </div>
       </div>
@@ -86,7 +110,7 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
           -webkit-app-region: no-drag;
         }
 
-        .new_tab_plus {
+        .new_tab_btn {
           display: flex;
           align-items: center;
           justify-content: center;
@@ -95,24 +119,22 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
           color: #888;
         }
 
-        .new_tab_plus:hover {
+        .new_tab_btn:hover {
           color: #fff;
           background: #252525;
         }
 
-        .new_tab_arrow {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          width: 16px;
-          cursor: pointer;
-          color: #666;
-          border-right: 1px solid #333;
+        .new_tab_icon {
+          font-size: 14px;
+          font-weight: 300;
+          line-height: 1;
         }
 
-        .new_tab_arrow:hover {
-          color: #fff;
-          background: #303030;
+        .new_tab_arrow_icon {
+          font-size: 14px;
+          font-weight: 300;
+          line-height: 1;
+          margin-left: -2px;
         }
 
         .new_tab_dropdown {

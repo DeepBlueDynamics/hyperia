@@ -36,6 +36,7 @@ interface TrackedSession {
   name: string;
   tabName: string;
   description: string;
+  rootTabUid: string; // uid of the root tab group — splits share this
 }
 const trackedSessions = new Map<string, TrackedSession>();
 
@@ -114,7 +115,9 @@ function scheduleReconnect() {
 function startHeartbeat() {
   stopHeartbeat();
   heartbeatTimer = setInterval(() => {
-    send({type: 'Heartbeat'});
+    // Include session count so sidecar can detect drift
+    const uids = Array.from(trackedSessions.keys());
+    send({type: 'Heartbeat', sessionCount: uids.length, sessionUids: uids});
   }, HEARTBEAT_INTERVAL_MS);
 }
 
@@ -140,8 +143,24 @@ function sendSessionRegister(uid: string, tracked: TrackedSession) {
     description: tracked.description,
     rows: tracked.rows,
     cols: tracked.cols,
-    pid: tracked.session.pty?.pid ?? 0
+    pid: tracked.session.pty?.pid ?? 0,
+    rootTabUid: tracked.rootTabUid
   });
+}
+
+/** Compute split letter labels: sessions sharing a rootTabUid get a, b, c... */
+function getSplitLabel(uid: string): string {
+  const tracked = trackedSessions.get(uid);
+  if (!tracked) return '';
+  const rootTab = tracked.rootTabUid;
+  // Collect all sessions in the same tab, sorted by insertion order
+  const siblings: string[] = [];
+  for (const [u, t] of trackedSessions) {
+    if (t.rootTabUid === rootTab) siblings.push(u);
+  }
+  if (siblings.length <= 1) return ''; // no splits, no label needed
+  const idx = siblings.indexOf(uid);
+  return String.fromCharCode(97 + idx); // a, b, c, ...
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +278,8 @@ function handleCommand(msg: Record<string, unknown>) {
         id: idx,
         uid,
         name: t.name,
+        tabName: t.tabName,
+        splitLabel: getSplitLabel(uid),
         rows: t.rows,
         cols: t.cols,
         pid: t.session.pty?.pid ?? 0
@@ -430,8 +451,8 @@ export function stopBridge() {
 }
 
 /** Register a PTY session with the bridge. Call after session creation. */
-export function registerSession(uid: string, session: Session, rows: number, cols: number, name: string = 'shell', tabName: string = '') {
-  const tracked: TrackedSession = {session, rows, cols, name, tabName: tabName || name, description: ''};
+export function registerSession(uid: string, session: Session, rows: number, cols: number, name: string = 'shell', tabName: string = '', rootTabUid: string = '') {
+  const tracked: TrackedSession = {session, rows, cols, name, tabName: tabName || name, description: '', rootTabUid: rootTabUid || uid};
   trackedSessions.set(uid, tracked);
 
   // Stream PTY output to sidecar as base64-encoded SessionData
@@ -447,6 +468,8 @@ export function registerSession(uid: string, session: Session, rows: number, col
 
   // Clean up on exit
   session.on('exit', () => {
+    const tracked = trackedSessions.get(uid);
+    console.log(`[bridge] Session exit: ${uid} (${tracked?.tabName || 'unknown'})`);
     trackedSessions.delete(uid);
     lastUserActivity.delete(uid);
     // Fail any queued agent writes
@@ -470,6 +493,15 @@ export function registerSession(uid: string, session: Session, rows: number, col
   }
 }
 
+/** Update the tab name for a session (called on xterm title change). */
+export function updateSessionTabName(uid: string, tabName: string) {
+  const tracked = trackedSessions.get(uid);
+  if (tracked) {
+    tracked.tabName = tabName;
+    send({type: 'SessionTabName', uid, tabName});
+  }
+}
+
 /** Update the description for a session. */
 export function updateSessionDescription(uid: string, description: string) {
   const tracked = trackedSessions.get(uid);
@@ -487,6 +519,23 @@ export function notifyResize(uid: string, rows: number, cols: number) {
     tracked.cols = cols;
   }
   send({type: 'Resize', uid, rows, cols});
+}
+
+/** Force-remove a session from bridge tracking and notify sidecar. Fallback for when session.on('exit') doesn't fire. */
+export function forceRemoveSession(uid: string) {
+  if (trackedSessions.has(uid)) {
+    console.log(`[bridge] Force removing session: ${uid}`);
+    trackedSessions.delete(uid);
+    lastUserActivity.delete(uid);
+    agentQueues.delete(uid);
+    send({type: 'SessionExit', uid});
+  }
+}
+
+/** Get the rootTabUid for a session. Used to inherit tab grouping on splits. */
+export function getSessionRootTab(uid: string): string {
+  const tracked = trackedSessions.get(uid);
+  return tracked ? tracked.rootTabUid : '';
 }
 
 /** Signal user activity on a session. Defers agent input for AGENT_DEFER_MS. */

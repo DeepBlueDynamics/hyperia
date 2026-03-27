@@ -1,4 +1,4 @@
-import {app, Notification, Tray, Menu, nativeImage} from 'electron';
+import {app, ipcMain, Notification, Tray, Menu, nativeImage} from 'electron';
 
 import isDev from 'electron-is-dev';
 
@@ -14,6 +14,16 @@ export function initTray() {
     const trayIcon = nativeImage.createFromPath(icon).resize({width: 16, height: 16});
     tray = new Tray(trayIcon);
     tray.setToolTip('Hyperia');
+
+    // Left-click: show/focus window
+    tray.on('click', () => {
+      const win = getWindow();
+      if (win) {
+        win.show();
+        win.focus();
+      }
+    });
+
     updateTrayMenu();
   } catch (e) {
     console.warn('[tray] Failed to create tray icon:', e);
@@ -27,45 +37,77 @@ export function destroyTray() {
   }
 }
 
+function getWindow(): Electron.BrowserWindow | null {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call
+  return (app as any).getLastFocusedWindow?.() || null;
+}
+
 function updateTrayMenu() {
   if (!tray) return;
   const recent = logRing.slice(-10).reverse();
   const menuItems: Electron.MenuItemConstructorOptions[] = [
     {label: 'Hyperia', enabled: false},
     {type: 'separator'},
-    ...recent.map(
-      (line): Electron.MenuItemConstructorOptions => ({
-        label: line.length > 80 ? line.slice(0, 77) + '...' : line,
-        enabled: false
-      })
-    )
-  ];
-  if (recent.length === 0) {
-    menuItems.push({label: 'No recent events', enabled: false});
-  }
-  menuItems.push(
-    {type: 'separator'},
+    // Primary actions at top — like Stickys
     {
-      label: 'Clear Log',
+      label: 'New Terminal',
       click: () => {
-        logRing.length = 0;
-        updateTrayMenu();
+        const win = getWindow();
+        if (win) {
+          win.show();
+          win.focus();
+        } else {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+          (app as any).createWindow?.();
+        }
+      }
+    },
+    {
+      label: 'New Note',
+      click: () => {
+        ipcMain.emit('new-sticky', {});
       }
     },
     {type: 'separator'},
     {
       label: 'Show Window',
       click: () => {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-        const win = (app as any).getLastFocusedWindow?.();
+        const win = getWindow();
         if (win) {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
           win.show();
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
           win.focus();
         }
       }
     },
+    {
+      label: 'New Window',
+      click: () => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        (app as any).createWindow?.();
+      }
+    },
+    {type: 'separator'},
+  ];
+
+  // Recent events log
+  if (recent.length > 0) {
+    for (const line of recent) {
+      menuItems.push({
+        label: line.length > 80 ? line.slice(0, 77) + '...' : line,
+        enabled: false
+      });
+    }
+    menuItems.push({
+      label: 'Clear Log',
+      click: () => {
+        logRing.length = 0;
+        updateTrayMenu();
+      }
+    });
+  }
+
+  menuItems.push(
+    {type: 'separator'},
     {label: 'Quit', click: () => app.quit()}
   );
   tray.setContextMenu(Menu.buildFromTemplate(menuItems));

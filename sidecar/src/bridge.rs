@@ -23,6 +23,7 @@ pub struct SessionInfo {
     pub rows: u16,
     pub cols: u16,
     pub pid: u32,
+    pub root_tab_uid: String,
     pub screen: ScreenBuffer,
 }
 
@@ -59,6 +60,7 @@ impl Bridge {
     }
 
     /// Whether an Electron client is connected.
+    #[allow(dead_code)]
     pub async fn is_connected(&self) -> bool {
         self.inner.cmd_tx.lock().await.is_some()
     }
@@ -136,6 +138,26 @@ impl Bridge {
         sessions.keys().nth(pane).cloned()
     }
 
+    /// Compute the split label (a, b, c...) for a session within its tab group.
+    fn split_label(sessions: &HashMap<String, SessionInfo>, uid: &str) -> String {
+        let info = match sessions.get(uid) {
+            Some(i) => i,
+            None => return String::new(),
+        };
+        let root = &info.root_tab_uid;
+        let mut siblings: Vec<&String> = sessions
+            .iter()
+            .filter(|(_, i)| i.root_tab_uid == *root)
+            .map(|(u, _)| u)
+            .collect();
+        if siblings.len() <= 1 {
+            return String::new(); // no splits
+        }
+        siblings.sort(); // deterministic order
+        let idx = siblings.iter().position(|u| *u == uid).unwrap_or(0);
+        String::from((b'a' + idx as u8) as char)
+    }
+
     /// Get status of all registered sessions.
     pub async fn get_status(&self) -> serde_json::Value {
         let sessions = self.inner.sessions.lock().await;
@@ -143,11 +165,13 @@ impl Bridge {
             .iter()
             .enumerate()
             .map(|(idx, (uid, info))| {
+                let label = Self::split_label(&sessions, uid);
                 serde_json::json!({
                     "id": idx,
                     "uid": uid,
                     "name": info.name,
                     "tabName": info.tab_name,
+                    "splitLabel": label,
                     "description": info.description,
                     "rows": info.rows,
                     "cols": info.cols,
@@ -179,7 +203,8 @@ impl Bridge {
                 let rows = msg["rows"].as_u64().unwrap_or(24) as u16;
                 let cols = msg["cols"].as_u64().unwrap_or(80) as u16;
                 let pid = msg["pid"].as_u64().unwrap_or(0) as u32;
-                tracing::info!("Session registered: {uid} ({tab_name}) {cols}x{rows} pid={pid}");
+                let root_tab_uid = msg["rootTabUid"].as_str().unwrap_or(&uid).to_string();
+                tracing::info!("Session registered: {uid} ({tab_name}) {cols}x{rows} pid={pid} tab={root_tab_uid}");
                 self.inner.sessions.lock().await.insert(
                     uid,
                     SessionInfo {
@@ -189,9 +214,19 @@ impl Bridge {
                         rows,
                         cols,
                         pid,
+                        root_tab_uid,
                         screen: ScreenBuffer::new(rows, cols, 1000),
                     },
                 );
+            }
+
+            "SessionTabName" => {
+                let uid = msg["uid"].as_str().unwrap_or("");
+                let tab_name = msg["tabName"].as_str().unwrap_or("").to_string();
+                if let Some(info) = self.inner.sessions.lock().await.get_mut(uid) {
+                    info.tab_name = tab_name.clone();
+                    tracing::info!("Session {uid} tab name: {tab_name}");
+                }
             }
 
             "SessionDescribe" => {
@@ -245,7 +280,25 @@ impl Bridge {
                 }
             }
 
-            "Heartbeat" => {}
+            "Heartbeat" => {
+                // Reconcile: remove any sessions the bridge no longer tracks
+                if let Some(uids) = msg["sessionUids"].as_array() {
+                    let bridge_uids: std::collections::HashSet<String> = uids
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect();
+                    let mut sessions = self.inner.sessions.lock().await;
+                    let stale: Vec<String> = sessions
+                        .keys()
+                        .filter(|uid| !bridge_uids.contains(*uid))
+                        .cloned()
+                        .collect();
+                    for uid in &stale {
+                        tracing::info!("Heartbeat reconcile: removing stale session {uid}");
+                        sessions.remove(uid);
+                    }
+                }
+            }
 
             _ => {
                 tracing::warn!("Unknown message type from Electron: {msg_type}");
@@ -282,6 +335,15 @@ pub async fn ws_handler(
 
 async fn handle_socket(socket: WebSocket, bridge: Bridge) {
     let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // Clear stale sessions from any previous connection that didn't disconnect cleanly
+    {
+        let mut sessions = bridge.inner.sessions.lock().await;
+        if !sessions.is_empty() {
+            tracing::info!("Clearing {} stale sessions from previous connection", sessions.len());
+            sessions.clear();
+        }
+    }
 
     // Create the command channel for this connection
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<String>();

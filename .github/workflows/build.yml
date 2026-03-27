@@ -1,0 +1,120 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            rust_target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      # macOS: also build arm64 sidecar
+      - name: Setup Rust ARM64 target (macOS)
+        if: matrix.os == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin
+
+      - name: Install Yarn
+        run: npm install -g yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # Build sidecar
+      - name: Build sidecar (release)
+        run: cargo build --release --manifest-path sidecar/Cargo.toml
+
+      - name: Build sidecar ARM64 (macOS)
+        if: matrix.os == 'macos-latest'
+        run: cargo build --release --manifest-path sidecar/Cargo.toml --target aarch64-apple-darwin
+
+      # Build Electron app
+      - name: Build app
+        run: yarn build
+
+      # Linux needs extra deps for electron-builder
+      - name: Install Linux build deps
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y rpm snapd
+
+      # Package installer
+      - name: Build installer (Windows)
+        if: matrix.os == 'windows-latest'
+        run: npx electron-builder --win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build installer (macOS)
+        if: matrix.os == 'macos-latest'
+        run: npx electron-builder --mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build installer (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: npx electron-builder --linux AppImage deb
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Upload artifacts
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hyperia-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.blockmap
+            dist/latest*.yml
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            artifacts/**/*.exe
+            artifacts/**/*.dmg
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
