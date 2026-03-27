@@ -46,11 +46,13 @@ export type MainEvents = {
   resize: {uid: string; cols: number; rows: number};
   'session set xterm title': {uid: string; title: string};
   'session set description': {uid: string; description: string};
+  'session set tab name': {uid: string; tabName: string};
   unmaximize: never;
 };
 
 export type RendererEvents = {
   ready: never;
+  'session rename': {uid: string; name: string};
   'add notification': {text: string; url: string; dismissable: boolean};
   'update available': {releaseNotes: string; releaseName: string; releaseUrl: string; canInstall: boolean};
   'open ssh': ReturnType<typeof parseUrl>;

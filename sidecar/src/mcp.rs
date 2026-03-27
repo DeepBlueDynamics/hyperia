@@ -11,7 +11,11 @@ use rmcp::{
 pub struct KeysRequest {
     /// Keystrokes to type into the terminal. Use \n for Enter, \t for Tab.
     pub keys: String,
-    /// Pane split label (e.g. "a", "b", "c"). Use terminal_status to see available panes and their labels. Omit for the first/focused pane.
+    /// Window index (0, 1, 2...). Omit for focused window.
+    pub window: Option<u32>,
+    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
+    pub tab: Option<String>,
+    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
     pub pane: Option<String>,
 }
 
@@ -19,7 +23,11 @@ pub struct KeysRequest {
 pub struct RunRequest {
     /// Shell command to execute (Enter is appended automatically)
     pub command: String,
-    /// Pane split label (e.g. "a", "b"). Use terminal_status to see available panes and their labels. Omit for the first/focused pane.
+    /// Window index (0, 1, 2...). Omit for focused window.
+    pub window: Option<u32>,
+    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
+    pub tab: Option<String>,
+    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
     pub pane: Option<String>,
     /// Milliseconds to wait for output before reading screen (default: 2000)
     pub wait_ms: Option<u64>,
@@ -27,7 +35,11 @@ pub struct RunRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ScreenRequest {
-    /// Pane split label (e.g. "a", "b"). Use terminal_status to see available panes. Omit for the first pane.
+    /// Window index (0, 1, 2...). Omit for focused window.
+    pub window: Option<u32>,
+    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
+    pub tab: Option<String>,
+    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
     pub pane: Option<String>,
 }
 
@@ -39,14 +51,28 @@ pub struct SplitRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct FocusRequest {
-    /// Pane split label to focus (e.g. "a", "b", "c"). Use terminal_status to see available panes.
-    pub pane: String,
+    /// Window index (0, 1, 2...). Omit for focused window.
+    pub window: Option<u32>,
+    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
+    pub tab: Option<String>,
+    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    pub pane: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct NewTabRequest {
     /// Shell command to run after the tab opens (e.g. "cd /my/project && claude")
     pub command: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RenameTabRequest {
+    /// New name for the tab
+    pub name: String,
+    /// Window index (0, 1, 2...). Omit for focused window.
+    pub window: Option<u32>,
+    /// Current tab name to rename. Omit for active tab.
+    pub tab: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -75,8 +101,12 @@ pub struct AgentStatusRequest {
     pub label: Option<String>,
     /// Human interaction percentage (0-100). How much of this session is human-driven.
     pub human_percent: Option<u8>,
-    /// Pane index to set status on. Omit for the first/active pane.
-    pub pane: Option<usize>,
+    /// Window index (0, 1, 2...). Omit for focused window.
+    pub window: Option<u32>,
+    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
+    pub tab: Option<String>,
+    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    pub pane: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -109,14 +139,22 @@ pub struct DashboardWidgetsRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ShellConfirmRequest {
-    /// Pane index (default: all panes)
-    pub pane: Option<usize>,
+    /// Window index (0, 1, 2...). Omit for focused window.
+    pub window: Option<u32>,
+    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
+    pub tab: Option<String>,
+    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    pub pane: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct AutoDescribeRequest {
-    /// Pane index to auto-describe (default: 0)
-    pub pane: Option<usize>,
+    /// Window index (0, 1, 2...). Omit for focused window.
+    pub window: Option<u32>,
+    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
+    pub tab: Option<String>,
+    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    pub pane: Option<String>,
 }
 
 // -- Stream Deck request schemas --
@@ -188,24 +226,24 @@ impl HyperiaMcp {
         }
     }
 
-    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab. These are unescaped automatically. Hint: call terminal_status first to see pane labels (a, b, c...) and pick which pane to target.")]
+    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab. These are unescaped automatically. Address panes with window/tab/pane. Use terminal_status to see the hierarchy.")]
     async fn terminal_keys(
         &self,
         Parameters(req): Parameters<KeysRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = self.resolve_pane(req.pane.as_deref()).await?;
+        let pane = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
         self.focus_pane(pane).await;
         let keys = unescape_keys(&req.keys);
         let resp = self.post_text(&format!("/api/type/{}", pane), &keys).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Run a shell command in a terminal pane. Sends command + Enter, waits, returns screen content. Hint: use terminal_status to list panes and their split labels, then pass the label (e.g. \"b\") to target a specific pane.")]
+    #[tool(description = "Run a shell command in a terminal pane. Sends command + Enter, waits, returns screen content. Address panes with window/tab/pane. Use terminal_status to see the hierarchy.")]
     async fn terminal_run(
         &self,
         Parameters(req): Parameters<RunRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = self.resolve_pane(req.pane.as_deref()).await?;
+        let pane = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
         self.focus_pane(pane).await;
         let keys = format!("{}\r\n", req.command);
         self.post_text(&format!("/api/type/{}", pane), &keys).await?;
@@ -217,17 +255,17 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "Read the current screen content of a terminal pane. Hint: call terminal_status first to see available panes and their split labels (a, b, c...).")]
+    #[tool(description = "Read the current screen content of a terminal pane. Address panes with window/tab/pane. Use terminal_status to see the hierarchy.")]
     async fn terminal_screen(
         &self,
         Parameters(req): Parameters<ScreenRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = self.resolve_pane(req.pane.as_deref()).await?;
+        let pane = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
         let text = self.get(&format!("/api/screen/{}", pane)).await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "List all open terminal panes with their split labels, tab names, dimensions, and PIDs. Each pane in a split is labeled a, b, c, etc. Use these labels to address panes in other tools like terminal_run, terminal_keys, terminal_screen, and terminal_focus.")]
+    #[tool(description = "List all open windows, tabs, and panes in a nested hierarchy. Each window has tabs, each tab has panes labeled a, b, c if split. Use window/tab/pane to address targets in other tools.")]
     async fn terminal_status(&self) -> Result<CallToolResult, ErrorData> {
         let text = self.get("/api/status").await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -245,12 +283,12 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Focus a specific pane by its split label (e.g. \"a\", \"b\", \"c\"). Hint: use terminal_status to see available panes and their labels.")]
+    #[tool(description = "Focus a specific pane by window/tab/pane address. Use terminal_status to see the hierarchy.")]
     async fn terminal_focus(
         &self,
         Parameters(req): Parameters<FocusRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = self.resolve_pane(Some(&req.pane)).await?;
+        let pane = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
         let body = serde_json::json!({"id": pane});
         let resp = self.post_json("/api/pane/focus", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
@@ -259,6 +297,17 @@ impl HyperiaMcp {
     #[tool(description = "Close the currently focused pane.")]
     async fn terminal_close(&self) -> Result<CallToolResult, ErrorData> {
         let resp = self.post_json("/api/pane/close", &serde_json::json!({})).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Rename a tab. Changes the display name that appears in the tab bar and in terminal_status.")]
+    async fn terminal_rename(
+        &self,
+        Parameters(req): Parameters<RenameTabRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pane = self.resolve_target(req.window, req.tab.as_deref(), None).await?;
+        let body = serde_json::json!({"id": pane, "name": req.name});
+        let resp = self.post_json("/api/pane/rename", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -281,24 +330,39 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "Set the agent status light on a specific tab. Use pane to target a tab by index.")]
+    #[tool(description = "Set the agent status light on a specific pane. Address with window/tab/pane.")]
     async fn agent_status(
         &self,
         Parameters(req): Parameters<AgentStatusRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        // Resolve pane index to session UID if provided
-        let session_uid = if let Some(pane) = req.pane {
-            let status_text = self.get("/api/status").await?;
-            let status: serde_json::Value = serde_json::from_str(&status_text)
-                .map_err(|e| ErrorData::internal_error(format!("Parse: {e}"), None))?;
-            status["panes"]
-                .as_array()
-                .and_then(|panes| panes.get(pane))
-                .and_then(|p| p["uid"].as_str())
-                .map(|s| s.to_string())
-        } else {
-            None
-        };
+        // Resolve window/tab/pane to a pane index, then look up its UID
+        let pane_idx = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
+        let status_text = self.get("/api/status").await?;
+        let status: serde_json::Value = serde_json::from_str(&status_text)
+            .map_err(|e| ErrorData::internal_error(format!("Parse: {e}"), None))?;
+
+        // Find the pane's UID by searching all windows/tabs/panes for matching id
+        let mut session_uid: Option<String> = None;
+        if let Some(windows) = status["windows"].as_array() {
+            'outer: for win in windows {
+                if let Some(tabs) = win["tabs"].as_array() {
+                    for tab in tabs {
+                        if let Some(panes) = tab["panes"].as_array() {
+                            for p in panes {
+                                if p["id"].as_u64() == Some(pane_idx as u64) {
+                                    // We need the UID — get it from the HTTP API
+                                    let screen_url = format!("/api/pane/uid/{}", pane_idx);
+                                    if let Ok(uid) = self.get(&screen_url).await {
+                                        session_uid = Some(uid);
+                                    }
+                                    break 'outer;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         let mut body = serde_json::json!({
             "connected": req.connected,
@@ -495,59 +559,78 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Read all pane screens in the current tab at once. Returns labeled output for each visible pane with their split labels (a, b, c...). Great for getting a holistic view of everything happening across splits.")]
+    #[tool(description = "Read all pane screens across all windows and tabs. Returns labeled output grouped by window and tab. Great for getting a holistic view of everything.")]
     async fn tab_snapshot(&self) -> Result<CallToolResult, ErrorData> {
         let status_text = self.get("/api/status").await?;
         let status: serde_json::Value = serde_json::from_str(&status_text)
             .map_err(|e| ErrorData::internal_error(format!("Parse: {e}"), None))?;
 
         let mut output = String::new();
-        if let Some(panes) = status["panes"].as_array() {
-            for pane in panes {
-                let id = pane["id"].as_u64().unwrap_or(0);
-                let name = pane["name"].as_str().unwrap_or("unknown");
-                let label = pane["splitLabel"].as_str().unwrap_or("");
-                let tab_name = pane["tabName"].as_str().unwrap_or("");
-                let cols = pane["cols"].as_u64().unwrap_or(0);
-                let rows = pane["rows"].as_u64().unwrap_or(0);
-                let screen = self.get(&format!("/api/screen/{}", id)).await
-                    .unwrap_or_else(|_| "(error reading screen)".into());
+        if let Some(windows) = status["windows"].as_array() {
+            for win in windows {
+                let win_id = win["id"].as_u64().unwrap_or(0);
+                output.push_str(&format!("=== Window {} ===\n", win_id));
 
-                let pane_label = if label.is_empty() {
-                    format!("{}", tab_name)
-                } else {
-                    format!("{} ({})", tab_name, label)
-                };
+                if let Some(tabs) = win["tabs"].as_array() {
+                    for tab in tabs {
+                        let tab_name = tab["name"].as_str().unwrap_or("shell");
+                        if let Some(panes) = tab["panes"].as_array() {
+                            for pane in panes {
+                                let id = pane["id"].as_u64().unwrap_or(0);
+                                let label = pane["label"].as_str().unwrap_or("");
+                                let cols = pane["cols"].as_u64().unwrap_or(0);
+                                let rows = pane["rows"].as_u64().unwrap_or(0);
+                                let screen = self.get(&format!("/api/screen/{}", id)).await
+                                    .unwrap_or_else(|_| "(error reading screen)".into());
 
-                output.push_str(&format!(
-                    "=== {} | {} | {}x{} ===\n{}\n\n",
-                    pane_label, name, cols, rows, screen.trim()
-                ));
+                                let header = if label.is_empty() {
+                                    format!("--- {} | {}x{} ---", tab_name, cols, rows)
+                                } else {
+                                    format!("--- {} ({}) | {}x{} ---", tab_name, label, cols, rows)
+                                };
+
+                                output.push_str(&format!("{}\n{}\n\n", header, screen.trim()));
+                            }
+                        }
+                    }
+                }
             }
         }
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
-    #[tool(description = "Analyze a pane's screen and return its state: idle (at prompt), dialog (waiting for selection), running (command in progress), or empty.")]
+    #[tool(description = "Analyze all panes' screens and return their state: idle (at prompt), dialog (waiting for selection), running (command in progress), or empty.")]
     async fn shell_state(&self) -> Result<CallToolResult, ErrorData> {
         let status_text = self.get("/api/status").await?;
         let status: serde_json::Value = serde_json::from_str(&status_text)
             .map_err(|e| ErrorData::internal_error(format!("Parse: {e}"), None))?;
 
         let mut results = Vec::new();
-        if let Some(panes) = status["panes"].as_array() {
-            for pane in panes {
-                let id = pane["id"].as_u64().unwrap_or(0);
-                let screen = self.get(&format!("/api/screen/{}", id)).await
-                    .unwrap_or_default();
+        if let Some(windows) = status["windows"].as_array() {
+            for win in windows {
+                if let Some(tabs) = win["tabs"].as_array() {
+                    for tab in tabs {
+                        if let Some(panes) = tab["panes"].as_array() {
+                            for pane in panes {
+                                let id = pane["id"].as_u64().unwrap_or(0);
+                                let label = pane["label"].as_str().unwrap_or("");
+                                let tab_name = tab["name"].as_str().unwrap_or("shell");
+                                let screen = self.get(&format!("/api/screen/{}", id)).await
+                                    .unwrap_or_default();
 
-                let state = detect_shell_state(&screen);
-                results.push(serde_json::json!({
-                    "pane": id,
-                    "state": state.kind,
-                    "detail": state.detail,
-                    "actionable": state.actionable,
-                }));
+                                let state = detect_shell_state(&screen);
+                                results.push(serde_json::json!({
+                                    "window": win["id"],
+                                    "tab": tab_name,
+                                    "pane": label,
+                                    "state": state.kind,
+                                    "detail": state.detail,
+                                    "actionable": state.actionable,
+                                }));
+                            }
+                        }
+                    }
+                }
             }
         }
         Ok(CallToolResult::success(vec![Content::text(
@@ -555,32 +638,64 @@ impl HyperiaMcp {
         )]))
     }
 
-    #[tool(description = "Auto-handle common shell prompts (trust dialogs, update prompts, y/n confirmations) on one or all panes.")]
+    #[tool(description = "Auto-handle common shell prompts (trust dialogs, update prompts, y/n confirmations). Target a specific pane with window/tab/pane, or omit all to scan every pane.")]
     async fn shell_confirm(
         &self,
         Parameters(req): Parameters<ShellConfirmRequest>,
     ) -> Result<CallToolResult, ErrorData> {
+        // If a specific pane is targeted, resolve and handle just that one
+        if req.window.is_some() || req.tab.is_some() || req.pane.is_some() {
+            let id = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
+            let screen = self.get(&format!("/api/screen/{}", id)).await
+                .unwrap_or_default();
+            let state = detect_shell_state(&screen);
+
+            if let Some(keys) = &state.actionable {
+                self.post_text(&format!("/api/type/{}", id), keys).await?;
+                return Ok(CallToolResult::success(vec![Content::text(
+                    format!("Sent '{}' ({})", keys.replace('\r', "\\r"), state.detail)
+                )]));
+            } else {
+                return Ok(CallToolResult::success(vec![Content::text(
+                    format!("No action needed ({})", state.kind)
+                )]));
+            }
+        }
+
+        // Otherwise scan all panes across all windows/tabs
         let status_text = self.get("/api/status").await?;
         let status: serde_json::Value = serde_json::from_str(&status_text)
             .map_err(|e| ErrorData::internal_error(format!("Parse: {e}"), None))?;
 
         let mut actions = Vec::new();
-        if let Some(panes) = status["panes"].as_array() {
-            for pane in panes {
-                let id = pane["id"].as_u64().unwrap_or(0) as usize;
-                if let Some(target) = req.pane {
-                    if id != target { continue; }
-                }
+        if let Some(windows) = status["windows"].as_array() {
+            for win in windows {
+                if let Some(tabs) = win["tabs"].as_array() {
+                    for tab in tabs {
+                        let tab_name = tab["name"].as_str().unwrap_or("shell");
+                        if let Some(panes) = tab["panes"].as_array() {
+                            for pane in panes {
+                                let id = pane["id"].as_u64().unwrap_or(0) as usize;
+                                let label = pane["label"].as_str().unwrap_or("");
+                                let screen = self.get(&format!("/api/screen/{}", id)).await
+                                    .unwrap_or_default();
+                                let state = detect_shell_state(&screen);
 
-                let screen = self.get(&format!("/api/screen/{}", id)).await
-                    .unwrap_or_default();
-                let state = detect_shell_state(&screen);
+                                let pane_desc = if label.is_empty() {
+                                    tab_name.to_string()
+                                } else {
+                                    format!("{} ({})", tab_name, label)
+                                };
 
-                if let Some(keys) = &state.actionable {
-                    self.post_text(&format!("/api/type/{}", id), keys).await?;
-                    actions.push(format!("Pane {}: sent '{}' ({})", id, keys.replace('\r', "\\r"), state.detail));
-                } else {
-                    actions.push(format!("Pane {}: no action needed ({})", id, state.kind));
+                                if let Some(keys) = &state.actionable {
+                                    self.post_text(&format!("/api/type/{}", id), keys).await?;
+                                    actions.push(format!("{}: sent '{}' ({})", pane_desc, keys.replace('\r', "\\r"), state.detail));
+                                } else {
+                                    actions.push(format!("{}: no action needed ({})", pane_desc, state.kind));
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -592,7 +707,7 @@ impl HyperiaMcp {
         &self,
         Parameters(req): Parameters<AutoDescribeRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = req.pane.unwrap_or(0);
+        let pane = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
         let resp = self.post_text(&format!("/api/pane/describe/{}", pane), "").await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
@@ -800,36 +915,55 @@ fn detect_shell_state(screen: &str) -> ShellStateInfo {
 // -- Helper methods --
 
 impl HyperiaMcp {
-    /// Resolve a pane label (e.g. "a", "b") to a pane index. Falls back to 0 if no label given.
-    async fn resolve_pane(&self, label: Option<&str>) -> Result<usize, ErrorData> {
-        let label = match label {
-            Some(l) if !l.is_empty() => l,
-            _ => return Ok(0),
-        };
-
-        // If it's a numeric string, use it directly as an index (backwards compat)
-        if let Ok(idx) = label.parse::<usize>() {
-            return Ok(idx);
-        }
-
+    /// Resolve window/tab/pane addressing to a flat session index for the HTTP API.
+    async fn resolve_target(&self, window: Option<u32>, tab: Option<&str>, pane: Option<&str>) -> Result<usize, ErrorData> {
         let status_text = self.get("/api/status").await?;
         let status: serde_json::Value = serde_json::from_str(&status_text)
             .map_err(|e| ErrorData::internal_error(format!("Parse: {e}"), None))?;
 
-        if let Some(panes) = status["panes"].as_array() {
-            for pane in panes {
-                if pane["splitLabel"].as_str() == Some(label) {
-                    if let Some(id) = pane["id"].as_u64() {
-                        return Ok(id as usize);
-                    }
-                }
-            }
-        }
+        let windows = status["windows"].as_array()
+            .ok_or_else(|| ErrorData::internal_error("No windows", None))?;
 
-        Err(ErrorData::invalid_params(
-            format!("No pane with label '{}'. Use terminal_status to see available panes.", label),
-            None,
-        ))
+        // Find target window
+        let target_window = if let Some(w) = window {
+            windows.iter().find(|win| win["id"].as_u64() == Some(w as u64))
+                .ok_or_else(|| ErrorData::invalid_params(format!("No window {w}"), None))?
+        } else {
+            // Use focused window, or first window
+            windows.iter().find(|win| win["focused"].as_bool() == Some(true))
+                .or_else(|| windows.first())
+                .ok_or_else(|| ErrorData::internal_error("No windows open", None))?
+        };
+
+        let tabs = target_window["tabs"].as_array()
+            .ok_or_else(|| ErrorData::internal_error("No tabs", None))?;
+
+        // Find target tab
+        let target_tab = if let Some(t) = tab {
+            tabs.iter().find(|tb| tb["name"].as_str() == Some(t))
+                .ok_or_else(|| ErrorData::invalid_params(format!("No tab '{t}'. Use terminal_status to see available tabs."), None))?
+        } else {
+            // Use active tab, or first tab
+            tabs.iter().find(|tb| tb["active"].as_bool() == Some(true))
+                .or_else(|| tabs.first())
+                .ok_or_else(|| ErrorData::internal_error("No tabs open", None))?
+        };
+
+        let panes = target_tab["panes"].as_array()
+            .ok_or_else(|| ErrorData::internal_error("No panes", None))?;
+
+        // Find target pane
+        let target_pane = if let Some(p) = pane {
+            panes.iter().find(|pn| pn["label"].as_str() == Some(p))
+                .ok_or_else(|| ErrorData::invalid_params(format!("No pane '{p}' in tab. Use terminal_status to see available panes."), None))?
+        } else {
+            panes.first()
+                .ok_or_else(|| ErrorData::internal_error("No panes", None))?
+        };
+
+        target_pane["id"].as_u64()
+            .map(|id| id as usize)
+            .ok_or_else(|| ErrorData::internal_error("Pane has no id", None))
     }
 
     /// Focus a pane by index (fire-and-forget, best-effort).
@@ -929,10 +1063,14 @@ impl ServerHandler for HyperiaMcp {
         ServerInfo {
             instructions: Some(
                 "Hyperia MCP server — controls a running Hyperia terminal emulator. \
-                 \n\nGetting started: call terminal_status to see all open panes with their \
-                 split labels (a, b, c...) and tab names. Use these labels to address specific \
-                 panes in terminal_run, terminal_keys, terminal_screen, and terminal_focus. \
-                 For a full view of all pane contents at once, use tab_snapshot. \
+                 \n\nAddressing: Hyperia organizes sessions as windows > tabs > panes. \
+                 Call terminal_status to see the full hierarchy. Most tools accept optional \
+                 window (index), tab (name), and pane (label) parameters: \
+                 - Omit all three to target the focused window's active tab's first pane. \
+                 - Specify window to pick a window by index (0, 1, 2...). \
+                 - Specify tab to pick a tab by name (e.g. \"Capybara\"). \
+                 - Specify pane to pick a split pane by label (\"a\", \"b\", \"c\"). \
+                 For a full view of all pane contents, use tab_snapshot. \
                  \n\nTerminal: terminal_keys, terminal_run, terminal_screen, terminal_status, \
                  terminal_split, terminal_focus, terminal_close, terminal_new_tab, tab_snapshot, \
                  shell_state, shell_confirm. \

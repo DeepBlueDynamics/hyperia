@@ -38,6 +38,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   };
 
   const handleRenameSubmit = () => {
+    if (!renaming) return; // prevent double-fire from blur + enter
     if (props.onDescribe && renameValue.trim()) {
       props.onDescribe(renameValue.trim());
     }
@@ -52,10 +53,38 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
 
   const handleContextMenu = (event: React.MouseEvent) => {
     event.preventDefault();
-    const desc = window.prompt('Describe this tab:', description || '');
-    if (desc !== null && props.onDescribe) {
-      props.onDescribe(desc);
-    }
+    event.stopPropagation();
+    /* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
+    const remote = require('@electron/remote');
+    const {Menu, MenuItem} = remote;
+    const {clipboard} = require('electron');
+    const menu = new Menu();
+    menu.append(
+      new MenuItem({
+        label: 'Rename',
+        click: () => {
+          setRenameValue(description || tabName || props.text);
+          setRenaming(true);
+        }
+      })
+    );
+    menu.append(
+      new MenuItem({
+        label: `Copy ID (${props.uid.substring(0, 8)}...)`,
+        click: () => {
+          clipboard.writeText(props.uid);
+        }
+      })
+    );
+    menu.append(new MenuItem({type: 'separator'}));
+    menu.append(
+      new MenuItem({
+        label: 'Close',
+        click: () => props.onClose()
+      })
+    );
+    menu.popup();
+    /* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
   };
 
   const {isActive, isFirst, isLast, borderColor, hasActivity, agentStatus, tabName, description} = props;
@@ -100,7 +129,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
             />
           )}
           <span
-            title={displayText}
+            title={props.text !== displayText ? props.text : ''}
             className={`tab_textInner ${isActive ? 'tab_textInnerActive' : ''}`}
             onDoubleClick={handleDoubleClick}
           >
@@ -300,6 +329,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
             color 0.2s ease,
             transform 0.25s ease,
             background-color 0.1s ease;
+          cursor: pointer;
           pointer-events: none;
           position: absolute;
           right: 7px;

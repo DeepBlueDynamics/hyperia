@@ -37,6 +37,7 @@ interface TrackedSession {
   tabName: string;
   description: string;
   rootTabUid: string; // uid of the root tab group — splits share this
+  windowId: number; // Electron BrowserWindow id
 }
 const trackedSessions = new Map<string, TrackedSession>();
 
@@ -144,7 +145,8 @@ function sendSessionRegister(uid: string, tracked: TrackedSession) {
     rows: tracked.rows,
     cols: tracked.cols,
     pid: tracked.session.pty?.pid ?? 0,
-    rootTabUid: tracked.rootTabUid
+    rootTabUid: tracked.rootTabUid,
+    windowId: tracked.windowId
   });
 }
 
@@ -282,7 +284,8 @@ function handleCommand(msg: Record<string, unknown>) {
         splitLabel: getSplitLabel(uid),
         rows: t.rows,
         cols: t.cols,
-        pid: t.session.pty?.pid ?? 0
+        pid: t.session.pty?.pid ?? 0,
+        windowId: t.windowId
       }));
       sendResult(seq, JSON.stringify({panes}));
       break;
@@ -364,6 +367,32 @@ function handleCommand(msg: Record<string, unknown>) {
         sendResult(seq, 'ok');
       } else {
         sendResult(seq, 'No focused window');
+      }
+      break;
+    }
+
+    case 'Rename': {
+      const id = msg.id as number;
+      const name = msg.name as string;
+      const entries = Array.from(trackedSessions.entries());
+      if (id >= 0 && id < entries.length) {
+        const [sessionUid, tracked] = entries[id];
+        const rootTab = tracked.rootTabUid;
+        // Update ALL sessions in the tab group and notify sidecar for each
+        for (const [uid, t] of trackedSessions) {
+          if (t.rootTabUid === rootTab) {
+            t.tabName = name;
+            send({type: 'SessionTabName', uid, tabName: name});
+          }
+        }
+        // Tell the renderer to update the tab name
+        const win = getFocusedHyperiaWindow();
+        if (win) {
+          win.rpc.emit('session rename', {uid: sessionUid, name});
+        }
+        sendResult(seq, 'ok');
+      } else {
+        sendResult(seq, `No pane at index ${id}`);
       }
       break;
     }
@@ -462,7 +491,8 @@ export function registerSession(
   cols: number,
   name: string = 'shell',
   tabName: string = '',
-  rootTabUid: string = ''
+  rootTabUid: string = '',
+  windowId: number = 0
 ) {
   const tracked: TrackedSession = {
     session,
@@ -471,7 +501,8 @@ export function registerSession(
     name,
     tabName: tabName || name,
     description: '',
-    rootTabUid: rootTabUid || uid
+    rootTabUid: rootTabUid || uid,
+    windowId
   };
   trackedSessions.set(uid, tracked);
 
@@ -515,16 +546,27 @@ export function registerSession(
 
 /** Update the tab name for a session (called on xterm title change). */
 export function updateSessionTabName(uid: string, tabName: string) {
-  const tracked = trackedSessions.get(uid);
-  if (tracked) {
-    tracked.tabName = tabName;
-    send({type: 'SessionTabName', uid, tabName});
+  const rootTabUid = trackedSessions.get(uid)?.rootTabUid || uid;
+  for (const [sessionUid, t] of trackedSessions) {
+    if (t.rootTabUid === rootTabUid) {
+      t.tabName = tabName;
+      send({type: 'SessionTabName', uid: sessionUid, tabName});
+    }
   }
 }
 
 /** Update the description for a session. */
 export function updateSessionDescription(uid: string, description: string) {
-  const tracked = trackedSessions.get(uid);
+  let tracked = trackedSessions.get(uid);
+  // Might be a termGroup uid — find by rootTabUid
+  if (!tracked) {
+    for (const [, t] of trackedSessions) {
+      if (t.rootTabUid === uid) {
+        tracked = t;
+        break;
+      }
+    }
+  }
   if (tracked) {
     tracked.description = description;
     send({type: 'SessionDescribe', uid, description});

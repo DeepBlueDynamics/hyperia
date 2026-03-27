@@ -240,6 +240,7 @@ export type TabProps = {
   text: string;
   tabName: string;
   description: string;
+  uid: string;
   agentStatus?: AgentStatus;
 } & extensionProps;
 

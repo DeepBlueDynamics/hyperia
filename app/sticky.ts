@@ -1,8 +1,9 @@
 // Sticky note windows — frameless, always-on-top, colored floating notes.
 // Can be plain text or file viewer with syntax highlighting.
 
-import {readFileSync} from 'fs';
-import {basename, extname} from 'path';
+import {readFileSync, writeFileSync, mkdirSync} from 'fs';
+import {tmpdir} from 'os';
+import {basename, extname, join} from 'path';
 
 import {BrowserWindow, ipcMain, screen} from 'electron';
 
@@ -98,7 +99,16 @@ function createStickyNote(
     winId: win.id
   });
 
-  void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  // Write HTML to temp file — data: URLs don't support -webkit-app-region
+  const stickyDir = join(tmpdir(), 'hyperia-sticky');
+  try {
+    mkdirSync(stickyDir, {recursive: true});
+  } catch {
+    // exists
+  }
+  const tmpFile = join(stickyDir, `sticky-${win.id}.html`);
+  writeFileSync(tmpFile, html, 'utf8');
+  void win.loadFile(tmpFile);
 
   win.on('closed', () => {
     stickyWindows.delete(win.id);

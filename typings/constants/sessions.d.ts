@@ -81,6 +81,7 @@ export interface SessionSetDescriptionAction {
   type: typeof SESSION_SET_DESCRIPTION;
   uid: string;
   description: string;
+  tabName: string;
 }
 
 export type SessionActions =

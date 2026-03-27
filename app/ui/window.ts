@@ -41,55 +41,8 @@ import toElectronBackgroundColor from '../utils/to-electron-background-color';
 
 import contextMenuTemplate from './contextmenu';
 
-const TAB_NAMES = [
-  // Cute animals
-  'Axolotl',
-  'Quokka',
-  'Pika',
-  'Capybara',
-  'Fennec',
-  'Pangolin',
-  'Numbat',
-  'Chinchilla',
-  'Tamarin',
-  'Loris',
-  'Dugong',
-  'Kinkajou',
-  'Bushbaby',
-  'Puffin',
-  'Wombat',
-  'Hedgehog',
-  'Otter',
-  'Narwhal',
-  // Violent space creatures
-  'Void Kraken',
-  'Star Reaver',
-  'Nebula Fang',
-  'Pulsar Maw',
-  'Gravity Wyrm',
-  'Plasma Hydra',
-  'Cosmic Talon',
-  'Dark Leviathan',
-  'Rift Stalker',
-  'Nova Scorpion',
-  'Quasar Beast',
-  'Ion Viper',
-  'Warp Mantis',
-  'Singularity Eel',
-  'Flux Raptor',
-  'Solar Barb',
-  'Eclipse Shark',
-  'Photon Wolf',
-  'Comet Drake',
-  'Aether Wasp'
-];
-let nameIndex = 0;
-
-function nextTabName(): string {
-  const name = TAB_NAMES[nameIndex % TAB_NAMES.length];
-  nameIndex++;
-  return name;
-}
+// Tab names are assigned by the renderer and synced via 'session set tab name' RPC.
+// The main process no longer generates names.
 
 function makeLetterIcon(letter: string): Electron.NativeImage {
   // Generate a 32x32 PNG with a single letter via canvas-free SVG→PNG
@@ -279,7 +232,6 @@ export function newWindow(
     const {session, options} = createSession(extraOptions);
 
     sessions.set(options.uid, session);
-    const cuteTabName = nextTabName(); // advance counter for tab naming
     rpc.emit('session add', {
       rows: options.rows,
       cols: options.cols,
@@ -301,13 +253,14 @@ export function newWindow(
       options.rows || 24,
       options.cols || 80,
       session.shell || 'shell',
-      cuteTabName,
-      rootTabUid
+      '', // tab name assigned by renderer via 'session set tab name'
+      rootTabUid,
+      window.id
     );
 
     // Start session logging if enabled
     if (cfg.sessionLogging) {
-      startSessionLog(options.uid, cuteTabName);
+      startSessionLog(options.uid, session.shell || 'shell');
     }
 
     session.on('data', (data: string) => {
@@ -376,6 +329,9 @@ export function newWindow(
   rpc.on('session set description', ({uid, description}: {uid: string; description: string}) => {
     updateSessionDescription(uid, description);
   });
+  rpc.on('session set tab name', ({uid, tabName}: {uid: string; tabName: string}) => {
+    updateSessionTabName(uid, tabName);
+  });
   rpc.on('info renderer', ({uid, type}) => {
     // Used in the "About" dialog
     setRendererType(uid, type);
@@ -393,15 +349,12 @@ export function newWindow(
     Menu.getApplicationMenu()!.popup({x: Math.ceil(x), y: Math.ceil(y)});
   });
   // Update Electron window title + taskbar icon when active session title changes
-  rpc.on('session set xterm title', ({uid, title}: {uid: string; title: string}) => {
+  rpc.on('session set xterm title', ({title}: {uid: string; title: string}) => {
+    // Only update window chrome — tab names come from renderer via 'session set tab name'
     if (title) {
       window.setTitle(`${title} — Hyperia`);
       if (process.platform === 'win32') {
         window.setIcon(makeLetterIcon(title));
-      }
-      // Keep sidecar in sync with the display name — but skip raw shell paths
-      if (uid && !/[/\\]/.test(title) && !/^(cmd|powershell|pwsh|bash|sh|zsh|Command Prompt)/i.test(title)) {
-        updateSessionTabName(uid, title);
       }
     } else {
       window.setTitle('Hyperia');

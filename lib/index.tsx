@@ -93,6 +93,10 @@ rpc.on('session exit', ({uid}) => {
   store_.dispatch(termGroupActions.ptyExitTermGroup(uid));
 });
 
+rpc.on('session rename', ({uid, name}: {uid: string; name: string}) => {
+  store_.dispatch(sessionActions.setSessionDescription(uid, name) as any);
+});
+
 rpc.on('termgroup close req', () => {
   store_.dispatch(termGroupActions.exitActiveTermGroup());
 });

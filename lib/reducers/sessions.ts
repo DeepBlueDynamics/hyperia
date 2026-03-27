@@ -1,4 +1,5 @@
 import Immutable from 'seamless-immutable';
+import {uniqueNamesGenerator, adjectives, animals} from 'unique-names-generator';
 
 import {
   SESSION_ADD,
@@ -16,49 +17,14 @@ import {
 import type {sessionState, session, Mutable, ISessionReducer} from '../../typings/hyper';
 import {decorateSessionsReducer} from '../utils/plugins';
 
-const TAB_NAMES = [
-  'Axolotl',
-  'Quokka',
-  'Pika',
-  'Capybara',
-  'Fennec',
-  'Pangolin',
-  'Numbat',
-  'Chinchilla',
-  'Tamarin',
-  'Loris',
-  'Dugong',
-  'Kinkajou',
-  'Bushbaby',
-  'Puffin',
-  'Wombat',
-  'Hedgehog',
-  'Otter',
-  'Narwhal',
-  'Void Kraken',
-  'Star Reaver',
-  'Nebula Fang',
-  'Pulsar Maw',
-  'Gravity Wyrm',
-  'Plasma Hydra',
-  'Cosmic Talon',
-  'Dark Leviathan',
-  'Rift Stalker',
-  'Nova Scorpion',
-  'Quasar Beast',
-  'Ion Viper',
-  'Warp Mantis',
-  'Singularity Eel',
-  'Flux Raptor',
-  'Solar Barb',
-  'Eclipse Shark',
-  'Photon Wolf',
-  'Comet Drake',
-  'Aether Wasp'
-];
-let nameIndex = Math.floor(Math.random() * TAB_NAMES.length);
 function nextTabName(): string {
-  return TAB_NAMES[nameIndex++ % TAB_NAMES.length];
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call
+  return uniqueNamesGenerator({
+    dictionaries: [adjectives, animals],
+    separator: ' ',
+    style: 'capital',
+    length: 2
+  });
 }
 
 const initialState: sessionState = Immutable<Mutable<sessionState>>({
@@ -166,7 +132,9 @@ const reducer: ISessionReducer = (state = initialState, action) => {
     }
 
     case SESSION_SET_DESCRIPTION:
-      return state.setIn(['sessions', action.uid, 'description'], action.description);
+      return state
+        .setIn(['sessions', action.uid, 'description'], action.description)
+        .setIn(['sessions', action.uid, 'tabName'], action.tabName);
 
     case SESSION_RESIZE:
       return state.setIn(

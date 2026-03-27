@@ -143,7 +143,9 @@ async fn post_type(
     if body.is_empty() {
         return (StatusCode::BAD_REQUEST, "Empty body".into());
     }
-    let keys = unescape_keys(&body);
+    // Don't unescape here — callers send raw bytes.
+    // MCP terminal_keys handles its own unescaping before calling this endpoint.
+    let keys = body;
     let uid = match state.bridge.pane_uid(pane).await {
         Some(u) => u,
         None => return (StatusCode::NOT_FOUND, format!("No pane at index {pane}")),
@@ -212,6 +214,30 @@ async fn post_new_tab(
     let profile = parsed["profile"].as_str().unwrap_or("").to_string();
     let command = parsed["command"].as_str().unwrap_or("").to_string();
     let cmd = serde_json::json!({"type": "NewTab", "profile": profile, "command": command});
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn post_rename_tab(
+    State(state): State<AppState>,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let id = parsed["id"].as_u64().unwrap_or(0);
+    let name = parsed["name"].as_str().unwrap_or("").to_string();
+
+    // Update locally in sidecar
+    {
+        let mut sessions = state.bridge.sessions().await;
+        if let Some((_uid, info)) = sessions.iter_mut().nth(id as usize) {
+            info.tab_name = name.clone();
+        }
+    }
+
+    // Tell Electron to update the renderer
+    let cmd = serde_json::json!({"type": "Rename", "id": id, "name": name});
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
@@ -383,6 +409,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pane/focus", axum::routing::post(post_focus))
         .route("/api/pane/close", axum::routing::post(post_close))
         .route("/api/pane/new", axum::routing::post(post_new_tab))
+        .route("/api/pane/rename", axum::routing::post(post_rename_tab))
         .route("/api/agent/status", axum::routing::post(post_agent_status))
         .route("/api/pane/describe/{pane}", axum::routing::post(post_auto_describe))
         // Voice (Auracle) endpoints

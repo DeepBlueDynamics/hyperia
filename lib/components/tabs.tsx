@@ -76,6 +76,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             text: tabName || title || 'Shell',
             tabName: tabName || title || 'Shell',
             description: description || '',
+            uid,
             isFirst: i === 0,
             isLast: tabs.length - 1 === i,
             borderColor,

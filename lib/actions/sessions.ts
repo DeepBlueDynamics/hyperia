@@ -35,6 +35,11 @@ export function addSession({uid, shell, pid, cols = null, rows = null, splitDire
       now,
       profile
     });
+    // Send the renderer-assigned tab name back to the main process for sidecar sync
+    const newSession = getState().sessions.sessions[uid];
+    if (newSession?.tabName) {
+      window.rpc.emit('session set tab name', {uid, tabName: newSession.tabName});
+    }
   };
 }
 
@@ -108,12 +113,20 @@ export function clearActiveSession(): HyperActions {
   };
 }
 
-export function setSessionDescription(uid: string, description: string): HyperActions {
-  window.rpc.emit('session set description', {uid, description});
-  return {
-    type: SESSION_SET_DESCRIPTION,
-    uid,
-    description
+export function setSessionDescription(uid: string, description: string) {
+  return (dispatch: HyperDispatch, getState: () => HyperState) => {
+    // uid might be a termGroup uid — resolve to session uid
+    const sessionUid = getState().termGroups.activeSessions[uid] || uid;
+    const session = getState().sessions.sessions[sessionUid];
+    const tabName = description || session?.title || session?.tabName || '';
+    window.rpc.emit('session set description', {uid: sessionUid, description});
+    window.rpc.emit('session set tab name', {uid: sessionUid, tabName});
+    dispatch({
+      type: SESSION_SET_DESCRIPTION,
+      uid: sessionUid,
+      description,
+      tabName
+    });
   };
 }
 

@@ -79,58 +79,18 @@ function findSidecarBinary(): string | null {
   return null;
 }
 
-function killProcessOnPort(port: number): Promise<void> {
+function killExistingSidecars(): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-shadow
   return new Promise((resolve) => {
-    if (process.platform === 'win32') {
-      // Find and kill any process using our port
-      const find = spawn(
-        'cmd',
-        ['/c', `for /f "tokens=5" %a in ('netstat -aon ^| findstr :${port} ^| findstr LISTENING') do @echo %a`],
-        {shell: true}
-      );
-      let pids = '';
-      find.stdout?.on('data', (d: Buffer) => {
-        pids += d.toString();
-      });
-      find.on('close', () => {
-        const pidList = pids
-          .trim()
-          .split(/\s+/)
-          .filter((p) => p && p !== '0');
-        if (pidList.length > 0) {
-          isDev && console.log(`[sidecar] Killing processes on port ${port}: ${pidList.join(', ')}`);
-          for (const pid of pidList) {
-            try {
-              process.kill(parseInt(pid, 10), 'SIGTERM');
-            } catch {
-              /* already dead */
-            }
-          }
-          setTimeout(resolve, 1000);
-        } else {
-          resolve();
-        }
-      });
-      find.on('error', () => resolve());
-    } else {
-      const find = spawn('lsof', ['-ti', `:${port}`]);
-      let pids = '';
-      find.stdout?.on('data', (d: Buffer) => {
-        pids += d.toString();
-      });
-      find.on('close', () => {
-        for (const pid of pids.trim().split('\n').filter(Boolean)) {
-          try {
-            process.kill(parseInt(pid, 10), 'SIGTERM');
-          } catch {
-            /* already dead */
-          }
-        }
-        setTimeout(resolve, 500);
-      });
-      find.on('error', () => resolve());
-    }
+    const cmd =
+      process.platform === 'win32'
+        ? spawn('taskkill', ['/f', '/im', 'hyperia-sidecar.exe'])
+        : spawn('pkill', ['-f', 'hyperia-sidecar']);
+    cmd.on('close', () => {
+      // Give OS time to release the port
+      setTimeout(resolve, 1500);
+    });
+    cmd.on('error', () => resolve());
   });
 }
 
@@ -140,8 +100,8 @@ async function spawnSidecar() {
 
   isDev && console.log(`[sidecar] __dirname = ${__dirname}`);
 
-  // Kill any existing sidecar on our port before spawning
-  await killProcessOnPort(SIDECAR_PORT);
+  // Kill any existing sidecar before spawning
+  await killExistingSidecars();
 
   isDev && console.log(`[sidecar] Spawning: ${sidecarPath} --port ${SIDECAR_PORT} --deck`);
   sidecarProcess = spawn(sidecarPath, ['--port', String(SIDECAR_PORT), '--deck'], {
@@ -424,16 +384,17 @@ app.on('ready', () => {
       });
 
       app.on('window-all-closed', () => {
-        if (process.platform !== 'darwin') {
-          destroyTray();
-          stopBridge();
-          killSidecar();
-          app.quit();
+        // Keep tray, sidecar, and bridge alive — user can open new windows from tray
+        // Only quit on explicit Quit from tray menu or app.quit()
+        if (process.platform === 'darwin') {
+          // macOS: standard behavior, app stays in dock
         }
       });
 
       app.on('before-quit', () => {
         destroyTray();
+        stopBridge();
+        killSidecar();
       });
 
       const makeMenu = () => {

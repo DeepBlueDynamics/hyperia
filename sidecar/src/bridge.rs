@@ -24,6 +24,7 @@ pub struct SessionInfo {
     pub cols: u16,
     pub pid: u32,
     pub root_tab_uid: String,
+    pub window_id: u32,
     pub screen: ScreenBuffer,
 }
 
@@ -63,6 +64,11 @@ impl Bridge {
     #[allow(dead_code)]
     pub async fn is_connected(&self) -> bool {
         self.inner.cmd_tx.lock().await.is_some()
+    }
+
+    /// Get mutable access to sessions for direct updates.
+    pub async fn sessions(&self) -> tokio::sync::MutexGuard<'_, HashMap<String, SessionInfo>> {
+        self.inner.sessions.lock().await
     }
 
     /// Send a command to Electron and wait for the ToolResult response.
@@ -138,48 +144,91 @@ impl Bridge {
         sessions.keys().nth(pane).cloned()
     }
 
-    /// Compute the split label (a, b, c...) for a session within its tab group.
-    fn split_label(sessions: &HashMap<String, SessionInfo>, uid: &str) -> String {
-        let info = match sessions.get(uid) {
-            Some(i) => i,
-            None => return String::new(),
-        };
-        let root = &info.root_tab_uid;
-        let mut siblings: Vec<&String> = sessions
-            .iter()
-            .filter(|(_, i)| i.root_tab_uid == *root)
-            .map(|(u, _)| u)
-            .collect();
-        if siblings.len() <= 1 {
-            return String::new(); // no splits
-        }
-        siblings.sort(); // deterministic order
-        let idx = siblings.iter().position(|u| *u == uid).unwrap_or(0);
-        String::from((b'a' + idx as u8) as char)
-    }
-
-    /// Get status of all registered sessions.
+    /// Get status of all registered sessions, grouped by window and tab.
     pub async fn get_status(&self) -> serde_json::Value {
         let sessions = self.inner.sessions.lock().await;
-        let panes: Vec<serde_json::Value> = sessions
+
+        // Build a stable uid→index mapping (sorted by uid for determinism)
+        let mut sorted_uids: Vec<&String> = sessions.keys().collect();
+        sorted_uids.sort();
+        let uid_to_idx: HashMap<&String, usize> = sorted_uids
             .iter()
             .enumerate()
-            .map(|(idx, (uid, info))| {
-                let label = Self::split_label(&sessions, uid);
-                serde_json::json!({
-                    "id": idx,
-                    "uid": uid,
-                    "name": info.name,
-                    "tabName": info.tab_name,
-                    "splitLabel": label,
-                    "description": info.description,
-                    "rows": info.rows,
-                    "cols": info.cols,
-                    "pid": info.pid,
-                })
-            })
+            .map(|(i, uid)| (*uid, i))
             .collect();
-        serde_json::json!({ "panes": panes })
+
+        // Group sessions by window_id
+        let mut windows_map: std::collections::BTreeMap<u32, Vec<(&String, &SessionInfo)>> =
+            std::collections::BTreeMap::new();
+        for (uid, info) in sessions.iter() {
+            windows_map.entry(info.window_id).or_default().push((uid, info));
+        }
+
+        let mut windows = Vec::new();
+        for (win_id, win_sessions) in &windows_map {
+            // Group by root_tab_uid within this window
+            let mut tabs_map: std::collections::BTreeMap<&str, Vec<(&String, &SessionInfo)>> =
+                std::collections::BTreeMap::new();
+            for (uid, info) in win_sessions {
+                tabs_map.entry(&info.root_tab_uid).or_default().push((uid, info));
+            }
+
+            let mut tabs = Vec::new();
+            for (_root_uid, tab_sessions) in &tabs_map {
+                // Sort panes within each tab by uid for deterministic label assignment
+                let mut sorted_panes = tab_sessions.clone();
+                sorted_panes.sort_by_key(|(uid, _)| (*uid).clone());
+
+                let tab_name = sorted_panes.first()
+                    .map(|(_, info)| info.tab_name.as_str())
+                    .unwrap_or("shell");
+
+                // Determine if this is the active tab (first tab for now)
+                let active = tabs.is_empty();
+
+                let tab_id = sorted_panes.first()
+                    .map(|(_, info)| info.root_tab_uid.as_str())
+                    .unwrap_or("");
+
+                let panes: Vec<serde_json::Value> = sorted_panes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (uid, info))| {
+                        let label = if sorted_panes.len() > 1 {
+                            String::from((b'a' + i as u8) as char)
+                        } else {
+                            String::new()
+                        };
+                        let idx = uid_to_idx.get(uid).copied().unwrap_or(0);
+                        serde_json::json!({
+                            "paneId": uid,
+                            "id": idx,
+                            "label": label,
+                            "cols": info.cols,
+                            "rows": info.rows,
+                            "pid": info.pid,
+                        })
+                    })
+                    .collect();
+
+                tabs.push(serde_json::json!({
+                    "tabId": tab_id,
+                    "name": tab_name,
+                    "active": active,
+                    "panes": panes,
+                }));
+            }
+
+            // First window is focused
+            let focused = windows.is_empty();
+            windows.push(serde_json::json!({
+                "id": win_id,
+                "focused": focused,
+                "tabs": tabs,
+            }));
+        }
+
+        serde_json::json!({ "windows": windows })
     }
 
     /// Handle an incoming message from Electron.
@@ -204,7 +253,8 @@ impl Bridge {
                 let cols = msg["cols"].as_u64().unwrap_or(80) as u16;
                 let pid = msg["pid"].as_u64().unwrap_or(0) as u32;
                 let root_tab_uid = msg["rootTabUid"].as_str().unwrap_or(&uid).to_string();
-                tracing::info!("Session registered: {uid} ({tab_name}) {cols}x{rows} pid={pid} tab={root_tab_uid}");
+                let window_id = msg["windowId"].as_u64().unwrap_or(0) as u32;
+                tracing::info!("Session registered: {uid} ({tab_name}) {cols}x{rows} pid={pid} tab={root_tab_uid} win={window_id}");
                 self.inner.sessions.lock().await.insert(
                     uid,
                     SessionInfo {
@@ -215,17 +265,25 @@ impl Bridge {
                         cols,
                         pid,
                         root_tab_uid,
+                        window_id,
                         screen: ScreenBuffer::new(rows, cols, 1000),
                     },
                 );
             }
 
             "SessionTabName" => {
-                let uid = msg["uid"].as_str().unwrap_or("");
+                let uid = msg["uid"].as_str().unwrap_or("").to_string();
                 let tab_name = msg["tabName"].as_str().unwrap_or("").to_string();
-                if let Some(info) = self.inner.sessions.lock().await.get_mut(uid) {
-                    info.tab_name = tab_name.clone();
-                    tracing::info!("Session {uid} tab name: {tab_name}");
+                let mut sessions = self.inner.sessions.lock().await;
+                // Find the root_tab_uid for this session, then update ALL sessions in the tab group
+                let root = sessions.get(&uid).map(|s| s.root_tab_uid.clone());
+                if let Some(root_uid) = root {
+                    for (sid, info) in sessions.iter_mut() {
+                        if info.root_tab_uid == root_uid {
+                            info.tab_name = tab_name.clone();
+                            tracing::info!("Session {sid} tab name: {tab_name}");
+                        }
+                    }
                 }
             }
 
