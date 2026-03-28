@@ -18,7 +18,6 @@ import type {sessionState, session, Mutable, ISessionReducer} from '../../typing
 import {decorateSessionsReducer} from '../utils/plugins';
 
 function nextTabName(): string {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call
   return uniqueNamesGenerator({
     dictionaries: [adjectives, animals],
     separator: ' ',

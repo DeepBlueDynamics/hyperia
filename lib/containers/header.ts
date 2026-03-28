@@ -17,7 +17,15 @@ const getActivityMarkers = ({ui}: HyperState) => ui.activityMarkers;
 const getBellMarkers = ({ui}: HyperState) => ui.bellMarkers;
 const getAgentStatuses = ({ui}: HyperState) => ui.agentStatuses;
 const getTabs = createSelector(
-  [getSessions, getRootGroups, getActiveSessions, getActiveRootGroup, getActivityMarkers, getBellMarkers, getAgentStatuses],
+  [
+    getSessions,
+    getRootGroups,
+    getActiveSessions,
+    getActiveRootGroup,
+    getActivityMarkers,
+    getBellMarkers,
+    getAgentStatuses
+  ],
   (sessions, rootGroups, activeSessions, activeRootGroup, activityMarkers, bellMarkers, agentStatuses) =>
     rootGroups.map((t): ITab => {
       const activeSessionUid = activeSessions[t.uid];
