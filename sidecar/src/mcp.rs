@@ -157,50 +157,6 @@ pub struct AutoDescribeRequest {
     pub pane: Option<String>,
 }
 
-// -- Stream Deck request schemas --
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct DeckButtonImageRequest {
-    /// Button index (0-7)
-    pub key: u8,
-    /// Base64-encoded PNG or JPEG image (resized to 120x120)
-    pub image_base64: String,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct DeckButtonColorRequest {
-    /// Button index (0-7)
-    pub key: u8,
-    /// Red 0-255
-    pub r: u8,
-    /// Green 0-255
-    pub g: u8,
-    /// Blue 0-255
-    pub b: u8,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct DeckTouchstripRequest {
-    /// Text to display on the touchstrip. Scrolls if too long.
-    pub text: Option<String>,
-    /// Or base64-encoded PNG/JPEG image (800x100)
-    pub image_base64: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct DeckBrightnessRequest {
-    /// Brightness 0-100
-    pub percent: u8,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct DeckKnobRequest {
-    /// Encoder index (0-3). 0 = tab selector by default.
-    pub encoder: u8,
-    /// What this knob controls: "tabs", "brightness", "volume", or "custom"
-    pub mode: String,
-}
-
 // -- MCP Server --
 
 #[derive(Clone)]
@@ -208,21 +164,20 @@ pub struct HyperiaMcp {
     tool_router: ToolRouter<Self>,
     client: reqwest::Client,
     base_url: String,
-    deck_port: u16,
 }
 
 #[tool_router]
 impl HyperiaMcp {
     pub fn new(http_port: u16) -> Self {
-        let deck_port = std::env::var("HYPERIA_DECK_PORT")
+        let base_url = std::env::var("HYPERIA_BASE_URL")
             .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(9850u16);
+            .map(|value| value.trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| format!("http://127.0.0.1:{}", http_port));
         Self {
             tool_router: Self::tool_router(),
             client: reqwest::Client::new(),
-            deck_port,
-            base_url: format!("http://127.0.0.1:{}", http_port),
+            base_url,
         }
     }
 
@@ -374,32 +329,6 @@ impl HyperiaMcp {
             body["sessionUid"] = serde_json::json!(uid);
         }
         let resp = self.post_json("/api/agent/status", &body).await?;
-        Ok(CallToolResult::success(vec![Content::text(resp)]))
-    }
-
-    // -- Voice (Auracle) tools --
-
-    #[tool(description = "Get voice/mic (Auracle) status: running, service health, exe path.")]
-    async fn voice_status(&self) -> Result<CallToolResult, ErrorData> {
-        let text = self.get("/api/voice/status").await?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
-    }
-
-    #[tool(description = "Start voice/mic capture (Auracle). Transcripts are typed into the focused pane.")]
-    async fn voice_start(&self) -> Result<CallToolResult, ErrorData> {
-        let resp = self.post_json("/api/voice/start", &serde_json::json!({})).await?;
-        Ok(CallToolResult::success(vec![Content::text(resp)]))
-    }
-
-    #[tool(description = "Stop voice/mic capture (Auracle).")]
-    async fn voice_stop(&self) -> Result<CallToolResult, ErrorData> {
-        let resp = self.post_json("/api/voice/stop", &serde_json::json!({})).await?;
-        Ok(CallToolResult::success(vec![Content::text(resp)]))
-    }
-
-    #[tool(description = "Toggle voice/mic capture on/off.")]
-    async fn voice_toggle(&self) -> Result<CallToolResult, ErrorData> {
-        let resp = self.post_json("/api/voice/toggle", &serde_json::json!({})).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -712,77 +641,6 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    // -- Stream Deck tools --
-
-    #[tool(description = "Get Stream Deck device info and state.")]
-    async fn deck_info(&self) -> Result<CallToolResult, ErrorData> {
-        let text = self.get_deck("/status").await?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
-    }
-
-    #[tool(description = "Set a Stream Deck button image from base64 PNG/JPEG. Key 0-7.")]
-    async fn deck_button_image(
-        &self,
-        Parameters(req): Parameters<DeckButtonImageRequest>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let body = serde_json::json!({"key": req.key, "image_base64": req.image_base64});
-        let resp = self.post_json_deck("/button/image", &body).await?;
-        Ok(CallToolResult::success(vec![Content::text(resp)]))
-    }
-
-    #[tool(description = "Set a Stream Deck button to a solid color. Key 0-7, RGB 0-255.")]
-    async fn deck_button_color(
-        &self,
-        Parameters(req): Parameters<DeckButtonColorRequest>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let body = serde_json::json!({"key": req.key, "r": req.r, "g": req.g, "b": req.b});
-        let resp = self.post_json_deck("/button/color", &body).await?;
-        Ok(CallToolResult::success(vec![Content::text(resp)]))
-    }
-
-    #[tool(description = "Set the Stream Deck touchstrip. Provide text (scrolls if long) or base64 image.")]
-    async fn deck_touchstrip(
-        &self,
-        Parameters(req): Parameters<DeckTouchstripRequest>,
-    ) -> Result<CallToolResult, ErrorData> {
-        if let Some(text) = &req.text {
-            let body = serde_json::json!({"text": text});
-            let resp = self.post_json_deck("/touchstrip/text", &body).await?;
-            Ok(CallToolResult::success(vec![Content::text(resp)]))
-        } else if let Some(img) = &req.image_base64 {
-            let body = serde_json::json!({"image_base64": img});
-            let resp = self.post_json_deck("/touchstrip/image", &body).await?;
-            Ok(CallToolResult::success(vec![Content::text(resp)]))
-        } else {
-            Ok(CallToolResult::error(vec![Content::text("Provide text or image_base64")]))
-        }
-    }
-
-    #[tool(description = "Set Stream Deck brightness 0-100.")]
-    async fn deck_brightness(
-        &self,
-        Parameters(req): Parameters<DeckBrightnessRequest>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let body = serde_json::json!({"percent": req.percent});
-        let resp = self.post_json_deck("/brightness", &body).await?;
-        Ok(CallToolResult::success(vec![Content::text(resp)]))
-    }
-
-    #[tool(description = "Configure a Stream Deck knob. Encoder 0-3, mode: tabs/brightness/volume/custom.")]
-    async fn deck_knob(
-        &self,
-        Parameters(req): Parameters<DeckKnobRequest>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let body = serde_json::json!({"encoder": req.encoder, "mode": req.mode});
-        let resp = self.post_json_deck("/encoder/mode", &body).await?;
-        Ok(CallToolResult::success(vec![Content::text(resp)]))
-    }
-
-    #[tool(description = "Take a screenshot of the Stream Deck. Returns base64 PNG.")]
-    async fn deck_screenshot(&self) -> Result<CallToolResult, ErrorData> {
-        let text = self.get_deck("/screenshot").await?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
-    }
 }
 
 // -- Key unescaping --
@@ -1029,30 +887,6 @@ impl HyperiaMcp {
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
     }
 
-    fn deck_url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.deck_port)
-    }
-
-    async fn get_deck(&self, path: &str) -> Result<String, ErrorData> {
-        let resp = self.client
-            .get(format!("{}{}", self.deck_url(), path))
-            .send()
-            .await
-            .map_err(|e| ErrorData::internal_error(format!("Deck HTTP: {e}"), None))?;
-        resp.text().await
-            .map_err(|e| ErrorData::internal_error(format!("Deck read: {e}"), None))
-    }
-
-    async fn post_json_deck(&self, path: &str, body: &serde_json::Value) -> Result<String, ErrorData> {
-        let resp = self.client
-            .post(format!("{}{}", self.deck_url(), path))
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| ErrorData::internal_error(format!("Deck HTTP: {e}"), None))?;
-        resp.text().await
-            .map_err(|e| ErrorData::internal_error(format!("Deck read: {e}"), None))
-    }
 }
 
 // -- ServerHandler impl --
@@ -1075,11 +909,8 @@ impl ServerHandler for HyperiaMcp {
                  terminal_split, terminal_focus, terminal_close, terminal_new_tab, tab_snapshot, \
                  shell_state, shell_confirm. \
                  \n\nAgent: agent_status, auto_describe. \
-                 \n\nVoice (Auracle): voice_status, voice_start, voice_stop, voice_toggle. \
                  \n\nStyles: style_list, style_create, style_delete. \
                  \n\nTelemetry: telemetry_toggle, telemetry_snapshot, telemetry_record, telemetry_reset. \
-                 \n\nStream Deck: deck_info, deck_button_image, deck_button_color, deck_touchstrip, \
-                 deck_brightness, deck_knob, deck_screenshot. \
                  \n\nLogs: sidecar_logs."
                     .into(),
             ),

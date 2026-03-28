@@ -60,7 +60,14 @@ function deleteSession(state: sessionState, uid: string) {
 const reducer: ISessionReducer = (state = initialState, action) => {
   switch (action.type) {
     case SESSION_ADD: {
-      const name = nextTabName();
+      const inheritedTabName =
+        action.splitDirection && action.activeUid
+          ? state.sessions[action.activeUid]?.description ||
+            state.sessions[action.activeUid]?.tabName ||
+            state.sessions[action.activeUid]?.title ||
+            ''
+          : '';
+      const name = inheritedTabName || nextTabName();
       return state.set('activeUid', action.uid).setIn(
         ['sessions', action.uid],
         Session({

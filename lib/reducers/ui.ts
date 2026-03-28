@@ -22,7 +22,9 @@ import {
   UI_WINDOW_GEOMETRY_CHANGED,
   UI_ENTER_FULLSCREEN,
   UI_LEAVE_FULLSCREEN,
-  SESSION_AGENT_STATUS
+  SESSION_AGENT_STATUS,
+  UI_TAB_BELL_SET,
+  UI_TAB_BELL_CLEAR
 } from '../../typings/constants/ui';
 import {UPDATE_AVAILABLE} from '../../typings/constants/updater';
 import type {uiState, Mutable, IUiReducer} from '../../typings/hyper';
@@ -83,6 +85,7 @@ const initial: uiState = Immutable<Mutable<uiState>>({
     lightWhite: '#FFFFFF'
   },
   activityMarkers: {},
+  bellMarkers: {},
   notifications: {
     font: false,
     resize: false,
@@ -346,6 +349,11 @@ const reducer: IUiReducer = (state = initial, action) => {
           delete markers_[action.uid];
           return markers_;
         })
+        .updateIn(['bellMarkers'], (markers: ImmutableType<Record<string, boolean>>) => {
+          const markers_ = markers.asMutable();
+          delete markers_[action.uid];
+          return markers_;
+        })
         .updateIn(['agentStatuses'], (statuses: ImmutableType<Record<string, unknown>>) => {
           const statuses_ = statuses.asMutable();
           delete statuses_[action.uid];
@@ -373,6 +381,9 @@ const reducer: IUiReducer = (state = initial, action) => {
       state_ = state.merge(
         {
           activeUid: action.uid,
+          bellMarkers: {
+            [action.uid]: false
+          },
           activityMarkers: {
             [action.uid]: false
           }
@@ -406,6 +417,28 @@ const reducer: IUiReducer = (state = initial, action) => {
           {deep: true}
         );
       }
+      break;
+
+    case UI_TAB_BELL_SET:
+      state_ = state.merge(
+        {
+          bellMarkers: {
+            [action.uid]: true
+          }
+        },
+        {deep: true}
+      );
+      break;
+
+    case UI_TAB_BELL_CLEAR:
+      state_ = state.merge(
+        {
+          bellMarkers: {
+            [action.uid]: false
+          }
+        },
+        {deep: true}
+      );
       break;
 
     case SESSION_SET_CWD:

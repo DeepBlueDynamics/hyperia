@@ -87,7 +87,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     /* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
   };
 
-  const {isActive, isFirst, isLast, borderColor, hasActivity, agentStatus, tabName, description} = props;
+  const {isActive, isFirst, isLast, borderColor, hasActivity, hasBell, agentStatus, tabName, description} = props;
 
   const displayText = description || tabName || props.text;
 
@@ -133,7 +133,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
             className={`tab_textInner ${isActive ? 'tab_textInnerActive' : ''}`}
             onDoubleClick={handleDoubleClick}
           >
-            {hasActivity && !isActive && <span className="tab_bell">🔔</span>}
+            {hasBell && <span className="tab_bell">🔔</span>}
             {renaming ? (
               <input
                 ref={inputRef}

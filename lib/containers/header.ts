@@ -14,10 +14,11 @@ const getSessions = ({sessions}: HyperState) => sessions.sessions;
 const getActiveRootGroup = ({termGroups}: HyperState) => termGroups.activeRootGroup;
 const getActiveSessions = ({termGroups}: HyperState) => termGroups.activeSessions;
 const getActivityMarkers = ({ui}: HyperState) => ui.activityMarkers;
+const getBellMarkers = ({ui}: HyperState) => ui.bellMarkers;
 const getAgentStatuses = ({ui}: HyperState) => ui.agentStatuses;
 const getTabs = createSelector(
-  [getSessions, getRootGroups, getActiveSessions, getActiveRootGroup, getActivityMarkers, getAgentStatuses],
-  (sessions, rootGroups, activeSessions, activeRootGroup, activityMarkers, agentStatuses) =>
+  [getSessions, getRootGroups, getActiveSessions, getActiveRootGroup, getActivityMarkers, getBellMarkers, getAgentStatuses],
+  (sessions, rootGroups, activeSessions, activeRootGroup, activityMarkers, bellMarkers, agentStatuses) =>
     rootGroups.map((t): ITab => {
       const activeSessionUid = activeSessions[t.uid];
       const session = sessions[activeSessionUid];
@@ -28,6 +29,7 @@ const getTabs = createSelector(
         description: session.description || '',
         isActive: t.uid === activeRootGroup,
         hasActivity: activityMarkers[session.uid],
+        hasBell: !!bellMarkers[session.uid],
         agentStatus: agentStatuses[session.uid]
       };
     })

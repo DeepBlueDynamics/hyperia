@@ -95,6 +95,7 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       bellSoundURL: this.props.bellSoundURL,
       bellSound: this.props.bellSound,
       onActive: this.bind(this.props.onActive, null, uid),
+      onBell: this.bind(this.props.onBell, null, uid),
       onResize: this.bind(this.props.onResize, null, uid),
       onTitle: this.bind(this.props.onTitle, null, uid),
       onData: this.bind(this.props.onData, null, uid),

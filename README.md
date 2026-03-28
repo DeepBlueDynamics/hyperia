@@ -13,13 +13,11 @@ Built by [Deep Blue Dynamics](https://deepbluedynamics.com).
 ## What makes it different
 
 - **Agent-native** — AI agents connect through the sidecar and drive terminal sessions alongside you. A per-session queue defers agent input while you're actively typing.
-- **MCP server** — 30+ tools for Claude Code, Gemini, Codex, or any MCP client. Open tabs, split panes, run commands, read screens, set status lights, control Stream Deck hardware.
+- **MCP server** — 20+ tools for Claude Code, Gemini, Codex, or any MCP client. Open tabs, split panes, run commands, read screens, set status lights, and inspect telemetry.
 - **Per-tab agent status** — Live indicators show which tabs have agents connected, working, or idle. No global status bar — each session tracks its own agent.
 - **Shell profiles** — PowerShell, CMD, WSL, Claude, Nemesis8, or any custom shell. New-tab dropdown shows available profiles.
 - **Visual themes** — Switch between Ember, Phosphor, Signal, Archive, and Prism from the View menu. Live switch, no restart.
 - **Sidecar architecture** — Rust process (`hyperia-sidecar`) with HTTP + WebSocket API. Decoupled from the Electron shell for speed and reliability.
-- **Stream Deck Plus** — Buttons, rotary encoders, and touchstrip as a physical control surface for terminal operations.
-- **Voice integration** — Auracle mic/voice capture with transcript forwarding to active panes.
 - **Telemetry dashboard** — Per-pane metrics for file ops, network, and token usage.
 
 ---
@@ -49,7 +47,7 @@ The sidecar starts automatically with the Electron app.
 ```bash
 yarn build
 npx electron-builder --win --x64
-# Output: dist/Hyperia-0.1.0-x64.exe (NSIS installer)
+# Output: dist/Hyperia-0.4.3-x64.exe (NSIS installer)
 ```
 
 **macOS:**
@@ -57,8 +55,8 @@ npx electron-builder --win --x64
 # Requires macOS with Xcode command line tools
 yarn build
 npx electron-builder --mac
-# Output: dist/Hyperia-0.1.0-mac-arm64.dmg (Apple Silicon)
-#         dist/Hyperia-0.1.0-mac-x64.dmg (Intel)
+# Output: dist/Hyperia-0.4.3-mac-arm64.dmg (Apple Silicon)
+#         dist/Hyperia-0.4.3-mac-x64.dmg (Intel)
 ```
 
 To build both architectures:
@@ -76,7 +74,7 @@ cargo build --release
 ```bash
 yarn build
 npx electron-builder --linux
-# Output: dist/Hyperia-0.1.0.AppImage, .deb, .rpm
+# Output: dist/Hyperia-0.4.3.AppImage, .deb, .rpm
 ```
 
 ### Prerequisites
@@ -154,12 +152,9 @@ Add to your project's `.mcp.json`:
 | `shell_confirm` | Auto-handle common prompts (trust dialogs, y/n) |
 | `agent_status` | Set status light (connected, working, label, human %) |
 | `sidecar_logs` | Read sidecar log output |
-| `voice_status` | Get Auracle voice/mic status |
-| `voice_start` / `voice_stop` / `voice_toggle` | Control voice capture |
 | `style_list` / `style_create` / `style_delete` | Manage visual themes |
 | `telemetry_toggle` / `telemetry_snapshot` / `telemetry_record` / `telemetry_reset` | Telemetry controls |
 | `dashboard_widgets` | Configure dashboard widget layout |
-| `deck_info` / `deck_button_image` / `deck_button_color` / `deck_touchstrip` / `deck_brightness` / `deck_knob` / `deck_screenshot` | Stream Deck Plus controls |
 
 ---
 
@@ -196,10 +191,8 @@ Electron (UI + PTY sessions)
     │
     │── WebSocket bridge ──▶ hyperia-sidecar (Rust, :9800)
                                   │
-                                  ├── HTTP API (terminal, agent, voice, telemetry)
-                                  ├── MCP server (stdio, 30+ tools)
-                                  ├── Stream Deck Plus (:9850)
-                                  ├── Auracle voice engine
+                                  ├── HTTP API (terminal, agent, telemetry)
+                                  ├── MCP server (stdio, 20+ tools)
                                   └── Dashboard + telemetry store
 ```
 

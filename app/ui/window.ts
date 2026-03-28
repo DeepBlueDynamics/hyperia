@@ -394,6 +394,8 @@ export function newWindow(
     sessions.forEach((session, key) => {
       session.removeAllListeners();
       session.destroy();
+      forceRemoveSession(key);
+      endSessionLog(key);
       sessions.delete(key);
     });
   };

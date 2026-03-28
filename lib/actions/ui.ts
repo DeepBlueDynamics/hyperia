@@ -23,7 +23,9 @@ import {
   UI_OPEN_SSH_URL,
   UI_CONTEXTMENU_OPEN,
   UI_COMMAND_EXEC,
-  SESSION_AGENT_STATUS
+  SESSION_AGENT_STATUS,
+  UI_TAB_BELL_SET,
+  UI_TAB_BELL_CLEAR
 } from '../../typings/constants/ui';
 import type {HyperState, HyperDispatch, HyperActions, ITermGroups} from '../../typings/hyper';
 import rpc from '../rpc';
@@ -34,6 +36,9 @@ import findBySession from '../utils/term-groups';
 
 import {requestSession, sendSessionData, setActiveSession} from './sessions';
 import {setActiveGroup} from './term-groups';
+
+const ACTIVE_TAB_BELL_CLEAR_MS = 60_000;
+const bellClearTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 export function openContextMenu(uid: string, selection: string) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
@@ -48,6 +53,35 @@ export function openContextMenu(uid: string, selection: string) {
         }
       }
     });
+  };
+}
+
+export function markTabBell(uid: string) {
+  return (dispatch: HyperDispatch, getState: () => HyperState) => {
+    dispatch({
+      type: UI_TAB_BELL_SET,
+      uid
+    });
+
+    const existing = bellClearTimers.get(uid);
+    if (existing) {
+      clearTimeout(existing);
+      bellClearTimers.delete(uid);
+    }
+
+    if (getState().ui.activeUid === uid) {
+      const timer = setTimeout(() => {
+        bellClearTimers.delete(uid);
+        const state = getState();
+        if (state.ui.activeUid === uid && state.ui.bellMarkers[uid]) {
+          dispatch({
+            type: UI_TAB_BELL_CLEAR,
+            uid
+          });
+        }
+      }, ACTIVE_TAB_BELL_CLEAR_MS);
+      bellClearTimers.set(uid, timer);
+    }
   };
 }
 

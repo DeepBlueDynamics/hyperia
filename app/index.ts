@@ -44,7 +44,7 @@ import * as windowUtils from './utils/window-utils';
 
 const windowSet = new Set<BrowserWindow>([]);
 
-// --- Sidecar process (Rust agent engine, Stream Deck, MCP) ---
+// --- Sidecar process (Rust agent engine, MCP) ---
 let sidecarProcess: ChildProcess | null = null;
 const SIDECAR_PORT = 9800;
 
@@ -103,8 +103,8 @@ async function spawnSidecar() {
   // Kill any existing sidecar before spawning
   await killExistingSidecars();
 
-  isDev && console.log(`[sidecar] Spawning: ${sidecarPath} --port ${SIDECAR_PORT} --deck`);
-  sidecarProcess = spawn(sidecarPath, ['--port', String(SIDECAR_PORT), '--deck'], {
+  isDev && console.log(`[sidecar] Spawning: ${sidecarPath} --port ${SIDECAR_PORT}`);
+  sidecarProcess = spawn(sidecarPath, ['--port', String(SIDECAR_PORT)], {
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
@@ -294,7 +294,7 @@ app.on('ready', () => {
   // Sticky notes
   initSticky();
 
-  // Launch sidecar (agent engine, Stream Deck, MCP)
+  // Launch sidecar (agent engine, MCP)
   // Kill any stale sidecar on our port, then spawn fresh, then connect bridge
   void spawnSidecar().then(() => {
     // Connect bridge to sidecar (auto-reconnects until connected)

@@ -281,6 +281,7 @@ export default class Term extends React.PureComponent<
 
     this.term.onBell(() => {
       this.ringBell();
+      this.props.onBell?.();
     });
 
     if (props.onResize) {
@@ -580,13 +581,23 @@ export default class Term extends React.PureComponent<
             overflow: hidden;
           }
 
-          /* Hide xterm scrollbar */
+          /* Thin dark scrollbar */
           .term_wrapper .xterm-viewport {
-            scrollbar-width: none;
-            -ms-overflow-style: none;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(68, 136, 255, 0.3) transparent;
           }
           .term_wrapper .xterm-viewport::-webkit-scrollbar {
-            display: none;
+            width: 6px;
+          }
+          .term_wrapper .xterm-viewport::-webkit-scrollbar-track {
+            background: transparent;
+          }
+          .term_wrapper .xterm-viewport::-webkit-scrollbar-thumb {
+            background: rgba(68, 136, 255, 0.25);
+            border-radius: 3px;
+          }
+          .term_wrapper .xterm-viewport::-webkit-scrollbar-thumb:hover {
+            background: rgba(68, 136, 255, 0.5);
           }
 
           .term_splitLabel {

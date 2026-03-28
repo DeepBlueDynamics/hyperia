@@ -23,6 +23,8 @@ export const UI_LEAVE_FULLSCREEN = 'UI_LEAVE_FULLSCREEN';
 export const UI_CONTEXTMENU_OPEN = 'UI_CONTEXTMENU_OPEN';
 export const UI_COMMAND_EXEC = 'UI_COMMAND_EXEC';
 export const SESSION_AGENT_STATUS = 'SESSION_AGENT_STATUS';
+export const UI_TAB_BELL_SET = 'UI_TAB_BELL_SET';
+export const UI_TAB_BELL_CLEAR = 'UI_TAB_BELL_CLEAR';
 
 export interface UIFontSizeSetAction {
   type: typeof UI_FONT_SIZE_SET;
@@ -108,6 +110,14 @@ export interface SessionAgentStatusAction {
   label?: string;
   humanPercent?: number;
 }
+export interface UITabBellSetAction {
+  type: typeof UI_TAB_BELL_SET;
+  uid: string;
+}
+export interface UITabBellClearAction {
+  type: typeof UI_TAB_BELL_CLEAR;
+  uid: string;
+}
 
 export type UIActions =
   | UIFontSizeSetAction
@@ -134,4 +144,6 @@ export type UIActions =
   | UILeaveFullscreenAction
   | UIContextmenuOpenAction
   | UICommandExecAction
-  | SessionAgentStatusAction;
+  | SessionAgentStatusAction
+  | UITabBellSetAction
+  | UITabBellClearAction;

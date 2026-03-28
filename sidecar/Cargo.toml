@@ -2,7 +2,7 @@
 name = "hyperia-sidecar"
 version = "0.1.0"
 edition = "2021"
-description = "Rust sidecar for Hyperia: Stream Deck, agent engine, MCP, signaling"
+description = "Rust sidecar for Hyperia: agent engine, MCP, signaling"
 
 [workspace]
 
@@ -13,12 +13,7 @@ codegen-units = 1
 opt-level = "z"
 
 [dependencies]
-# Stream Deck Plus hardware
-elgato-streamdeck = "0.12"
-hidapi = "2.6"
-image = "0.25"
-
-# HTTP server (deck + sidecar API) + WebSocket bridge
+# HTTP server + WebSocket bridge
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"

@@ -7,7 +7,7 @@ import {
   openSearch,
   closeSearch
 } from '../actions/sessions';
-import {openContextMenu} from '../actions/ui';
+import {markTabBell, openContextMenu} from '../actions/ui';
 import Terms from '../components/terms';
 import {getRootGroups} from '../selectors';
 import {connect} from '../utils/plugins';
@@ -74,6 +74,10 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
 
     onActive(uid: string) {
       dispatch(setActiveSession(uid));
+    },
+
+    onBell(uid: string) {
+      dispatch(markTabBell(uid) as any);
     },
 
     onOpenSearch(uid: string) {

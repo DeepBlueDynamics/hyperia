@@ -1,10 +1,8 @@
 #![allow(dead_code, unused_imports, unused_variables)]
 
-mod auracle;
 mod bridge;
 mod chat;
 mod dashboard;
-mod deck;
 mod logs;
 mod mcp;
 mod screen;
@@ -20,27 +18,15 @@ use bridge::Bridge;
 
 #[derive(Parser, Debug)]
 #[command(name = "hyperia-sidecar")]
-#[command(about = "Rust sidecar for Hyperia: Stream Deck, agent engine, MCP, HTTP bridge")]
+#[command(about = "Rust sidecar for Hyperia: agent engine, MCP, HTTP bridge")]
 struct Args {
     /// HTTP API port (Electron connects here)
     #[arg(long, default_value = "9800")]
     port: u16,
 
-    /// Stream Deck HTTP port
-    #[arg(long, default_value = "9850")]
-    deck_port: u16,
-
-    /// Enable Stream Deck Plus integration
-    #[arg(long)]
-    deck: bool,
-
     /// Run as MCP stdio server
     #[arg(long)]
     mcp: bool,
-
-    /// Enable Auracle (voice/mic) integration
-    #[arg(long)]
-    auracle: bool,
 }
 
 #[derive(Clone)]
@@ -48,7 +34,6 @@ struct AppState {
     bridge: Bridge,
     log_buffer: logs::LogBuffer,
     telemetry: telemetry::TelemetryStore,
-    auracle: Option<auracle::Auracle>,
 }
 
 // ---------------------------------------------------------------------------
@@ -269,73 +254,6 @@ async fn post_agent_status(
 }
 
 // ---------------------------------------------------------------------------
-// Voice (Auracle) route handlers
-// ---------------------------------------------------------------------------
-
-async fn get_voice_status(State(state): State<AppState>) -> Json<serde_json::Value> {
-    if let Some(ref a) = state.auracle {
-        Json(serde_json::to_value(a.status().await).unwrap_or_default())
-    } else {
-        Json(serde_json::json!({"running": false, "error": "Auracle not enabled (use --auracle)"}))
-    }
-}
-
-async fn post_voice_start(State(state): State<AppState>) -> (StatusCode, String) {
-    match &state.auracle {
-        Some(a) => match a.start().await {
-            Ok(msg) => (StatusCode::OK, msg),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
-        },
-        None => (StatusCode::BAD_REQUEST, "Auracle not enabled".into()),
-    }
-}
-
-async fn post_voice_stop(State(state): State<AppState>) -> (StatusCode, String) {
-    match &state.auracle {
-        Some(a) => (StatusCode::OK, a.stop().await),
-        None => (StatusCode::BAD_REQUEST, "Auracle not enabled".into()),
-    }
-}
-
-async fn post_voice_toggle(State(state): State<AppState>) -> (StatusCode, String) {
-    match &state.auracle {
-        Some(a) => match a.toggle().await {
-            Ok(msg) => (StatusCode::OK, msg),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
-        },
-        None => (StatusCode::BAD_REQUEST, "Auracle not enabled".into()),
-    }
-}
-
-/// Receives forwarded transcripts from Auracle's callback system.
-/// The body is plain text like "[Mic] hello world".
-async fn post_voice_forward(State(state): State<AppState>, body: String) -> (StatusCode, String) {
-    if body.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Empty transcript".into());
-    }
-    match &state.auracle {
-        Some(a) => match a.handle_transcript(&body).await {
-            Ok(r) => (StatusCode::OK, r),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
-        },
-        None => {
-            // Even without --auracle, forward to first pane via bridge
-            let uid = state.bridge.pane_uid(0).await;
-            match uid {
-                Some(u) => {
-                    let cmd = serde_json::json!({"type": "Keys", "uid": u, "keys": body});
-                    match state.bridge.send_command(cmd).await {
-                        Ok(r) => (StatusCode::OK, r),
-                        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
-                    }
-                }
-                None => (StatusCode::NOT_FOUND, "No active pane".into()),
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -369,32 +287,10 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("hyperia-sidecar v{}", env!("CARGO_PKG_VERSION"));
     tracing::info!("API :{}", args.port);
 
-    // Stream Deck (optional)
-    if args.deck {
-        match deck::init_deck(args.deck_port).await {
-            Ok(dh) => {
-                tracing::info!("Stream Deck Plus connected");
-                let _ = dh;
-            }
-            Err(e) => {
-                tracing::warn!("Stream Deck not available: {e}");
-            }
-        }
-    }
-
     let bridge = Bridge::new();
     let telem = telemetry::TelemetryStore::new();
     let dash_state = dashboard::DashboardState::new(telem.clone());
-
-    // Auracle (voice/mic) — optional
-    let auracle_handle = if args.auracle {
-        Some(auracle::init_auracle(bridge.clone(), args.port, true).await)
-    } else {
-        // Still create the handle (for toggle via API) but don't auto-start
-        Some(auracle::init_auracle(bridge.clone(), args.port, false).await)
-    };
-
-    let state = AppState { bridge, log_buffer, telemetry: telem, auracle: auracle_handle };
+    let state = AppState { bridge, log_buffer, telemetry: telem };
 
     let app = axum::Router::new()
         .route("/health", axum::routing::get(|| async { "ok" }))
@@ -412,12 +308,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pane/rename", axum::routing::post(post_rename_tab))
         .route("/api/agent/status", axum::routing::post(post_agent_status))
         .route("/api/pane/describe/{pane}", axum::routing::post(post_auto_describe))
-        // Voice (Auracle) endpoints
-        .route("/api/voice/status", axum::routing::get(get_voice_status))
-        .route("/api/voice/start", axum::routing::post(post_voice_start))
-        .route("/api/voice/stop", axum::routing::post(post_voice_stop))
-        .route("/api/voice/toggle", axum::routing::post(post_voice_toggle))
-        .route("/api/voice/forward", axum::routing::post(post_voice_forward))
         .with_state(state);
 
     // Dashboard routes with their own state
@@ -433,8 +323,14 @@ async fn main() -> anyhow::Result<()> {
     let app = app.merge(dash_routes);
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!("Port {} already in use — another sidecar is running. Exiting. ({})", args.port, e);
+            std::process::exit(0); // Exit cleanly so auto-restart doesn't loop
+        }
+    };
     tracing::info!(%addr, "Sidecar HTTP listening");
-    let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
 
     Ok(())

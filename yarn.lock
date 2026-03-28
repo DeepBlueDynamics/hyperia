@@ -8131,6 +8131,11 @@ unique-filename@^4.0.0:
   dependencies:
     unique-slug "^5.0.0"
 
+unique-names-generator@4.7.1:
+  version "4.7.1"
+  resolved "https://registry.npmjs.org/unique-names-generator/-/unique-names-generator-4.7.1.tgz"
+  integrity sha512-lMx9dX+KRmG8sq6gulYYpKWZc9RlGsgBR6aoO8Qsm3qvkSJ+3rAymr+TnV8EDMrIrwuFJ4kruzMWM/OpYzPoow==
+
 unique-slug@^3.0.0:
   version "3.0.0"
   resolved "https://registry.npmjs.org/unique-slug/-/unique-slug-3.0.0.tgz"

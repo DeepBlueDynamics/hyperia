@@ -48,6 +48,7 @@ export type uiState = Immutable<{
   _lastUpdate: number | null;
   activeUid: string | null;
   activityMarkers: Record<string, boolean>;
+  bellMarkers: Record<string, boolean>;
   backgroundColor: string;
   bell: 'SOUND' | false;
   bellSoundURL: string | null;
@@ -226,6 +227,7 @@ export type StyleSheetProps = {
 export type TabProps = {
   borderColor: string;
   hasActivity: boolean;
+  hasBell: boolean;
   isActive: boolean;
   isFirst: boolean;
   isLast: boolean;
@@ -258,6 +260,7 @@ export type ITab = {
   description: string;
   isActive: boolean;
   hasActivity: boolean;
+  hasBell: boolean;
   agentStatus?: AgentStatus;
 };
 
@@ -325,6 +328,7 @@ export type TermGroupOwnProps = {
   | 'macOptionSelectionMode'
   | 'modifierKeys'
   | 'onActive'
+  | 'onBell'
   | 'onContextMenu'
   | 'onCloseSearch'
   | 'onData'
@@ -396,6 +400,7 @@ export type TermProps = {
   macOptionSelectionMode: string;
   modifierKeys: Immutable<{altIsMeta: boolean; cmdIsMeta: boolean}>;
   onActive: () => void;
+  onBell: () => void;
   onCloseSearch: () => void;
   onContextMenu: (selection: any) => void;
   onCursorMove?: (cursorFrame: {x: number; y: number; width: number; height: number; col: number; row: number}) => void;

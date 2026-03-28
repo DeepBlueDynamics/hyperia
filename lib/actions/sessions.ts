@@ -22,6 +22,7 @@ import findBySession from '../utils/term-groups';
 export function addSession({uid, shell, pid, cols = null, rows = null, splitDirection, activeUid, profile}: Session) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     const {sessions} = getState();
+    const resolvedActiveUid = activeUid ? activeUid : sessions.activeUid;
     const now = Date.now();
     dispatch({
       type: SESSION_ADD,
@@ -31,14 +32,20 @@ export function addSession({uid, shell, pid, cols = null, rows = null, splitDire
       cols,
       rows,
       splitDirection,
-      activeUid: activeUid ? activeUid : sessions.activeUid,
+      activeUid: resolvedActiveUid,
       now,
       profile
     });
-    // Send the renderer-assigned tab name back to the main process for sidecar sync
+    // Keep split panes attached to the parent tab's existing name when syncing
+    // the tab label back to the main process / sidecar.
     const newSession = getState().sessions.sessions[uid];
-    if (newSession?.tabName) {
-      window.rpc.emit('session set tab name', {uid, tabName: newSession.tabName});
+    const parentSession = resolvedActiveUid ? getState().sessions.sessions[resolvedActiveUid] : undefined;
+    const tabName =
+      splitDirection && parentSession
+        ? parentSession.description || parentSession.tabName || parentSession.title
+        : newSession?.tabName;
+    if (tabName) {
+      window.rpc.emit('session set tab name', {uid, tabName});
     }
   };
 }
