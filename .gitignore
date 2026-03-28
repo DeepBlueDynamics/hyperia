@@ -24,6 +24,10 @@ plugins
 
 # per-machine config
 .mcp.json
+.mcp.json.bak
+.mcp.json.host
+.nemesis8.toml
+.serpapi.env
 
 # TypeScript build info
 *.tsbuildinfo
