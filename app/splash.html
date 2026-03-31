@@ -260,11 +260,11 @@ function draw() {
 const START = performance.now();
 const TITLE_FADE_IN = 1500;   // ms - title starts fading in
 const TITLE_FULL = 2500;      // ms - title fully visible
-const HOLD = 4500;            // ms - start fade out
-const FADE_OUT = 5500;        // ms - fully black
-const DONE = 6000;            // ms - signal electron to proceed
 
 let signaled = false;
+let readyToClose = false;
+let fadeStartTime = 0;
+const FADE_DURATION = 1000;   // ms
 
 function loop() {
   const elapsed = performance.now() - START;
@@ -273,23 +273,28 @@ function loop() {
   draw();
 
   // Title fade in
-  if (elapsed > TITLE_FADE_IN && elapsed < HOLD) {
+  if (elapsed > TITLE_FADE_IN && !readyToClose) {
     const t = Math.min(1, (elapsed - TITLE_FADE_IN) / (TITLE_FULL - TITLE_FADE_IN));
     title.style.opacity = t;
   }
 
-  // Fade out everything
-  if (elapsed > HOLD) {
-    const t = Math.min(1, (elapsed - HOLD) / (FADE_OUT - HOLD));
-    fade.style.opacity = t;
-    title.style.opacity = 1 - t;
+  // When app signals ready, start fade out
+  if (readyToClose && fadeStartTime === 0) {
+    fadeStartTime = performance.now();
   }
 
-  // Signal done
-  if (elapsed > DONE && !signaled) {
-    signaled = true;
-    if (window.electronAPI) {
-      window.electronAPI.splashDone();
+  if (fadeStartTime > 0) {
+    const fadeElapsed = performance.now() - fadeStartTime;
+    const t = Math.min(1, fadeElapsed / FADE_DURATION);
+    fade.style.opacity = t;
+    title.style.opacity = 1 - t;
+
+    // Signal done after fade completes
+    if (t >= 1 && !signaled) {
+      signaled = true;
+      if (window.electronAPI) {
+        window.electronAPI.splashDone();
+      }
     }
   }
 
@@ -298,9 +303,16 @@ function loop() {
   }
 }
 
+// Listen for app ready signal
+if (window.electronAPI) {
+  window.electronAPI.onAppReady(() => {
+    readyToClose = true;
+  });
+}
+
 // Allow click/key to skip
-document.addEventListener('click', () => { signaled = true; if (window.electronAPI) window.electronAPI.splashDone(); });
-document.addEventListener('keydown', () => { signaled = true; if (window.electronAPI) window.electronAPI.splashDone(); });
+document.addEventListener('click', () => { readyToClose = true; });
+document.addEventListener('keydown', () => { readyToClose = true; });
 
 requestAnimationFrame(loop);
 </script>

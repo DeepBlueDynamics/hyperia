@@ -63,7 +63,6 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   return (
     <nav className="tabs_nav" ref={ref}>
       {props.customChildrenBefore}
-      {tabs.length === 1 && isMac ? <div className="tabs_title">{tabs[0].title}</div> : null}
       <ul
         key="list"
         ref={listRef}
@@ -121,17 +120,6 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           flex: 1 1 auto;
           min-width: 0;
           -webkit-app-region: drag;
-        }
-
-        .tabs_title {
-          text-align: center;
-          color: #fff;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          padding-left: 76px;
-          padding-right: 76px;
-          flex-grow: 1;
         }
 
         .tabs_list {

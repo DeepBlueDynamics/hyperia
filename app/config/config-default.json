@@ -64,8 +64,22 @@
     "screenReaderMode": false,
     "sessionLogging": false,
     "imageSupport": true,
-    "defaultProfile": "PowerShell",
+    "defaultProfile": "",
     "profiles": [
+      {
+        "name": "zsh",
+        "config": {
+          "shell": "/bin/zsh",
+          "shellArgs": ["--login"]
+        }
+      },
+      {
+        "name": "bash",
+        "config": {
+          "shell": "/bin/bash",
+          "shellArgs": ["--login"]
+        }
+      },
       {
         "name": "PowerShell",
         "config": {

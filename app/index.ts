@@ -212,8 +212,10 @@ async function installDevExtensions(isDev_: boolean) {
   );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function _showSplash(winBounds: {x: number; y: number; width: number; height: number}): Promise<void> {
+function _showSplash(
+  winBounds: {x: number; y: number; width: number; height: number},
+  mainWin: BrowserWindow
+): Promise<void> {
   return new Promise((resolve_) => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const {icon: appIcon} = require('./config/paths');
@@ -238,6 +240,16 @@ function _showSplash(winBounds: {x: number; y: number; width: number; height: nu
     });
 
     void splash.loadFile(resolve(isDev ? __dirname : app.getAppPath(), 'splash.html'));
+
+    // Signal splash when main window is ready
+    mainWin.webContents.once('did-finish-load', () => {
+      // Add a small delay to ensure everything is rendered
+      setTimeout(() => {
+        if (!splash.isDestroyed()) {
+          splash.webContents.send('app-ready');
+        }
+      }, 500);
+    });
 
     let resolved = false;
     const done = () => {
@@ -265,7 +277,8 @@ function _showSplash(winBounds: {x: number; y: number; width: number; height: nu
     };
 
     ipcMain.once('splash-done', done);
-    setTimeout(done, 8000);
+    // Failsafe: close after 30 seconds if something goes wrong
+    setTimeout(done, 30000);
   });
 }
 
@@ -363,10 +376,9 @@ app.on('ready', () => {
         return hwin;
       }
 
-      // Create the terminal window
-      createWindow();
-      // Splash screen available but skipped for reliability
-      // To re-enable: const firstWin = createWindow(); firstWin.once('show', () => void _showSplash(firstWin.getBounds()));
+      // Create the terminal window with splash screen
+      const firstWin = createWindow();
+      firstWin.once('show', () => void _showSplash(firstWin.getBounds(), firstWin));
 
       // expose to plugins
       app.createWindow = createWindow;
