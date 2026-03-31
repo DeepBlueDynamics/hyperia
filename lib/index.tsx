@@ -16,11 +16,11 @@ import * as uiActions from './actions/ui';
 import * as updaterActions from './actions/updater';
 import HyperContainer from './containers/hyper';
 import rpc from './rpc';
+import {getRootGroups} from './selectors';
 import configureStore from './store/configure-store';
 import * as config from './utils/config';
 import {getBase64FileData} from './utils/file';
 import * as plugins from './utils/plugins';
-import {getRootGroups} from './selectors';
 
 // On Linux, the default zoom was somehow changed with Electron 3 (or maybe 2).
 // Setting zoom factor to 1.2 brings back the normal default size
@@ -248,13 +248,20 @@ rpc.on('agent status', ({sessionUid, connected, working, label, humanPercent}) =
 
 function countLeaves(group: any, termGroups: Record<string, any>): number {
   if (group?.sessionUid) return 1;
-  return (group?.children || []).reduce((count: number, childUid: string) => {
+  const children: string[] = (group?.children as string[]) || [];
+  return children.reduce((count: number, childUid: string) => {
     const child = termGroups[childUid];
     return count + (child ? countLeaves(child, termGroups) : 0);
   }, 0);
 }
 
-function collectPaneLayout(group: any, termGroups: Record<string, any>, splitOffset = 0, isRoot = true): Array<{uid: string; splitLabel: string}> {
+// prettier-ignore
+function collectPaneLayout(
+  group: any,
+  termGroups: Record<string, any>,
+  splitOffset = 0,
+  isRoot = true
+): Array<{uid: string; splitLabel: string}> {
   if (group?.sessionUid) {
     return [{uid: group.sessionUid, splitLabel: ''}];
   }
@@ -283,6 +290,7 @@ function collectPaneLayout(group: any, termGroups: Record<string, any>, splitOff
 let lastLayoutSignature = '';
 store_.subscribe(() => {
   const state = store_.getState();
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
   const rootGroups = getRootGroups(state as any);
   const tabs = rootGroups.map((rootGroup: any, order: number) => ({
     rootGroupUid: rootGroup.uid,
