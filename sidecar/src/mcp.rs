@@ -186,10 +186,11 @@ impl HyperiaMcp {
         &self,
         Parameters(req): Parameters<KeysRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
-        self.focus_pane(pane).await;
+        self.focus_pane(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
         let keys = unescape_keys(&req.keys);
-        let resp = self.post_text(&format!("/api/type/{}", pane), &keys).await?;
+        let resp = self
+            .post_text(&self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref()), &keys)
+            .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -198,15 +199,14 @@ impl HyperiaMcp {
         &self,
         Parameters(req): Parameters<RunRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
-        self.focus_pane(pane).await;
+        self.focus_pane(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
         let keys = format!("{}\r\n", req.command);
-        self.post_text(&format!("/api/type/{}", pane), &keys).await?;
+        self.post_text(&self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref()), &keys).await?;
 
         let wait = req.wait_ms.unwrap_or(2000);
         tokio::time::sleep(tokio::time::Duration::from_millis(wait)).await;
 
-        let text = self.get(&format!("/api/screen/{}", pane)).await?;
+        let text = self.get(&self.pane_path("/api/screen", req.window, req.tab.as_deref(), req.pane.as_deref())).await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -215,8 +215,7 @@ impl HyperiaMcp {
         &self,
         Parameters(req): Parameters<ScreenRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
-        let text = self.get(&format!("/api/screen/{}", pane)).await?;
+        let text = self.get(&self.pane_path("/api/screen", req.window, req.tab.as_deref(), req.pane.as_deref())).await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -243,8 +242,7 @@ impl HyperiaMcp {
         &self,
         Parameters(req): Parameters<FocusRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
-        let body = serde_json::json!({"id": pane});
+        let body = serde_json::json!({"window": req.window, "tab": req.tab, "pane": req.pane});
         let resp = self.post_json("/api/pane/focus", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
@@ -260,8 +258,7 @@ impl HyperiaMcp {
         &self,
         Parameters(req): Parameters<RenameTabRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = self.resolve_target(req.window, req.tab.as_deref(), None).await?;
-        let body = serde_json::json!({"id": pane, "name": req.name});
+        let body = serde_json::json!({"window": req.window, "tab": req.tab, "name": req.name});
         let resp = self.post_json("/api/pane/rename", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
@@ -290,44 +287,15 @@ impl HyperiaMcp {
         &self,
         Parameters(req): Parameters<AgentStatusRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        // Resolve window/tab/pane to a pane index, then look up its UID
-        let pane_idx = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
-        let status_text = self.get("/api/status").await?;
-        let status: serde_json::Value = serde_json::from_str(&status_text)
-            .map_err(|e| ErrorData::internal_error(format!("Parse: {e}"), None))?;
-
-        // Find the pane's UID by searching all windows/tabs/panes for matching id
-        let mut session_uid: Option<String> = None;
-        if let Some(windows) = status["windows"].as_array() {
-            'outer: for win in windows {
-                if let Some(tabs) = win["tabs"].as_array() {
-                    for tab in tabs {
-                        if let Some(panes) = tab["panes"].as_array() {
-                            for p in panes {
-                                if p["id"].as_u64() == Some(pane_idx as u64) {
-                                    // We need the UID — get it from the HTTP API
-                                    let screen_url = format!("/api/pane/uid/{}", pane_idx);
-                                    if let Ok(uid) = self.get(&screen_url).await {
-                                        session_uid = Some(uid);
-                                    }
-                                    break 'outer;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut body = serde_json::json!({
+        let body = serde_json::json!({
             "connected": req.connected,
             "working": req.working,
             "label": req.label,
             "humanPercent": req.human_percent,
+            "window": req.window,
+            "tab": req.tab,
+            "pane": req.pane,
         });
-        if let Some(uid) = session_uid {
-            body["sessionUid"] = serde_json::json!(uid);
-        }
         let resp = self.post_json("/api/agent/status", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
@@ -505,11 +473,10 @@ impl HyperiaMcp {
                         let tab_name = tab["name"].as_str().unwrap_or("shell");
                         if let Some(panes) = tab["panes"].as_array() {
                             for pane in panes {
-                                let id = pane["id"].as_u64().unwrap_or(0);
                                 let label = pane["label"].as_str().unwrap_or("");
                                 let cols = pane["cols"].as_u64().unwrap_or(0);
                                 let rows = pane["rows"].as_u64().unwrap_or(0);
-                                let screen = self.get(&format!("/api/screen/{}", id)).await
+                                let screen = self.get(&self.pane_path("/api/screen", Some(win_id as u32), Some(tab_name), Some(label))).await
                                     .unwrap_or_else(|_| "(error reading screen)".into());
 
                                 let header = if label.is_empty() {
@@ -541,10 +508,9 @@ impl HyperiaMcp {
                     for tab in tabs {
                         if let Some(panes) = tab["panes"].as_array() {
                             for pane in panes {
-                                let id = pane["id"].as_u64().unwrap_or(0);
                                 let label = pane["label"].as_str().unwrap_or("");
                                 let tab_name = tab["name"].as_str().unwrap_or("shell");
-                                let screen = self.get(&format!("/api/screen/{}", id)).await
+                                let screen = self.get(&self.pane_path("/api/screen", Some(win["id"].as_u64().unwrap_or(0) as u32), Some(tab_name), Some(label))).await
                                     .unwrap_or_default();
 
                                 let state = detect_shell_state(&screen);
@@ -574,13 +540,12 @@ impl HyperiaMcp {
     ) -> Result<CallToolResult, ErrorData> {
         // If a specific pane is targeted, resolve and handle just that one
         if req.window.is_some() || req.tab.is_some() || req.pane.is_some() {
-            let id = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
-            let screen = self.get(&format!("/api/screen/{}", id)).await
+            let screen = self.get(&self.pane_path("/api/screen", req.window, req.tab.as_deref(), req.pane.as_deref())).await
                 .unwrap_or_default();
             let state = detect_shell_state(&screen);
 
             if let Some(keys) = &state.actionable {
-                self.post_text(&format!("/api/type/{}", id), keys).await?;
+                self.post_text(&self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref()), keys).await?;
                 return Ok(CallToolResult::success(vec![Content::text(
                     format!("Sent '{}' ({})", keys.replace('\r', "\\r"), state.detail)
                 )]));
@@ -604,9 +569,8 @@ impl HyperiaMcp {
                         let tab_name = tab["name"].as_str().unwrap_or("shell");
                         if let Some(panes) = tab["panes"].as_array() {
                             for pane in panes {
-                                let id = pane["id"].as_u64().unwrap_or(0) as usize;
                                 let label = pane["label"].as_str().unwrap_or("");
-                                let screen = self.get(&format!("/api/screen/{}", id)).await
+                                let screen = self.get(&self.pane_path("/api/screen", Some(win["id"].as_u64().unwrap_or(0) as u32), Some(tab_name), Some(label))).await
                                     .unwrap_or_default();
                                 let state = detect_shell_state(&screen);
 
@@ -617,7 +581,7 @@ impl HyperiaMcp {
                                 };
 
                                 if let Some(keys) = &state.actionable {
-                                    self.post_text(&format!("/api/type/{}", id), keys).await?;
+                                    self.post_text(&self.pane_path("/api/type", Some(win["id"].as_u64().unwrap_or(0) as u32), Some(tab_name), Some(label)), keys).await?;
                                     actions.push(format!("{}: sent '{}' ({})", pane_desc, keys.replace('\r', "\\r"), state.detail));
                                 } else {
                                     actions.push(format!("{}: no action needed ({})", pane_desc, state.kind));
@@ -636,8 +600,7 @@ impl HyperiaMcp {
         &self,
         Parameters(req): Parameters<AutoDescribeRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let pane = self.resolve_target(req.window, req.tab.as_deref(), req.pane.as_deref()).await?;
-        let resp = self.post_text(&format!("/api/pane/describe/{}", pane), "").await?;
+        let resp = self.post_text(&self.pane_path("/api/pane/describe", req.window, req.tab.as_deref(), req.pane.as_deref()), "").await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -773,61 +736,28 @@ fn detect_shell_state(screen: &str) -> ShellStateInfo {
 // -- Helper methods --
 
 impl HyperiaMcp {
-    /// Resolve window/tab/pane addressing to a flat session index for the HTTP API.
-    async fn resolve_target(&self, window: Option<u32>, tab: Option<&str>, pane: Option<&str>) -> Result<usize, ErrorData> {
-        let status_text = self.get("/api/status").await?;
-        let status: serde_json::Value = serde_json::from_str(&status_text)
-            .map_err(|e| ErrorData::internal_error(format!("Parse: {e}"), None))?;
-
-        let windows = status["windows"].as_array()
-            .ok_or_else(|| ErrorData::internal_error("No windows", None))?;
-
-        // Find target window
-        let target_window = if let Some(w) = window {
-            windows.iter().find(|win| win["id"].as_u64() == Some(w as u64))
-                .ok_or_else(|| ErrorData::invalid_params(format!("No window {w}"), None))?
-        } else {
-            // Use focused window, or first window
-            windows.iter().find(|win| win["focused"].as_bool() == Some(true))
-                .or_else(|| windows.first())
-                .ok_or_else(|| ErrorData::internal_error("No windows open", None))?
-        };
-
-        let tabs = target_window["tabs"].as_array()
-            .ok_or_else(|| ErrorData::internal_error("No tabs", None))?;
-
-        // Find target tab
-        let target_tab = if let Some(t) = tab {
-            tabs.iter().find(|tb| tb["name"].as_str() == Some(t))
-                .ok_or_else(|| ErrorData::invalid_params(format!("No tab '{t}'. Use terminal_status to see available tabs."), None))?
-        } else {
-            // Use active tab, or first tab
-            tabs.iter().find(|tb| tb["active"].as_bool() == Some(true))
-                .or_else(|| tabs.first())
-                .ok_or_else(|| ErrorData::internal_error("No tabs open", None))?
-        };
-
-        let panes = target_tab["panes"].as_array()
-            .ok_or_else(|| ErrorData::internal_error("No panes", None))?;
-
-        // Find target pane
-        let target_pane = if let Some(p) = pane {
-            panes.iter().find(|pn| pn["label"].as_str() == Some(p))
-                .ok_or_else(|| ErrorData::invalid_params(format!("No pane '{p}' in tab. Use terminal_status to see available panes."), None))?
-        } else {
-            panes.first()
-                .ok_or_else(|| ErrorData::internal_error("No panes", None))?
-        };
-
-        target_pane["id"].as_u64()
-            .map(|id| id as usize)
-            .ok_or_else(|| ErrorData::internal_error("Pane has no id", None))
+    /// Focus a pane by window/tab/pane address (fire-and-forget, best-effort).
+    async fn focus_pane(&self, window: Option<u32>, tab: Option<&str>, pane: Option<&str>) {
+        let body = serde_json::json!({"window": window, "tab": tab, "pane": pane});
+        let _ = self.post_json("/api/pane/focus", &body).await;
     }
 
-    /// Focus a pane by index (fire-and-forget, best-effort).
-    async fn focus_pane(&self, pane: usize) {
-        let body = serde_json::json!({"id": pane});
-        let _ = self.post_json("/api/pane/focus", &body).await;
+    fn pane_path(&self, base: &str, window: Option<u32>, tab: Option<&str>, pane: Option<&str>) -> String {
+        let mut params = Vec::new();
+        if let Some(window) = window {
+            params.push(format!("window={}", window));
+        }
+        if let Some(tab) = tab {
+            params.push(format!("tab={}", urlencoding::encode(tab)));
+        }
+        if let Some(pane) = pane {
+            params.push(format!("pane={}", urlencoding::encode(pane)));
+        }
+        if params.is_empty() {
+            base.to_string()
+        } else {
+            format!("{}?{}", base, params.join("&"))
+        }
     }
 
     async fn get(&self, path: &str) -> Result<String, ErrorData> {

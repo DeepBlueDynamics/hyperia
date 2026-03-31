@@ -47,6 +47,12 @@ export type MainEvents = {
   'session set xterm title': {uid: string; title: string};
   'session set description': {uid: string; description: string};
   'session set tab name': {uid: string; tabName: string};
+  'session layout sync': Array<{
+    rootGroupUid: string;
+    order: number;
+    active: boolean;
+    panes: Array<{uid: string; splitLabel: string}>;
+  }>;
   unmaximize: never;
 };
 

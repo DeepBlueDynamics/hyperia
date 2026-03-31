@@ -20,6 +20,7 @@ import configureStore from './store/configure-store';
 import * as config from './utils/config';
 import {getBase64FileData} from './utils/file';
 import * as plugins from './utils/plugins';
+import {getRootGroups} from './selectors';
 
 // On Linux, the default zoom was somehow changed with Electron 3 (or maybe 2).
 // Setting zoom factor to 1.2 brings back the normal default size
@@ -243,6 +244,56 @@ rpc.on('agent status', ({sessionUid, connected, working, label, humanPercent}) =
   if (uid) {
     store_.dispatch(uiActions.setAgentStatus(uid, {connected, working, label, humanPercent}));
   }
+});
+
+function countLeaves(group: any, termGroups: Record<string, any>): number {
+  if (group?.sessionUid) return 1;
+  return (group?.children || []).reduce((count: number, childUid: string) => {
+    const child = termGroups[childUid];
+    return count + (child ? countLeaves(child, termGroups) : 0);
+  }, 0);
+}
+
+function collectPaneLayout(group: any, termGroups: Record<string, any>, splitOffset = 0, isRoot = true): Array<{uid: string; splitLabel: string}> {
+  if (group?.sessionUid) {
+    return [{uid: group.sessionUid, splitLabel: ''}];
+  }
+
+  const totalLeaves = countLeaves(group, termGroups);
+  const needLabels = totalLeaves > 1 || !isRoot;
+  let offset = splitOffset;
+  const panes: Array<{uid: string; splitLabel: string}> = [];
+
+  for (const childUid of group?.children || []) {
+    const child = termGroups[childUid];
+    if (!child) continue;
+    const leafCount = countLeaves(child, termGroups);
+    const splitLabel = needLabels ? String.fromCharCode(97 + offset) : '';
+    if (child.sessionUid) {
+      panes.push({uid: child.sessionUid, splitLabel});
+    } else {
+      panes.push(...collectPaneLayout(child, termGroups, offset, false));
+    }
+    offset += leafCount;
+  }
+
+  return panes;
+}
+
+let lastLayoutSignature = '';
+store_.subscribe(() => {
+  const state = store_.getState();
+  const rootGroups = getRootGroups(state as any);
+  const tabs = rootGroups.map((rootGroup: any, order: number) => ({
+    rootGroupUid: rootGroup.uid,
+    order,
+    active: rootGroup.uid === state.termGroups.activeRootGroup,
+    panes: collectPaneLayout(rootGroup, state.termGroups.termGroups)
+  }));
+  const signature = JSON.stringify(tabs);
+  if (signature === lastLayoutSignature) return;
+  lastLayoutSignature = signature;
+  rpc.emit('session layout sync', tabs);
 });
 
 const root = createRoot(document.getElementById('mount')!);

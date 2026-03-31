@@ -8,10 +8,11 @@ mod mcp;
 mod screen;
 mod telemetry;
 
-use axum::extract::{Path, State};
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use clap::Parser;
+use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
 
 use bridge::Bridge;
@@ -40,6 +41,13 @@ struct AppState {
 // Route handlers
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Default, Deserialize)]
+struct PaneAddress {
+    window: Option<u32>,
+    tab: Option<String>,
+    pane: Option<String>,
+}
+
 async fn get_logs(State(state): State<AppState>) -> Json<Vec<String>> {
     let lines = state.log_buffer.lock().unwrap();
     Json(lines.iter().cloned().collect())
@@ -49,15 +57,30 @@ async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(state.bridge.get_status().await)
 }
 
-async fn get_screen(State(state): State<AppState>, Path(pane): Path<usize>) -> String {
-    state.bridge.get_screen_text(Some(pane)).await
+async fn get_screen(State(state): State<AppState>, Query(addr): Query<PaneAddress>) -> (StatusCode, String) {
+    let Some(uid) = state
+        .bridge
+        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .await
+    else {
+        return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into());
+    };
+    (StatusCode::OK, state.bridge.get_screen_text_by_uid(&uid).await)
 }
 
 async fn post_auto_describe(
     State(state): State<AppState>,
-    Path(pane): Path<usize>,
+    Query(addr): Query<PaneAddress>,
 ) -> (StatusCode, String) {
-    let screen = state.bridge.get_screen_text(Some(pane)).await;
+    let Some(uid) = state
+        .bridge
+        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .await
+    else {
+        return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into());
+    };
+
+    let screen = state.bridge.get_screen_text_by_uid(&uid).await;
     if screen.trim().is_empty() {
         return (StatusCode::OK, "empty".into());
     }
@@ -80,7 +103,7 @@ async fn post_auto_describe(
             Ok(json) => {
                 let description = json["response"].as_str().unwrap_or("").trim().to_string();
                 // Update the session description in the bridge
-                state.bridge.set_description(pane, &description).await;
+                state.bridge.set_description_by_uid(&uid, &description).await;
                 (StatusCode::OK, description)
             }
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Parse: {e}")),
@@ -122,7 +145,7 @@ fn unescape_keys(raw: &str) -> String {
 
 async fn post_type(
     State(state): State<AppState>,
-    Path(pane): Path<usize>,
+    Query(addr): Query<PaneAddress>,
     body: String,
 ) -> (StatusCode, String) {
     if body.is_empty() {
@@ -131,9 +154,13 @@ async fn post_type(
     // Don't unescape here — callers send raw bytes.
     // MCP terminal_keys handles its own unescaping before calling this endpoint.
     let keys = body;
-    let uid = match state.bridge.pane_uid(pane).await {
+    let uid = match state
+        .bridge
+        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .await
+    {
         Some(u) => u,
-        None => return (StatusCode::NOT_FOUND, format!("No pane at index {pane}")),
+        None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
     };
     let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys});
     match state.bridge.send_command(cmd).await {
@@ -167,11 +194,24 @@ async fn post_focus(
 ) -> (StatusCode, String) {
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
 
-    // Focus by pane index — resolve to uid
-    if let Some(id) = parsed["id"].as_u64() {
-        let uid = match state.bridge.pane_uid(id as usize).await {
+    if let Some(uid) = parsed["sessionUid"].as_str() {
+        let cmd = serde_json::json!({"type": "Focus", "uid": uid});
+        match state.bridge.send_command(cmd).await {
+            Ok(r) => (StatusCode::OK, r),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+        }
+    } else if parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string() {
+        let uid = match state
+            .bridge
+            .resolve_pane_uid(
+                parsed["window"].as_u64().map(|v| v as u32),
+                parsed["tab"].as_str(),
+                parsed["pane"].as_str(),
+            )
+            .await
+        {
             Some(u) => u,
-            None => return (StatusCode::NOT_FOUND, format!("No pane at index {id}")),
+            None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
         };
         let cmd = serde_json::json!({"type": "Focus", "uid": uid});
         match state.bridge.send_command(cmd).await {
@@ -179,7 +219,7 @@ async fn post_focus(
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
         }
     } else {
-        (StatusCode::BAD_REQUEST, "Missing 'id' field".into())
+        (StatusCode::BAD_REQUEST, "Missing sessionUid or window/tab/pane".into())
     }
 }
 
@@ -210,19 +250,34 @@ async fn post_rename_tab(
     body: String,
 ) -> (StatusCode, String) {
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
-    let id = parsed["id"].as_u64().unwrap_or(0);
     let name = parsed["name"].as_str().unwrap_or("").to_string();
+    let session_uid = match state
+        .bridge
+        .resolve_tab_uid(
+            parsed["window"].as_u64().map(|v| v as u32),
+            parsed["tab"].as_str(),
+        )
+        .await
+    {
+        Some(uid) => uid,
+        None => return (StatusCode::NOT_FOUND, "No tab at that window/tab address".into()),
+    };
 
     // Update locally in sidecar
     {
         let mut sessions = state.bridge.sessions().await;
-        if let Some((_uid, info)) = sessions.iter_mut().nth(id as usize) {
-            info.tab_name = name.clone();
+        let root = sessions.get(&session_uid).map(|info| info.root_tab_uid.clone());
+        if let Some(root_uid) = root {
+            for (_uid, info) in sessions.iter_mut() {
+                if info.root_tab_uid == root_uid {
+                    info.tab_name = name.clone();
+                }
+            }
         }
     }
 
     // Tell Electron to update the renderer
-    let cmd = serde_json::json!({"type": "Rename", "id": id, "name": name});
+    let cmd = serde_json::json!({"type": "Rename", "uid": session_uid, "name": name});
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
@@ -243,9 +298,19 @@ async fn post_agent_status(
     });
     if let Some(uid) = parsed["sessionUid"].as_str() {
         cmd["sessionUid"] = serde_json::json!(uid);
-    }
-    if let Some(pane) = parsed["pane"].as_u64() {
-        cmd["pane"] = serde_json::json!(pane);
+    } else if parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string() {
+        match state
+            .bridge
+            .resolve_pane_uid(
+                parsed["window"].as_u64().map(|v| v as u32),
+                parsed["tab"].as_str(),
+                parsed["pane"].as_str(),
+            )
+            .await
+        {
+            Some(uid) => cmd["sessionUid"] = serde_json::json!(uid),
+            None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
+        }
     }
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
@@ -298,16 +363,16 @@ async fn main() -> anyhow::Result<()> {
         // Read endpoints
         .route("/api/logs", axum::routing::get(get_logs))
         .route("/api/status", axum::routing::get(get_status))
-        .route("/api/screen/{pane}", axum::routing::get(get_screen))
+        .route("/api/screen", axum::routing::get(get_screen))
         // Write endpoints
-        .route("/api/type/{pane}", axum::routing::post(post_type))
+        .route("/api/type", axum::routing::post(post_type))
         .route("/api/pane/split", axum::routing::post(post_split))
         .route("/api/pane/focus", axum::routing::post(post_focus))
         .route("/api/pane/close", axum::routing::post(post_close))
         .route("/api/pane/new", axum::routing::post(post_new_tab))
         .route("/api/pane/rename", axum::routing::post(post_rename_tab))
         .route("/api/agent/status", axum::routing::post(post_agent_status))
-        .route("/api/pane/describe/{pane}", axum::routing::post(post_auto_describe))
+        .route("/api/pane/describe", axum::routing::post(post_auto_describe))
         .with_state(state);
 
     // Dashboard routes with their own state

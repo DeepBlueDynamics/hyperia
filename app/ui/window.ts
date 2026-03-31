@@ -23,6 +23,7 @@ import {
   notifyUserActivity,
   updateSessionDescription,
   updateSessionTabName,
+  updateSessionLayout,
   getSessionRootTab,
   forceRemoveSession
 } from '../bridge';
@@ -332,6 +333,19 @@ export function newWindow(
   rpc.on('session set tab name', ({uid, tabName}: {uid: string; tabName: string}) => {
     updateSessionTabName(uid, tabName);
   });
+  rpc.on(
+    'session layout sync',
+    (
+      payload: Array<{
+        rootGroupUid: string;
+        order: number;
+        active: boolean;
+        panes: Array<{uid: string; splitLabel: string}>;
+      }>
+    ) => {
+      updateSessionLayout(payload);
+    }
+  );
   rpc.on('info renderer', ({uid, type}) => {
     // Used in the "About" dialog
     setRendererType(uid, type);

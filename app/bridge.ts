@@ -38,6 +38,9 @@ interface TrackedSession {
   description: string;
   rootTabUid: string; // uid of the root tab group — splits share this
   windowId: number; // Electron BrowserWindow id
+  splitLabel: string;
+  tabOrder: number;
+  tabActive: boolean;
 }
 const trackedSessions = new Map<string, TrackedSession>();
 
@@ -146,23 +149,11 @@ function sendSessionRegister(uid: string, tracked: TrackedSession) {
     cols: tracked.cols,
     pid: tracked.session.pty?.pid ?? 0,
     rootTabUid: tracked.rootTabUid,
-    windowId: tracked.windowId
+    windowId: tracked.windowId,
+    splitLabel: tracked.splitLabel,
+    tabOrder: tracked.tabOrder,
+    tabActive: tracked.tabActive
   });
-}
-
-/** Compute split letter labels: sessions sharing a rootTabUid get a, b, c... */
-function getSplitLabel(uid: string): string {
-  const tracked = trackedSessions.get(uid);
-  if (!tracked) return '';
-  const rootTab = tracked.rootTabUid;
-  // Collect all sessions in the same tab, sorted by insertion order
-  const siblings: string[] = [];
-  for (const [u, t] of trackedSessions) {
-    if (t.rootTabUid === rootTab) siblings.push(u);
-  }
-  if (siblings.length <= 1) return ''; // no splits, no label needed
-  const idx = siblings.indexOf(uid);
-  return String.fromCharCode(97 + idx); // a, b, c, ...
 }
 
 // ---------------------------------------------------------------------------
@@ -281,7 +272,7 @@ function handleCommand(msg: Record<string, unknown>) {
         uid,
         name: t.name,
         tabName: t.tabName,
-        splitLabel: getSplitLabel(uid),
+        splitLabel: t.splitLabel,
         rows: t.rows,
         cols: t.cols,
         pid: t.session.pty?.pid ?? 0,
@@ -372,11 +363,18 @@ function handleCommand(msg: Record<string, unknown>) {
     }
 
     case 'Rename': {
-      const id = msg.id as number;
+      const targetUid = msg.uid as string | undefined;
+      const id = msg.id as number | undefined;
       const name = msg.name as string;
       const entries = Array.from(trackedSessions.entries());
-      if (id >= 0 && id < entries.length) {
-        const [sessionUid, tracked] = entries[id];
+      const entry =
+        targetUid !== undefined
+          ? entries.find(([sessionUid]) => sessionUid === targetUid)
+          : id !== undefined && id >= 0 && id < entries.length
+            ? entries[id]
+            : undefined;
+      if (entry) {
+        const [sessionUid, tracked] = entry;
         const rootTab = tracked.rootTabUid;
         // Update ALL sessions in the tab group and notify sidecar for each
         for (const [uid, t] of trackedSessions) {
@@ -392,7 +390,7 @@ function handleCommand(msg: Record<string, unknown>) {
         }
         sendResult(seq, 'ok');
       } else {
-        sendResult(seq, `No pane at index ${id}`);
+        sendResult(seq, 'No matching tab session');
       }
       break;
     }
@@ -502,7 +500,10 @@ export function registerSession(
     tabName: tabName || name,
     description: '',
     rootTabUid: rootTabUid || uid,
-    windowId
+    windowId,
+    splitLabel: '',
+    tabOrder: 0,
+    tabActive: false
   };
   trackedSessions.set(uid, tracked);
 
@@ -570,6 +571,51 @@ export function updateSessionDescription(uid: string, description: string) {
   if (tracked) {
     tracked.description = description;
     send({type: 'SessionDescribe', uid, description});
+  }
+}
+
+export function updateSessionLayout(
+  tabs: Array<{
+    rootGroupUid: string;
+    order: number;
+    active: boolean;
+    panes: Array<{uid: string; splitLabel: string}>;
+  }>
+) {
+  const seen = new Set<string>();
+
+  for (const tab of tabs) {
+    for (const pane of tab.panes) {
+      const tracked = trackedSessions.get(pane.uid);
+      if (!tracked) continue;
+      tracked.rootTabUid = tab.rootGroupUid || tracked.rootTabUid;
+      tracked.splitLabel = pane.splitLabel || '';
+      tracked.tabOrder = tab.order;
+      tracked.tabActive = tab.active;
+      seen.add(pane.uid);
+      send({
+        type: 'SessionLayout',
+        uid: pane.uid,
+        rootTabUid: tracked.rootTabUid,
+        splitLabel: tracked.splitLabel,
+        tabOrder: tracked.tabOrder,
+        tabActive: tracked.tabActive
+      });
+    }
+  }
+
+  for (const [uid, tracked] of trackedSessions) {
+    if (seen.has(uid)) continue;
+    tracked.splitLabel = '';
+    tracked.tabActive = false;
+    send({
+      type: 'SessionLayout',
+      uid,
+      rootTabUid: tracked.rootTabUid,
+      splitLabel: '',
+      tabOrder: tracked.tabOrder,
+      tabActive: false
+    });
   }
 }
 

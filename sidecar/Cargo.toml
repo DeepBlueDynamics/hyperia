@@ -1,6 +1,6 @@
 [package]
 name = "hyperia-sidecar"
-version = "0.1.0"
+version = "0.5.2"
 edition = "2021"
 description = "Rust sidecar for Hyperia: agent engine, MCP, signaling"
 
@@ -42,6 +42,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Error handling
 anyhow = "1"
+urlencoding = "2.1"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

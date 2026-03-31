@@ -281,7 +281,7 @@ fn compile_system_prompt(screen_text: &str, pane_name: &str) -> String {
          [CONTEXT]\n\
          The user is looking at pane '{pane_name}'. Current screen:\n```\n{screen}\n```\n\n\
          When closing, focusing, or operating on panes, ALWAYS call terminal_status first \
-         to get pane IDs and names. Tell the user WHICH pane by name.\n\
+         to get window/tab/pane labels. Tell the user WHICH pane by name.\n\
          Before installing software, modifying system settings, or running destructive commands, ASK the user first.\n\
          For simple read-only commands (ls, cat, echo, pip list, dir, pwd, git status), execute directly.\n\
          When showing command results, briefly describe what you see. Be concise. Act first, explain after.\n\
@@ -312,7 +312,9 @@ fn tool_definitions() -> Vec<serde_json::Value> {
                 "type": "object",
                 "properties": {
                     "keys": { "type": "string", "description": "Keystrokes to type (e.g. \"ls -la\\n\")" },
-                    "pane": { "type": "integer", "description": "Pane ID (default: focused pane)" }
+                    "window": { "type": "integer", "description": "Window id from terminal_status (optional)" },
+                    "tab": { "type": "string", "description": "Tab name from terminal_status (optional)" },
+                    "pane": { "type": "string", "description": "Pane label within the tab, e.g. \"a\" or \"b\" (optional)" }
                 },
                 "required": ["keys"]
             }
@@ -334,30 +336,31 @@ fn tool_definitions() -> Vec<serde_json::Value> {
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "id": { "type": "integer", "description": "Pane ID to focus" },
-                    "direction": { "type": "string", "enum": ["next", "prev"], "description": "Focus next or previous pane" }
+                    "window": { "type": "integer", "description": "Window id from terminal_status (optional)" },
+                    "tab": { "type": "string", "description": "Tab name from terminal_status (optional)" },
+                    "pane": { "type": "string", "description": "Pane label within the tab, e.g. \"a\" or \"b\"" }
                 }
             }
         },
         {
             "name": "terminal_rename",
-            "description": "Rename the currently focused pane.",
+            "description": "Rename a tab by window/tab address, or rename the active tab if omitted.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "name": { "type": "string", "description": "New pane name" }
+                    "name": { "type": "string", "description": "New tab name" },
+                    "window": { "type": "integer", "description": "Window id from terminal_status (optional)" },
+                    "tab": { "type": "string", "description": "Current tab name from terminal_status (optional)" }
                 },
                 "required": ["name"]
             }
         },
         {
             "name": "terminal_close",
-            "description": "Close a pane by ID, or the focused pane if no ID given. Always check terminal_status first to know pane names and IDs.",
+            "description": "Close the focused pane. Always check terminal_status first to know window/tab/pane labels.",
             "input_schema": {
                 "type": "object",
-                "properties": {
-                    "id": { "type": "integer", "description": "Pane ID to close (default: focused pane)" }
-                }
+                "properties": {}
             }
         },
         {
@@ -374,7 +377,9 @@ fn tool_definitions() -> Vec<serde_json::Value> {
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "pane": { "type": "integer", "description": "Pane ID (default: focused)" }
+                    "window": { "type": "integer", "description": "Window id from terminal_status (optional)" },
+                    "tab": { "type": "string", "description": "Tab name from terminal_status (optional)" },
+                    "pane": { "type": "string", "description": "Pane label within the tab, e.g. \"a\" or \"b\" (optional)" }
                 }
             }
         },
@@ -465,15 +470,31 @@ async fn execute_tool(
 ) -> String {
     let base = format!("http://localhost:{}", http_port);
     let client = reqwest::Client::new();
+    let build_target_url = |path: &str| {
+        let mut url = format!("{}/{}", base, path.trim_start_matches('/'));
+        let mut params = Vec::new();
+        if let Some(window) = input["window"].as_u64() {
+            params.push(format!("window={}", window));
+        }
+        if let Some(tab) = input["tab"].as_str() {
+            params.push(format!("tab={}", urlencoding::encode(tab)));
+        }
+        if let Some(pane) = input["pane"].as_str() {
+            params.push(format!("pane={}", urlencoding::encode(pane)));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+        url
+    };
 
     let result = match name {
         "terminal_keys" => {
             let keys = input["keys"].as_str().unwrap_or("");
             // Unescape common sequences
             let keys = keys.replace("\\n", "\r").replace("\\t", "\t");
-            let pane = input["pane"].as_u64().map(|p| p as usize);
-            let body = serde_json::json!({ "keys": keys, "pane": pane });
-            client.post(format!("{}/api/keys", base)).json(&body).send().await
+            client.post(build_target_url("/api/type")).body(keys).send().await
         }
         "terminal_split" => {
             let dir = input["direction"].as_str().unwrap_or("vertical");
@@ -481,34 +502,32 @@ async fn execute_tool(
             client.post(format!("{}/api/pane/split", base)).json(&body).send().await
         }
         "terminal_focus" => {
-            let body = if let Some(id) = input["id"].as_u64() {
-                serde_json::json!({ "id": id })
-            } else {
-                let dir = input["direction"].as_str().unwrap_or("next");
-                serde_json::json!({ "direction": dir })
-            };
+            let body = serde_json::json!({
+                "window": input["window"],
+                "tab": input["tab"],
+                "pane": input["pane"],
+            });
             client.post(format!("{}/api/pane/focus", base)).json(&body).send().await
         }
         "terminal_rename" => {
             let name = input["name"].as_str().unwrap_or("unnamed");
-            let body = serde_json::json!({ "name": name });
+            let body = serde_json::json!({
+                "name": name,
+                "window": input["window"],
+                "tab": input["tab"],
+            });
             client.post(format!("{}/api/pane/rename", base)).json(&body).send().await
         }
         "terminal_close" => {
-            let body = if let Some(id) = input["id"].as_u64() {
-                serde_json::json!({ "id": id })
-            } else {
-                serde_json::json!({})
-            };
+            let body = serde_json::json!({});
             client.post(format!("{}/api/pane/close", base)).json(&body).send().await
         }
         "terminal_status" => {
             client.get(format!("{}/api/status", base)).send().await
         }
         "terminal_screen" => {
-            let pane = input["pane"].as_u64().unwrap_or(0);
             // Fetch screen and extract just text lines (attrs are huge)
-            match client.get(format!("{}/api/screen?pane={}", base, pane)).send().await {
+            match client.get(build_target_url("/api/screen")).send().await {
                 Ok(resp) => {
                     let text = resp.text().await.unwrap_or_default();
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
