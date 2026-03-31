@@ -200,7 +200,9 @@ impl HyperiaMcp {
         Parameters(req): Parameters<RunRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         self.focus_pane(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
-        let keys = format!("{}\r\n", req.command);
+        // Strip trailing newline/return sequences agents love to append — we add our own Enter
+        let cmd = strip_trailing_returns(&req.command);
+        let keys = format!("{}\r\n", cmd);
         self.post_text(&self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref()), &keys).await?;
 
         let wait = req.wait_ms.unwrap_or(2000);
@@ -609,6 +611,25 @@ impl HyperiaMcp {
 // -- Key unescaping --
 
 /// Convert literal escape sequences (\n, \r, \t) to actual control characters.
+/// Strip trailing newline / carriage-return sequences that agents append.
+/// Handles real chars (\r, \n) and escape literals (\\n, \\r, /n, /r).
+fn strip_trailing_returns(s: &str) -> &str {
+    let mut s = s.trim_end();
+    loop {
+        // Real CR/LF
+        if let Some(stripped) = s.strip_suffix('\n') { s = stripped.trim_end_matches('\r'); continue; }
+        if let Some(stripped) = s.strip_suffix('\r') { s = stripped; continue; }
+        // Escaped: \n \r \\n \\r
+        if let Some(stripped) = s.strip_suffix("\\n") { s = stripped; continue; }
+        if let Some(stripped) = s.strip_suffix("\\r") { s = stripped; continue; }
+        // Forward-slash typo: /n /r
+        if let Some(stripped) = s.strip_suffix("/n") { s = stripped; continue; }
+        if let Some(stripped) = s.strip_suffix("/r") { s = stripped; continue; }
+        break;
+    }
+    s
+}
+
 fn unescape_keys(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
