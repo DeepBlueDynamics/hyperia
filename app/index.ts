@@ -37,6 +37,8 @@ import {startBridge, stopBridge} from './bridge';
 import * as AppMenu from './menus/menu';
 import {initTray, destroyTray} from './notify';
 import * as plugins from './plugins';
+import {initHyperia} from './ghost';
+import {initSettings} from './settings';
 import {initSticky} from './sticky';
 import {newWindow} from './ui/window';
 import {installCLI} from './utils/cli-install';
@@ -306,6 +308,12 @@ app.on('ready', () => {
 
   // Sticky notes
   initSticky();
+
+  // Settings chat window
+  initSettings();
+
+  // Ghost agent window
+  initHyperia();
 
   // Launch sidecar (agent engine, MCP)
   // Kill any stale sidecar on our port, then spawn fresh, then connect bridge

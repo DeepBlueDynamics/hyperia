@@ -42,6 +42,10 @@ const contextMenuTemplate = (
       click: () => createWindow()
     },
     {
+      label: 'New Hyperia',
+      click: () => ipcMain.emit('open-ghost')
+    },
+    {
       label: 'New Note',
       click: () => ipcMain.emit('new-sticky', {})
     },

@@ -3,6 +3,7 @@
 mod bridge;
 mod chat;
 mod dashboard;
+mod ghost;
 mod logs;
 mod mcp;
 mod screen;
@@ -385,7 +386,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/dashboard/widgets", axum::routing::get(dashboard::get_widgets).post(dashboard::post_widgets))
         .with_state(dash_state);
 
-    let app = app.merge(dash_routes);
+    // Ghost agent routes — always mounted, config lazy-loaded per request
+    let ghost_state = ghost::GhostState::new(args.port);
+    let ghost_routes = axum::Router::new()
+        .route("/api/ghost/chat", axum::routing::post(ghost::api::ghost_chat))
+        .route("/api/ghost/status", axum::routing::get(ghost::api::ghost_status))
+        .route("/api/ghost/reset", axum::routing::post(ghost::api::ghost_reset))
+        .with_state(ghost_state);
+
+    let app = app.merge(dash_routes).merge(ghost_routes);
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
     let listener = match tokio::net::TcpListener::bind(addr).await {

@@ -275,7 +275,7 @@ impl Bridge {
             }));
         }
 
-        serde_json::json!({ "windows": windows })
+        serde_json::json!({ "version": env!("CARGO_PKG_VERSION"), "windows": windows })
     }
 
     /// Handle an incoming message from Electron.

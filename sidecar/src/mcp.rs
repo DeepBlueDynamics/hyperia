@@ -284,6 +284,25 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
+    #[tool(description = "Get the current Hyperia version. Returns the sidecar version and the Electron app version.")]
+    async fn hyperia_version(&self) -> Result<CallToolResult, ErrorData> {
+        let sidecar_version = env!("CARGO_PKG_VERSION");
+        let app_version = match self.get("/api/status").await {
+            Ok(status) => {
+                serde_json::from_str::<serde_json::Value>(&status)
+                    .ok()
+                    .and_then(|v| v["version"].as_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "unknown".into())
+            }
+            Err(_) => "unavailable (sidecar not connected to Electron)".into(),
+        };
+        let info = format!(
+            "Hyperia v{}\nSidecar v{}\nElectron app v{}",
+            sidecar_version, sidecar_version, app_version
+        );
+        Ok(CallToolResult::success(vec![Content::text(info)]))
+    }
+
     #[tool(description = "Set the agent status light on a specific pane. Address with window/tab/pane.")]
     async fn agent_status(
         &self,
