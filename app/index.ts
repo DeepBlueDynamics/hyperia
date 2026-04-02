@@ -34,10 +34,10 @@ import {gitDescribe} from 'git-describe';
 import parseUrl from 'parse-url';
 
 import {startBridge, stopBridge} from './bridge';
+import {initHyperia} from './ghost';
 import * as AppMenu from './menus/menu';
 import {initTray, destroyTray} from './notify';
 import * as plugins from './plugins';
-import {initHyperia} from './ghost';
 import {initSettings} from './settings';
 import {initSticky} from './sticky';
 import {newWindow} from './ui/window';

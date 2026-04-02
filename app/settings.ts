@@ -14,7 +14,7 @@ let settingsWindow: BrowserWindow | null = null;
 export function hasAgentToken(): boolean {
   try {
     const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
-    return !!(cfg.config && cfg.config.agentToken && cfg.config.agentModel);
+    return !!(cfg.config?.agentToken && cfg.config?.agentModel);
   } catch {
     return false;
   }
@@ -78,8 +78,8 @@ function buildSettingsHtml(): string {
   } catch {
     cfg = {};
   }
-  const hasToken = !!(cfg.config && cfg.config.agentToken);
-  const currentModel = (cfg.config && cfg.config.agentModel) || '';
+  const hasToken = !!cfg.config?.agentToken;
+  const currentModel = cfg.config?.agentModel || '';
   const cfgPathEscaped = JSON.stringify(cfgPath.replace(/\\/g, '\\\\'));
 
   return `<!DOCTYPE html>
@@ -325,9 +325,11 @@ function buildSettingsHtml(): string {
 
   <div class="chat" id="chat">
     <div class="msg system">
-      ${hasToken
-        ? 'Settings agent ready. Type below to configure Hyperia.'
-        : 'Set a model token so the agent can help you with configuration. Pick a model and enter your API key below.'}
+      ${
+        hasToken
+          ? 'Settings agent ready. Type below to configure Hyperia.'
+          : 'Set a model token so the agent can help you with configuration. Pick a model and enter your API key below.'
+      }
     </div>
   </div>
 
