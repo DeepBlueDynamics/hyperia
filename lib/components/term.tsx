@@ -222,6 +222,70 @@ export default class Term extends React.PureComponent<
           if (shallActivateWebLink(event)) void shell.openExternal(uri);
         })
       );
+      // Custom link provider for URLs that wrap across multiple rows
+      this.term.registerLinkProvider({
+        provideLinks: (rowIndex: number, callback: (links: any[] | undefined) => void) => {
+          const buffer = this.term.buffer.active;
+          // Join up to 5 rows around the hovered row to catch wrapped URLs
+          const startRow = Math.max(0, rowIndex - 2);
+          const endRow = Math.min(buffer.length - 1, rowIndex + 2);
+          let combined = '';
+          const rowOffsets: {row: number; startCol: number; len: number}[] = [];
+          for (let r = startRow; r <= endRow; r++) {
+            const line = buffer.getLine(r);
+            if (!line) continue;
+            const text = line.translateToString(false);
+            // Only join if previous line was wrapped (no trailing whitespace = wrapped)
+            if (r > startRow && !line.isWrapped) {
+              // Reset — this line is not a continuation
+              combined = '';
+              rowOffsets.length = 0;
+            }
+            rowOffsets.push({row: r, startCol: 0, len: text.length});
+            combined += text;
+          }
+
+          // Match URLs in the combined text
+          const urlRegex = /https?:\/\/[^\s<>'")\]}>]+/g;
+          let match;
+          const links: any[] = [];
+          while ((match = urlRegex.exec(combined)) !== null) {
+            const url = match[0];
+            const matchStart = match.index;
+            const matchEnd = matchStart + url.length;
+
+            // Map back to row/col coordinates
+            let charOffset = 0;
+            let startLink: {row: number; col: number} | null = null;
+            let endLink: {row: number; col: number} | null = null;
+
+            for (const seg of rowOffsets) {
+              const segEnd = charOffset + seg.len;
+              if (!startLink && matchStart < segEnd) {
+                startLink = {row: seg.row, col: matchStart - charOffset};
+              }
+              if (!endLink && matchEnd <= segEnd) {
+                endLink = {row: seg.row, col: matchEnd - charOffset};
+              }
+              charOffset = segEnd;
+            }
+
+            if (startLink && endLink && startLink.row <= rowIndex && endLink.row >= rowIndex) {
+              links.push({
+                range: {
+                  start: {x: startLink.col + 1, y: startLink.row + 1},
+                  end: {x: endLink.col, y: endLink.row + 1}
+                },
+                text: url,
+                activate: (_event: MouseEvent, text: string) => {
+                  if (shallActivateWebLink(_event)) void shell.openExternal(text);
+                }
+              });
+            }
+          }
+          callback(links.length > 0 ? links : undefined);
+        }
+      });
       this.term.open(this.termRef);
 
       if (useWebGL) {
