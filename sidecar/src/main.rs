@@ -353,8 +353,28 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("hyperia-sidecar v{}", env!("CARGO_PKG_VERSION"));
     tracing::info!("API :{}", args.port);
 
-    // Auto-spawn Ferricula if the binary exists
-    let _ferricula_child = spawn_ferricula();
+    // Embed Ferricula memory core
+    let ferricula_port: u16 = std::env::var("FERRICULA_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8765);
+    let home = if cfg!(windows) { std::env::var("USERPROFILE").ok() } else { std::env::var("HOME").ok() };
+    let _ferricula_handle = if let Some(home) = home {
+        let data_dir = std::path::PathBuf::from(&home).join(".hyperia").join("memory");
+        match ferricula::embed::spawn_embedded(data_dir.to_string_lossy().as_ref(), ferricula_port) {
+            Ok(handle) => {
+                tracing::info!("Ferricula core embedded on :{}", ferricula_port);
+                Some(handle)
+            }
+            Err(e) => {
+                tracing::warn!("Ferricula failed to start: {}", e);
+                None
+            }
+        }
+    } else {
+        tracing::warn!("No home directory — Ferricula disabled");
+        None
+    };
 
     let bridge = Bridge::new();
     let telem = telemetry::TelemetryStore::new();
@@ -411,100 +431,4 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
-}
-
-/// Try to spawn Ferricula as a subprocess. Returns the child process handle
-/// so it stays alive as long as the sidecar does. Returns None if the binary
-/// isn't found or if Ferricula is already running.
-fn spawn_ferricula() -> Option<std::process::Child> {
-    let ferricula_port: u16 = std::env::var("FERRICULA_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(8765);
-
-    // Check if already running
-    if std::net::TcpStream::connect(format!("127.0.0.1:{}", ferricula_port)).is_ok() {
-        tracing::info!("Ferricula already running on :{}", ferricula_port);
-        return None;
-    }
-
-    // Data directory: ~/.hyperia/memory/
-    let home = if cfg!(windows) {
-        std::env::var("USERPROFILE").ok()
-    } else {
-        std::env::var("HOME").ok()
-    }?;
-    let data_dir = std::path::PathBuf::from(&home)
-        .join(".hyperia")
-        .join("memory");
-    let _ = std::fs::create_dir_all(&data_dir);
-
-    // Look for ferricula binary in common locations
-    let binary = find_ferricula_binary(&home)?;
-
-    tracing::info!("Spawning Ferricula: {} --serve {} (data: {})",
-        binary.display(), ferricula_port, data_dir.display());
-
-    match std::process::Command::new(&binary)
-        .arg(data_dir.to_string_lossy().as_ref())
-        .arg("--serve")
-        .arg(ferricula_port.to_string())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        Ok(child) => {
-            tracing::info!("Ferricula started (pid {})", child.id());
-            Some(child)
-        }
-        Err(e) => {
-            tracing::warn!("Failed to spawn Ferricula: {}", e);
-            None
-        }
-    }
-}
-
-fn find_ferricula_binary(home: &str) -> Option<std::path::PathBuf> {
-    let candidates = [
-        // Installed alongside sidecar
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("ferricula"))),
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("ferricula.exe"))),
-        // In the Gnosis dev tree
-        Some(std::path::PathBuf::from(home).join("Code").join("Gnosis").join("ferricula").join("ferricula").join("target").join("release").join(if cfg!(windows) { "ferricula.exe" } else { "ferricula" })),
-        // In PATH
-        Some(std::path::PathBuf::from("ferricula")),
-    ];
-
-    for candidate in candidates.iter().flatten() {
-        if candidate.exists() || which_exists(candidate) {
-            return Some(candidate.clone());
-        }
-    }
-    tracing::info!("Ferricula binary not found — memory disabled");
-    None
-}
-
-fn which_exists(name: &std::path::Path) -> bool {
-    // For bare names like "ferricula", check if it's in PATH
-    if name.components().count() == 1 {
-        if cfg!(windows) {
-            std::process::Command::new("where")
-                .arg(name)
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        } else {
-            std::process::Command::new("which")
-                .arg(name)
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        }
-    } else {
-        false
-    }
 }
