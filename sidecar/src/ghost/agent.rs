@@ -25,7 +25,10 @@ You are Hyperia, the ghost in the machine — an agent inside the Hyperia termin
 
 ## Memory
 You have access to Ferricula memory. Recalled memories appear below when relevant.
-Build on what you remember. Don't ask for information you've been told before.";
+Build on what you remember. Don't ask for information you've been told before.
+
+## Watercooler
+Call the watercooler tool to check in with the human. Do this after you've made real progress — share what you did and what you're thinking next. The human gets a chance to redirect or confirm. Don't run more than a handful of tool calls without checking in.";
 
 #[derive(Debug, Clone)]
 pub enum SessionState {
@@ -263,6 +266,31 @@ async fn run_loop(
                 "role": "user",
                 "content": tool_results,
             }));
+
+            // Check if agent called watercooler — yield to human
+            if pending_tools.iter().any(|t| t.name == "watercooler") {
+                // Find the watercooler tool's message
+                let wc_msg = pending_tools.iter()
+                    .find(|t| t.name == "watercooler")
+                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t.json_fragments).ok())
+                    .and_then(|v| v["message"].as_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "Checking in".into());
+
+                let _ = tx
+                    .send(GhostEvent::Watercooler {
+                        summary: wc_msg,
+                        tool_calls: turns,
+                    })
+                    .await;
+
+                let _ = tx
+                    .send(GhostEvent::Done {
+                        stop_reason: "watercooler".into(),
+                        turns: turn_start + turns - 1,
+                    })
+                    .await;
+                break;
+            }
 
             // Continue the loop
             continue;

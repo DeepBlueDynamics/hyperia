@@ -77,6 +77,11 @@ pub async fn ghost_chat(
                     let mut session = state.session.lock().await;
                     session.set_state(SessionState::Error(message.clone()));
                 }
+                GhostEvent::Watercooler { .. } => {
+                    // Session stays idle — human can continue naturally
+                    let mut session = state.session.lock().await;
+                    session.set_state(SessionState::Idle);
+                }
                 _ => {}
             }
         }

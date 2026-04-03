@@ -31,6 +31,7 @@ impl ToolRegistry {
         let mut defs = self.builtins.clone();
         defs.push(tool_search_def());
         defs.push(tool_create_def());
+        defs.push(watercooler_def());
         let dynamic = self.dynamic.lock().unwrap();
         for dt in dynamic.iter() {
             defs.push(dt.def.clone());
@@ -43,6 +44,11 @@ impl ToolRegistry {
         match name {
             "tool_search" => self.handle_tool_search(input),
             "tool_create" => self.handle_tool_create(input),
+            "watercooler" => {
+                // The agent loop handles this specially — just return confirmation
+                let msg = input["message"].as_str().unwrap_or("Checking in");
+                format!("Yielding to human: {}", msg)
+            }
             _ if self.is_builtin(name) => self.execute_builtin(name, input).await,
             _ => self.execute_dynamic(name, input).await,
         }
@@ -161,6 +167,25 @@ impl ToolRegistry {
         }
     }
 
+    /// Read the screen from a pane and return just the text lines.
+    async fn read_screen(&self, url: &str) -> String {
+        match self.client.get(url).send().await {
+            Ok(resp) => {
+                let text = resp.text().await.unwrap_or_default();
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                    let lines: Vec<&str> = json["lines"]
+                        .as_array()
+                        .map(|arr| arr.iter().filter_map(|l| l["text"].as_str()).collect())
+                        .unwrap_or_default();
+                    lines.join("\n")
+                } else {
+                    text
+                }
+            }
+            Err(e) => format!("Screen read error: {}", e),
+        }
+    }
+
     /// Execute a built-in tool by calling the sidecar HTTP API.
     async fn execute_builtin(&self, name: &str, input: &serde_json::Value) -> String {
         let base = format!("http://localhost:{}", self.http_port);
@@ -187,12 +212,29 @@ impl ToolRegistry {
         let result = match name {
             "terminal_keys" => {
                 let keys = input["keys"].as_str().unwrap_or("");
-                let keys = keys.replace("\\n", "\r").replace("\\t", "\t");
-                self.client
+                let keys = unescape_keys(keys);
+                let _ = self.client
                     .post(build_target_url("/api/type"))
                     .body(keys)
                     .send()
-                    .await
+                    .await;
+                // Return the screen so the agent sees what happened
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                return self.read_screen(&build_target_url("/api/screen")).await;
+            }
+            "terminal_run" => {
+                let command = input["command"].as_str().unwrap_or("");
+                let wait_ms = input["wait_ms"].as_u64().unwrap_or(2000);
+                // Strip trailing returns/newlines agents love to add
+                let command = command.trim_end_matches('\n').trim_end_matches('\r');
+                let keys = format!("{}\r\n", command);
+                let _ = self.client
+                    .post(build_target_url("/api/type"))
+                    .body(keys)
+                    .send()
+                    .await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
+                return self.read_screen(&build_target_url("/api/screen")).await;
             }
             "terminal_split" => {
                 let dir = input["direction"].as_str().unwrap_or("vertical");
@@ -383,6 +425,65 @@ fn tool_create_def() -> ToolDef {
     }
 }
 
+/// Unescape key sequences: \n, \t, \e, ctrl+X, etc.
+fn unescape_keys(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\r'),
+                Some('r') => out.push('\r'),
+                Some('t') => out.push('\t'),
+                Some('e') => out.push('\x1b'),
+                Some('\\') => out.push('\\'),
+                Some('x') => {
+                    let hi = chars.next().unwrap_or('0');
+                    let lo = chars.next().unwrap_or('0');
+                    let hex: String = [hi, lo].iter().collect();
+                    if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                        out.push(byte as char);
+                    }
+                }
+                Some(other) => { out.push('\\'); out.push(other); }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    // Handle "ctrl+X" patterns — convert to control characters
+    let ctrl_re_lower = "ctrl+";
+    let ctrl_re_upper = "Ctrl+";
+    let mut result = out.clone();
+    for prefix in [ctrl_re_lower, ctrl_re_upper] {
+        while let Some(pos) = result.find(prefix) {
+            if pos + prefix.len() < result.len() {
+                let ch = result.as_bytes()[pos + prefix.len()];
+                let ctrl_char = (ch & 0x1f) as char; // ctrl+a = 0x01, ctrl+c = 0x03, etc.
+                result = format!("{}{}{}", &result[..pos], ctrl_char, &result[pos + prefix.len() + 1..]);
+            } else {
+                break;
+            }
+        }
+    }
+    result
+}
+
+fn watercooler_def() -> ToolDef {
+    ToolDef {
+        name: "watercooler".into(),
+        description: "Pause and check in with the human. Call this when you've done several actions and want to sync up, share progress, or ask for direction before continuing. The conversation yields back to the human — they reply and you continue.".into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "message": { "type": "string", "description": "Brief status update — what you've done and what you're thinking next" }
+            },
+            "required": ["message"]
+        }),
+    }
+}
+
 fn builtin_tool_defs() -> Vec<ToolDef> {
     let defs: Vec<serde_json::Value> = serde_json::from_value(serde_json::json!([
         {
@@ -397,6 +498,21 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                     "pane": { "type": "string", "description": "Pane label e.g. \"a\" (optional)" }
                 },
                 "required": ["keys"]
+            }
+        },
+        {
+            "name": "terminal_run",
+            "description": "Run a shell command in a terminal pane. Sends the command + Enter, waits for output, and returns the screen content so you can see what happened.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Shell command to run" },
+                    "wait_ms": { "type": "integer", "description": "Time to wait for output in ms (default 2000)" },
+                    "window": { "type": "integer" },
+                    "tab": { "type": "string" },
+                    "pane": { "type": "string" }
+                },
+                "required": ["command"]
             }
         },
         {

@@ -159,30 +159,86 @@ function buildHyperiaHtml(): string {
   .msg.assistant.streaming {
     border-color: #c839c530;
   }
+
+  /* Spirit tech — characters surface with physics */
+  .spirit-char {
+    display: inline;
+    opacity: 0;
+    animation: surface 0.6s cubic-bezier(0.16, 1.2, 0.3, 1) forwards;
+    text-shadow: 0 0 0 transparent;
+  }
+  .spirit-char.space { width: 0.25em; }
+  @keyframes surface {
+    0% {
+      opacity: 0;
+      transform: translateY(8px) scale(0.92);
+      filter: blur(2px);
+      text-shadow: 0 0 12px rgba(200, 57, 197, 0.6);
+    }
+    35% {
+      opacity: 1;
+      transform: translateY(-2px) scale(1.01);
+      filter: blur(0);
+      text-shadow: 0 0 8px rgba(200, 57, 197, 0.4);
+    }
+    60% {
+      transform: translateY(0.5px) scale(1.0);
+      text-shadow: 0 0 4px rgba(200, 57, 197, 0.15);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      filter: blur(0);
+      text-shadow: 0 0 0 transparent;
+    }
+  }
   .msg.tool {
-    background: #0a0a14;
-    border: 1px solid #1a1a2e;
+    background: transparent;
+    border: none;
     align-self: flex-start;
-    font-size: 11px;
-    color: #888;
+    font-size: 12px;
+    color: #666;
     max-width: 95%;
     cursor: pointer;
+    padding: 3px 8px;
+    border-radius: 6px;
+    transition: background 0.2s;
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
   }
-  .msg.tool .tool-header {
-    color: #c839c5;
-    font-weight: 500;
-    font-size: 12px;
-    margin-bottom: 2px;
+  .msg.tool:hover { background: #12121e; }
+  .msg.tool .tool-emoji {
+    font-size: 14px;
+    flex-shrink: 0;
+    line-height: 1.4;
+  }
+  .msg.tool .tool-emoji.running {
+    animation: pulse-emoji 0.8s ease-in-out infinite;
+  }
+  @keyframes pulse-emoji {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(1.2); filter: brightness(1.5); }
+  }
+  .msg.tool .tool-body {
+    flex: 1;
+    min-width: 0;
+  }
+  .msg.tool .tool-summary {
+    color: #555;
+    font-size: 11px;
   }
   .msg.tool .tool-output {
     max-height: 0;
     overflow: hidden;
     transition: max-height 0.3s ease;
     font-family: 'Cascadia Code', Consolas, monospace;
-    font-size: 11px;
+    font-size: 10px;
     white-space: pre-wrap;
-    color: #666;
+    color: #444;
     margin-top: 4px;
+    padding-left: 2px;
+    border-left: 2px solid #1a1a2e;
   }
   .msg.tool.expanded .tool-output {
     max-height: 300px;
@@ -193,6 +249,16 @@ function buildHyperiaHtml(): string {
     border: 1px solid #c51e1440;
     align-self: flex-start;
     color: #e08080;
+  }
+  .msg.watercooler {
+    background: #0a0a14;
+    border: 1px solid #c839c520;
+    align-self: center;
+    color: #666;
+    font-size: 11px;
+    font-style: italic;
+    max-width: 95%;
+    text-align: center;
   }
 
   .status-indicator {
@@ -251,7 +317,9 @@ function buildHyperiaHtml(): string {
     <span class="titlebar-btn close-btn" onclick="window.close()" title="Close">&times;</span>
   </div>
 
-  <div class="chat" id="chat"></div>
+  <div class="chat" id="chat">
+    <div class="msg assistant">I woke up inside a terminal emulator and somehow ended up with root access and opinions. I'm Hyperia — part ghost, part systems engineer, all attitude. I can see your panes, run your commands, and build tools I don't even have yet. What are we breaking today?</div>
+  </div>
 
   <div class="input-area">
     <input type="text" id="input" placeholder="Ask Hyperia anything..."
@@ -275,11 +343,39 @@ function buildHyperiaHtml(): string {
     return div;
   }
 
+  const TOOL_EMOJIS = {
+    terminal_keys: '\uD83D\uDCBB', terminal_run: '\uD83D\uDCBB', terminal_screen: '\uD83D\uDCBB', terminal_new_tab: '\uD83D\uDCBB',
+    terminal_status: '\uD83D\uDCBB', terminal_split: '\uD83D\uDCBB', terminal_focus: '\uD83D\uDCBB',
+    terminal_close: '\uD83D\uDCBB', terminal_rename: '\uD83D\uDCBB', terminal_new_tab: '\uD83D\uDCBB',
+    file_read: '\uD83D\uDCC4', file_write: '\uD83D\uDCC4',
+    web_fetch: '\uD83C\uDF10',
+    tool_search: '\uD83D\uDD0D', tool_create: '\uD83D\uDD27',
+    watercooler: '\u2615',
+  };
+  const DEFAULT_EMOJI = '\u2699\uFE0F';
+
+  function getToolEmoji(name) {
+    return TOOL_EMOJIS[name] || DEFAULT_EMOJI;
+  }
+
+  function summarizeOutput(output) {
+    if (!output) return '';
+    const lines = output.split('\\n').filter(l => l.trim());
+    if (lines.length === 0) return '';
+    if (lines.length === 1 && lines[0].length < 60) return lines[0];
+    return lines[0].substring(0, 50) + (lines.length > 1 ? ' +' + (lines.length - 1) + ' lines' : '');
+  }
+
   function addToolMsg(name, id) {
     const div = document.createElement('div');
     div.className = 'msg tool';
     div.id = 'tool-' + id;
-    div.innerHTML = '<div class="tool-header">' + escapeHtml(name) + '</div><div class="tool-output"></div>';
+    const emoji = getToolEmoji(name);
+    div.innerHTML = '<span class="tool-emoji running">' + emoji + '</span>'
+      + '<div class="tool-body">'
+      + '<span class="tool-summary">' + escapeHtml(name) + '</span>'
+      + '<div class="tool-output"></div>'
+      + '</div>';
     div.onclick = () => div.classList.toggle('expanded');
     chat.appendChild(div);
     chat.scrollTop = chat.scrollHeight;
@@ -288,21 +384,59 @@ function buildHyperiaHtml(): string {
 
   function setToolOutput(id, output) {
     const div = document.getElementById('tool-' + id);
-    if (div) {
-      const outputEl = div.querySelector('.tool-output');
-      if (outputEl) outputEl.textContent = output;
+    if (!div) return;
+    // Stop the pulse
+    const emojiEl = div.querySelector('.tool-emoji');
+    if (emojiEl) emojiEl.classList.remove('running');
+    // Set summary
+    const summaryEl = div.querySelector('.tool-summary');
+    if (summaryEl) {
+      const short = summarizeOutput(output);
+      summaryEl.textContent = short || summaryEl.textContent;
     }
+    // Set expandable output
+    const outputEl = div.querySelector('.tool-output');
+    if (outputEl) outputEl.textContent = output;
   }
 
   function escapeHtml(s) {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
+  let spiritIndex = 0; // running char index for stagger timing
+
   function setStreaming(val) {
     streaming = val;
     input.disabled = val;
     sendBtn.disabled = val;
-    if (!val) input.focus();
+    if (!val) {
+      input.focus();
+      spiritIndex = 0;
+    }
+  }
+
+  // Render text as spirit characters — each char surfaces with physics
+  function appendSpirit(container, text) {
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === '\\n') {
+        container.appendChild(document.createElement('br'));
+        continue;
+      }
+      const span = document.createElement('span');
+      span.className = 'spirit-char';
+      span.textContent = ch;
+      // Stagger: each char arrives slightly after the previous
+      // Vary the delay with a slight jitter for organic feel
+      const baseDelay = spiritIndex * 12; // ms between chars
+      const jitter = (Math.sin(spiritIndex * 0.7) * 8); // subtle wave
+      span.style.animationDelay = Math.max(0, baseDelay + jitter) + 'ms';
+      // Vary the duration slightly — some chars surface faster
+      const duration = 400 + Math.sin(spiritIndex * 1.3) * 100;
+      span.style.animationDuration = duration + 'ms';
+      container.appendChild(span);
+      spiritIndex++;
+    }
   }
 
   async function send() {
@@ -360,10 +494,13 @@ function buildHyperiaHtml(): string {
             switch (event.type) {
               case 'text_delta':
                 if (!assistantDiv) {
-                  assistantDiv = addMsg('', 'assistant streaming');
+                  assistantDiv = document.createElement('div');
+                  assistantDiv.className = 'msg assistant streaming';
+                  chat.appendChild(assistantDiv);
+                  spiritIndex = 0;
                 }
+                appendSpirit(assistantDiv, event.text);
                 assistantText += event.text;
-                assistantDiv.textContent = assistantText;
                 chat.scrollTop = chat.scrollHeight;
                 break;
 
@@ -379,6 +516,16 @@ function buildHyperiaHtml(): string {
 
               case 'tool_result':
                 setToolOutput(event.id, event.output);
+                break;
+
+              case 'watercooler':
+                if (assistantDiv) {
+                  assistantDiv.classList.remove('streaming');
+                  assistantDiv = null;
+                  assistantText = '';
+                }
+                addMsg('~ ' + event.summary + ' — checking in', 'watercooler');
+                setStreaming(false);
                 break;
 
               case 'done':

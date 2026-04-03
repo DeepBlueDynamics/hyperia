@@ -10,6 +10,8 @@ pub enum GhostEvent {
     ToolStart { name: String, id: String },
     #[serde(rename = "tool_result")]
     ToolResult { id: String, output: String },
+    #[serde(rename = "watercooler")]
+    Watercooler { summary: String, tool_calls: usize },
     #[serde(rename = "done")]
     Done { stop_reason: String, turns: usize },
     #[serde(rename = "error")]
