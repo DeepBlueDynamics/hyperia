@@ -8,6 +8,7 @@ export const SESSION_USER_EXIT = 'SESSION_USER_EXIT';
 export const SESSION_SET_ACTIVE = 'SESSION_SET_ACTIVE';
 export const SESSION_CLEAR_ACTIVE = 'SESSION_CLEAR_ACTIVE';
 export const SESSION_USER_DATA = 'SESSION_USER_DATA';
+export const SESSION_SET_TAB_NAME = 'SESSION_SET_TAB_NAME';
 export const SESSION_SET_XTERM_TITLE = 'SESSION_SET_XTERM_TITLE';
 export const SESSION_SET_CWD = 'SESSION_SET_CWD';
 export const SESSION_SEARCH = 'SESSION_SEARCH';
@@ -63,6 +64,11 @@ export interface SessionClearActiveAction {
 export interface SessionUserDataAction {
   type: typeof SESSION_USER_DATA;
 }
+export interface SessionSetTabNameAction {
+  type: typeof SESSION_SET_TAB_NAME;
+  uid: string;
+  tabName: string;
+}
 export interface SessionSetXtermTitleAction {
   type: typeof SESSION_SET_XTERM_TITLE;
   uid: string;
@@ -95,6 +101,7 @@ export type SessionActions =
   | SessionSetActiveAction
   | SessionClearActiveAction
   | SessionUserDataAction
+  | SessionSetTabNameAction
   | SessionSetXtermTitleAction
   | SessionSetCwdAction
   | SessionSearchAction

@@ -28,6 +28,7 @@ pub struct SessionInfo {
     pub split_label: String,
     pub tab_order: u32,
     pub tab_active: bool,
+    pub pane_active: bool,
     pub screen: ScreenBuffer,
 }
 
@@ -49,6 +50,8 @@ struct BridgeInner {
     seq: AtomicU64,
     /// Registered PTY sessions (uid → info)
     sessions: Mutex<HashMap<String, SessionInfo>>,
+    /// Last focused Hyperia window id.
+    focused_window_id: Mutex<Option<u32>>,
 }
 
 impl Bridge {
@@ -59,6 +62,7 @@ impl Bridge {
                 pending: Mutex::new(HashMap::new()),
                 seq: AtomicU64::new(1),
                 sessions: Mutex::new(HashMap::new()),
+                focused_window_id: Mutex::new(None),
             }),
         }
     }
@@ -135,6 +139,10 @@ impl Bridge {
         }
     }
 
+    pub async fn session_count(&self) -> usize {
+        self.inner.sessions.lock().await.len()
+    }
+
     /// Resolve a window/tab/pane label address to its session uid.
     pub async fn resolve_pane_uid(
         &self,
@@ -142,6 +150,7 @@ impl Bridge {
         tab: Option<&str>,
         pane: Option<&str>,
     ) -> Option<String> {
+        let focused_window_id = *self.inner.focused_window_id.lock().await;
         let sessions = self.inner.sessions.lock().await;
 
         let mut windows_map: std::collections::BTreeMap<u32, Vec<(&String, &SessionInfo)>> =
@@ -151,9 +160,17 @@ impl Bridge {
         }
 
         let (_, win_sessions) = if let Some(window_id) = window {
-            windows_map.into_iter().find(|(id, _)| *id == window_id)?
+            windows_map.iter().find(|(id, _)| **id == window_id).map(|(id, s)| (*id, s.clone()))?
         } else {
-            windows_map.into_iter().next()?
+            if let Some(focused_id) = focused_window_id {
+                windows_map
+                    .iter()
+                    .find(|(id, _)| **id == focused_id)
+                    .map(|(id, s)| (*id, s.clone()))
+                    .or_else(|| windows_map.iter().next().map(|(id, s)| (*id, s.clone())))?
+            } else {
+                windows_map.iter().next().map(|(id, s)| (*id, s.clone()))?
+            }
         };
 
         let mut tabs_map: std::collections::BTreeMap<String, Vec<(&String, &SessionInfo)>> =
@@ -192,7 +209,11 @@ impl Bridge {
                 .find(|(_, info)| info.split_label == label)
                 .map(|(uid, _)| uid.clone())
         } else {
-            sorted_panes.first().map(|(uid, _)| (*uid).clone())
+            sorted_panes
+                .iter()
+                .find(|(_, info)| info.pane_active)
+                .map(|(uid, _)| (*uid).clone())
+                .or_else(|| sorted_panes.first().map(|(uid, _)| (*uid).clone()))
         }
     }
 
@@ -203,6 +224,7 @@ impl Bridge {
 
     /// Get status of all registered sessions, grouped by window and tab.
     pub async fn get_status(&self) -> serde_json::Value {
+        let focused_window_id = *self.inner.focused_window_id.lock().await;
         let sessions = self.inner.sessions.lock().await;
 
         // Group sessions by window_id
@@ -254,6 +276,7 @@ impl Bridge {
                             "cols": info.cols,
                             "rows": info.rows,
                             "pid": info.pid,
+                            "active": info.pane_active,
                         })
                     })
                     .collect();
@@ -266,8 +289,7 @@ impl Bridge {
                 }));
             }
 
-            // First window is focused
-            let focused = windows.is_empty();
+            let focused = focused_window_id.map(|id| id == *win_id).unwrap_or_else(|| windows.is_empty());
             windows.push(serde_json::json!({
                 "id": win_id,
                 "focused": focused,
@@ -304,7 +326,12 @@ impl Bridge {
                 let split_label = msg["splitLabel"].as_str().unwrap_or("").to_string();
                 let tab_order = msg["tabOrder"].as_u64().unwrap_or(0) as u32;
                 let tab_active = msg["tabActive"].as_bool().unwrap_or(false);
+                let pane_active = msg["paneActive"].as_bool().unwrap_or(false);
                 tracing::info!("Session registered: {uid} ({tab_name}) {cols}x{rows} pid={pid} tab={root_tab_uid} win={window_id}");
+                let mut focused_window_id = self.inner.focused_window_id.lock().await;
+                if focused_window_id.is_none() {
+                    *focused_window_id = Some(window_id);
+                }
                 self.inner.sessions.lock().await.insert(
                     uid,
                     SessionInfo {
@@ -319,6 +346,7 @@ impl Bridge {
                         split_label,
                         tab_order,
                         tab_active,
+                        pane_active,
                         screen: ScreenBuffer::new(rows, cols, 1000),
                     },
                 );
@@ -363,6 +391,25 @@ impl Bridge {
                     info.tab_order = tab_order;
                     info.tab_active = tab_active;
                 }
+            }
+
+            "SessionActive" => {
+                let uid = msg["uid"].as_str().unwrap_or("");
+                let window_id = msg["windowId"].as_u64().unwrap_or(0) as u32;
+                let mut sessions = self.inner.sessions.lock().await;
+                for (_sid, info) in sessions.iter_mut() {
+                    if info.window_id == window_id {
+                        info.pane_active = false;
+                    }
+                }
+                if let Some(info) = sessions.get_mut(uid) {
+                    info.pane_active = true;
+                }
+            }
+
+            "WindowFocus" => {
+                let window_id = msg["windowId"].as_u64().unwrap_or(0) as u32;
+                *self.inner.focused_window_id.lock().await = Some(window_id);
             }
 
             "SessionData" => {
@@ -506,4 +553,66 @@ async fn handle_socket(socket: WebSocket, bridge: Bridge) {
     // Cleanup
     writer.abort();
     bridge.on_disconnect().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session_info(window_id: u32, root_tab_uid: &str, split_label: &str, tab_active: bool, pane_active: bool) -> SessionInfo {
+        SessionInfo {
+            name: "shell".into(),
+            tab_name: "tab".into(),
+            description: String::new(),
+            rows: 24,
+            cols: 80,
+            pid: 1,
+            root_tab_uid: root_tab_uid.into(),
+            window_id,
+            split_label: split_label.into(),
+            tab_order: 0,
+            tab_active,
+            pane_active,
+            screen: ScreenBuffer::new(24, 80, 1000),
+        }
+    }
+
+    #[test]
+    fn resolve_pane_prefers_focused_window_and_active_pane() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let bridge = Bridge::new();
+            {
+                let mut sessions = bridge.inner.sessions.lock().await;
+                sessions.insert("win0-a".into(), session_info(10, "tab-0", "a", true, false));
+                sessions.insert("win0-b".into(), session_info(10, "tab-0", "b", true, true));
+                sessions.insert("win1-a".into(), session_info(20, "tab-1", "a", true, true));
+            }
+            *bridge.inner.focused_window_id.lock().await = Some(10);
+
+            let resolved = bridge.resolve_pane_uid(None, None, None).await;
+            assert_eq!(resolved.as_deref(), Some("win0-b"));
+        });
+    }
+
+    #[test]
+    fn status_marks_real_focused_window_and_active_pane() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let bridge = Bridge::new();
+            {
+                let mut sessions = bridge.inner.sessions.lock().await;
+                sessions.insert("win0-a".into(), session_info(10, "tab-0", "a", true, true));
+                sessions.insert("win1-a".into(), session_info(20, "tab-1", "a", true, true));
+            }
+            *bridge.inner.focused_window_id.lock().await = Some(20);
+
+            let status = bridge.get_status().await;
+            let windows = status["windows"].as_array().unwrap();
+            let focused_window = windows.iter().find(|w| w["focused"].as_bool() == Some(true)).unwrap();
+            assert_eq!(focused_window["id"].as_u64(), Some(20));
+            let panes = focused_window["tabs"][0]["panes"].as_array().unwrap();
+            assert_eq!(panes[0]["active"].as_bool(), Some(true));
+        });
+    }
 }

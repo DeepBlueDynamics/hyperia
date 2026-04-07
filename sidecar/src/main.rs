@@ -64,7 +64,13 @@ async fn get_screen(State(state): State<AppState>, Query(addr): Query<PaneAddres
         .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
         .await
     else {
-        return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into());
+        let session_count = state.bridge.session_count().await;
+        tracing::warn!("get_screen 404: window={:?} tab={:?} pane={:?} (sessions={})",
+            addr.window, addr.tab, addr.pane, session_count);
+        return (StatusCode::NOT_FOUND, format!(
+            "No pane at that address (window={:?} tab={:?} pane={:?}, {} sessions registered)",
+            addr.window, addr.tab, addr.pane, session_count
+        ));
     };
     (StatusCode::OK, state.bridge.get_screen_text_by_uid(&uid).await)
 }
@@ -152,8 +158,6 @@ async fn post_type(
     if body.is_empty() {
         return (StatusCode::BAD_REQUEST, "Empty body".into());
     }
-    // Don't unescape here — callers send raw bytes.
-    // MCP terminal_keys handles its own unescaping before calling this endpoint.
     let keys = body;
     let uid = match state
         .bridge
@@ -161,7 +165,15 @@ async fn post_type(
         .await
     {
         Some(u) => u,
-        None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
+        None => {
+            let session_count = state.bridge.session_count().await;
+            tracing::warn!("post_type 404: window={:?} tab={:?} pane={:?} (sessions={})",
+                addr.window, addr.tab, addr.pane, session_count);
+            return (StatusCode::NOT_FOUND, format!(
+                "No pane at that address (window={:?} tab={:?} pane={:?}, {} sessions registered)",
+                addr.window, addr.tab, addr.pane, session_count
+            ));
+        }
     };
     let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys});
     match state.bridge.send_command(cmd).await {
@@ -414,6 +426,9 @@ async fn main() -> anyhow::Result<()> {
     let ghost_routes = axum::Router::new()
         .route("/api/ghost/chat", axum::routing::post(ghost::api::ghost_chat))
         .route("/api/ghost/status", axum::routing::get(ghost::api::ghost_status))
+        .route("/api/ghost/history", axum::routing::get(ghost::api::ghost_history))
+        .route("/api/ghost/memory", axum::routing::get(ghost::api::ghost_memory))
+        .route("/api/ghost/stop", axum::routing::post(ghost::api::ghost_stop))
         .route("/api/ghost/reset", axum::routing::post(ghost::api::ghost_reset))
         .with_state(ghost_state);
 

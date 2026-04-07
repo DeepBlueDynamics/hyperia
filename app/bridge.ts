@@ -41,8 +41,10 @@ interface TrackedSession {
   splitLabel: string;
   tabOrder: number;
   tabActive: boolean;
+  paneActive: boolean;
 }
 const trackedSessions = new Map<string, TrackedSession>();
+let focusedWindowId: number | null = null;
 
 // Agent input queue: per-session deferral when user is active
 const lastUserActivity = new Map<string, number>();
@@ -152,7 +154,8 @@ function sendSessionRegister(uid: string, tracked: TrackedSession) {
     windowId: tracked.windowId,
     splitLabel: tracked.splitLabel,
     tabOrder: tracked.tabOrder,
-    tabActive: tracked.tabActive
+    tabActive: tracked.tabActive,
+    paneActive: tracked.paneActive
   });
 }
 
@@ -245,6 +248,12 @@ function getFocusedHyperiaWindow(): BrowserWindow | null {
   return (app as any).getLastFocusedWindow?.() || null;
 }
 
+function getHyperiaWindowById(windowId: number): BrowserWindow | null {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call
+  const windows = Array.from((app as any).getWindows?.() || []) as BrowserWindow[];
+  return windows.find((win) => win.id === windowId) || null;
+}
+
 // ---------------------------------------------------------------------------
 // Downstream command handling (sidecar → Electron)
 // ---------------------------------------------------------------------------
@@ -299,21 +308,14 @@ function handleCommand(msg: Record<string, unknown>) {
     }
 
     case 'Focus': {
-      const win = getFocusedHyperiaWindow();
-      if (win) {
-        // Use session data send to trigger focus via the renderer's Redux store.
-        // The renderer listens for 'session data send' with a uid to focus that pane.
-        const targetUid = msg.uid as string | undefined;
-        if (targetUid) {
-          win.rpc.emit('session data send', {
-            uid: targetUid,
-            data: '',
-            escaped: false
-          });
-        }
+      const targetUid = msg.uid as string | undefined;
+      const tracked = targetUid ? trackedSessions.get(targetUid) : undefined;
+      const win = tracked ? getHyperiaWindowById(tracked.windowId) : null;
+      if (win && targetUid) {
+        win.rpc.emit('session set active', {uid: targetUid});
         sendResult(seq, 'ok');
       } else {
-        sendResult(seq, 'No focused window');
+        sendResult(seq, 'No matching pane/window');
       }
       break;
     }
@@ -383,8 +385,8 @@ function handleCommand(msg: Record<string, unknown>) {
             send({type: 'SessionTabName', uid, tabName: name});
           }
         }
-        // Tell the renderer to update the tab name
-        const win = getFocusedHyperiaWindow();
+        // Tell the owning renderer to update the tab name immediately.
+        const win = getHyperiaWindowById(tracked.windowId);
         if (win) {
           win.rpc.emit('session rename', {uid: sessionUid, name});
         }
@@ -503,7 +505,8 @@ export function registerSession(
     windowId,
     splitLabel: '',
     tabOrder: 0,
-    tabActive: false
+    tabActive: false,
+    paneActive: !Array.from(trackedSessions.values()).some((existing) => existing.windowId === windowId)
   };
   trackedSessions.set(uid, tracked);
 
@@ -554,6 +557,26 @@ export function updateSessionTabName(uid: string, tabName: string) {
       send({type: 'SessionTabName', uid: sessionUid, tabName});
     }
   }
+}
+
+export function updateSessionActive(uid: string, windowId: number) {
+  const tracked = trackedSessions.get(uid);
+  if (!tracked) return;
+
+  for (const [, session] of trackedSessions) {
+    if (session.windowId === windowId) {
+      session.paneActive = false;
+    }
+  }
+
+  tracked.paneActive = true;
+  focusedWindowId = windowId;
+  send({type: 'SessionActive', uid, windowId});
+}
+
+export function updateWindowFocus(windowId: number) {
+  focusedWindowId = windowId;
+  send({type: 'WindowFocus', windowId});
 }
 
 /** Update the description for a session. */

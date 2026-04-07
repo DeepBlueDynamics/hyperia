@@ -258,13 +258,13 @@ function draw() {
 
 // --- Timeline ---
 const START = performance.now();
-const TITLE_FADE_IN = 1500;   // ms - title starts fading in
-const TITLE_FULL = 2500;      // ms - title fully visible
+const TITLE_FADE_IN = 600;    // ms - title starts fading in
+const TITLE_FULL = 1200;      // ms - title fully visible
 
 let signaled = false;
 let readyToClose = false;
 let fadeStartTime = 0;
-const FADE_DURATION = 1000;   // ms
+const FADE_DURATION = 400;    // ms - fast fade out
 
 function loop() {
   const elapsed = performance.now() - START;

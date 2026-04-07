@@ -95,7 +95,7 @@ rpc.on('session exit', ({uid}) => {
 });
 
 rpc.on('session rename', ({uid, name}: {uid: string; name: string}) => {
-  store_.dispatch(sessionActions.setSessionDescription(uid, name) as any);
+  store_.dispatch(sessionActions.setSessionTabName(uid, name, false) as any);
 });
 
 rpc.on('termgroup close req', () => {

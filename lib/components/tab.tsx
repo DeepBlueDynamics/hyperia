@@ -89,7 +89,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
 
   const {isActive, isFirst, isLast, borderColor, hasActivity, hasBell, agentStatus, tabName, description} = props;
 
-  const displayText = description || tabName || props.text;
+  const displayText = tabName || description || props.text;
 
   // Agent dot color
   const agentDotColor = agentStatus?.working

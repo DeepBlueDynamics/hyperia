@@ -243,14 +243,11 @@ function _showSplash(
 
     void splash.loadFile(resolve(isDev ? __dirname : app.getAppPath(), 'splash.html'));
 
-    // Signal splash when main window is ready
+    // Signal splash as soon as main window content loads
     mainWin.webContents.once('did-finish-load', () => {
-      // Add a small delay to ensure everything is rendered
-      setTimeout(() => {
-        if (!splash.isDestroyed()) {
-          splash.webContents.send('app-ready');
-        }
-      }, 500);
+      if (!splash.isDestroyed()) {
+        splash.webContents.send('app-ready');
+      }
     });
 
     let resolved = false;
@@ -260,7 +257,7 @@ function _showSplash(
       if (!splash.isDestroyed()) {
         let opacity = 1;
         const fadeInterval = setInterval(() => {
-          opacity -= 0.05;
+          opacity -= 0.15;
           if (opacity <= 0 || splash.isDestroyed()) {
             clearInterval(fadeInterval);
             if (!splash.isDestroyed()) {
@@ -279,8 +276,8 @@ function _showSplash(
     };
 
     ipcMain.once('splash-done', done);
-    // Failsafe: close after 30 seconds if something goes wrong
-    setTimeout(done, 30000);
+    // Failsafe: close after 8 seconds max
+    setTimeout(done, 8000);
   });
 }
 

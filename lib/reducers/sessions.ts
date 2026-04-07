@@ -8,6 +8,7 @@ import {
   SESSION_PTY_DATA,
   SESSION_SET_ACTIVE,
   SESSION_CLEAR_ACTIVE,
+  SESSION_SET_TAB_NAME,
   SESSION_RESIZE,
   SESSION_SET_XTERM_TITLE,
   SESSION_SET_CWD,
@@ -141,6 +142,9 @@ const reducer: ISessionReducer = (state = initialState, action) => {
       return state
         .setIn(['sessions', action.uid, 'description'], action.description)
         .setIn(['sessions', action.uid, 'tabName'], action.tabName);
+
+    case SESSION_SET_TAB_NAME:
+      return state.setIn(['sessions', action.uid, 'tabName'], action.tabName);
 
     case SESSION_RESIZE:
       return state.setIn(

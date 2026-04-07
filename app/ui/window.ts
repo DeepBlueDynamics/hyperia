@@ -24,6 +24,8 @@ import {
   updateSessionDescription,
   updateSessionTabName,
   updateSessionLayout,
+  updateSessionActive,
+  updateWindowFocus,
   getSessionRootTab,
   forceRemoveSession
 } from '../bridge';
@@ -327,6 +329,9 @@ export function newWindow(
       }
     }
   });
+  rpc.on('session set active', ({uid}: {uid: string}) => {
+    updateSessionActive(uid, window.id);
+  });
   rpc.on('session set description', ({uid, description}: {uid: string; description: string}) => {
     updateSessionDescription(uid, description);
   });
@@ -474,6 +479,7 @@ export function newWindow(
   // Works nicely even if a window is closed and removed.
   const updateFocusTime = () => {
     window.focusTime = process.uptime();
+    updateWindowFocus(window.id);
   };
 
   window.on('focus', () => {

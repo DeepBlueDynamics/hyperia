@@ -160,37 +160,9 @@ function buildHyperiaHtml(): string {
     border-color: #c839c530;
   }
 
-  /* Spirit tech — characters surface with physics */
-  .spirit-char {
-    display: inline;
-    opacity: 0;
-    animation: surface 0.6s cubic-bezier(0.16, 1.2, 0.3, 1) forwards;
-    text-shadow: 0 0 0 transparent;
-  }
-  .spirit-char.space { width: 0.25em; }
-  @keyframes surface {
-    0% {
-      opacity: 0;
-      transform: translateY(8px) scale(0.92);
-      filter: blur(2px);
-      text-shadow: 0 0 12px rgba(200, 57, 197, 0.6);
-    }
-    35% {
-      opacity: 1;
-      transform: translateY(-2px) scale(1.01);
-      filter: blur(0);
-      text-shadow: 0 0 8px rgba(200, 57, 197, 0.4);
-    }
-    60% {
-      transform: translateY(0.5px) scale(1.0);
-      text-shadow: 0 0 4px rgba(200, 57, 197, 0.15);
-    }
-    100% {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-      filter: blur(0);
-      text-shadow: 0 0 0 transparent;
-    }
+  .msg.assistant.streaming {
+    color: #d8d0f0;
+    text-shadow: 0 0 6px rgba(200, 57, 197, 0.25);
   }
   .msg.tool {
     background: transparent;
@@ -309,6 +281,21 @@ function buildHyperiaHtml(): string {
     box-shadow: 0 0 12px rgba(200,57,197,0.2);
   }
   .send-btn:disabled { opacity: 0.4; cursor: default; }
+  .stop-btn {
+    background: #c51e1420;
+    border: 1px solid #c51e1440;
+    border-radius: 8px;
+    color: #c51e14;
+    padding: 0 16px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+    display: none;
+  }
+  .stop-btn:hover {
+    background: #c51e1440;
+    box-shadow: 0 0 12px rgba(197,30,20,0.2);
+  }
 </style>
 </head>
 <body>
@@ -317,14 +304,13 @@ function buildHyperiaHtml(): string {
     <span class="titlebar-btn close-btn" onclick="window.close()" title="Close">&times;</span>
   </div>
 
-  <div class="chat" id="chat">
-    <div class="msg assistant">I woke up inside a terminal emulator and somehow ended up with root access and opinions. I'm Hyperia — part ghost, part systems engineer, all attitude. I can see your panes, run your commands, and build tools I don't even have yet. What are we breaking today?</div>
-  </div>
+  <div class="chat" id="chat"></div>
 
-  <div class="input-area">
+  <div class="input-area" id="inputArea">
     <input type="text" id="input" placeholder="Ask Hyperia anything..."
            onkeydown="if(event.key==='Enter'&&!event.shiftKey)send()" autofocus>
     <button class="send-btn" id="sendBtn" onclick="send()">Send</button>
+    <button class="stop-btn" id="stopBtn" onclick="stopAgent()">Stop</button>
   </div>
 
 <script>
@@ -333,6 +319,29 @@ function buildHyperiaHtml(): string {
   const input = document.getElementById('input');
   const sendBtn = document.getElementById('sendBtn');
   let streaming = false;
+
+  // Auto-activate on load
+  (async function() {
+    // Try to restore previous chat
+    try {
+      const resp = await fetch(SIDECAR_URL + '/api/ghost/history');
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.messages && data.messages.length > 0) {
+          for (const msg of data.messages) {
+            addMsg(msg.content, msg.role);
+          }
+          chat.scrollTop = chat.scrollHeight;
+          input.focus();
+          return;
+        }
+      }
+    } catch (e) { /* no history */ }
+
+    // No history — show intro
+    addMsg("I woke up inside a terminal emulator and somehow ended up with root access and opinions. I'm Hyperia \u2014 part ghost, part systems engineer, all attitude. I can see your panes, run your commands, and build tools I don't even have yet. What are we breaking today?", 'assistant');
+    input.focus();
+  })();
 
   function addMsg(content, type) {
     const div = document.createElement('div');
@@ -403,40 +412,20 @@ function buildHyperiaHtml(): string {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
-  let spiritIndex = 0; // running char index for stagger timing
+  const stopBtn = document.getElementById('stopBtn');
 
   function setStreaming(val) {
     streaming = val;
     input.disabled = val;
-    sendBtn.disabled = val;
-    if (!val) {
-      input.focus();
-      spiritIndex = 0;
-    }
+    sendBtn.style.display = val ? 'none' : '';
+    stopBtn.style.display = val ? '' : 'none';
+    if (!val) input.focus();
   }
 
-  // Render text as spirit characters — each char surfaces with physics
-  function appendSpirit(container, text) {
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-      if (ch === '\\n') {
-        container.appendChild(document.createElement('br'));
-        continue;
-      }
-      const span = document.createElement('span');
-      span.className = 'spirit-char';
-      span.textContent = ch;
-      // Stagger: each char arrives slightly after the previous
-      // Vary the delay with a slight jitter for organic feel
-      const baseDelay = spiritIndex * 12; // ms between chars
-      const jitter = (Math.sin(spiritIndex * 0.7) * 8); // subtle wave
-      span.style.animationDelay = Math.max(0, baseDelay + jitter) + 'ms';
-      // Vary the duration slightly — some chars surface faster
-      const duration = 400 + Math.sin(spiritIndex * 1.3) * 100;
-      span.style.animationDuration = duration + 'ms';
-      container.appendChild(span);
-      spiritIndex++;
-    }
+  async function stopAgent() {
+    try {
+      await fetch(SIDECAR_URL + '/api/ghost/stop', { method: 'POST' });
+    } catch (e) { /* ignore */ }
   }
 
   async function send() {
@@ -494,13 +483,10 @@ function buildHyperiaHtml(): string {
             switch (event.type) {
               case 'text_delta':
                 if (!assistantDiv) {
-                  assistantDiv = document.createElement('div');
-                  assistantDiv.className = 'msg assistant streaming';
-                  chat.appendChild(assistantDiv);
-                  spiritIndex = 0;
+                  assistantDiv = addMsg('', 'assistant streaming');
                 }
-                appendSpirit(assistantDiv, event.text);
                 assistantText += event.text;
+                assistantDiv.textContent = assistantText;
                 chat.scrollTop = chat.scrollHeight;
                 break;
 

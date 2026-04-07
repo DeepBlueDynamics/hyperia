@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Sticky</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    color: #222;
+    font-family: 'Cascadia Code', 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+  }
+  .titlebar {
+    height: 22px;
+    display: flex;
+    align-items: center;
+    padding: 0 4px 0 8px;
+    -webkit-app-region: drag;
+    flex-shrink: 0;
+    font-size: 10px;
+    user-select: none;
+    background: rgba(0,0,0,0.08);
+  }
+  .titlebar-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: bold;
+    opacity: 0.7;
+  }
+  .titlebar-btn {
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    cursor: pointer;
+    -webkit-app-region: no-drag;
+    font-size: 13px;
+    opacity: 0.7;
+    transition: opacity 0.15s, background 0.15s;
+    z-index: 100;
+    line-height: 1;
+  }
+  .titlebar-btn:hover { opacity: 1; }
+  .close-btn { color: #c00; font-weight: bold; }
+  .close-btn:hover { background: rgba(255, 0, 0, 0.3); }
+  .lines-btn:hover { background: rgba(0, 0, 0, 0.12); }
+
+  .content {
+    flex: 1;
+    overflow: hidden;
+    padding: 4px 6px 6px 8px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Single scrollbar via textarea only */
+  .note-text {
+    width: 100%;
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: 13px;
+    resize: none;
+    outline: none;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    tab-size: 2;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 4px;
+  }
+
+  /* Slim color-coded scrollbars */
+  .note-text::-webkit-scrollbar,
+  pre::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .note-text::-webkit-scrollbar-track,
+  pre::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .note-text::-webkit-scrollbar-thumb,
+  pre::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 3px;
+  }
+  .note-text::-webkit-scrollbar-thumb:hover,
+  pre::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.4);
+  }
+
+  pre {
+    margin: 0;
+    flex: 1;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.6;
+    tab-size: 4;
+    background: transparent !important;
+    color: inherit;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  code { background: transparent !important; }
+
+  .with-lines { counter-reset: line; }
+  .with-lines .line {
+    display: block;
+    counter-increment: line;
+  }
+  .with-lines .line::before {
+    content: counter(line);
+    display: inline-block;
+    width: 3em;
+    margin-right: 1em;
+    text-align: right;
+    opacity: 0.3;
+    font-size: 10px;
+    user-select: none;
+  }
+
+</style>
+</head>
+<body>
+  <div class="titlebar">
+    <span class="titlebar-text" id="titleText"></span>
+    <span class="titlebar-btn lines-btn" id="linesBtn" style="display:none" title="Toggle line numbers">#</span>
+    <span class="titlebar-btn close-btn" id="closeBtn" title="Close">&times;</span>
+  </div>
+  <div class="content" id="content"></div>
+
+<script>
+const { ipcRenderer, clipboard } = require('electron');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const params = new URLSearchParams(window.location.search);
+const noteId = params.get('id') || '';
+const filePath = params.get('file') || '';
+const nameParam = params.get('name') || '';
+
+const stickysDir = path.join(os.homedir(), '.hyperia', 'stickys');
+const notesJson = path.join(stickysDir, 'notes.json');
+
+const STICKY_COLORS = [
+  '#fff9c4', '#ffb6c1', '#c8e6c9', '#bbdefb',
+  '#f8bbd0', '#e1bee7', '#ffe0b2', '#f0e68c',
+  '#dda0dd', '#ff6347', '#ffd700', '#add8e6',
+  '#90ee90', '#ffa07a', '#e6e6fa', '#afeeee'
+];
+
+function readNotes() {
+  try { return JSON.parse(fs.readFileSync(notesJson, 'utf8')); }
+  catch { return []; }
+}
+function writeNotes(notes) {
+  try {
+    fs.mkdirSync(stickysDir, { recursive: true });
+    fs.writeFileSync(notesJson, JSON.stringify(notes, null, 2), 'utf8');
+  } catch (e) { console.error(e); }
+}
+function findNote(id) {
+  return readNotes().find(n => n.id === id);
+}
+function saveNote(note) {
+  const notes = readNotes();
+  const idx = notes.findIndex(n => n.id === note.id);
+  if (idx >= 0) notes[idx] = note;
+  else notes.push(note);
+  writeNotes(notes);
+}
+
+const titleText = document.getElementById('titleText');
+const content = document.getElementById('content');
+const closeBtn = document.getElementById('closeBtn');
+const linesBtn = document.getElementById('linesBtn');
+
+const saved = noteId ? findNote(noteId) : null;
+let bgColor = (saved && saved.color) || params.get('color') || '#fff9c4';
+let displayName = (saved && saved.name) || nameParam || noteId;
+
+document.body.style.background = bgColor;
+titleText.textContent = displayName;
+
+function setColor(color) {
+  bgColor = color;
+  document.body.style.background = color;
+  const note = findNote(noteId) || { id: noteId, name: displayName };
+  note.color = color;
+  note.saved_at = new Date().toISOString();
+  saveNote(note);
+  ipcRenderer.send('sticky-color', noteId, color);
+}
+
+// Native context menu — can extend beyond window bounds
+document.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  const textarea = document.getElementById('noteText');
+  const hasSelection = textarea && textarea.selectionStart !== textarea.selectionEnd;
+  ipcRenderer.send('sticky-context-menu', noteId, hasSelection);
+});
+
+// Handle actions dispatched from the native menu
+ipcRenderer.on('sticky-set-color', (_e, color) => {
+  setColor(color);
+});
+ipcRenderer.on('sticky-copy-all', () => {
+  const el = document.getElementById('noteText');
+  if (el) clipboard.writeText(el.value);
+});
+ipcRenderer.on('sticky-rename', () => {
+  const newName = prompt('Rename note:', displayName);
+  if (newName && newName.trim()) {
+    displayName = newName.trim();
+    titleText.textContent = displayName;
+    const note = findNote(noteId) || { id: noteId, color: bgColor };
+    note.name = displayName;
+    note.saved_at = new Date().toISOString();
+    saveNote(note);
+  }
+});
+ipcRenderer.on('sticky-delete', () => {
+  if (confirm('Delete this note?')) {
+    const notes = readNotes().filter(n => n.id !== noteId);
+    writeNotes(notes);
+    ipcRenderer.send('sticky-close', noteId);
+  }
+});
+
+closeBtn.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  ipcRenderer.send('sticky-close', noteId);
+});
+
+if (filePath) {
+  let fileContent = '';
+  let fileName = path.basename(filePath);
+  let fileExt = path.extname(filePath).slice(1).toLowerCase();
+  try { fileContent = fs.readFileSync(filePath, 'utf8'); }
+  catch (e) { fileContent = 'Error reading file: ' + e.message; }
+
+  titleText.textContent = fileName;
+  linesBtn.style.display = '';
+
+  const langMap = {
+    js: 'javascript', ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
+    py: 'python', rb: 'ruby', rs: 'rust', go: 'go',
+    sh: 'bash', ps1: 'powershell', md: 'markdown',
+    json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'ini',
+    html: 'html', css: 'css', scss: 'scss', sql: 'sql'
+  };
+  const lang = langMap[fileExt] || fileExt;
+
+  const pre = document.createElement('pre');
+  pre.id = 'codeBlock';
+  pre.className = 'with-lines';
+  const code = document.createElement('code');
+  code.className = lang ? 'language-' + lang : '';
+  code.textContent = fileContent;
+  pre.appendChild(code);
+  content.appendChild(pre);
+
+  if (window.hljs) window.hljs.highlightAll();
+
+  const lines = code.innerHTML.split('\n');
+  code.innerHTML = lines.map(l => '<span class="line">' + l + '</span>').join('\n');
+
+  linesBtn.addEventListener('click', () => {
+    pre.classList.toggle('with-lines');
+  });
+} else {
+  const textarea = document.createElement('textarea');
+  textarea.className = 'note-text';
+  textarea.id = 'noteText';
+  textarea.placeholder = '';
+  textarea.value = (saved && saved.text) || '';
+  textarea.spellcheck = false;
+  content.appendChild(textarea);
+
+  const forceFocus = () => {
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  };
+  forceFocus();
+  setTimeout(forceFocus, 50);
+  setTimeout(forceFocus, 200);
+  setTimeout(forceFocus, 500);
+
+  content.addEventListener('click', () => forceFocus());
+  document.body.addEventListener('click', (e) => {
+    if (e.target === document.body) forceFocus();
+  });
+  window.addEventListener('focus', forceFocus);
+
+  let saveTimer;
+  textarea.addEventListener('input', () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      if (!noteId) return;
+      const existing = findNote(noteId) || { id: noteId, name: displayName, color: bgColor };
+      existing.text = textarea.value;
+      existing.color = bgColor;
+      existing.name = displayName;
+      existing.saved_at = new Date().toISOString();
+      saveNote(existing);
+    }, 500);
+  });
+}
+</script>
+</body>
+</html>

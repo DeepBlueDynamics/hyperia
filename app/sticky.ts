@@ -1,13 +1,56 @@
 // Sticky note windows — frameless, always-on-top, colored floating notes.
-// Can be plain text or file viewer with syntax highlighting.
+// Loads static sticky.html from app dir. Persists to ~/.hyperia/stickys/notes.json.
 
 import {readFileSync, writeFileSync, mkdirSync} from 'fs';
-import {tmpdir} from 'os';
-import {basename, extname, join} from 'path';
+import {homedir} from 'os';
+import {join, resolve} from 'path';
 
-import {BrowserWindow, ipcMain, screen} from 'electron';
+import {BrowserWindow, ipcMain, Menu, screen, app, clipboard, nativeImage} from 'electron';
 
-const STICKY_COLORS = [
+import isDev from 'electron-is-dev';
+
+const NOTE_ADJECTIVES = [
+  'Bold', 'Brave', 'Calm', 'Clever', 'Cosmic', 'Curious', 'Dapper', 'Dreamy',
+  'Eager', 'Elegant', 'Fancy', 'Fierce', 'Fluffy', 'Friendly', 'Gentle', 'Glowing',
+  'Happy', 'Honest', 'Jolly', 'Kind', 'Lazy', 'Lively', 'Lucky', 'Mighty',
+  'Neat', 'Noble', 'Odd', 'Proud', 'Quick', 'Quiet', 'Relaxed', 'Royal',
+  'Silly', 'Sleepy', 'Sly', 'Smug', 'Snappy', 'Spicy', 'Spotless', 'Sunny',
+  'Swift', 'Tame', 'Tidy', 'Tiny', 'Wild', 'Wise', 'Witty', 'Zesty',
+  'Moody', 'Furious', 'Stormy', 'Creative', 'Thoughtful', 'Patient', 'Sparkly', 'Drowsy'
+];
+
+const NOTE_ANIMALS = [
+  'Badger', 'Beaver', 'Bison', 'Capybara', 'Cat', 'Cheetah', 'Crab', 'Dolphin',
+  'Elephant', 'Falcon', 'Ferret', 'Fox', 'Frog', 'Giraffe', 'Goose', 'Heron',
+  'Hippo', 'Iguana', 'Jaguar', 'Kangaroo', 'Koala', 'Lemur', 'Lion', 'Llama',
+  'Lynx', 'Manatee', 'Mole', 'Moose', 'Narwhal', 'Newt', 'Octopus', 'Otter',
+  'Owl', 'Panda', 'Panther', 'Parrot', 'Penguin', 'Platypus', 'Puma', 'Quokka',
+  'Rabbit', 'Raccoon', 'Raven', 'Seal', 'Shark', 'Slug', 'Sloth', 'Snail',
+  'Squirrel', 'Stork', 'Tapir', 'Tiger', 'Toucan', 'Turtle', 'Vicuna', 'Walrus',
+  'Weasel', 'Whale', 'Wolf', 'Wombat', 'Yak', 'Zebra'
+];
+
+const NOTE_EMOJIS = [
+  '📝', '📌', '📋', '🗒️', '✨', '💡', '🌟', '⭐', '🔖', '🎯',
+  '🔮', '🧠', '💭', '🌙', '🪐', '🌸', '🍀', '🌿', '🔥', '⚡',
+  '🦊', '🦉', '🐸', '🦋', '🐙', '🌊', '🍄', '🌻', '🕯️', '🎨'
+];
+
+function generateNoteName(): string {
+  const adj = NOTE_ADJECTIVES[Math.floor(Math.random() * NOTE_ADJECTIVES.length)];
+  const animal = NOTE_ANIMALS[Math.floor(Math.random() * NOTE_ANIMALS.length)];
+  const name = `${adj} ${animal}`;
+  // 1/3 chance of an emoji prefix
+  if (Math.random() < 1 / 3) {
+    const emoji = NOTE_EMOJIS[Math.floor(Math.random() * NOTE_EMOJIS.length)];
+    return `${emoji} ${name}`;
+  }
+  return name;
+}
+
+type StickyColor = {bg: string; text: string; name: string};
+
+const STICKY_COLORS: StickyColor[] = [
   {bg: '#fff9c4', text: '#333', name: 'yellow'},
   {bg: '#c8e6c9', text: '#1b5e20', name: 'green'},
   {bg: '#bbdefb', text: '#0d47a1', name: 'blue'},
@@ -17,340 +60,344 @@ const STICKY_COLORS = [
 ];
 
 let colorIndex = 0;
-const stickyWindows = new Map<number, {filePath?: string; color: (typeof STICKY_COLORS)[0]}>();
+const stickyWindows = new Map<string, BrowserWindow>(); // noteId -> window
+let devToolsFirst = false; // Set true to debug sticky windows
 
-function nextColor() {
+function nextColor(): StickyColor {
   const color = STICKY_COLORS[colorIndex % STICKY_COLORS.length];
   colorIndex++;
   return color;
 }
 
+/// Make a small BMP swatch for native menu icons.
+function makeColorSwatch(hex: string) {
+  // 16x16 BMP with solid color
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const size = 16;
+
+  // BMP header (14 bytes) + DIB header (40 bytes) + pixel data
+  const rowBytes = Math.ceil((24 * size) / 32) * 4;
+  const pixelSize = rowBytes * size;
+  const fileSize = 54 + pixelSize;
+  const buf = Buffer.alloc(fileSize);
+
+  // BMP header
+  buf.write('BM', 0);
+  buf.writeUInt32LE(fileSize, 2);
+  buf.writeUInt32LE(54, 10); // data offset
+
+  // DIB header
+  buf.writeUInt32LE(40, 14); // header size
+  buf.writeInt32LE(size, 18); // width
+  buf.writeInt32LE(size, 22); // height
+  buf.writeUInt16LE(1, 26); // planes
+  buf.writeUInt16LE(24, 28); // bpp
+  buf.writeUInt32LE(pixelSize, 34); // image size
+
+  // Pixels (BGR, bottom-up)
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const offset = 54 + y * rowBytes + x * 3;
+      buf[offset] = b;
+      buf[offset + 1] = g;
+      buf[offset + 2] = r;
+    }
+  }
+
+  return nativeImage.createFromBuffer(buf);
+}
+
+function stickysDir(): string {
+  const dir = join(homedir(), '.hyperia', 'stickys');
+  try {
+    mkdirSync(dir, {recursive: true});
+  } catch {
+    // exists
+  }
+  return dir;
+}
+
+type NoteData = {
+  id: string;
+  name?: string;
+  text?: string;
+  color?: string;
+  filePath?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  saved_at?: string;
+  last_closed_at?: string;
+};
+
+function readAllNotes(): NoteData[] {
+  try {
+    return JSON.parse(readFileSync(join(stickysDir(), 'notes.json'), 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function writeAllNotes(notes: NoteData[]) {
+  try {
+    writeFileSync(join(stickysDir(), 'notes.json'), JSON.stringify(notes, null, 2), 'utf8');
+  } catch (e) {
+    console.error('Failed to write notes.json:', e);
+  }
+}
+
+function getNote(id: string): NoteData | undefined {
+  return readAllNotes().find((n) => n.id === id);
+}
+
+function upsertNote(note: NoteData) {
+  const notes = readAllNotes();
+  const idx = notes.findIndex((n) => n.id === note.id);
+  if (idx >= 0) notes[idx] = {...notes[idx], ...note};
+  else notes.push(note);
+  writeAllNotes(notes);
+}
+
+function removeNote(id: string) {
+  const notes = readAllNotes().filter((n) => n.id !== id);
+  writeAllNotes(notes);
+}
+
 function createStickyNote(
   options: {
+    id?: string;
+    name?: string;
     filePath?: string;
-    content?: string;
+    text?: string;
     x?: number;
     y?: number;
     width?: number;
     height?: number;
+    color?: string;
   } = {}
 ) {
-  const color = nextColor();
   const cursor = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursor);
 
-  const width = options.width || 320;
-  const height = options.height || 280;
-  const x = options.x ?? display.workArea.x + display.workArea.width / 2 - width / 2 + Math.random() * 60 - 30;
-  const y = options.y ?? display.workArea.y + display.workArea.height / 2 - height / 2 + Math.random() * 60 - 30;
+  // Slim default — compact sticky size
+  const width = options.width || 280;
+  const height = options.height || 220;
+
+  const x =
+    options.x ??
+    Math.round(display.workArea.x + display.workArea.width / 2 - width / 2 + Math.random() * 60 - 30);
+  const y =
+    options.y ??
+    Math.round(display.workArea.y + display.workArea.height / 2 - height / 2 + Math.random() * 60 - 30);
+
+  // Determine or generate note ID
+  const noteId = options.id || `note-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+  // Already open? Focus it.
+  const existing = stickyWindows.get(noteId);
+  if (existing && !existing.isDestroyed()) {
+    existing.focus();
+    return existing;
+  }
+
+  // Generate a random name (or use existing)
+  const savedNote = options.id ? getNote(options.id) : undefined;
+  const displayName = options.name || savedNote?.name || generateNoteName();
+
+  // Pick color (use saved if restoring, else cycle)
+  const colorHex = options.color || savedNote?.color || nextColor().bg;
 
   const win = new BrowserWindow({
     width,
     height,
-    x: Math.round(x),
-    y: Math.round(y),
+    x,
+    y,
+    minWidth: 200,
+    minHeight: 150,
     frame: false,
     transparent: false,
     alwaysOnTop: true,
-    skipTaskbar: true,
+    skipTaskbar: false,
     resizable: true,
-    minimizable: false,
+    minimizable: true,
     maximizable: false,
-    backgroundColor: color.bg,
+    focusable: true,
+    show: false,
+    backgroundColor: colorHex,
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false
+      contextIsolation: false,
+      webSecurity: false
     }
   });
 
-  stickyWindows.set(win.id, {filePath: options.filePath, color});
-
-  // Build the sticky note HTML
-  const filePath = options.filePath;
-  let fileContent = options.content || '';
-  let fileName = '';
-  let fileExt = '';
-
-  if (filePath) {
-    try {
-      fileContent = readFileSync(filePath, 'utf8');
-      fileName = basename(filePath);
-      fileExt = extname(filePath).slice(1).toLowerCase();
-    } catch (e) {
-      fileContent = `Error reading file: ${(e as Error).message}`;
-    }
+  // Persist initial record for notes
+  if (!options.filePath) {
+    const current = getNote(noteId) || {id: noteId, name: displayName, color: colorHex, text: options.text || '', x, y, width, height};
+    upsertNote({...current, name: displayName, x, y, width, height, color: colorHex});
   }
 
-  const isFileMode = !!filePath;
-  const escapedContent = fileContent
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  stickyWindows.set(noteId, win);
 
-  const html = buildStickyHtml({
-    bgColor: color.bg,
-    textColor: color.text,
-    content: isFileMode ? escapedContent : '',
-    rawContent: isFileMode ? '' : fileContent,
-    fileName,
-    fileExt,
-    isFileMode,
-    winId: win.id
+  // Build the URL with query params
+  const htmlPath = resolve(isDev ? __dirname : app.getAppPath(), 'sticky.html');
+  const queryParams = new URLSearchParams();
+  queryParams.set('id', noteId);
+  queryParams.set('color', colorHex);
+  queryParams.set('name', displayName);
+  if (options.filePath) queryParams.set('file', options.filePath);
+  void win.loadFile(htmlPath, {search: queryParams.toString()});
+
+  // Show and focus once ready
+  win.once('ready-to-show', () => {
+    win.show();
+    win.focus();
+    win.webContents.focus();
+
+    // DevTools on the first sticky for diagnostics
+    if (devToolsFirst) {
+      devToolsFirst = false;
+      win.webContents.openDevTools({mode: 'detach'});
+    }
   });
 
-  // Write HTML to temp file — data: URLs don't support -webkit-app-region
-  const stickyDir = join(tmpdir(), 'hyperia-sticky');
-  try {
-    mkdirSync(stickyDir, {recursive: true});
-  } catch {
-    // exists
-  }
-  const tmpFile = join(stickyDir, `sticky-${win.id}.html`);
-  writeFileSync(tmpFile, html, 'utf8');
-  void win.loadFile(tmpFile);
+  // Persist geometry on move/resize
+  const saveGeom = () => {
+    if (options.filePath) return; // file mode doesn't persist
+    const bounds = win.getBounds();
+    const note = getNote(noteId);
+    if (note) {
+      upsertNote({...note, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height});
+    }
+  };
+  win.on('moved', saveGeom);
+  win.on('resized', saveGeom);
 
   win.on('closed', () => {
-    stickyWindows.delete(win.id);
+    stickyWindows.delete(noteId);
   });
 
   return win;
 }
 
-function buildStickyHtml(opts: {
-  bgColor: string;
-  textColor: string;
-  content: string;
-  rawContent: string;
-  fileName: string;
-  fileExt: string;
-  isFileMode: boolean;
-  winId: number;
-}): string {
-  const langClass = opts.fileExt ? `language-${mapExtToLang(opts.fileExt)}` : '';
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>${opts.fileName || 'Sticky Note'}</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"><${'/'}>script>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; overflow: hidden; }
-  body {
-    background: ${opts.bgColor};
-    color: ${opts.textColor};
-    font-family: -apple-system, 'Segoe UI', sans-serif;
-    font-size: 13px;
-    display: flex;
-    flex-direction: column;
-  }
-  .titlebar {
-    height: 24px;
-    display: flex;
-    align-items: center;
-    padding: 0 6px;
-    -webkit-app-region: drag;
-    flex-shrink: 0;
-    opacity: 0.6;
-    font-size: 10px;
-    user-select: none;
-  }
-  .titlebar:hover { opacity: 1; }
-  .titlebar-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .titlebar-btn {
-    width: 16px; height: 16px;
-    display: flex; align-items: center; justify-content: center;
-    border-radius: 50%;
-    cursor: pointer;
-    -webkit-app-region: no-drag;
-    font-size: 10px;
-    opacity: 0.5;
-    transition: opacity 0.2s;
-  }
-  .titlebar-btn:hover { opacity: 1; }
-  .close-btn:hover { background: rgba(255,0,0,0.2); }
-  .lines-btn:hover { background: rgba(0,0,0,0.1); }
-  .stealth-btn:hover { background: rgba(0,0,0,0.1); }
-
-  .content {
-    flex: 1;
-    overflow: auto;
-    padding: 8px 10px;
-  }
-
-  /* Plain text mode */
-  .note-text {
-    width: 100%;
-    height: 100%;
-    border: none;
-    background: transparent;
-    color: inherit;
-    font-family: inherit;
-    font-size: 13px;
-    resize: none;
-    outline: none;
-    line-height: 1.5;
-  }
-
-  /* File mode */
-  pre {
-    margin: 0;
-    font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-    font-size: 12px;
-    line-height: 1.6;
-    tab-size: 4;
-    background: transparent !important;
-    color: inherit;
-  }
-  code { background: transparent !important; }
-
-  /* Line numbers */
-  .with-lines {
-    counter-reset: line;
-  }
-  .with-lines .line {
-    display: block;
-    counter-increment: line;
-  }
-  .with-lines .line::before {
-    content: counter(line);
-    display: inline-block;
-    width: 3em;
-    margin-right: 1em;
-    text-align: right;
-    color: ${opts.textColor};
-    opacity: 0.3;
-    font-size: 10px;
-    user-select: none;
-  }
-
-  /* Stealth: hide line numbers */
-  .stealth .line::before { display: none; }
-
-  /* Resize handle */
-  .resize-handle {
-    position: absolute;
-    bottom: 0; right: 0;
-    width: 14px; height: 14px;
-    cursor: nwse-resize;
-    opacity: 0.3;
-  }
-  .resize-handle:hover { opacity: 0.6; }
-</style>
-</head>
-<body>
-  <div class="titlebar">
-    <span class="titlebar-text">${opts.fileName || ''}</span>
-    ${opts.isFileMode ? '<span class="titlebar-btn lines-btn" onclick="toggleLines()" title="Toggle line numbers">#</span>' : ''}
-    ${opts.isFileMode ? '<span class="titlebar-btn stealth-btn" onclick="toggleStealth()" title="Stealth mode">S</span>' : ''}
-    <span class="titlebar-btn close-btn" onclick="window.close()" title="Close">&times;</span>
-  </div>
-  <div class="content" id="content">
-    ${
-      opts.isFileMode
-        ? `<pre id="codeBlock" class="with-lines"><code class="${langClass}">${opts.content}</code></pre>`
-        : `<textarea class="note-text" placeholder="Type a note..." autofocus>${opts.rawContent}</textarea>`
-    }
-  </div>
-  <svg class="resize-handle" viewBox="0 0 14 14">
-    <path d="M12 2v10H2" fill="none" stroke="${opts.textColor}" stroke-width="1" opacity="0.3"/>
-    <path d="M12 6v6H6" fill="none" stroke="${opts.textColor}" stroke-width="1" opacity="0.3"/>
-    <path d="M12 10v2h-2" fill="none" stroke="${opts.textColor}" stroke-width="1" opacity="0.3"/>
-  </svg>
-  <script>
-    ${
-      opts.isFileMode
-        ? `
-      // Highlight code
-      hljs.highlightAll();
-
-      // Wrap lines for line numbering
-      const codeEl = document.querySelector('code');
-      if (codeEl) {
-        const lines = codeEl.innerHTML.split('\\n');
-        codeEl.innerHTML = lines.map(l => '<span class="line">' + l + '</span>').join('\\n');
-      }
-
-      function toggleLines() {
-        document.getElementById('codeBlock').classList.toggle('with-lines');
-      }
-      function toggleStealth() {
-        document.getElementById('codeBlock').classList.toggle('stealth');
-      }
-    `
-        : `
-      // Auto-save note content (debounced)
-      const textarea = document.querySelector('.note-text');
-      let saveTimer;
-      textarea.addEventListener('input', () => {
-        clearTimeout(saveTimer);
-        saveTimer = setTimeout(() => {
-          // TODO: persist to sticky store
-        }, 1000);
-      });
-    `
-    }
-  </script>
-</body>
-</html>`;
-}
-
-function mapExtToLang(ext: string): string {
-  const map: Record<string, string> = {
-    js: 'javascript',
-    ts: 'typescript',
-    tsx: 'typescript',
-    jsx: 'javascript',
-    py: 'python',
-    rb: 'ruby',
-    rs: 'rust',
-    go: 'go',
-    java: 'java',
-    c: 'c',
-    cpp: 'cpp',
-    h: 'c',
-    hpp: 'cpp',
-    cs: 'csharp',
-    sh: 'bash',
-    bash: 'bash',
-    zsh: 'bash',
-    ps1: 'powershell',
-    json: 'json',
-    yaml: 'yaml',
-    yml: 'yaml',
-    toml: 'ini',
-    xml: 'xml',
-    html: 'html',
-    css: 'css',
-    scss: 'scss',
-    sql: 'sql',
-    md: 'markdown',
-    dockerfile: 'dockerfile',
-    r: 'r',
-    lua: 'lua',
-    swift: 'swift',
-    kt: 'kotlin',
-    ex: 'elixir',
-    exs: 'elixir',
-    erl: 'erlang',
-    hs: 'haskell',
-    ml: 'ocaml',
-    nix: 'nix'
-  };
-  return map[ext] || ext;
-}
-
 export function initSticky() {
-  ipcMain.on('new-sticky', (_event, options?: {filePath?: string; content?: string}) => {
+  ipcMain.on('new-sticky', (_event, options?: {filePath?: string; text?: string}) => {
     createStickyNote(options || {});
   });
 
   ipcMain.on('new-sticky-file', (_event, filePath: string) => {
     createStickyNote({filePath, width: 600, height: 500});
   });
+
+  // Close from renderer
+  ipcMain.on('sticky-close', (_event, noteId: string) => {
+    const win = stickyWindows.get(noteId);
+    if (win && !win.isDestroyed()) {
+      // Mark as closed in metadata but keep the record
+      const note = getNote(noteId);
+      if (note) {
+        upsertNote({...note, last_closed_at: new Date().toISOString()});
+      }
+      win.close();
+    }
+  });
+
+  // Color change from renderer — update window backgroundColor
+  ipcMain.on('sticky-color', (_event, noteId: string, color: string) => {
+    const win = stickyWindows.get(noteId);
+    if (win && !win.isDestroyed()) {
+      win.setBackgroundColor(color);
+    }
+  });
+
+  // Native context menu — can extend beyond window bounds
+  ipcMain.on('sticky-context-menu', (event, noteId: string, hasSelection: boolean) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return;
+
+    const colors = [
+      {name: 'Yellow', hex: '#fff9c4'},
+      {name: 'Pink', hex: '#ffb6c1'},
+      {name: 'Green', hex: '#c8e6c9'},
+      {name: 'Blue', hex: '#bbdefb'},
+      {name: 'Peach', hex: '#ffe0b2'},
+      {name: 'Lavender', hex: '#e1bee7'},
+      {name: 'Khaki', hex: '#f0e68c'},
+      {name: 'Plum', hex: '#dda0dd'},
+      {name: 'Tomato', hex: '#ff6347'},
+      {name: 'Gold', hex: '#ffd700'},
+      {name: 'Mint', hex: '#90ee90'},
+      {name: 'Salmon', hex: '#ffa07a'}
+    ];
+
+    const template: Electron.MenuItemConstructorOptions[] = [
+      {
+        label: 'Color',
+        submenu: colors.map((c) => ({
+          label: c.name,
+          icon: makeColorSwatch(c.hex),
+          click: () => {
+            event.sender.send('sticky-set-color', c.hex);
+          }
+        }))
+      },
+      {type: 'separator'},
+      {
+        label: 'Cut',
+        enabled: hasSelection,
+        role: 'cut'
+      },
+      {
+        label: 'Copy',
+        enabled: hasSelection,
+        role: 'copy'
+      },
+      {
+        label: 'Paste',
+        role: 'paste'
+      },
+      {
+        label: 'Copy All',
+        click: () => event.sender.send('sticky-copy-all')
+      },
+      {type: 'separator'},
+      {
+        label: 'Rename...',
+        click: () => event.sender.send('sticky-rename')
+      },
+      {
+        label: 'Delete',
+        click: () => event.sender.send('sticky-delete')
+      }
+    ];
+
+    const menu = Menu.buildFromTemplate(template);
+    menu.popup({window: win});
+  });
+
+  // Renderer reported geometry change (redundant with win events, keeps alive)
+  ipcMain.on('sticky-geom', () => {
+    // handled by win.on('moved'/'resized') above
+  });
+
+  // Restore notes that were open last time (skip ones explicitly closed)
+  const notes = readAllNotes();
+  for (const note of notes) {
+    if (note.filePath) continue; // file mode notes aren't restored
+    if (note.text && note.text.trim().length > 0) {
+      // Only restore notes with content and not marked as closed recently
+      const lastClosed = note.last_closed_at ? Date.parse(note.last_closed_at) : 0;
+      const lastSaved = note.saved_at ? Date.parse(note.saved_at) : 0;
+      // Skip notes closed AFTER their last save (user explicitly closed)
+      if (lastClosed > lastSaved) continue;
+
+      // Don't auto-restore on startup — too aggressive
+      // Just keep the record so next time user creates a note with same ID it restores
+    }
+  }
 }
 
 export {createStickyNote};

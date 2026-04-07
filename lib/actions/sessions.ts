@@ -10,6 +10,7 @@ import {
   SESSION_SET_ACTIVE,
   SESSION_CLEAR_ACTIVE,
   SESSION_USER_DATA,
+  SESSION_SET_TAB_NAME,
   SESSION_SET_XTERM_TITLE,
   SESSION_SEARCH,
   SESSION_SET_DESCRIPTION
@@ -47,6 +48,7 @@ export function addSession({uid, shell, pid, cols = null, rows = null, splitDire
     if (tabName) {
       window.rpc.emit('session set tab name', {uid, tabName});
     }
+    window.rpc.emit('session set active', {uid});
   };
 }
 
@@ -109,7 +111,10 @@ export function setActiveSession(uid: string) {
   return (dispatch: HyperDispatch) => {
     dispatch({
       type: SESSION_SET_ACTIVE,
-      uid
+      uid,
+      effect() {
+        window.rpc.emit('session set active', {uid});
+      }
     });
   };
 }
@@ -132,6 +137,20 @@ export function setSessionDescription(uid: string, description: string) {
       type: SESSION_SET_DESCRIPTION,
       uid: sessionUid,
       description,
+      tabName
+    });
+  };
+}
+
+export function setSessionTabName(uid: string, tabName: string, sync = true) {
+  return (dispatch: HyperDispatch, getState: () => HyperState) => {
+    const sessionUid = getState().termGroups.activeSessions[uid] || uid;
+    if (sync) {
+      window.rpc.emit('session set tab name', {uid: sessionUid, tabName});
+    }
+    dispatch({
+      type: SESSION_SET_TAB_NAME,
+      uid: sessionUid,
       tabName
     });
   };

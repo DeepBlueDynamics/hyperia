@@ -226,26 +226,59 @@ export default class Term extends React.PureComponent<
       this.term.registerLinkProvider({
         provideLinks: (rowIndex: number, callback: (links: any[] | undefined) => void) => {
           const buffer = this.term.buffer.active;
-          // Join up to 5 rows around the hovered row to catch wrapped URLs
-          const startRow = Math.max(0, rowIndex - 2);
-          const endRow = Math.min(buffer.length - 1, rowIndex + 2);
-          let combined = '';
-          const rowOffsets: {row: number; startCol: number; len: number}[] = [];
+          // Look up to 6 rows around the hovered row to catch long wrapped URLs
+          const startRow = Math.max(0, rowIndex - 3);
+          const endRow = Math.min(buffer.length - 1, rowIndex + 3);
+
+          // Build segments. Each segment contains the trimmed text of one row,
+          // with metadata about the original column where each character lives.
+          // We strip trailing whitespace before concatenation so that padding
+          // doesn't get spliced into URLs.
+          type Segment = {row: number; trimmedText: string; charCols: number[]};
+          let segments: Segment[] = [];
+
           for (let r = startRow; r <= endRow; r++) {
             const line = buffer.getLine(r);
             if (!line) continue;
-            const text = line.translateToString(false);
-            // Only join if previous line was wrapped (no trailing whitespace = wrapped)
-            if (r > startRow && !line.isWrapped) {
-              // Reset — this line is not a continuation
-              combined = '';
-              rowOffsets.length = 0;
+
+            // If this line is not a wrap continuation and we already started
+            // collecting, reset — wrapped runs are bounded.
+            if (r > startRow && !line.isWrapped && segments.length > 0) {
+              // If our hovered row is already in this run, stop here.
+              if (segments.some((s) => s.row === rowIndex)) break;
+              segments = [];
             }
-            rowOffsets.push({row: r, startCol: 0, len: text.length});
-            combined += text;
+
+            // Pull each cell text + its column index, dropping trailing whitespace.
+            const charCols: number[] = [];
+            const chars: string[] = [];
+            for (let c = 0; c < line.length; c++) {
+              const cell = line.getCell(c);
+              if (!cell) continue;
+              const ch = cell.getChars();
+              if (ch.length > 0) {
+                chars.push(ch);
+                charCols.push(c);
+              }
+            }
+            // Trim trailing whitespace
+            while (chars.length > 0 && /^\s+$/.test(chars[chars.length - 1])) {
+              chars.pop();
+              charCols.pop();
+            }
+            const trimmedText = chars.join('');
+            segments.push({row: r, trimmedText, charCols});
           }
 
-          // Match URLs in the combined text
+          // Concatenate trimmed segments — wrapped continuations join cleanly.
+          let combined = '';
+          const segOffsets: {row: number; offset: number; charCols: number[]}[] = [];
+          for (const seg of segments) {
+            segOffsets.push({row: seg.row, offset: combined.length, charCols: seg.charCols});
+            combined += seg.trimmedText;
+          }
+
+          // Match URLs
           const urlRegex = /https?:\/\/[^\s<>'")\]}>]+/g;
           let match;
           const links: any[] = [];
@@ -254,34 +287,40 @@ export default class Term extends React.PureComponent<
             const matchStart = match.index;
             const matchEnd = matchStart + url.length;
 
-            // Map back to row/col coordinates
-            let charOffset = 0;
-            let startLink: {row: number; col: number} | null = null;
-            let endLink: {row: number; col: number} | null = null;
-
-            for (const seg of rowOffsets) {
-              const segEnd = charOffset + seg.len;
-              if (!startLink && matchStart < segEnd) {
-                startLink = {row: seg.row, col: matchStart - charOffset};
-              }
-              if (!endLink && matchEnd <= segEnd) {
-                endLink = {row: seg.row, col: matchEnd - charOffset};
-              }
-              charOffset = segEnd;
-            }
-
-            if (startLink && endLink && startLink.row <= rowIndex && endLink.row >= rowIndex) {
-              links.push({
-                range: {
-                  start: {x: startLink.col + 1, y: startLink.row + 1},
-                  end: {x: endLink.col, y: endLink.row + 1}
-                },
-                text: url,
-                activate: (_event: MouseEvent, text: string) => {
-                  if (shallActivateWebLink(_event)) void shell.openExternal(text);
+            // Map combined-text indices back to (row, col)
+            const findCoord = (idx: number) => {
+              for (let i = segOffsets.length - 1; i >= 0; i--) {
+                const so = segOffsets[i];
+                if (idx >= so.offset) {
+                  const localIdx = idx - so.offset;
+                  if (localIdx < so.charCols.length) {
+                    return {row: so.row, col: so.charCols[localIdx]};
+                  } else if (localIdx === so.charCols.length && so.charCols.length > 0) {
+                    // End-of-segment — point past the last char
+                    return {row: so.row, col: so.charCols[so.charCols.length - 1] + 1};
+                  }
                 }
-              });
-            }
+              }
+              return null;
+            };
+
+            const startCoord = findCoord(matchStart);
+            const endCoord = findCoord(matchEnd - 1);
+            if (!startCoord || !endCoord) continue;
+
+            // Only show this link on rows that the hovered row touches
+            if (startCoord.row > rowIndex || endCoord.row < rowIndex) continue;
+
+            links.push({
+              range: {
+                start: {x: startCoord.col + 1, y: startCoord.row + 1},
+                end: {x: endCoord.col + 1, y: endCoord.row + 1}
+              },
+              text: url,
+              activate: (_event: MouseEvent, text: string) => {
+                if (shallActivateWebLink(_event)) void shell.openExternal(text);
+              }
+            });
           }
           callback(links.length > 0 ? links : undefined);
         }

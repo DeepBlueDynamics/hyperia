@@ -234,7 +234,7 @@ fn compile_system_prompt(screen_text: &str, pane_name: &str) -> String {
         .replace("{{SLOT:env_max_tool_calls:Default 50}}", "30")
         .replace("{{SLOT:env_max_per_turn:Default 5}}", "5")
         .replace("{{SLOT:policy_mode:Runtime mode — chat | builder | operator}}", "operator")
-        .replace("{{SLOT:allowed_tools:Explicit tool allowlist as JSON array}}", "[\"terminal_keys\",\"terminal_split\",\"terminal_focus\",\"terminal_rename\",\"terminal_close\",\"terminal_status\",\"terminal_screen\",\"terminal_quit\",\"console_open\",\"console_close\",\"console_logs\",\"file_read\",\"file_write\",\"web_fetch\"]")
+        .replace("{{SLOT:allowed_tools:Explicit tool allowlist as JSON array}}", "[\"terminal_keys\",\"terminal_split\",\"terminal_focus\",\"terminal_rename\",\"terminal_new_tab\",\"terminal_close\",\"terminal_status\",\"terminal_screen\",\"terminal_quit\",\"console_open\",\"console_close\",\"console_logs\",\"file_read\",\"file_write\",\"web_fetch\"]")
         .replace("{{SLOT:denied_tools:Explicit tool denylist — overrides allowlist}}", "[]")
         .replace("{{SLOT:workspace_scope:Filesystem path or container ID for this agent}}", "terminal")
         .replace("{{SLOT:project_id:Project identifier}}", "gnosis-terminal")
@@ -353,6 +353,16 @@ fn tool_definitions() -> Vec<serde_json::Value> {
                     "tab": { "type": "string", "description": "Current tab name from terminal_status (optional)" }
                 },
                 "required": ["name"]
+            }
+        },
+        {
+            "name": "terminal_new_tab",
+            "description": "Open a new tab. Optionally run a startup command in it.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Shell command to run after the tab opens" }
+                }
             }
         },
         {
@@ -517,6 +527,12 @@ async fn execute_tool(
                 "tab": input["tab"],
             });
             client.post(format!("{}/api/pane/rename", base)).json(&body).send().await
+        }
+        "terminal_new_tab" => {
+            let body = serde_json::json!({
+                "command": input["command"],
+            });
+            client.post(format!("{}/api/pane/new", base)).json(&body).send().await
         }
         "terminal_close" => {
             let body = serde_json::json!({});

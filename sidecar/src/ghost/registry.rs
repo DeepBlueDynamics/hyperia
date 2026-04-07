@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use super::ferricula::FerriculaBackend;
 use super::types::ToolDef;
 
 /// A dynamically created tool backed by a shell command.
@@ -14,6 +15,7 @@ pub struct ToolRegistry {
     dynamic: Arc<Mutex<Vec<DynamicTool>>>,
     client: reqwest::Client,
     http_port: u16,
+    ferricula: Option<Arc<FerriculaBackend>>,
 }
 
 impl ToolRegistry {
@@ -23,7 +25,13 @@ impl ToolRegistry {
             dynamic: Arc::new(Mutex::new(Vec::new())),
             client: reqwest::Client::new(),
             http_port,
+            ferricula: None,
         }
+    }
+
+    pub fn with_ferricula(mut self, fc: Arc<FerriculaBackend>) -> Self {
+        self.ferricula = Some(fc);
+        self
     }
 
     /// All tool definitions for sending to the Anthropic API.
@@ -32,6 +40,12 @@ impl ToolRegistry {
         defs.push(tool_search_def());
         defs.push(tool_create_def());
         defs.push(watercooler_def());
+        // Ferricula memory tools
+        defs.push(memory_recall_def());
+        defs.push(memory_remember_def());
+        defs.push(memory_dream_def());
+        defs.push(memory_connect_def());
+        defs.push(memory_status_def());
         let dynamic = self.dynamic.lock().unwrap();
         for dt in dynamic.iter() {
             defs.push(dt.def.clone());
@@ -45,12 +59,72 @@ impl ToolRegistry {
             "tool_search" => self.handle_tool_search(input),
             "tool_create" => self.handle_tool_create(input),
             "watercooler" => {
-                // The agent loop handles this specially — just return confirmation
                 let msg = input["message"].as_str().unwrap_or("Checking in");
                 format!("Yielding to human: {}", msg)
             }
+            "memory_recall" => self.handle_memory_recall(input).await,
+            "memory_remember" => self.handle_memory_remember(input).await,
+            "memory_status" => self.handle_memory_status().await,
+            "memory_dream" => self.handle_memory_dream().await,
+            "memory_connect" => self.handle_memory_connect(input).await,
             _ if self.is_builtin(name) => self.execute_builtin(name, input).await,
             _ => self.execute_dynamic(name, input).await,
+        }
+    }
+
+    async fn handle_memory_recall(&self, input: &serde_json::Value) -> String {
+        let query = input["query"].as_str().unwrap_or("");
+        match &self.ferricula {
+            Some(fc) => {
+                let result = fc.recall(query).await;
+                if result.is_empty() { "No memories found.".into() } else { result }
+            }
+            None => "Ferricula not configured.".into(),
+        }
+    }
+
+    async fn handle_memory_remember(&self, input: &serde_json::Value) -> String {
+        let text = input["text"].as_str().unwrap_or("");
+        let channel = input["channel"].as_str().unwrap_or("ghost");
+        if text.is_empty() { return "Error: 'text' is required.".into(); }
+        let importance = input["importance"].as_f64().unwrap_or(0.5) as f32;
+        let keystone = input["keystone"].as_bool().unwrap_or(false);
+        let emotion = input["emotion"].as_str().map(|e| (e, input["emotion_secondary"].as_str()));
+        match &self.ferricula {
+            Some(fc) => {
+                fc.remember_full(text, channel, importance, emotion, keystone).await;
+                let extras = if keystone { " [keystone]" } else { "" };
+                format!("Remembered (importance={:.1}){}:{}", importance, extras, &text[..text.len().min(100)])
+            }
+            None => "Ferricula not configured.".into(),
+        }
+    }
+
+    async fn handle_memory_dream(&self) -> String {
+        match &self.ferricula {
+            Some(fc) => fc.dream().await,
+            None => "Ferricula not configured.".into(),
+        }
+    }
+
+    async fn handle_memory_connect(&self, input: &serde_json::Value) -> String {
+        let id_a = input["id_a"].as_u64().unwrap_or(0) as u32;
+        let id_b = input["id_b"].as_u64().unwrap_or(0) as u32;
+        let label = input["label"].as_str().unwrap_or("related");
+        if id_a == 0 || id_b == 0 { return "Error: id_a and id_b are required.".into(); }
+        match &self.ferricula {
+            Some(fc) => fc.connect(id_a, id_b, label).await,
+            None => "Ferricula not configured.".into(),
+        }
+    }
+
+    async fn handle_memory_status(&self) -> String {
+        match &self.ferricula {
+            Some(fc) => {
+                let info = fc.config_json();
+                serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".into())
+            }
+            None => "Ferricula not configured.".into(),
         }
     }
 
@@ -209,6 +283,27 @@ impl ToolRegistry {
             url
         };
 
+        // For terminal_keys and terminal_run: read the screen FIRST to detect interactive programs
+        if name == "terminal_keys" || name == "terminal_run" {
+            let screen_before = self.read_screen(&build_target_url("/api/screen")).await;
+            let interactive = detect_interactive(&screen_before);
+
+            if let Some(program) = &interactive {
+                // If running a shell command into an interactive program, warn hard
+                if name == "terminal_run" {
+                    return format!(
+                        "[BLOCKED] This pane is running '{}' — an interactive program. \
+                        You CANNOT run shell commands here. Either:\n\
+                        - Use this program's own commands/interface\n\
+                        - Switch to a different pane that has a shell prompt\n\
+                        - Open a new tab with terminal_new_tab\n\n\
+                        Current screen:\n{}",
+                        program, &screen_before[..screen_before.len().min(500)]
+                    );
+                }
+            }
+        }
+
         let result = match name {
             "terminal_keys" => {
                 let keys = input["keys"].as_str().unwrap_or("");
@@ -218,14 +313,12 @@ impl ToolRegistry {
                     .body(keys)
                     .send()
                     .await;
-                // Return the screen so the agent sees what happened
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 return self.read_screen(&build_target_url("/api/screen")).await;
             }
             "terminal_run" => {
                 let command = input["command"].as_str().unwrap_or("");
                 let wait_ms = input["wait_ms"].as_u64().unwrap_or(2000);
-                // Strip trailing returns/newlines agents love to add
                 let command = command.trim_end_matches('\n').trim_end_matches('\r');
                 let keys = format!("{}\r\n", command);
                 let _ = self.client
@@ -266,6 +359,16 @@ impl ToolRegistry {
                 });
                 self.client
                     .post(format!("{}/api/pane/rename", base))
+                    .json(&body)
+                    .send()
+                    .await
+            }
+            "terminal_new_tab" => {
+                let body = serde_json::json!({
+                    "command": input["command"],
+                });
+                self.client
+                    .post(format!("{}/api/pane/new", base))
                     .json(&body)
                     .send()
                     .await
@@ -470,6 +573,47 @@ fn unescape_keys(raw: &str) -> String {
     result
 }
 
+/// Detect if a terminal screen is showing an interactive program (not a shell prompt).
+fn detect_interactive(screen: &str) -> Option<String> {
+    let lower = screen.to_lowercase();
+    let last_lines: String = screen.lines().rev().take(10).collect::<Vec<_>>().join("\n").to_lowercase();
+
+    // Claude Code / codex
+    if last_lines.contains("claude") && (last_lines.contains("❯") || last_lines.contains(">>") || last_lines.contains("transmuting")) {
+        return Some("Claude Code".into());
+    }
+    if last_lines.contains("codex") && (last_lines.contains(">>") || last_lines.contains("❯")) {
+        return Some("Codex".into());
+    }
+    // Python REPL
+    if last_lines.contains(">>>") && lower.contains("python") {
+        return Some("Python REPL".into());
+    }
+    // Node REPL
+    if last_lines.contains("> ") && lower.contains("node") && !last_lines.contains("$") {
+        return Some("Node REPL".into());
+    }
+    // vim/nvim
+    if lower.contains("-- insert --") || lower.contains("-- normal --") || lower.contains("-- visual --") {
+        return Some("vim".into());
+    }
+    // less/man
+    if last_lines.ends_with(":") && (lower.contains("manual page") || lower.contains("(end)")) {
+        return Some("less/man".into());
+    }
+    // nemesis8 interactive
+    if last_lines.contains("nemesis") && last_lines.contains(">>") {
+        return Some("Nemesis8".into());
+    }
+    // SSH session indicators
+    if lower.contains("ssh ") && last_lines.contains("@") && last_lines.contains("$") {
+        // This is actually a shell prompt over SSH — allow it
+        return None;
+    }
+
+    None
+}
+
 fn watercooler_def() -> ToolDef {
     ToolDef {
         name: "watercooler".into(),
@@ -480,6 +624,77 @@ fn watercooler_def() -> ToolDef {
                 "message": { "type": "string", "description": "Brief status update — what you've done and what you're thinking next" }
             },
             "required": ["message"]
+        }),
+    }
+}
+
+fn memory_recall_def() -> ToolDef {
+    ToolDef {
+        name: "memory_recall".into(),
+        description: "Search your Ferricula memory for relevant memories. Use this to remember things from past conversations, facts about the user, or context you've stored.".into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "What to search for in memory" }
+            },
+            "required": ["query"]
+        }),
+    }
+}
+
+fn memory_remember_def() -> ToolDef {
+    ToolDef {
+        name: "memory_remember".into(),
+        description: "Store something in your Ferricula memory. You control importance, emotion, and whether it's a keystone (permanent) memory.".into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "text": { "type": "string", "description": "The memory to store" },
+                "channel": { "type": "string", "description": "Category: ghost, user, project, etc. (default: ghost)" },
+                "importance": { "type": "number", "description": "0.0-1.0 how important (default 0.5)" },
+                "keystone": { "type": "boolean", "description": "If true, this memory never decays" },
+                "emotion": { "type": "string", "description": "Primary emotion: curiosity, joy, concern, determination, etc." },
+                "emotion_secondary": { "type": "string", "description": "Secondary emotion (optional)" }
+            },
+            "required": ["text"]
+        }),
+    }
+}
+
+fn memory_dream_def() -> ToolDef {
+    ToolDef {
+        name: "memory_dream".into(),
+        description: "Trigger a dream cycle — consolidate and clean up memories. Merges similar memories, decays old ones, activates archetypes. Do this when cognitive heat is high or after many memories have accumulated.".into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {}
+        }),
+    }
+}
+
+fn memory_connect_def() -> ToolDef {
+    ToolDef {
+        name: "memory_connect".into(),
+        description: "Create a semantic link between two memories by their IDs. Use this to build associations between related concepts.".into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id_a": { "type": "integer", "description": "First memory ID" },
+                "id_b": { "type": "integer", "description": "Second memory ID" },
+                "label": { "type": "string", "description": "Relationship label (e.g. 'related', 'causes', 'contradicts')" }
+            },
+            "required": ["id_a", "id_b"]
+        }),
+    }
+}
+
+fn memory_status_def() -> ToolDef {
+    ToolDef {
+        name: "memory_status".into(),
+        description: "Check the status of your Ferricula memory system — mode, data location, whether it's active.".into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {}
         }),
     }
 }
@@ -549,6 +764,16 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                     "tab": { "type": "string" }
                 },
                 "required": ["name"]
+            }
+        },
+        {
+            "name": "terminal_new_tab",
+            "description": "Open a new tab. Optionally run a startup command in it.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Shell command to run after the tab opens" }
+                }
             }
         },
         {

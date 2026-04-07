@@ -9,6 +9,7 @@ use futures::Stream;
 use tokio::sync::Mutex;
 
 use super::agent::{GhostSession, SessionState};
+use super::ferricula::{FerriculaBackend, load_ferricula_config};
 use super::provider::AnthropicProvider;
 use super::registry::ToolRegistry;
 use super::types::{ChatRequest, GhostEvent};
@@ -19,16 +20,20 @@ use super::types::{ChatRequest, GhostEvent};
 pub struct GhostState {
     pub session: Arc<Mutex<GhostSession>>,
     pub registry: Arc<ToolRegistry>,
+    pub ferricula: Arc<FerriculaBackend>,
     pub http_port: u16,
 }
 
 impl GhostState {
     pub fn new(http_port: u16) -> Self {
-        let registry = Arc::new(ToolRegistry::new(http_port));
         let session = Arc::new(Mutex::new(GhostSession::new(25)));
+        let fc_config = load_ferricula_config();
+        let ferricula = Arc::new(FerriculaBackend::new(&fc_config));
+        let registry = Arc::new(ToolRegistry::new(http_port).with_ferricula(ferricula.clone()));
         Self {
             session,
             registry,
+            ferricula,
             http_port,
         }
     }
@@ -56,10 +61,12 @@ pub async fn ghost_chat(
 
     let provider = Arc::new(AnthropicProvider::new(&config));
     let registry = state.registry.clone();
+    let session_mutex = state.session.clone();
+    let ferricula = state.ferricula.clone();
 
     let rx = {
         let mut session = state.session.lock().await;
-        session.run(req.message, registry, provider)
+        session.run(req.message, registry, provider, session_mutex.clone(), ferricula)
     };
 
     let s = async_stream::stream! {
@@ -67,23 +74,6 @@ pub async fn ghost_chat(
         while let Some(event) = rx.recv().await {
             let json = serde_json::to_string(&event).unwrap_or_default();
             yield Ok::<_, Infallible>(Event::default().data(json));
-
-            match &event {
-                GhostEvent::Done { stop_reason, .. } => {
-                    let mut session = state.session.lock().await;
-                    session.set_state(SessionState::Completed(stop_reason.clone()));
-                }
-                GhostEvent::Error { message } => {
-                    let mut session = state.session.lock().await;
-                    session.set_state(SessionState::Error(message.clone()));
-                }
-                GhostEvent::Watercooler { .. } => {
-                    // Session stays idle — human can continue naturally
-                    let mut session = state.session.lock().await;
-                    session.set_state(SessionState::Idle);
-                }
-                _ => {}
-            }
         }
     };
 
@@ -106,6 +96,38 @@ pub async fn ghost_status(State(state): State<GhostState>) -> Json<serde_json::V
         "messages": session.message_count(),
         "has_token": has_token,
     }))
+}
+
+/// GET /api/ghost/history — return chat messages from Ferricula for restoring the UI.
+pub async fn ghost_history(State(state): State<GhostState>) -> Json<serde_json::Value> {
+    let turns = state.ferricula.history(50).await;
+    let messages: Vec<serde_json::Value> = turns
+        .into_iter()
+        .map(|(role, content)| serde_json::json!({ "role": role, "content": content }))
+        .collect();
+    Json(serde_json::json!({ "messages": messages }))
+}
+
+/// GET /api/ghost/memory — inspect Ferricula memory state.
+pub async fn ghost_memory(State(state): State<GhostState>) -> Json<serde_json::Value> {
+    let info = state.ferricula.config_json();
+    let history = state.ferricula.history(20).await;
+    let recent: Vec<serde_json::Value> = history
+        .into_iter()
+        .map(|(role, content)| serde_json::json!({ "role": role, "content": content }))
+        .collect();
+
+    Json(serde_json::json!({
+        "config": info,
+        "recent_history": recent,
+    }))
+}
+
+/// POST /api/ghost/stop — stop the running agent loop.
+pub async fn ghost_stop(State(state): State<GhostState>) -> &'static str {
+    let session = state.session.lock().await;
+    session.stop();
+    "stopped"
 }
 
 /// POST /api/ghost/reset — clear conversation.
