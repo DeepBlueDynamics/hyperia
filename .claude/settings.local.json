@@ -28,7 +28,14 @@
       "Bash(git stash:*)",
       "Bash(yarn run dist:mac:*)",
       "WebFetch(domain:nemesis8.nuts.services)",
-      "Bash(git fetch:*)"
+      "Bash(git fetch:*)",
+      "Bash(python3:*)",
+      "Bash(cat:*)",
+      "Bash(log show --predicate 'process == \"\"\"\"hyperia-sidecar\"\"\"\"' --last 5m)",
+      "Read(//Applications/Hyperia.app/Contents/Resources/sidecar/**)",
+      "Bash(pkill:*)",
+      "Bash(xargs lsof -p)",
+      "Bash(log show --predicate 'process == \"\"\"\"hyperia-sidecar\"\"\"\"' --last 10m --info --debug)"
     ],
     "deny": [],
     "ask": []

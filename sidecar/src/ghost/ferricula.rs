@@ -194,7 +194,7 @@ impl FerriculaBackend {
             let row = ferricula::Row {
                 id: next_id,
                 tags,
-                vector: vec![0.0; 64],
+                vector: vec![0.0; 768],
             };
 
             let mut record = MemoryRecord::new(next_id);
@@ -219,7 +219,7 @@ impl FerriculaBackend {
                 let body = serde_json::json!({
                     "id": max_id + 1,
                     "tags": { "text": text, "channel": channel, "source": "hyperia-ghost" },
-                    "vector": vec![0.0f32; 64],
+                    "vector": vec![0.0f32; 768],
                     "importance": importance,
                     "keystone": keystone,
                 });
@@ -254,7 +254,7 @@ impl FerriculaBackend {
                 tags.insert("role".into(), role.to_string());
                 tags.insert("channel".into(), "ghost-history".to_string());
                 tags.insert("source".into(), "hyperia-ghost".to_string());
-                let row = ferricula::Row { id: next_id, tags, vector: vec![0.0; 64] };
+                let row = ferricula::Row { id: next_id, tags, vector: vec![0.0; 768] };
                 let record = MemoryRecord::new(next_id);
                 search.add_document(next_id, text);
                 let _ = db.remember(row, record);
