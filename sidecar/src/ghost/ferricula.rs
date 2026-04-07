@@ -459,7 +459,7 @@ fn get_entropy() -> Vec<u8> {
     bytes
 }
 
-/// Load ferricula config from ~/.hyperia/hyperia.json.
+/// Load ferricula config from ~/.config/hyperia/hyperia.json.
 pub fn load_ferricula_config() -> FerriculaConfig {
     let cfg_path = {
         let home = if cfg!(windows) {
@@ -467,7 +467,7 @@ pub fn load_ferricula_config() -> FerriculaConfig {
         } else {
             std::env::var("HOME").unwrap_or_default()
         };
-        std::path::PathBuf::from(home).join(".hyperia").join("hyperia.json")
+        std::path::PathBuf::from(home).join(".config").join("hyperia").join("hyperia.json")
     };
 
     if let Ok(content) = std::fs::read_to_string(&cfg_path) {
