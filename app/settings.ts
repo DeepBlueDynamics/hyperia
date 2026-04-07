@@ -1,6 +1,7 @@
 // Settings chat window — token setup, config editing, nemesis8 install.
 // Opens instead of a JSON editor when user clicks Preferences.
 
+import {spawn} from 'child_process';
 import {readFileSync, writeFileSync, mkdirSync} from 'fs';
 import {tmpdir} from 'os';
 import {join} from 'path';
@@ -494,7 +495,18 @@ export function initSettings() {
   });
 
   ipcMain.on('edit-config-external', () => {
-    void shell.openPath(cfgPath);
+    // Try VS Code first, fall back to TextEdit on Mac or system default
+    if (process.platform === 'darwin') {
+      // macOS: try VS Code, then TextEdit
+      spawn('open', ['-a', 'Visual Studio Code', cfgPath]).on('error', () => {
+        spawn('open', ['-e', cfgPath]); // TextEdit
+      });
+    } else {
+      // Windows/Linux: try VS Code, fall back to system default
+      spawn('code', [cfgPath]).on('error', () => {
+        void shell.openPath(cfgPath);
+      });
+    }
   });
 
   ipcMain.on('factory-reset-config', (event) => {

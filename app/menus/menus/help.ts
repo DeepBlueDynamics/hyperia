@@ -13,7 +13,7 @@ const helpMenu = (commands: Record<string, string>, showAbout: () => void): Menu
     {
       label: `${app.name} Website`,
       click() {
-        void shell.openExternal('https://hyper.is');
+        void shell.openExternal('https://hyperia.nuts.services');
       }
     },
     {
@@ -26,14 +26,14 @@ const helpMenu = (commands: Record<string, string>, showAbout: () => void): Menu
   If not, please try and fulfil these first.
 -->
 <!-- 👉 Checked checkbox should look like this: [x] -->
-- [ ] Your Hyper.app version is **${version}**. Please verify you're using the [latest](https://github.com/vercel/hyper/releases/latest) Hyper.app version
-- [ ] I have searched the [issues](https://github.com/vercel/hyper/issues) of this repo and believe that this is not a duplicate
+- [ ] Your Hyperia version is **${version}**. Please verify you're using the [latest](https://github.com/deepbluedynamics/hyperia/releases/latest) Hyperia version
+- [ ] I have searched the [issues](https://github.com/deepbluedynamics/hyperia/issues) of this repo and believe that this is not a duplicate
 ---
 - **Any relevant information from devtools?** _(CMD+OPTION+I on macOS, CTRL+SHIFT+I elsewhere)_:
 <!-- 👉 Replace with info if applicable, or N/A -->
 
-- **Is the issue reproducible in vanilla Hyper.app?**
-<!-- 👉 Replace with info if applicable, or Is Vanilla. (Vanilla means Hyper.app without any add-ons or extras. Straight out of the box.) -->
+- **Is the issue reproducible in vanilla Hyperia?**
+<!-- 👉 Replace with info if applicable, or Is Vanilla. (Vanilla means Hyperia without any add-ons or extras. Straight out of the box.) -->
 
 ## Issue
 <!-- 👉 Now feel free to write your issue, but please be descriptive! Thanks again 🙌 ❤️ -->
@@ -61,11 +61,11 @@ ${JSON.stringify(getPlugins(), null, 2)}
 \`\`\`
 </details>`;
 
-        const issueURL = `https://github.com/vercel/hyper/issues/new?body=${encodeURIComponent(body)}`;
+        const issueURL = `https://github.com/deepbluedynamics/hyperia/issues/new?body=${encodeURIComponent(body)}`;
         const copyAndSend = () => {
           clipboard.writeText(body);
           void shell.openExternal(
-            `https://github.com/vercel/hyper/issues/new?body=${encodeURIComponent(
+            `https://github.com/deepbluedynamics/hyperia/issues/new?body=${encodeURIComponent(
               '<!-- We have written the needed data into your clipboard because it was too large to send. ' +
                 'Please paste. -->\n'
             )}`
@@ -98,7 +98,7 @@ ${JSON.stringify(getPlugins(), null, 2)}
     submenu.push(
       {type: 'separator'},
       {
-        label: 'About Hyper',
+        label: 'About Hyperia',
         click() {
           showAbout();
         }

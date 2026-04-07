@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
+import {existsSync} from 'fs';
+
 import React, {useState, useRef, useEffect} from 'react';
 
 import type {configOptions} from '../../typings/config';
@@ -28,8 +30,16 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  // Only show profiles that define a shell — visual-only profiles are not shell choices
-  const shellProfiles = (profiles || []).filter((p: any) => p.config?.shell);
+  // Only show profiles that define a shell AND where the shell actually exists on this platform
+  const shellProfiles = (profiles || []).filter((p: any) => {
+    if (!p.config?.shell) return false;
+    // Check if shell path exists (filter out Windows shells on Mac, Mac shells on Windows, etc.)
+    try {
+      return existsSync(p.config.shell);
+    } catch {
+      return false;
+    }
+  });
 
   const handleClick = () => {
     openNewTab(defaultProfile);

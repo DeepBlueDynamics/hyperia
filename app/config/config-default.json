@@ -102,7 +102,14 @@
         }
       },
       {
-        "name": "Claude",
+        "name": "Claude Code (macOS)",
+        "config": {
+          "shell": "/bin/zsh",
+          "shellArgs": ["-l", "-c", "claude"]
+        }
+      },
+      {
+        "name": "Claude Code (Windows)",
         "config": {
           "shell": "C:\\Windows\\System32\\cmd.exe",
           "shellArgs": ["/c", "claude"]

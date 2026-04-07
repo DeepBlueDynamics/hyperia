@@ -263,6 +263,10 @@ function _showSplash(
             if (!splash.isDestroyed()) {
               splash.destroy();
             }
+            // Show main window after splash is gone
+            if (!mainWin.isDestroyed() && !mainWin.isVisible()) {
+              mainWin.show();
+            }
           } else {
             try {
               splash.setOpacity(opacity);
@@ -381,9 +385,11 @@ app.on('ready', () => {
         return hwin;
       }
 
-      // Create the terminal window with splash screen
+      // Create the terminal window (starts hidden in production)
       const firstWin = createWindow();
-      firstWin.once('show', () => void _showSplash(firstWin.getBounds(), firstWin));
+
+      // Show splash immediately (don't wait for window to show)
+      void _showSplash(firstWin.getBounds(), firstWin);
 
       // expose to plugins
       app.createWindow = createWindow;

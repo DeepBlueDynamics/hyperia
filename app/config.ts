@@ -1,3 +1,5 @@
+import {existsSync} from 'fs';
+
 import {app} from 'electron';
 
 import chokidar from 'chokidar';
@@ -82,7 +84,38 @@ export const getConfigDir = () => {
 };
 
 export const getDefaultProfile = () => {
-  return cfg.config.defaultProfile || cfg.config.profiles[0]?.name || 'default';
+  // Find the first valid profile (where shell exists on this platform)
+  const findValidProfile = () => {
+    for (const profile of cfg.config.profiles || []) {
+      if (profile.config?.shell) {
+        try {
+          if (existsSync(profile.config.shell)) {
+            return profile.name;
+          }
+        } catch {
+          // shell path doesn't exist, try next
+        }
+      }
+    }
+    return 'default';
+  };
+
+  // If defaultProfile is specified and valid, use it
+  if (cfg.config.defaultProfile) {
+    const profile = cfg.config.profiles?.find((p) => p.name === cfg.config.defaultProfile);
+    if (profile?.config?.shell) {
+      try {
+        if (existsSync(profile.config.shell)) {
+          return cfg.config.defaultProfile;
+        }
+      } catch {
+        // configured default doesn't exist, fall through
+      }
+    }
+  }
+
+  // Fall back to first valid profile
+  return findValidProfile();
 };
 
 // get config for the default profile, keeping it for backward compatibility
