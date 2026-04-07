@@ -27,7 +27,8 @@
       "Bash(git push:*)",
       "Bash(git stash:*)",
       "Bash(yarn run dist:mac:*)",
-      "WebFetch(domain:nemesis8.nuts.services)"
+      "WebFetch(domain:nemesis8.nuts.services)",
+      "Bash(git fetch:*)"
     ],
     "deny": [],
     "ask": []

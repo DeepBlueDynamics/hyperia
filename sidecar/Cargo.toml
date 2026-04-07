@@ -51,4 +51,4 @@ urlencoding = "2.1"
 clap = { version = "4", features = ["derive"] }
 
 # Ferricula memory core (embedded)
-ferricula = { path = "../../ferricula/ferricula" }
+ferricula = { path = "../../ferricula" }

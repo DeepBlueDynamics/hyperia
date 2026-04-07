@@ -40,5 +40,5 @@ fn config_path() -> Option<PathBuf> {
     } else {
         std::env::var("HOME").ok()
     }?;
-    Some(PathBuf::from(home).join(".hyperia").join("hyperia.json"))
+    Some(PathBuf::from(home).join(".config").join("hyperia").join("hyperia.json"))
 }
