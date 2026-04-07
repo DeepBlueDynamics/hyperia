@@ -5,35 +5,165 @@ import {readFileSync, writeFileSync, mkdirSync} from 'fs';
 import {homedir} from 'os';
 import {join, resolve} from 'path';
 
-import {BrowserWindow, ipcMain, Menu, screen, app, clipboard, nativeImage} from 'electron';
+import {BrowserWindow, ipcMain, Menu, screen, app, nativeImage} from 'electron';
 
 import isDev from 'electron-is-dev';
 
 const NOTE_ADJECTIVES = [
-  'Bold', 'Brave', 'Calm', 'Clever', 'Cosmic', 'Curious', 'Dapper', 'Dreamy',
-  'Eager', 'Elegant', 'Fancy', 'Fierce', 'Fluffy', 'Friendly', 'Gentle', 'Glowing',
-  'Happy', 'Honest', 'Jolly', 'Kind', 'Lazy', 'Lively', 'Lucky', 'Mighty',
-  'Neat', 'Noble', 'Odd', 'Proud', 'Quick', 'Quiet', 'Relaxed', 'Royal',
-  'Silly', 'Sleepy', 'Sly', 'Smug', 'Snappy', 'Spicy', 'Spotless', 'Sunny',
-  'Swift', 'Tame', 'Tidy', 'Tiny', 'Wild', 'Wise', 'Witty', 'Zesty',
-  'Moody', 'Furious', 'Stormy', 'Creative', 'Thoughtful', 'Patient', 'Sparkly', 'Drowsy'
+  'Bold',
+  'Brave',
+  'Calm',
+  'Clever',
+  'Cosmic',
+  'Curious',
+  'Dapper',
+  'Dreamy',
+  'Eager',
+  'Elegant',
+  'Fancy',
+  'Fierce',
+  'Fluffy',
+  'Friendly',
+  'Gentle',
+  'Glowing',
+  'Happy',
+  'Honest',
+  'Jolly',
+  'Kind',
+  'Lazy',
+  'Lively',
+  'Lucky',
+  'Mighty',
+  'Neat',
+  'Noble',
+  'Odd',
+  'Proud',
+  'Quick',
+  'Quiet',
+  'Relaxed',
+  'Royal',
+  'Silly',
+  'Sleepy',
+  'Sly',
+  'Smug',
+  'Snappy',
+  'Spicy',
+  'Spotless',
+  'Sunny',
+  'Swift',
+  'Tame',
+  'Tidy',
+  'Tiny',
+  'Wild',
+  'Wise',
+  'Witty',
+  'Zesty',
+  'Moody',
+  'Furious',
+  'Stormy',
+  'Creative',
+  'Thoughtful',
+  'Patient',
+  'Sparkly',
+  'Drowsy'
 ];
 
 const NOTE_ANIMALS = [
-  'Badger', 'Beaver', 'Bison', 'Capybara', 'Cat', 'Cheetah', 'Crab', 'Dolphin',
-  'Elephant', 'Falcon', 'Ferret', 'Fox', 'Frog', 'Giraffe', 'Goose', 'Heron',
-  'Hippo', 'Iguana', 'Jaguar', 'Kangaroo', 'Koala', 'Lemur', 'Lion', 'Llama',
-  'Lynx', 'Manatee', 'Mole', 'Moose', 'Narwhal', 'Newt', 'Octopus', 'Otter',
-  'Owl', 'Panda', 'Panther', 'Parrot', 'Penguin', 'Platypus', 'Puma', 'Quokka',
-  'Rabbit', 'Raccoon', 'Raven', 'Seal', 'Shark', 'Slug', 'Sloth', 'Snail',
-  'Squirrel', 'Stork', 'Tapir', 'Tiger', 'Toucan', 'Turtle', 'Vicuna', 'Walrus',
-  'Weasel', 'Whale', 'Wolf', 'Wombat', 'Yak', 'Zebra'
+  'Badger',
+  'Beaver',
+  'Bison',
+  'Capybara',
+  'Cat',
+  'Cheetah',
+  'Crab',
+  'Dolphin',
+  'Elephant',
+  'Falcon',
+  'Ferret',
+  'Fox',
+  'Frog',
+  'Giraffe',
+  'Goose',
+  'Heron',
+  'Hippo',
+  'Iguana',
+  'Jaguar',
+  'Kangaroo',
+  'Koala',
+  'Lemur',
+  'Lion',
+  'Llama',
+  'Lynx',
+  'Manatee',
+  'Mole',
+  'Moose',
+  'Narwhal',
+  'Newt',
+  'Octopus',
+  'Otter',
+  'Owl',
+  'Panda',
+  'Panther',
+  'Parrot',
+  'Penguin',
+  'Platypus',
+  'Puma',
+  'Quokka',
+  'Rabbit',
+  'Raccoon',
+  'Raven',
+  'Seal',
+  'Shark',
+  'Slug',
+  'Sloth',
+  'Snail',
+  'Squirrel',
+  'Stork',
+  'Tapir',
+  'Tiger',
+  'Toucan',
+  'Turtle',
+  'Vicuna',
+  'Walrus',
+  'Weasel',
+  'Whale',
+  'Wolf',
+  'Wombat',
+  'Yak',
+  'Zebra'
 ];
 
 const NOTE_EMOJIS = [
-  '📝', '📌', '📋', '🗒️', '✨', '💡', '🌟', '⭐', '🔖', '🎯',
-  '🔮', '🧠', '💭', '🌙', '🪐', '🌸', '🍀', '🌿', '🔥', '⚡',
-  '🦊', '🦉', '🐸', '🦋', '🐙', '🌊', '🍄', '🌻', '🕯️', '🎨'
+  '📝',
+  '📌',
+  '📋',
+  '🗒️',
+  '✨',
+  '💡',
+  '🌟',
+  '⭐',
+  '🔖',
+  '🎯',
+  '🔮',
+  '🧠',
+  '💭',
+  '🌙',
+  '🪐',
+  '🌸',
+  '🍀',
+  '🌿',
+  '🔥',
+  '⚡',
+  '🦊',
+  '🦉',
+  '🐸',
+  '🦋',
+  '🐙',
+  '🌊',
+  '🍄',
+  '🌻',
+  '🕯️',
+  '🎨'
 ];
 
 function generateNoteName(): string {
@@ -135,7 +265,7 @@ type NoteData = {
 
 function readAllNotes(): NoteData[] {
   try {
-    return JSON.parse(readFileSync(join(stickysDir(), 'notes.json'), 'utf8'));
+    return JSON.parse(readFileSync(join(stickysDir(), 'notes.json'), 'utf8')) as NoteData[];
   } catch {
     return [];
   }
@@ -161,11 +291,6 @@ function upsertNote(note: NoteData) {
   writeAllNotes(notes);
 }
 
-function removeNote(id: string) {
-  const notes = readAllNotes().filter((n) => n.id !== id);
-  writeAllNotes(notes);
-}
-
 function createStickyNote(
   options: {
     id?: string;
@@ -187,11 +312,9 @@ function createStickyNote(
   const height = options.height || 220;
 
   const x =
-    options.x ??
-    Math.round(display.workArea.x + display.workArea.width / 2 - width / 2 + Math.random() * 60 - 30);
+    options.x ?? Math.round(display.workArea.x + display.workArea.width / 2 - width / 2 + Math.random() * 60 - 30);
   const y =
-    options.y ??
-    Math.round(display.workArea.y + display.workArea.height / 2 - height / 2 + Math.random() * 60 - 30);
+    options.y ?? Math.round(display.workArea.y + display.workArea.height / 2 - height / 2 + Math.random() * 60 - 30);
 
   // Determine or generate note ID
   const noteId = options.id || `note-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -236,7 +359,16 @@ function createStickyNote(
 
   // Persist initial record for notes
   if (!options.filePath) {
-    const current = getNote(noteId) || {id: noteId, name: displayName, color: colorHex, text: options.text || '', x, y, width, height};
+    const current = getNote(noteId) || {
+      id: noteId,
+      name: displayName,
+      color: colorHex,
+      text: options.text || '',
+      x,
+      y,
+      width,
+      height
+    };
     upsertNote({...current, name: displayName, x, y, width, height, color: colorHex});
   }
 

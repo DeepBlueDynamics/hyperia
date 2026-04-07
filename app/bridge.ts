@@ -44,7 +44,7 @@ interface TrackedSession {
   paneActive: boolean;
 }
 const trackedSessions = new Map<string, TrackedSession>();
-let focusedWindowId: number | null = null;
+let focusedWindowId: number | null = null; // eslint-disable-line @typescript-eslint/no-unused-vars
 
 // Agent input queue: per-session deferral when user is active
 const lastUserActivity = new Map<string, number>();
@@ -249,8 +249,8 @@ function getFocusedHyperiaWindow(): BrowserWindow | null {
 }
 
 function getHyperiaWindowById(windowId: number): BrowserWindow | null {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call
-  const windows = Array.from((app as any).getWindows?.() || []) as BrowserWindow[];
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument
+  const windows = Array.from((app as any).getWindows?.() || []);
   return windows.find((win) => win.id === windowId) || null;
 }
 
