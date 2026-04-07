@@ -250,7 +250,7 @@ function getFocusedHyperiaWindow(): BrowserWindow | null {
 
 function getHyperiaWindowById(windowId: number): BrowserWindow | null {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument
-  const windows = Array.from((app as any).getWindows?.() || []);
+  const windows: BrowserWindow[] = Array.from((app as any).getWindows?.() || []);
   return windows.find((win) => win.id === windowId) || null;
 }
 
