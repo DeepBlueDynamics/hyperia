@@ -423,47 +423,55 @@ function buildSettingsHtml(): string {
 
   function installNemesis8() {
     addMsg('Install Nemesis8', 'user');
-    addMsg('Cloning nemesis8 from GitHub...');
+    addMsg('Running official Nemesis8 installer...');
 
     const {exec} = require('child_process');
-    const home = require('os').homedir();
-    const path = require('path');
-    const installDir = path.join(home, '.hyperia', 'packages', 'nemesis8');
+    const isWin = process.platform === 'win32';
 
-    exec('git clone https://github.com/DeepBlueDynamics/nemesis8.git "' + installDir + '"', (err) => {
-      if (err && !err.message.includes('already exists')) {
-        addMsg('Clone failed: <code>' + err.message.replace(/</g, '&lt;') + '</code>', 'error');
+    // Use official installation script from nemesis8.nuts.services
+    const installCmd = isWin
+      ? 'powershell -c "irm https://nemesis8.nuts.services/install.ps1 | iex"'
+      : 'curl -fsSL https://nemesis8.nuts.services/install.sh | sh';
+
+    exec(installCmd, {timeout: 300000}, (err, stdout, stderr) => {
+      if (err) {
+        addMsg('Installation failed: <code>' + err.message.replace(/</g, '&lt;') + '</code>', 'error');
+        if (stderr) {
+          addMsg('Error details: <code>' + stderr.replace(/</g, '&lt;').substring(0, 500) + '</code>', 'error');
+        }
         return;
       }
-      addMsg('Building nemesis8 (this may take a minute)...');
-      exec('cd "' + installDir + '" && cargo build --release', {timeout: 300000}, (err2) => {
+
+      addMsg('Installation complete. Setting up profile...');
+
+      // Verify installation by checking if nemesis8 is now in PATH
+      exec(isWin ? 'where nemesis8' : 'which nemesis8', (err2, binaryPath) => {
         if (err2) {
-          addMsg('Build failed: <code>' + err2.message.replace(/</g, '&lt;') + '</code>', 'error');
+          addMsg('Nemesis8 installed, but could not find binary in PATH. Try restarting Hyperia.', 'error');
           return;
         }
+
         const cfg = readConfig();
         if (!cfg.config) cfg.config = {};
         if (!cfg.config.profiles) cfg.config.profiles = [];
         const existing = cfg.config.profiles.findIndex(p => p.name === 'Nemesis8');
-        const isWin = process.platform === 'win32';
+
         const profile = {
           name: 'Nemesis8',
           config: {
             shell: isWin ? 'C:\\\\Windows\\\\System32\\\\cmd.exe' : '/bin/bash',
             shellArgs: isWin
-              ? ['/c', 'cd "' + installDir + '" && .\\\\target\\\\release\\\\nemisis8.exe interactive']
-              : ['-c', 'cd "' + installDir + '" && ./target/release/nemisis8 interactive']
+              ? ['/c', 'nemesis8 interactive']
+              : ['-c', 'nemesis8 interactive']
           }
         };
+
         if (existing >= 0) cfg.config.profiles[existing] = profile;
         else cfg.config.profiles.push(profile);
         saveConfig(cfg);
 
         // Get installed version
-        const binary = isWin
-          ? path.join(installDir, 'target', 'release', 'nemisis8.exe')
-          : path.join(installDir, 'target', 'release', 'nemisis8');
-        exec('"' + binary + '" -V', {timeout: 5000}, (err3, stdout3) => {
+        exec('nemesis8 -V', {timeout: 5000}, (err3, stdout3) => {
           const version = err3 ? 'unknown' : stdout3.trim();
           addMsg('Nemesis8 <code>' + version + '</code> installed and added as a profile. Restart Hyperia to use it.', 'success');
         });

@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(yarn run build)",
+      "Bash(yarn install:*)",
+      "Bash(yarn cache clean:*)",
+      "Bash(npm cache verify:*)",
+      "Bash(git pull:*)",
+      "Bash(yarn run dist:*)",
+      "Bash(ls:*)",
+      "Bash(awk:*)",
+      "Bash(curl:*)",
+      "Bash(sh -s -- -y)",
+      "Bash(. \"$HOME/.cargo/env\")",
+      "Bash(cargo build:*)",
+      "Bash(/Users/kord/code/deepbluedynamics/hyperia/sidecar/target/release/hyperia-sidecar:*)",
+      "Read(//Users/kord/.config/**)",
+      "Read(//Users/kord/Library/**)",
+      "Read(//Users/kord/**)",
+      "Bash(rustup target add:*)",
+      "Bash(sips:*)",
+      "Bash(iconutil:*)",
+      "Bash(git add:*)",
+      "Bash(git rm:*)",
+      "Bash(git commit:*)",
+      "Bash(git log:*)",
+      "Bash(git push:*)",
+      "Bash(git stash:*)",
+      "Bash(yarn run dist:mac:*)",
+      "WebFetch(domain:nemesis8.nuts.services)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
