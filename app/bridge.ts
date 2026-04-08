@@ -9,12 +9,11 @@
 import {app} from 'electron';
 import type {BrowserWindow} from 'electron';
 
-import {createStickyNote, closeStickyNote} from './sticky';
-
 import isDev from 'electron-is-dev';
 import WebSocket from 'ws';
 
 import type Session from './session';
+import {createStickyNote, closeStickyNote} from './sticky';
 
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
@@ -448,17 +447,17 @@ function handleCommand(msg: Record<string, unknown>) {
       const modifiers = (msg.modifiers as string[]) || [];
       const targetWindowId = msg.windowId as number | undefined;
 
-      const win = targetWindowId
-        ? getHyperiaWindowById(targetWindowId)
-        : getFocusedHyperiaWindow();
+      const win = targetWindowId ? getHyperiaWindowById(targetWindowId) : getFocusedHyperiaWindow();
 
       if (win && keyCode) {
         const eventBase = {
           keyCode,
           modifiers
         } as any;
-        win.webContents.sendInputEvent({...eventBase, type: 'keyDown'} as any);
-        win.webContents.sendInputEvent({...eventBase, type: 'keyUp'} as any);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        win.webContents.sendInputEvent({...eventBase, type: 'keyDown'});
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+        win.webContents.sendInputEvent({...eventBase, type: 'keyUp'});
         sendResult(seq, 'ok');
       } else {
         sendResult(seq, win ? 'No keyCode specified' : 'No matching window');

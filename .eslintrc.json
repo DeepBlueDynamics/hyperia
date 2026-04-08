@@ -156,6 +156,15 @@
         "prettier/prettier": "off",
         "json-schema-validator/no-invalid": "error"
       }
+    },
+    {
+      "files": [
+        "electron-builder.json",
+        "electron-builder-linux-ci.json"
+      ],
+      "rules": {
+        "json-schema-validator/no-invalid": "off"
+      }
     }
   ]
 }
