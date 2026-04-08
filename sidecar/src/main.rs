@@ -297,6 +297,82 @@ async fn post_rename_tab(
     }
 }
 
+async fn post_ui_key(
+    State(state): State<AppState>,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let key_code = match parsed["keyCode"].as_str() {
+        Some(k) => k.to_string(),
+        None => return (StatusCode::BAD_REQUEST, "Missing keyCode".into()),
+    };
+    let modifiers = parsed["modifiers"].clone();
+    let window_id = parsed["windowId"].as_u64().map(|v| v as u32);
+    let mut cmd = serde_json::json!({
+        "type": "UIKey",
+        "keyCode": key_code,
+        "modifiers": modifiers,
+    });
+    if let Some(wid) = window_id {
+        cmd["windowId"] = serde_json::json!(wid);
+    }
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn get_notes() -> (StatusCode, String) {
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").ok()
+    } else {
+        std::env::var("HOME").ok()
+    };
+    let Some(home) = home else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "No home directory".into());
+    };
+    let path = std::path::PathBuf::from(home)
+        .join(".hyperia")
+        .join("stickys")
+        .join("notes.json");
+    match std::fs::read_to_string(&path) {
+        Ok(content) => (StatusCode::OK, content),
+        Err(_) => (StatusCode::OK, "[]".into()),
+    }
+}
+
+async fn post_note_create(
+    State(state): State<AppState>,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let cmd = serde_json::json!({
+        "type": "NoteCreate",
+        "text": parsed["text"],
+        "color": parsed["color"],
+    });
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn post_note_close(
+    State(state): State<AppState>,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let id = parsed["id"].as_str().unwrap_or("").to_string();
+    if id.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Missing note id".into());
+    }
+    let cmd = serde_json::json!({"type": "NoteClose", "id": id});
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
 async fn post_agent_status(
     State(state): State<AppState>,
     body: String,
@@ -408,7 +484,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pane/new", axum::routing::post(post_new_tab))
         .route("/api/pane/rename", axum::routing::post(post_rename_tab))
         .route("/api/agent/status", axum::routing::post(post_agent_status))
+        .route("/api/ui/key", axum::routing::post(post_ui_key))
         .route("/api/pane/describe", axum::routing::post(post_auto_describe))
+        .route("/api/notes", axum::routing::get(get_notes).post(post_note_create))
+        .route("/api/notes/close", axum::routing::post(post_note_close))
         .with_state(state);
 
     // Dashboard routes with their own state
@@ -429,6 +508,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ghost/history", axum::routing::get(ghost::api::ghost_history))
         .route("/api/ghost/memory", axum::routing::get(ghost::api::ghost_memory))
         .route("/api/ghost/stop", axum::routing::post(ghost::api::ghost_stop))
+        .route("/api/ghost/continue", axum::routing::post(ghost::api::ghost_continue))
         .route("/api/ghost/reset", axum::routing::post(ghost::api::ghost_reset))
         .with_state(ghost_state);
 

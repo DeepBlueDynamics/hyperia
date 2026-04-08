@@ -94,6 +94,7 @@ pub async fn ghost_status(State(state): State<GhostState>) -> Json<serde_json::V
         "state": state_str,
         "turn": session.turn(),
         "messages": session.message_count(),
+        "stop_requested": session.stop_requested(),
         "has_token": has_token,
     }))
 }
@@ -123,11 +124,18 @@ pub async fn ghost_memory(State(state): State<GhostState>) -> Json<serde_json::V
     }))
 }
 
-/// POST /api/ghost/stop — stop the running agent loop.
+/// POST /api/ghost/stop — request that the running agent wrap up and stop.
 pub async fn ghost_stop(State(state): State<GhostState>) -> &'static str {
     let session = state.session.lock().await;
-    session.stop();
-    "stopped"
+    session.request_stop();
+    "stop requested"
+}
+
+/// POST /api/ghost/continue — clear a pending stop request.
+pub async fn ghost_continue(State(state): State<GhostState>) -> &'static str {
+    let session = state.session.lock().await;
+    session.continue_run();
+    "continuing"
 }
 
 /// POST /api/ghost/reset — clear conversation.

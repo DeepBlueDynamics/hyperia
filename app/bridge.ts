@@ -9,6 +9,8 @@
 import {app} from 'electron';
 import type {BrowserWindow} from 'electron';
 
+import {createStickyNote, closeStickyNote} from './sticky';
+
 import isDev from 'electron-is-dev';
 import WebSocket from 'ws';
 
@@ -345,7 +347,7 @@ function handleCommand(msg: Record<string, unknown>) {
             const tryWrite = (attempts: number) => {
               if (session.pty?.pid) {
                 setTimeout(() => {
-                  session.write(command + '\r\n');
+                  session.write(command + '\r');
                 }, 800);
               } else if (attempts > 0) {
                 setTimeout(() => tryWrite(attempts - 1), 200);
@@ -434,6 +436,48 @@ function handleCommand(msg: Record<string, unknown>) {
         focWin.rpc.emit('agent status', statusData);
       }
       sendResult(seq, 'ok');
+      break;
+    }
+
+    case 'UIKey': {
+      // Dispatch a keyboard event directly to a window's webContents —
+      // bypasses the PTY and hits React's event system. This is how you send
+      // Escape, Ctrl+C, Alt+Up etc. to apps like Claude Code that handle
+      // keyboard shortcuts at the UI layer, not the terminal layer.
+      const keyCode = msg.keyCode as string;
+      const modifiers = (msg.modifiers as string[]) || [];
+      const targetWindowId = msg.windowId as number | undefined;
+
+      const win = targetWindowId
+        ? getHyperiaWindowById(targetWindowId)
+        : getFocusedHyperiaWindow();
+
+      if (win && keyCode) {
+        const eventBase = {
+          keyCode,
+          modifiers
+        } as any;
+        win.webContents.sendInputEvent({...eventBase, type: 'keyDown'} as any);
+        win.webContents.sendInputEvent({...eventBase, type: 'keyUp'} as any);
+        sendResult(seq, 'ok');
+      } else {
+        sendResult(seq, win ? 'No keyCode specified' : 'No matching window');
+      }
+      break;
+    }
+
+    case 'NoteCreate': {
+      const text = msg.text as string | undefined;
+      const color = msg.color as string | undefined;
+      createStickyNote({text, color});
+      sendResult(seq, 'ok');
+      break;
+    }
+
+    case 'NoteClose': {
+      const noteId = msg.id as string;
+      const closed = closeStickyNote(noteId);
+      sendResult(seq, closed ? 'ok' : 'Note not found or not open');
       break;
     }
 

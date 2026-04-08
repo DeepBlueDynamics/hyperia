@@ -532,4 +532,17 @@ export function initSticky() {
   }
 }
 
-export {createStickyNote};
+export function closeStickyNote(noteId: string): boolean {
+  const win = stickyWindows.get(noteId);
+  if (win && !win.isDestroyed()) {
+    const note = getNote(noteId);
+    if (note) {
+      upsertNote({...note, last_closed_at: new Date().toISOString()});
+    }
+    win.close();
+    return true;
+  }
+  return false;
+}
+
+export {createStickyNote, readAllNotes};

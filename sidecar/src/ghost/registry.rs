@@ -320,7 +320,7 @@ impl ToolRegistry {
                 let command = input["command"].as_str().unwrap_or("");
                 let wait_ms = input["wait_ms"].as_u64().unwrap_or(2000);
                 let command = command.trim_end_matches('\n').trim_end_matches('\r');
-                let keys = format!("{}\r\n", command);
+                let keys = format!("{}\r", command);
                 let _ = self.client
                     .post(build_target_url("/api/type"))
                     .body(keys)

@@ -40,8 +40,11 @@
         "x64"
       ]
     },
-    "signAndEditExecutable": false,
-    "rfc3161TimeStampServer": "http://timestamp.comodoca.com"
+    "signtoolOptions": {
+      "publisherName": "DeepBlue Dynamics LLC",
+      "signingHashAlgorithms": ["sha256"],
+      "sign": "./build/win/sign.js"
+    }
   },
   "nsis": {
     "include": "build/win/installer.nsh",

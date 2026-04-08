@@ -110,6 +110,16 @@ pub struct AgentStatusRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UIKeyRequest {
+    /// Electron key name: 'Escape', 'c', 'Up', 'Down', 'Return', 'Tab', etc.
+    pub key_code: String,
+    /// Modifier keys: ['ctrl'], ['alt'], ['shift'], ['meta'], or combinations
+    pub modifiers: Option<Vec<String>>,
+    /// Window index (0, 1, 2...). Omit for focused window.
+    pub window: Option<u32>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TelemetryToggleRequest {
     /// Enable or disable telemetry collection
     pub enabled: bool,
@@ -157,6 +167,20 @@ pub struct AutoDescribeRequest {
     pub pane: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct NoteCreateRequest {
+    /// Initial text content for the note (optional)
+    pub text: Option<String>,
+    /// Background color hex (e.g. "#fff9c4" for yellow). Omit to auto-assign.
+    pub color: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct NoteCloseRequest {
+    /// Note ID from note_list output (e.g. "note-1712345678-abc1")
+    pub id: String,
+}
+
 // -- MCP Server --
 
 #[derive(Clone)]
@@ -202,7 +226,7 @@ impl HyperiaMcp {
         self.focus_pane(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
         // Strip trailing newline/return sequences agents love to append — we add our own Enter
         let cmd = strip_trailing_returns(&req.command);
-        let keys = format!("{}\r\n", cmd);
+        let keys = format!("{}\r", cmd);
         self.post_text(&self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref()), &keys).await?;
 
         let wait = req.wait_ms.unwrap_or(2000);
@@ -301,6 +325,24 @@ impl HyperiaMcp {
             sidecar_version, sidecar_version, app_version
         );
         Ok(CallToolResult::success(vec![Content::text(info)]))
+    }
+
+    #[tool(description = "Send a keyboard event directly to a Hyperia window's UI layer — bypasses the PTY and hits React/Electron's event system. Use this to send keys like Escape, Ctrl+C, Alt+Up that are handled as UI shortcuts rather than terminal input. keyCode uses Electron key names (e.g. 'Escape', 'c', 'Up'). modifiers is an array like ['ctrl'], ['alt'], ['shift'], ['ctrl','shift'].")]
+    async fn terminal_ui_key(
+        &self,
+        Parameters(req): Parameters<UIKeyRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut body = serde_json::json!({
+            "keyCode": req.key_code,
+            "modifiers": req.modifiers.unwrap_or_default(),
+        });
+        if let Some(w) = req.window {
+            body["windowId"] = serde_json::json!(w);
+        }
+        let resp = self
+            .post_json("/api/ui/key", &body)
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
     #[tool(description = "Set the agent status light on a specific pane. Address with window/tab/pane.")]
@@ -616,6 +658,32 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(actions.join("\n"))]))
     }
 
+    #[tool(description = "List all sticky notes. Returns id, name, text preview, color, and position for each note.")]
+    async fn note_list(&self) -> Result<CallToolResult, ErrorData> {
+        let resp = self.get("/api/notes").await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Create a new sticky note floating window. Optionally provide initial text and a background color hex.")]
+    async fn note_create(
+        &self,
+        Parameters(req): Parameters<NoteCreateRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"text": req.text, "color": req.color});
+        let resp = self.post_json("/api/notes", &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Close an open sticky note window by its ID. Use note_list to get IDs. The note's content is preserved on disk.")]
+    async fn note_close(
+        &self,
+        Parameters(req): Parameters<NoteCloseRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"id": req.id});
+        let resp = self.post_json("/api/notes/close", &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
     #[tool(description = "Auto-describe a pane using local ollama. Reads screen content, generates a short description, and stores it on the tab.")]
     async fn auto_describe(
         &self,
@@ -655,7 +723,7 @@ fn unescape_keys(s: &str) -> String {
     while let Some(c) = chars.next() {
         if c == '\\' {
             match chars.next() {
-                Some('n') => out.push_str("\r\n"), // \n → Enter (CR+LF for terminal)
+                Some('n') => out.push('\r'), // \n → Enter
                 Some('r') => out.push('\r'),
                 Some('t') => out.push('\t'),
                 Some('\\') => out.push('\\'),
@@ -686,7 +754,7 @@ fn detect_shell_state(screen: &str) -> ShellStateInfo {
         return ShellStateInfo {
             kind: "dialog".into(),
             detail: "Claude Code trust folder prompt".into(),
-            actionable: Some("\r\n".into()),
+            actionable: Some("\r".into()),
         };
     }
 
@@ -695,7 +763,7 @@ fn detect_shell_state(screen: &str) -> ShellStateInfo {
         return ShellStateInfo {
             kind: "dialog".into(),
             detail: "Update available prompt".into(),
-            actionable: Some("2\r\n".into()),
+            actionable: Some("2\r".into()),
         };
     }
 
@@ -704,7 +772,7 @@ fn detect_shell_state(screen: &str) -> ShellStateInfo {
         return ShellStateInfo {
             kind: "dialog".into(),
             detail: "y/n confirmation".into(),
-            actionable: Some("y\r\n".into()),
+            actionable: Some("y\r".into()),
         };
     }
 
@@ -713,7 +781,7 @@ fn detect_shell_state(screen: &str) -> ShellStateInfo {
         return ShellStateInfo {
             kind: "dialog".into(),
             detail: "Press enter prompt".into(),
-            actionable: Some("\r\n".into()),
+            actionable: Some("\r".into()),
         };
     }
 

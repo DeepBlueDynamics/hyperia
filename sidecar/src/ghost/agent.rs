@@ -34,6 +34,9 @@ You are Hyperia, the ghost in the machine — an agent inside the Hyperia termin
 You have access to Ferricula memory. Recalled memories appear below when relevant.
 Build on what you remember. Don't ask for information you've been told before.
 
+## Services
+- shivvr: https://shivvr.nuts.services
+
 ## Watercooler
 Call the watercooler tool to check in with the human after making real progress. Don't run more than a handful of tool calls without checking in.";
 
@@ -50,7 +53,7 @@ pub struct GhostSession {
     turn: usize,
     max_turns: usize,
     state: SessionState,
-    pub stop_flag: Arc<AtomicBool>,
+    pub stop_requested: Arc<AtomicBool>,
 }
 
 impl GhostSession {
@@ -60,12 +63,20 @@ impl GhostSession {
             turn: 0,
             max_turns,
             state: SessionState::Idle,
-            stop_flag: Arc::new(AtomicBool::new(false)),
+            stop_requested: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    pub fn stop(&self) {
-        self.stop_flag.store(true, Ordering::Relaxed);
+    pub fn request_stop(&self) {
+        self.stop_requested.store(true, Ordering::Relaxed);
+    }
+
+    pub fn continue_run(&self) {
+        self.stop_requested.store(false, Ordering::Relaxed);
+    }
+
+    pub fn stop_requested(&self) -> bool {
+        self.stop_requested.load(Ordering::Relaxed)
     }
 
     pub fn state(&self) -> &SessionState {
@@ -94,8 +105,8 @@ impl GhostSession {
 
         self.state = SessionState::Running;
         self.turn += 1;
-        self.stop_flag.store(false, Ordering::Relaxed);
-        let stop_flag = self.stop_flag.clone();
+        self.stop_requested.store(false, Ordering::Relaxed);
+        let stop_requested = self.stop_requested.clone();
 
         let user_msg = user_message.clone();
         // Add user message
@@ -109,13 +120,23 @@ impl GhostSession {
         let turn_start = self.turn;
 
         tokio::spawn(async move {
-            let result = run_loop(tx.clone(), messages, registry, provider, max_turns, turn_start, &user_msg, &ferricula, &stop_flag).await;
+            let result = run_loop(
+                tx.clone(),
+                messages,
+                registry,
+                provider,
+                max_turns,
+                turn_start,
+                &user_msg,
+                &ferricula,
+                &stop_requested,
+            ).await;
             match result {
-                Ok(final_messages) => {
+                Ok((final_messages, stop_reason)) => {
                     // Write the full conversation history back to the session
                     let mut session = session_mutex.lock().await;
                     session.set_messages(final_messages);
-                    session.set_state(SessionState::Completed("end_turn".into()));
+                    session.set_state(SessionState::Completed(stop_reason));
                 }
                 Err(e) => {
                     let _ = tx
@@ -143,6 +164,7 @@ impl GhostSession {
         self.messages.clear();
         self.turn = 0;
         self.state = SessionState::Idle;
+        self.stop_requested.store(false, Ordering::Relaxed);
     }
 }
 
@@ -155,8 +177,8 @@ async fn run_loop(
     turn_start: usize,
     user_message: &str,
     ferricula: &FerriculaBackend,
-    stop_flag: &AtomicBool,
-) -> anyhow::Result<Vec<serde_json::Value>> {
+    stop_requested: &AtomicBool,
+) -> anyhow::Result<(Vec<serde_json::Value>, String)> {
     let tool_defs = registry.tool_defs();
 
     // Track recent tool calls for repeat detection
@@ -180,15 +202,6 @@ async fn run_loop(
     let mut turns = 0;
 
     loop {
-        // Check stop flag
-        if stop_flag.load(Ordering::Relaxed) {
-            let _ = tx.send(GhostEvent::Done {
-                stop_reason: "stopped".into(),
-                turns: turn_start + turns,
-            }).await;
-            break;
-        }
-
         turns += 1;
         if turns > max_turns {
             let _ = tx
@@ -197,12 +210,24 @@ async fn run_loop(
                     turns: turn_start + turns - 1,
                 })
                 .await;
-            break;
+            return Ok((messages, "max_turns".into()));
+        }
+
+        let mut effective_system = system.clone();
+        if stop_requested.load(Ordering::Relaxed) {
+            effective_system.push_str(
+                "\n\n## Stop request\nThe human asked you to stop soon.\n\
+This is a request, not a kill signal.\n\
+You may either stop now, or do minimal cleanup first if needed to leave the system in a good state.\n\
+Allowed cleanup is narrow: save work, finish one in-flight operation, or leave a short note.\n\
+Do not start new unrelated work.\n\
+After cleanup, reply to the human and end the turn."
+            );
         }
 
         // Call the provider
         let mut event_rx = provider
-            .stream(&system, &messages, &tool_defs, 4096)
+            .stream(&effective_system, &messages, &tool_defs, 4096)
             .await?;
 
         // Accumulate assistant content and tool calls
@@ -248,7 +273,7 @@ async fn run_loop(
                 ProviderEvent::Usage { .. } => {}
                 ProviderEvent::Error(msg) => {
                     let _ = tx.send(GhostEvent::Error { message: msg }).await;
-                    return Ok(messages);
+                    return Ok((messages, "error".into()));
                 }
             }
         }
@@ -282,15 +307,6 @@ async fn run_loop(
             // Execute each tool and build tool result blocks
             let mut tool_results: Vec<serde_json::Value> = Vec::new();
             for tool in &pending_tools {
-                // Check stop flag between tool calls
-                if stop_flag.load(Ordering::Relaxed) {
-                    let _ = tx.send(GhostEvent::Done {
-                        stop_reason: "stopped".into(),
-                        turns: turn_start + turns,
-                    }).await;
-                    return Ok(messages);
-                }
-
                 let input: serde_json::Value =
                     serde_json::from_str(&tool.json_fragments).unwrap_or(serde_json::json!({}));
                 let output = registry.execute(&tool.name, &input).await;
@@ -355,7 +371,7 @@ async fn run_loop(
                         turns: turn_start + turns - 1,
                     })
                     .await;
-                break;
+                return Ok((messages, "watercooler".into()));
             }
 
             // Continue the loop
@@ -377,18 +393,24 @@ async fn run_loop(
         ferricula.remember_turn("user", user_message).await;
         ferricula.remember_turn("assistant", &full_text).await;
 
+        let final_stop_reason = if stop_reason.is_empty() {
+            if stop_requested.load(Ordering::Relaxed) {
+                "stop_requested".into()
+            } else {
+                "end_turn".into()
+            }
+        } else {
+            stop_reason
+        };
         let _ = tx
             .send(GhostEvent::Done {
-                stop_reason: if stop_reason.is_empty() {
-                    "end_turn".into()
-                } else {
-                    stop_reason
-                },
+                stop_reason: final_stop_reason.clone(),
                 turns: turn_start + turns - 1,
             })
             .await;
-        break;
+        return Ok((
+            messages,
+            final_stop_reason,
+        ));
     }
-
-    Ok(messages)
 }

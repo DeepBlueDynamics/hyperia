@@ -296,6 +296,21 @@ function buildHyperiaHtml(): string {
     background: #c51e1440;
     box-shadow: 0 0 12px rgba(197,30,20,0.2);
   }
+  .continue-btn {
+    background: #1f6f4a20;
+    border: 1px solid #1f6f4a50;
+    border-radius: 8px;
+    color: #6fd0a0;
+    padding: 0 16px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+    display: none;
+  }
+  .continue-btn:hover {
+    background: #1f6f4a40;
+    box-shadow: 0 0 12px rgba(31,111,74,0.2);
+  }
 </style>
 </head>
 <body>
@@ -310,7 +325,8 @@ function buildHyperiaHtml(): string {
     <input type="text" id="input" placeholder="Ask Hyperia anything..."
            onkeydown="if(event.key==='Enter'&&!event.shiftKey)send()" autofocus>
     <button class="send-btn" id="sendBtn" onclick="send()">Send</button>
-    <button class="stop-btn" id="stopBtn" onclick="stopAgent()">Stop</button>
+    <button class="stop-btn" id="stopBtn" onclick="stopAgent()">Stop Soon</button>
+    <button class="continue-btn" id="continueBtn" onclick="continueAgent()">Carry on</button>
   </div>
 
 <script>
@@ -318,10 +334,25 @@ function buildHyperiaHtml(): string {
   const chat = document.getElementById('chat');
   const input = document.getElementById('input');
   const sendBtn = document.getElementById('sendBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const continueBtn = document.getElementById('continueBtn');
   let streaming = false;
+  let stopRequested = false;
+
+  async function refreshStatus() {
+    try {
+      const resp = await fetch(SIDECAR_URL + '/api/ghost/status');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      stopRequested = !!data.stop_requested;
+      setStreaming(data.state === 'running');
+    } catch (e) { /* ignore */ }
+  }
 
   // Auto-activate on load
   (async function() {
+    await refreshStatus();
+
     // Try to restore previous chat
     try {
       const resp = await fetch(SIDECAR_URL + '/api/ghost/history');
@@ -332,7 +363,7 @@ function buildHyperiaHtml(): string {
             addMsg(msg.content, msg.role);
           }
           chat.scrollTop = chat.scrollHeight;
-          input.focus();
+          if (!streaming) input.focus();
           return;
         }
       }
@@ -412,19 +443,30 @@ function buildHyperiaHtml(): string {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
-  const stopBtn = document.getElementById('stopBtn');
-
   function setStreaming(val) {
     streaming = val;
     input.disabled = val;
     sendBtn.style.display = val ? 'none' : '';
-    stopBtn.style.display = val ? '' : 'none';
+    stopBtn.style.display = val && !stopRequested ? '' : 'none';
+    continueBtn.style.display = val && stopRequested ? '' : 'none';
     if (!val) input.focus();
   }
 
   async function stopAgent() {
     try {
       await fetch(SIDECAR_URL + '/api/ghost/stop', { method: 'POST' });
+      stopRequested = true;
+      setStreaming(true);
+      addMsg('Stop requested. Hyperia can wrap up first, then reply and stop.', 'watercooler');
+    } catch (e) { /* ignore */ }
+  }
+
+  async function continueAgent() {
+    try {
+      await fetch(SIDECAR_URL + '/api/ghost/continue', { method: 'POST' });
+      stopRequested = false;
+      setStreaming(true);
+      addMsg('Carry on. Stop request cleared.', 'watercooler');
     } catch (e) { /* ignore */ }
   }
 
@@ -435,6 +477,7 @@ function buildHyperiaHtml(): string {
     input.value = '';
 
     addMsg(text, 'user');
+    stopRequested = false;
     setStreaming(true);
 
     let assistantDiv = null;
@@ -520,11 +563,13 @@ function buildHyperiaHtml(): string {
                   assistantDiv = null;
                   assistantText = '';
                 }
+                stopRequested = false;
                 setStreaming(false);
                 break;
 
               case 'error':
                 addMsg('Error: ' + event.message, 'error');
+                stopRequested = false;
                 setStreaming(false);
                 break;
             }
@@ -537,8 +582,19 @@ function buildHyperiaHtml(): string {
       addMsg('Cannot reach sidecar. Make sure Hyperia is running and restart if needed.', 'error');
     }
 
+    stopRequested = false;
     setStreaming(false);
   }
+
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !streaming) return;
+    event.preventDefault();
+    if (stopRequested) {
+      void continueAgent();
+    } else {
+      void stopAgent();
+    }
+  });
 </script>
 </body>
 </html>`;
