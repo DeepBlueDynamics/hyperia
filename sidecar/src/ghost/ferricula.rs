@@ -21,12 +21,14 @@ pub struct FerriculaBackend {
     local: Option<Arc<FerriculaCore>>,
     remote_url: Option<String>,
     remote_client: reqwest::Client,
+    shivvr_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct FerriculaConfig {
     pub mode: String,
     pub url: String,
+    pub shivvr_url: Option<String>,
 }
 
 impl FerriculaBackend {
@@ -94,6 +96,7 @@ impl FerriculaBackend {
             local,
             remote_url,
             remote_client: reqwest::Client::new(),
+            shivvr_url: config.shivvr_url.clone(),
         }
     }
 
@@ -104,6 +107,27 @@ impl FerriculaBackend {
             std::env::var("HOME").unwrap_or_default()
         };
         std::path::PathBuf::from(home).join(".hyperia").join("memory")
+    }
+
+    /// Generate embeddings for text using Shivvr server.
+    async fn embed(&self, text: &str) -> Vec<f32> {
+        if let Some(ref url) = self.shivvr_url {
+            let body = serde_json::json!({ "text": text });
+            if let Ok(resp) = self.remote_client.post(format!("{}/embed", url)).json(&body).send().await {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(vec) = json["embedding"].as_array() {
+                        let embedding: Vec<f32> = vec.iter()
+                            .filter_map(|v| v.as_f64().map(|f| f as f32))
+                            .collect();
+                        if embedding.len() == 768 {
+                            return embedding;
+                        }
+                    }
+                }
+            }
+        }
+        // Fallback: zeros
+        vec![0.0; 768]
     }
 
     /// Recall memories relevant to a query using text search.
@@ -181,6 +205,9 @@ impl FerriculaBackend {
         emotion: Option<(&str, Option<&str>)>,
         keystone: bool,
     ) {
+        // Generate embedding
+        let vector = self.embed(text).await;
+
         if let Some(ref core) = self.local {
             let mut db = core.engine.lock().unwrap();
             let mut search = core.search.lock().unwrap();
@@ -194,7 +221,7 @@ impl FerriculaBackend {
             let row = ferricula::Row {
                 id: next_id,
                 tags,
-                vector: vec![0.0; 768],
+                vector,
             };
 
             let mut record = MemoryRecord::new(next_id);
@@ -239,6 +266,9 @@ impl FerriculaBackend {
         self.remember_full(text, "ghost-history", 0.3, None, false).await;
         // Tag with role
         if let Some(ref core) = self.local {
+            // Generate embedding BEFORE acquiring locks
+            let vector = self.embed(text).await;
+
             let db = core.engine.lock().unwrap();
             let bitmap = db.engine().all_bitmap();
             if let Some(max_id) = bitmap.max() {
@@ -254,7 +284,7 @@ impl FerriculaBackend {
                 tags.insert("role".into(), role.to_string());
                 tags.insert("channel".into(), "ghost-history".to_string());
                 tags.insert("source".into(), "hyperia-ghost".to_string());
-                let row = ferricula::Row { id: next_id, tags, vector: vec![0.0; 768] };
+                let row = ferricula::Row { id: next_id, tags, vector };
                 let record = MemoryRecord::new(next_id);
                 search.add_document(next_id, text);
                 let _ = db.remember(row, record);
@@ -473,9 +503,11 @@ pub fn load_ferricula_config() -> FerriculaConfig {
     if let Ok(content) = std::fs::read_to_string(&cfg_path) {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
             let fc = &json["config"]["ferricula"];
+            let shivvr = &json["config"]["shivvr"];
             return FerriculaConfig {
                 mode: fc["mode"].as_str().unwrap_or("local").to_string(),
                 url: fc["url"].as_str().unwrap_or("http://localhost:8765").to_string(),
+                shivvr_url: shivvr["url"].as_str().map(|s| s.to_string()),
             };
         }
     }
@@ -483,5 +515,6 @@ pub fn load_ferricula_config() -> FerriculaConfig {
     FerriculaConfig {
         mode: "local".into(),
         url: "http://localhost:8765".into(),
+        shivvr_url: None,
     }
 }
