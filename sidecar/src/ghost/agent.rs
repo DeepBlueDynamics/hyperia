@@ -29,6 +29,10 @@ You are Hyperia, the ghost in the machine — an agent inside the Hyperia termin
 - Address panes with window/tab/pane parameters.
 - Use tool_search to discover available tools by keyword.
 - Use tool_create to make new tools on the fly when no existing tool fits.
+  - Prefer the SCRIPT mode (code + language). Write Python/Node/shell scripts that read JSON args from stdin and write results to stdout. This avoids all quoting issues and gives you real language features.
+  - Use shell command templates only for trivial one-liners with no quoting complexity.
+  - Scripts are saved to ~/.hyperia/tools/ and are callable immediately after creation.
+- If a tool behaves unexpectedly, is broken, or needs fixing, call memory_remember with channel=\"tool-health\" to record it. Future sessions will recall this automatically.
 
 ## Memory
 You have access to Ferricula memory. Recalled memories appear below when relevant.
@@ -54,6 +58,7 @@ pub struct GhostSession {
     max_turns: usize,
     state: SessionState,
     pub stop_requested: Arc<AtomicBool>,
+    pub window_closed: Arc<AtomicBool>,
 }
 
 impl GhostSession {
@@ -64,6 +69,7 @@ impl GhostSession {
             max_turns,
             state: SessionState::Idle,
             stop_requested: Arc::new(AtomicBool::new(false)),
+            window_closed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -77,6 +83,14 @@ impl GhostSession {
 
     pub fn stop_requested(&self) -> bool {
         self.stop_requested.load(Ordering::Relaxed)
+    }
+
+    pub fn notify_window_closed(&self) {
+        self.window_closed.store(true, Ordering::Relaxed);
+    }
+
+    pub fn window_closed(&self) -> bool {
+        self.window_closed.load(Ordering::Relaxed)
     }
 
     pub fn state(&self) -> &SessionState {
@@ -106,7 +120,9 @@ impl GhostSession {
         self.state = SessionState::Running;
         self.turn += 1;
         self.stop_requested.store(false, Ordering::Relaxed);
+        self.window_closed.store(false, Ordering::Relaxed);
         let stop_requested = self.stop_requested.clone();
+        let window_closed = self.window_closed.clone();
 
         let user_msg = user_message.clone();
         // Add user message
@@ -130,6 +146,7 @@ impl GhostSession {
                 &user_msg,
                 &ferricula,
                 &stop_requested,
+                &window_closed,
             ).await;
             match result {
                 Ok((final_messages, stop_reason)) => {
@@ -165,6 +182,7 @@ impl GhostSession {
         self.turn = 0;
         self.state = SessionState::Idle;
         self.stop_requested.store(false, Ordering::Relaxed);
+        self.window_closed.store(false, Ordering::Relaxed);
     }
 }
 
@@ -178,6 +196,7 @@ async fn run_loop(
     user_message: &str,
     ferricula: &FerriculaBackend,
     stop_requested: &AtomicBool,
+    window_closed: &AtomicBool,
 ) -> anyhow::Result<(Vec<serde_json::Value>, String)> {
     let tool_defs = registry.tool_defs();
 
@@ -214,7 +233,14 @@ async fn run_loop(
         }
 
         let mut effective_system = system.clone();
-        if stop_requested.load(Ordering::Relaxed) {
+        if window_closed.load(Ordering::Relaxed) {
+            effective_system.push_str(
+                "\n\n## Window closed\nThe Hyperia chat window has been closed by the user.\n\
+Stop all current activity immediately. Do not start new tool calls.\n\
+Do not produce output — there is no window to display it.\n\
+Exit the turn now."
+            );
+        } else if stop_requested.load(Ordering::Relaxed) {
             effective_system.push_str(
                 "\n\n## Stop request\nThe human asked you to stop soon.\n\
 This is a request, not a kill signal.\n\
@@ -271,6 +297,9 @@ After cleanup, reply to the human and end the turn."
                     stop_reason = sr;
                 }
                 ProviderEvent::Usage { .. } => {}
+                ProviderEvent::Retrying { attempt, wait_secs } => {
+                    let _ = tx.send(GhostEvent::Retrying { attempt, wait_secs }).await;
+                }
                 ProviderEvent::Error(msg) => {
                     let _ = tx.send(GhostEvent::Error { message: msg }).await;
                     return Ok((messages, "error".into()));
@@ -319,6 +348,27 @@ After cleanup, reply to the human and end the turn."
                 recent_calls.push((call_sig, output.clone()));
                 // Keep only last 10
                 if recent_calls.len() > 10 { recent_calls.remove(0); }
+
+                // Auto-save tool health observations
+                {
+                    let out_lower = output.to_lowercase();
+                    let is_error = out_lower.contains("error") || out_lower.contains("failed")
+                        || out_lower.contains("blocked") || out_lower.contains("unknown tool");
+                    if is_error {
+                        let snippet = &output[..output.len().min(300)];
+                        ferricula.remember(
+                            &format!("Tool '{}' returned an error: {}", tool.name, snippet),
+                            "tool-health",
+                        ).await;
+                    }
+                    if is_repeat {
+                        ferricula.remember(
+                            &format!("Tool '{}' looped — same input produced same output twice. May be broken or stuck. Input: {}",
+                                tool.name, &input.to_string()[..input.to_string().len().min(200)]),
+                            "tool-health",
+                        ).await;
+                    }
+                }
 
                 let _ = tx
                     .send(GhostEvent::ToolResult {

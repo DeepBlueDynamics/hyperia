@@ -12,6 +12,8 @@ pub enum GhostEvent {
     ToolResult { id: String, output: String },
     #[serde(rename = "watercooler")]
     Watercooler { summary: String, tool_calls: usize },
+    #[serde(rename = "retrying")]
+    Retrying { attempt: u32, wait_secs: u64 },
     #[serde(rename = "done")]
     Done { stop_reason: String, turns: usize },
     #[serde(rename = "error")]
@@ -43,6 +45,7 @@ pub enum ProviderEvent {
     ToolCallEnd { id: String },
     Usage { input_tokens: u64, output_tokens: u64 },
     MessageStop { stop_reason: String },
+    Retrying { attempt: u32, wait_secs: u64 },
     Error(String),
 }
 

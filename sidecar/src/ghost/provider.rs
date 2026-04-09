@@ -12,7 +12,7 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     pub fn new(config: &GhostConfig) -> Self {
         let model = match config.model.as_str() {
-            "anthropic" => "claude-sonnet-4-20250514".to_string(),
+            "anthropic" => "claude-sonnet-4-6".to_string(),
             other => other.to_string(),
         };
         Self {
@@ -52,25 +52,47 @@ impl AnthropicProvider {
             "stream": true,
         });
 
-        let resp = self
-            .client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .body(body.to_string())
-            .send()
-            .await?;
+        // Retry up to 3 times on 529 overloaded with exponential backoff
+        let mut attempt = 0u32;
+        let resp = loop {
+            let resp = self
+                .client
+                .post("https://api.anthropic.com/v1/messages")
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .body(body.to_string())
+                .send()
+                .await?;
+
+            if resp.status().as_u16() == 529 && attempt < 3 {
+                attempt += 1;
+                let wait_ms = 1000u64 * (1 << attempt); // 2s, 4s, 8s
+                let _ = tx.send(ProviderEvent::Retrying {
+                    attempt,
+                    wait_secs: wait_ms / 1000,
+                }).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
+                continue;
+            }
+
+            break resp;
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            let _ = tx
-                .send(ProviderEvent::Error(format!(
-                    "API error {}: {}",
-                    status, body
-                )))
-                .await;
+            let raw = resp.text().await.unwrap_or_default();
+            // Parse Anthropic error body for a clean message, but always include the raw body
+            let label = if status.as_u16() == 529 {
+                format!("Anthropic overloaded (529) after {} retries — try again shortly.\nFull response: {}", attempt, raw)
+            } else if status.as_u16() == 401 {
+                format!("Invalid API key (401). Check your token in Settings.\nFull response: {}", raw)
+            } else if status.as_u16() == 400 {
+                format!("Bad request (400) — likely invalid model or parameters.\nFull response: {}", raw)
+            } else {
+                format!("API error {} — {}", status, raw)
+            };
+            let _ = tx.send(ProviderEvent::Error(label)).await;
             return Ok(rx);
         }
 

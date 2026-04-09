@@ -130,45 +130,74 @@ impl FerriculaBackend {
         vec![0.0; 768]
     }
 
-    /// Recall memories relevant to a query using text search.
+    /// Recall memories relevant to a query using hybrid BM25 + vector + keyword search.
     pub async fn recall(&self, query: &str) -> String {
-        let mut results = Vec::new();
+        // (score, text) — higher is more relevant
+        let mut scored: Vec<(f32, String)> = Vec::new();
+
+        // Query embedding for semantic search — only meaningful if Shivvr is configured
+        let query_vec = self.embed(query).await;
+        let has_embeddings = query_vec.iter().any(|&v| v != 0.0);
 
         if let Some(ref core) = self.local {
             let db = core.engine.lock().unwrap();
             let search = core.search.lock().unwrap();
+            let mut seen: std::collections::HashSet<u32> = Default::default();
 
-            // BM25 text search via corpus engine
-            let hits = search.bm25_search(query, 10, db.prime_tree());
-            for hit in &hits {
+            // BM25 — increased cap, score descends by rank position
+            let hits = search.bm25_search(query, 25, db.prime_tree());
+            for (i, hit) in hits.iter().enumerate() {
                 if let Some(row) = db.engine().get(hit.id) {
                     if row.tags.get("channel").map(|s| s.as_str()) == Some("ghost-history") {
                         continue;
                     }
                     if let Some(text) = row.tags.get("text") {
-                        results.push(text.clone());
-                        if results.len() >= 5 { break; }
+                        let score = 1.0 - (i as f32 * 0.04); // 1.0, 0.96, 0.92 …
+                        scored.push((score, text.clone()));
+                        seen.insert(hit.id);
                     }
                 }
             }
 
-            // Fallback: keyword scan if BM25 found nothing
-            if results.is_empty() {
-                let terms: Vec<String> = query.split_whitespace().map(|s| s.to_lowercase()).take(5).collect();
+            // Vector similarity — scan all non-history rows (up to 2000), merge with BM25
+            if has_embeddings {
                 let bitmap = db.engine().all_bitmap();
-                if let Some(max) = bitmap.max() {
-                    let start = if max > 50 { max - 50 } else { 0 };
-                    for id in (start..=max).rev() {
-                        if results.len() >= 5 { break; }
-                        if let Some(row) = db.engine().get(id) {
-                            if row.tags.get("channel").map(|s| s.as_str()) == Some("ghost-history") {
-                                continue;
-                            }
+                let mut scanned = 0u32;
+                for id in bitmap.iter() {
+                    if scanned >= 2000 { break; }
+                    scanned += 1;
+                    if seen.contains(&id) { continue; }
+                    if let Some(row) = db.engine().get(id) {
+                        if row.tags.get("channel").map(|s| s.as_str()) == Some("ghost-history") {
+                            continue;
+                        }
+                        if row.vector.iter().all(|&v| v == 0.0) { continue; }
+                        let sim = cosine_similarity(&query_vec, &row.vector);
+                        if sim > 0.45 {
                             if let Some(text) = row.tags.get("text") {
-                                let lower = text.to_lowercase();
-                                if terms.iter().any(|t| lower.contains(t)) {
-                                    results.push(text.clone());
-                                }
+                                scored.push((sim, text.clone()));
+                                seen.insert(id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Keyword fallback — scan ALL rows, no recency limit
+            if scored.is_empty() {
+                let terms: Vec<String> = query.split_whitespace()
+                    .map(|s| s.to_lowercase()).take(5).collect();
+                let bitmap = db.engine().all_bitmap();
+                for id in bitmap.iter() {
+                    if scored.len() >= 10 { break; }
+                    if let Some(row) = db.engine().get(id) {
+                        if row.tags.get("channel").map(|s| s.as_str()) == Some("ghost-history") {
+                            continue;
+                        }
+                        if let Some(text) = row.tags.get("text") {
+                            let lower = text.to_lowercase();
+                            if terms.iter().any(|t| lower.contains(t)) {
+                                scored.push((0.1, text.clone()));
                             }
                         }
                     }
@@ -176,24 +205,31 @@ impl FerriculaBackend {
             }
         }
 
-        // Remote recall
+        // Remote recall — append with a mid-tier score
         if let Some(ref url) = self.remote_url {
             let body = serde_json::json!({ "query": query });
             if let Ok(resp) = self.remote_client.post(format!("{}/recall", url)).json(&body).send().await {
                 if let Ok(text) = resp.text().await {
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                        Self::extract_recall_texts(&json, &mut results);
+                        let mut remote: Vec<String> = Vec::new();
+                        Self::extract_recall_texts(&json, &mut remote);
+                        for r in remote {
+                            scored.push((0.5, r));
+                        }
                     }
                 }
             }
         }
 
-        if results.is_empty() {
-            String::new()
-        } else {
-            let formatted: Vec<String> = results.iter().take(5).map(|t| format!("- {}", t)).collect();
-            format!("\n## Recalled memories\n{}", formatted.join("\n"))
+        if scored.is_empty() {
+            return String::new();
         }
+
+        // Sort by score descending, deduplicate, return top 8
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.dedup_by(|a, b| a.1 == b.1);
+        let formatted: Vec<String> = scored.iter().take(8).map(|(_, t)| format!("- {}", t)).collect();
+        format!("\n## Recalled memories\n{}", formatted.join("\n"))
     }
 
     /// Store a memory with full control over metadata.
@@ -471,6 +507,15 @@ impl FerriculaBackend {
     }
 }
 
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() { return 0.0; }
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 { return 0.0; }
+    dot / (norm_a * norm_b)
+}
+
 fn get_entropy() -> Vec<u8> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -489,7 +534,7 @@ fn get_entropy() -> Vec<u8> {
     bytes
 }
 
-/// Load ferricula config from ~/.config/hyperia/hyperia.json.
+/// Load ferricula config from ~/.hyperia/hyperia.json.
 pub fn load_ferricula_config() -> FerriculaConfig {
     let cfg_path = {
         let home = if cfg!(windows) {
@@ -497,7 +542,7 @@ pub fn load_ferricula_config() -> FerriculaConfig {
         } else {
             std::env::var("HOME").unwrap_or_default()
         };
-        std::path::PathBuf::from(home).join(".config").join("hyperia").join("hyperia.json")
+        std::path::PathBuf::from(home).join(".hyperia").join("hyperia.json")
     };
 
     if let Ok(content) = std::fs::read_to_string(&cfg_path) {

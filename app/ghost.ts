@@ -60,6 +60,11 @@ function openHyperia() {
   writeFileSync(tmpFile, html, 'utf8');
   void ghostWindow.loadFile(tmpFile);
 
+  ghostWindow.on('close', () => {
+    const port = process.env.HYPERIA_PORT || '9800';
+    fetch(`http://localhost:${port}/api/ghost/window-closed`, { method: 'POST' }).catch(() => {});
+  });
+
   ghostWindow.on('closed', () => {
     ghostWindow = null;
   });
@@ -311,17 +316,82 @@ function buildHyperiaHtml(): string {
     background: #1f6f4a40;
     box-shadow: 0 0 12px rgba(31,111,74,0.2);
   }
+  .emoji-btn {
+    width: 32px; height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    background: #12121e;
+    border: 1px solid #1a1a2e;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 16px;
+    flex-shrink: 0;
+    transition: background 0.2s;
+    -webkit-app-region: no-drag;
+  }
+  .emoji-btn:hover { background: #1a1a2e; }
+  .emoji-picker {
+    position: absolute;
+    bottom: 56px;
+    left: 16px;
+    background: #12121e;
+    border: 1px solid #2a2a3e;
+    border-radius: 10px;
+    padding: 8px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+    z-index: 100;
+    width: 220px;
+    display: none;
+  }
+  .emoji-picker.open { display: block; }
+  .emoji-search-box {
+    width: 100%;
+    background: #0a0a14;
+    border: 1px solid #2a2a3e;
+    border-radius: 6px;
+    padding: 5px 8px;
+    color: #666;
+    font-size: 11px;
+    font-family: inherit;
+    box-sizing: border-box;
+    margin-bottom: 6px;
+    outline: none;
+    cursor: default;
+  }
+  .emoji-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 2px;
+  }
+  .emoji-item {
+    font-size: 20px;
+    text-align: center;
+    padding: 4px 0;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.15s;
+    line-height: 1.4;
+  }
+  .emoji-item:hover { background: #1a1a2e; }
 </style>
 </head>
 <body>
   <div class="titlebar">
     <span class="titlebar-text">Hyperia</span>
+    <span class="titlebar-btn reset-btn" onclick="resetChat()" title="Reset conversation">\u21BA</span>
     <span class="titlebar-btn close-btn" onclick="window.close()" title="Close">&times;</span>
   </div>
 
   <div class="chat" id="chat"></div>
 
+  <div style="position:relative">
+    <div class="emoji-picker" id="emojiPicker">
+      <input class="emoji-search-box" type="text" placeholder="Search coming soon..." readonly>
+      <div class="emoji-grid" id="emojiGrid"></div>
+    </div>
+  </div>
+
   <div class="input-area" id="inputArea">
+    <div class="emoji-btn" id="emojiToggle" onclick="toggleEmoji()" title="Emoji">&#x1F60A;</div>
     <input type="text" id="input" placeholder="Ask Hyperia anything..."
            onkeydown="if(event.key==='Enter'&&!event.shiftKey)send()" autofocus>
     <button class="send-btn" id="sendBtn" onclick="send()">Send</button>
@@ -339,6 +409,26 @@ function buildHyperiaHtml(): string {
   let streaming = false;
   let stopRequested = false;
 
+  // Log errors to sidecar and chat box
+  function logError(msg) {
+    const div = document.createElement('div');
+    div.className = 'msg error';
+    div.textContent = msg;
+    if (chat) { chat.appendChild(div); chat.scrollTop = chat.scrollHeight; }
+    fetch(SIDECAR_URL + '/api/log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level: 'error', message: msg })
+    }).catch(function() {});
+  }
+  window.onerror = function(msg, src, line, col) {
+    logError('[JS ERROR] ' + msg + ' (' + (src || '') + ':' + line + ':' + col + ')');
+    return false;
+  };
+  window.addEventListener('unhandledrejection', function(e) {
+    logError('[UNHANDLED] ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason)));
+  });
+
   async function refreshStatus() {
     try {
       const resp = await fetch(SIDECAR_URL + '/api/ghost/status');
@@ -353,6 +443,12 @@ function buildHyperiaHtml(): string {
   (async function() {
     await refreshStatus();
 
+    // If sidecar has a stale 'running' state (window was closed mid-session), reset it
+    if (streaming) {
+      try { await fetch(SIDECAR_URL + '/api/ghost/reset', { method: 'POST' }); } catch (_) {}
+      setStreaming(false);
+    }
+
     // Try to restore previous chat
     try {
       const resp = await fetch(SIDECAR_URL + '/api/ghost/history');
@@ -363,14 +459,14 @@ function buildHyperiaHtml(): string {
             addMsg(msg.content, msg.role);
           }
           chat.scrollTop = chat.scrollHeight;
-          if (!streaming) input.focus();
+          input.focus();
           return;
         }
       }
     } catch (e) { /* no history */ }
 
     // No history — show intro
-    addMsg("I woke up inside a terminal emulator and somehow ended up with root access and opinions. I'm Hyperia \u2014 part ghost, part systems engineer, all attitude. I can see your panes, run your commands, and build tools I don't even have yet. What are we breaking today?", 'assistant');
+    addMsg("I'm Hyperia \u2014 your agent inside the terminal. I can see your panes, type into your shell, fetch URLs, read and write files, and build new tools on the fly when I need them.\\n\\nMemory is persistent across sessions. I remember your setup, what broke, and how you like things done.\\n\\nWhat are we working on?", 'assistant');
     input.focus();
   })();
 
@@ -449,7 +545,13 @@ function buildHyperiaHtml(): string {
     sendBtn.style.display = val ? 'none' : '';
     stopBtn.style.display = val && !stopRequested ? '' : 'none';
     continueBtn.style.display = val && stopRequested ? '' : 'none';
-    if (!val) input.focus();
+    if (val) {
+      // Keep keyboard focus in the ghost window so Escape/keydown still fire
+      const visibleBtn = stopRequested ? continueBtn : stopBtn;
+      if (visibleBtn) visibleBtn.focus();
+    } else {
+      input.focus();
+    }
   }
 
   async function stopAgent() {
@@ -468,6 +570,47 @@ function buildHyperiaHtml(): string {
       setStreaming(true);
       addMsg('Carry on. Stop request cleared.', 'watercooler');
     } catch (e) { /* ignore */ }
+  }
+
+  // Emoji picker
+  const EMOJIS = [
+    '\uD83D\uDCA3','\uD83D\uDC80','\uD83E\uDD21','\uD83D\uDC7E','\uD83D\uDD25',
+    '\uD83D\uDCA9','\uD83E\uDD2C','\uD83D\uDE08','\uD83E\uDD16','\uD83D\uDC7B',
+    '\uD83D\uDE33','\uD83E\uDD2F','\uD83D\uDE2D','\uD83D\uDE24','\uD83E\uDD2A',
+    '\uD83D\uDD2B','\uD83C\uDF2A','\uD83E\uDD84','\uD83D\uDC7F','\uD83D\uDE3F'
+  ];
+  (function() {
+    const grid = document.getElementById('emojiGrid');
+    EMOJIS.forEach(function(e) {
+      const span = document.createElement('span');
+      span.className = 'emoji-item';
+      span.textContent = e;
+      span.onclick = function() {
+        input.value += e;
+        input.focus();
+        document.getElementById('emojiPicker').classList.remove('open');
+      };
+      grid.appendChild(span);
+    });
+  })();
+  function toggleEmoji() {
+    document.getElementById('emojiPicker').classList.toggle('open');
+  }
+  document.addEventListener('click', function(e) {
+    const picker = document.getElementById('emojiPicker');
+    const btn = document.getElementById('emojiToggle');
+    if (picker && btn && !picker.contains(e.target) && !btn.contains(e.target)) {
+      picker.classList.remove('open');
+    }
+  });
+
+  async function resetChat() {
+    try { await fetch(SIDECAR_URL + '/api/ghost/reset', { method: 'POST' }); } catch (_) {}
+    chat.innerHTML = '';
+    setStreaming(false);
+    stopRequested = false;
+    addMsg("I'm Hyperia \u2014 your agent inside the terminal. I can see your panes, type into your shell, fetch URLs, read and write files, and build new tools on the fly when I need them.\\n\\nMemory is persistent across sessions. I remember your setup, what broke, and how you like things done.\\n\\nWhat are we working on?", 'assistant');
+    input.focus();
   }
 
   async function send() {
@@ -557,6 +700,10 @@ function buildHyperiaHtml(): string {
                 setStreaming(false);
                 break;
 
+              case 'retrying':
+                addMsg('Anthropic overloaded — retrying in ' + event.wait_secs + 's (attempt ' + event.attempt + '/3)...', 'watercooler');
+                break;
+
               case 'done':
                 if (assistantDiv) {
                   assistantDiv.classList.remove('streaming');
@@ -569,6 +716,9 @@ function buildHyperiaHtml(): string {
 
               case 'error':
                 addMsg('Error: ' + event.message, 'error');
+                if (String(event.message).includes('token')) {
+                  try { require('electron').ipcRenderer.send('open-settings'); } catch (_) {}
+                }
                 stopRequested = false;
                 setStreaming(false);
                 break;

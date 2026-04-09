@@ -144,3 +144,10 @@ pub async fn ghost_reset(State(state): State<GhostState>) -> &'static str {
     session.reset();
     "ok"
 }
+
+/// POST /api/ghost/window-closed — notify agent that the chat window was closed.
+pub async fn ghost_window_closed(State(state): State<GhostState>) -> &'static str {
+    let session = state.session.lock().await;
+    session.notify_window_closed();
+    "ok"
+}

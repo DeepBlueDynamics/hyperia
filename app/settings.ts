@@ -2,7 +2,7 @@
 // Opens instead of a JSON editor when user clicks Preferences.
 
 import {spawn} from 'child_process';
-import {readFileSync, writeFileSync, mkdirSync} from 'fs';
+import {readFileSync, writeFileSync, mkdirSync, rmSync} from 'fs';
 import {tmpdir} from 'os';
 import {join} from 'path';
 
@@ -408,13 +408,13 @@ function buildSettingsHtml(): string {
   }
 
   function factoryReset() {
+    if (!confirm('This will wipe all Hyperia settings AND Ferricula memory (tool history, remembered facts, parrot colors — all of it). Your agent API token will be preserved. Restart Hyperia after. Continue?')) return;
     addMsg('Factory Reset', 'user');
-    addMsg('This will restore all settings to defaults. Your agent token will be preserved. Restart Hyperia after.', 'system');
     const {ipcRenderer} = require('electron');
     ipcRenderer.send('factory-reset-config');
     ipcRenderer.once('factory-reset-done', (event, ok) => {
       if (ok) {
-        addMsg('Config restored to factory defaults. Restart Hyperia to apply.', 'success');
+        addMsg('Config and memory wiped. Your API token was preserved. Restart Hyperia to complete the reset.', 'success');
       } else {
         addMsg('Factory reset failed.', 'error');
       }
@@ -541,6 +541,20 @@ export function initSettings() {
       }
 
       writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+
+      // Purge Ferricula memory from disk
+      const home = process.env.USERPROFILE || process.env.HOME || '';
+      const memDir = join(home, '.hyperia', 'memory');
+      try {
+        rmSync(memDir, { recursive: true, force: true });
+      } catch {
+        // non-fatal — may not exist
+      }
+
+      // Best-effort: tell sidecar to reset ghost session (in-memory state)
+      const port = process.env.HYPERIA_PORT || '9800';
+      fetch(`http://localhost:${port}/api/ghost/reset`, { method: 'POST' }).catch(() => {});
+
       event.reply('factory-reset-done', true);
     } catch (e) {
       event.reply('factory-reset-done', false);

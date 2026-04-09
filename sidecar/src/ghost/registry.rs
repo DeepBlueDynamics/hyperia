@@ -3,11 +3,20 @@ use std::sync::{Arc, Mutex};
 use super::ferricula::FerriculaBackend;
 use super::types::ToolDef;
 
-/// A dynamically created tool backed by a shell command.
+/// How a dynamic tool is invoked.
+#[derive(Debug, Clone)]
+pub enum DynamicInvocation {
+    /// Legacy: shell command with {{input.field}} substitution
+    ShellTemplate(String),
+    /// Script file on disk — receives JSON args on stdin, writes result to stdout
+    Script { path: String, interpreter: String },
+}
+
+/// A dynamically created tool.
 #[derive(Debug, Clone)]
 pub struct DynamicTool {
     pub def: ToolDef,
-    pub command_template: String,
+    pub invocation: DynamicInvocation,
 }
 
 pub struct ToolRegistry {
@@ -160,35 +169,77 @@ impl ToolRegistry {
             .as_str()
             .unwrap_or("A dynamically created tool")
             .to_string();
-        let command = match input["command"].as_str() {
-            Some(c) => c.to_string(),
-            None => return "Error: 'command' is required".into(),
-        };
         let parameters = input["parameters"].clone();
-        let schema = if parameters.is_null() || parameters.is_object() && parameters.as_object().map_or(true, |o| o.is_empty()) {
-            serde_json::json!({
-                "type": "object",
-                "properties": {},
-            })
+        let schema = if parameters.is_null() || (parameters.is_object() && parameters.as_object().map_or(true, |o| o.is_empty())) {
+            serde_json::json!({ "type": "object", "properties": {} })
         } else {
             parameters
         };
 
+        let invocation = if let Some(code) = input["code"].as_str() {
+            // Script-based tool — write to ~/.hyperia/tools/<name>.<ext>
+            let language = input["language"].as_str().unwrap_or("python");
+            let ext = match language {
+                "node" | "javascript" | "js" => "js",
+                "shell" | "bash" | "sh"      => "sh",
+                _                            => "py",
+            };
+            let interpreter = match language {
+                "node" | "javascript" | "js" => "node",
+                "shell" | "bash" | "sh"      => if cfg!(windows) { "bash" } else { "bash" },
+                _                            => "python3",
+            };
+
+            let tools_dir = Self::tools_dir();
+            if let Err(e) = std::fs::create_dir_all(&tools_dir) {
+                return format!("Error creating tools dir: {}", e);
+            }
+            let script_path = tools_dir.join(format!("{}.{}", name, ext));
+            if let Err(e) = std::fs::write(&script_path, code) {
+                return format!("Error writing script: {}", e);
+            }
+            // Make executable on Unix
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
+            }
+            DynamicInvocation::Script {
+                path: script_path.to_string_lossy().to_string(),
+                interpreter: interpreter.to_string(),
+            }
+        } else if let Some(command) = input["command"].as_str() {
+            DynamicInvocation::ShellTemplate(command.to_string())
+        } else {
+            return "Error: provide either 'code' (script) or 'command' (shell template)".into();
+        };
+
+        let summary = match &invocation {
+            DynamicInvocation::Script { path, interpreter } =>
+                format!("Script tool '{}' written ({}) — call it now.", name, interpreter),
+            DynamicInvocation::ShellTemplate(_) =>
+                format!("Shell tool '{}' created — call it now.", name),
+        };
+
         let tool = DynamicTool {
-            def: ToolDef {
-                name: name.clone(),
-                description,
-                input_schema: schema,
-            },
-            command_template: command,
+            def: ToolDef { name: name.clone(), description, input_schema: schema },
+            invocation,
         };
 
         let mut dynamic = self.dynamic.lock().unwrap();
-        // Replace if same name exists
         dynamic.retain(|t| t.def.name != name);
         dynamic.push(tool);
 
-        format!("Tool '{}' created successfully. You can now call it.", name)
+        summary
+    }
+
+    fn tools_dir() -> std::path::PathBuf {
+        let home = if cfg!(windows) {
+            std::env::var("USERPROFILE").unwrap_or_default()
+        } else {
+            std::env::var("HOME").unwrap_or_default()
+        };
+        std::path::PathBuf::from(home).join(".hyperia").join("tools")
     }
 
     async fn execute_dynamic(&self, name: &str, input: &serde_json::Value) -> String {
@@ -200,44 +251,72 @@ impl ToolRegistry {
             }
         };
 
-        // Substitute {{input.fieldName}} in the command template
-        let mut cmd = tool.command_template.clone();
-        if let Some(obj) = input.as_object() {
-            for (key, val) in obj {
-                let placeholder = format!("{{{{input.{}}}}}", key);
-                let replacement = match val {
-                    serde_json::Value::String(s) => s.clone(),
-                    other => other.to_string(),
+        match &tool.invocation {
+            DynamicInvocation::Script { path, interpreter } => {
+                // Pass args as JSON on stdin; read result from stdout
+                let args_json = serde_json::to_string(input).unwrap_or_else(|_| "{}".into());
+                let mut child = match tokio::process::Command::new(interpreter)
+                    .arg(path)
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                {
+                    Ok(c) => c,
+                    Err(e) => return format!("Failed to start {}: {}", interpreter, e),
                 };
-                cmd = cmd.replace(&placeholder, &replacement);
-            }
-        }
-
-        // Execute the command
-        match tokio::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
-            .args(if cfg!(windows) { vec!["/c", &cmd] } else { vec!["-c", &cmd] })
-            .output()
-            .await
-        {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if output.status.success() {
-                    if stderr.is_empty() {
-                        stdout.to_string()
-                    } else {
-                        format!("{}\nstderr: {}", stdout, stderr)
-                    }
+                // Write JSON args to stdin
+                if let Some(mut stdin) = child.stdin.take() {
+                    use tokio::io::AsyncWriteExt;
+                    let _ = stdin.write_all(args_json.as_bytes()).await;
+                }
+                let out = match child.wait_with_output().await {
+                    Ok(o) => o,
+                    Err(e) => return format!("Script execution error: {}", e),
+                };
+                let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                if out.status.success() {
+                    if stdout.is_empty() && !stderr.is_empty() { stderr } else { stdout }
                 } else {
-                    format!(
-                        "Command failed (exit {})\nstdout: {}\nstderr: {}",
-                        output.status.code().unwrap_or(-1),
-                        stdout,
-                        stderr
-                    )
+                    format!("Script failed (exit {}):\n{}{}", out.status.code().unwrap_or(-1),
+                        if !stdout.is_empty() { format!("stdout: {}\n", stdout) } else { String::new() },
+                        if !stderr.is_empty() { format!("stderr: {}", stderr) } else { String::new() })
                 }
             }
-            Err(e) => format!("Failed to execute command: {}", e),
+
+            DynamicInvocation::ShellTemplate(template) => {
+                // Legacy: substitute {{input.fieldName}} and run as shell command
+                let mut cmd = template.clone();
+                if let Some(obj) = input.as_object() {
+                    for (key, val) in obj {
+                        let placeholder = format!("{{{{input.{}}}}}", key);
+                        let replacement = match val {
+                            serde_json::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        cmd = cmd.replace(&placeholder, &replacement);
+                    }
+                }
+                match tokio::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+                    .args(if cfg!(windows) { vec!["/c", &cmd] } else { vec!["-c", &cmd] })
+                    .output()
+                    .await
+                {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        if output.status.success() {
+                            if stderr.is_empty() { stdout.to_string() }
+                            else { format!("{}\nstderr: {}", stdout, stderr) }
+                        } else {
+                            format!("Command failed (exit {}):\nstdout: {}\nstderr: {}",
+                                output.status.code().unwrap_or(-1), stdout, stderr)
+                        }
+                    }
+                    Err(e) => format!("Failed to execute command: {}", e),
+                }
+            }
         }
     }
 
@@ -514,16 +593,20 @@ fn tool_search_def() -> ToolDef {
 fn tool_create_def() -> ToolDef {
     ToolDef {
         name: "tool_create".into(),
-        description: "Create a new tool at runtime. The tool executes a shell command when called. Use {{input.fieldName}} in the command template for parameter substitution.".into(),
+        description: "Create a callable tool at runtime. Two modes:\n\
+            1. SCRIPT (preferred): provide 'code' + 'language' (python/node/shell). The script receives a JSON object on stdin and must write its result to stdout. Saved to ~/.hyperia/tools/ and callable immediately.\n\
+            2. SHELL TEMPLATE (simple): provide 'command' with {{input.fieldName}} substitution — use only for trivial one-liners.".into(),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
                 "name": { "type": "string", "description": "Tool name (snake_case)" },
                 "description": { "type": "string", "description": "What the tool does" },
                 "parameters": { "type": "object", "description": "JSON Schema for the tool's input parameters" },
-                "command": { "type": "string", "description": "Shell command template. Use {{input.fieldName}} for substitution." }
+                "code": { "type": "string", "description": "Full script code. Reads args from stdin as JSON (import json, sys; args = json.load(sys.stdin)). Writes result to stdout." },
+                "language": { "type": "string", "enum": ["python", "node", "shell"], "description": "Script language (default: python)" },
+                "command": { "type": "string", "description": "Shell command template for simple one-liners. Use {{input.fieldName}} for substitution." }
             },
-            "required": ["name", "description", "command"]
+            "required": ["name", "description"]
         }),
     }
 }

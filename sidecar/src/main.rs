@@ -54,6 +54,25 @@ async fn get_logs(State(state): State<AppState>) -> Json<Vec<String>> {
     Json(lines.iter().cloned().collect())
 }
 
+#[derive(serde::Deserialize)]
+struct ClientLogRequest {
+    level: Option<String>,
+    message: String,
+}
+
+async fn post_client_log(
+    State(state): State<AppState>,
+    Json(req): Json<ClientLogRequest>,
+) -> &'static str {
+    let msg = format!("[ghost-client] {}", req.message);
+    match req.level.as_deref().unwrap_or("info") {
+        "error" => tracing::error!("{}", msg),
+        "warn"  => tracing::warn!("{}", msg),
+        _       => tracing::info!("{}", msg),
+    }
+    "ok"
+}
+
 async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(state.bridge.get_status().await)
 }
@@ -474,6 +493,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/ws", axum::routing::get(bridge::ws_handler))
         // Read endpoints
         .route("/api/logs", axum::routing::get(get_logs))
+        .route("/api/log", axum::routing::post(post_client_log))
         .route("/api/status", axum::routing::get(get_status))
         .route("/api/screen", axum::routing::get(get_screen))
         // Write endpoints
@@ -510,6 +530,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ghost/stop", axum::routing::post(ghost::api::ghost_stop))
         .route("/api/ghost/continue", axum::routing::post(ghost::api::ghost_continue))
         .route("/api/ghost/reset", axum::routing::post(ghost::api::ghost_reset))
+        .route("/api/ghost/window-closed", axum::routing::post(ghost::api::ghost_window_closed))
         .with_state(ghost_state);
 
     let app = app.merge(dash_routes).merge(ghost_routes);

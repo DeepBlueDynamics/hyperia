@@ -7,6 +7,7 @@ import chokidar from 'chokidar';
 import type {parsedConfig, configOptions} from '../typings/config';
 
 import {_import, getDefaultConfig} from './config/import';
+import {detectProfiles, pickDefaultProfile} from './config/detect';
 import _openConfig from './config/open';
 import {cfgPath, cfgDir} from './config/paths';
 import notify from './notify';
@@ -157,6 +158,17 @@ export const getKeymaps = () => {
 
 export const setup = () => {
   cfg = _import();
+  // Replace static default profiles with system-detected shells
+  const detected = detectProfiles();
+  if (detected.length > 0) {
+    cfg.config.profiles = detected;
+    // Only override defaultProfile if it isn't set or doesn't exist in detected list
+    const current = cfg.config.defaultProfile;
+    const valid = current && detected.find((p) => p.name === current);
+    if (!valid) {
+      cfg.config.defaultProfile = pickDefaultProfile(detected);
+    }
+  }
   _watch();
   checkDeprecatedConfig();
 };

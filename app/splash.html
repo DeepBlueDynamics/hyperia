@@ -56,7 +56,7 @@ const C = 600;        // speed of light (pixels/s)
 const K = 8000;       // Coulomb constant (scaled)
 const DT = 0.016;     // timestep
 const DAMPING = 0.998;
-const N = 80;         // particle count
+const N = 40;         // particle count
 
 // Particle class
 class Particle {
@@ -258,13 +258,15 @@ function draw() {
 
 // --- Timeline ---
 const START = performance.now();
-const TITLE_FADE_IN = 600;    // ms - title starts fading in
-const TITLE_FULL = 1200;      // ms - title fully visible
+const TITLE_FADE_IN = 800;    // ms - title starts fading in
+const TITLE_FULL = 2000;      // ms - title fully visible
+const MIN_SHOW_MS = 6000;     // ms - minimum time splash is visible
 
 let signaled = false;
+let appReady = false;
 let readyToClose = false;
 let fadeStartTime = 0;
-const FADE_DURATION = 400;    // ms - fast fade out
+const FADE_DURATION = 600;    // ms - fade out duration
 
 function loop() {
   const elapsed = performance.now() - START;
@@ -276,6 +278,11 @@ function loop() {
   if (elapsed > TITLE_FADE_IN && !readyToClose) {
     const t = Math.min(1, (elapsed - TITLE_FADE_IN) / (TITLE_FULL - TITLE_FADE_IN));
     title.style.opacity = t;
+  }
+
+  // Don't close until minimum time has passed AND app is ready
+  if (appReady && elapsed >= MIN_SHOW_MS && !readyToClose) {
+    readyToClose = true;
   }
 
   // When app signals ready, start fade out
@@ -306,13 +313,13 @@ function loop() {
 // Listen for app ready signal
 if (window.electronAPI) {
   window.electronAPI.onAppReady(() => {
-    readyToClose = true;
+    appReady = true;
   });
 }
 
-// Allow click/key to skip
-document.addEventListener('click', () => { readyToClose = true; });
-document.addEventListener('keydown', () => { readyToClose = true; });
+// Allow click/key to skip minimum wait
+document.addEventListener('click', () => { appReady = true; readyToClose = true; });
+document.addEventListener('keydown', () => { appReady = true; readyToClose = true; });
 
 requestAnimationFrame(loop);
 </script>
