@@ -2,8 +2,8 @@
  * Shell detection — queries the actual system at startup to build a profiles list
  * containing only shells that are installed and available.
  */
-import {existsSync} from 'fs';
 import {execSync} from 'child_process';
+import {existsSync} from 'fs';
 import process from 'process';
 
 export interface DetectedProfile {
@@ -52,13 +52,20 @@ function detectWslDistros(): string[] {
   if (!buf) return [];
 
   // Try UTF-16 LE first (the common Windows format for WSL output)
-  let raw = buf.toString('utf16le');
+  const raw = buf.toString('utf16le');
   // If it decoded properly, it won't have \0 artifacts — filter them
-  let lines = raw.split(/\r?\n/).map((l) => l.replace(/\0/g, '').trim()).filter(Boolean);
+  let lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\0/g, '').trim())
+    .filter(Boolean);
 
   // Sanity check: if lines look garbled, try utf8
   if (lines.length === 0 || lines.some((l) => l.includes('\0'))) {
-    lines = buf.toString('utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    lines = buf
+      .toString('utf8')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
   }
 
   return lines.filter((d) => {
@@ -90,10 +97,7 @@ function detectWindows(): DetectedProfile[] {
   }
 
   // Git Bash
-  const gitBashCandidates = [
-    'C:\\Program Files\\Git\\bin\\bash.exe',
-    'C:\\Program Files (x86)\\Git\\bin\\bash.exe'
-  ];
+  const gitBashCandidates = ['C:\\Program Files\\Git\\bin\\bash.exe', 'C:\\Program Files (x86)\\Git\\bin\\bash.exe'];
   for (const p of gitBashCandidates) {
     if (existsSync(p)) {
       profiles.push({name: 'Git Bash', config: {shell: p, shellArgs: ['--login', '-i']}});
@@ -176,9 +180,7 @@ export function pickDefaultProfile(profiles: DetectedProfile[]): string {
   if (profiles.length === 0) return 'default';
 
   const preferred =
-    process.platform === 'win32'
-      ? ['PowerShell', 'PowerShell 5', 'CMD', 'Git Bash']
-      : ['zsh', 'bash', 'fish'];
+    process.platform === 'win32' ? ['PowerShell', 'PowerShell 5', 'CMD', 'Git Bash'] : ['zsh', 'bash', 'fish'];
 
   for (const name of preferred) {
     if (profiles.find((p) => p.name === name)) return name;

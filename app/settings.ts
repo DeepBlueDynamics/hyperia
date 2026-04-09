@@ -546,14 +546,14 @@ export function initSettings() {
       const home = process.env.USERPROFILE || process.env.HOME || '';
       const memDir = join(home, '.hyperia', 'memory');
       try {
-        rmSync(memDir, { recursive: true, force: true });
+        rmSync(memDir, {recursive: true, force: true});
       } catch {
         // non-fatal — may not exist
       }
 
       // Best-effort: tell sidecar to reset ghost session (in-memory state)
       const port = process.env.HYPERIA_PORT || '9800';
-      fetch(`http://localhost:${port}/api/ghost/reset`, { method: 'POST' }).catch(() => {});
+      fetch(`http://localhost:${port}/api/ghost/reset`, {method: 'POST'}).catch(() => {});
 
       event.reply('factory-reset-done', true);
     } catch (e) {

@@ -6,8 +6,8 @@ import chokidar from 'chokidar';
 
 import type {parsedConfig, configOptions} from '../typings/config';
 
-import {_import, getDefaultConfig} from './config/import';
 import {detectProfiles, pickDefaultProfile} from './config/detect';
+import {_import, getDefaultConfig} from './config/import';
 import _openConfig from './config/open';
 import {cfgPath, cfgDir} from './config/paths';
 import notify from './notify';

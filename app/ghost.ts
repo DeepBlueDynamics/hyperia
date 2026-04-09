@@ -62,7 +62,7 @@ function openHyperia() {
 
   ghostWindow.on('close', () => {
     const port = process.env.HYPERIA_PORT || '9800';
-    fetch(`http://localhost:${port}/api/ghost/window-closed`, { method: 'POST' }).catch(() => {});
+    fetch(`http://localhost:${port}/api/ghost/window-closed`, {method: 'POST'}).catch(() => {});
   });
 
   ghostWindow.on('closed', () => {
