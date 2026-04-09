@@ -9,7 +9,7 @@ mod mcp;
 mod screen;
 mod telemetry;
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use clap::Parser;
@@ -47,6 +47,11 @@ struct PaneAddress {
     window: Option<u32>,
     tab: Option<String>,
     pane: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct NotesQuery {
+    q: Option<String>,
 }
 
 async fn get_logs(State(state): State<AppState>) -> Json<Vec<String>> {
@@ -341,7 +346,7 @@ async fn post_ui_key(
     }
 }
 
-async fn get_notes() -> (StatusCode, String) {
+async fn get_notes(Query(query): Query<NotesQuery>) -> (StatusCode, String) {
     let home = if cfg!(windows) {
         std::env::var("USERPROFILE").ok()
     } else {
@@ -355,7 +360,28 @@ async fn get_notes() -> (StatusCode, String) {
         .join("stickys")
         .join("notes.json");
     match std::fs::read_to_string(&path) {
-        Ok(content) => (StatusCode::OK, content),
+        Ok(content) => {
+            let query = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
+            if let Some(query) = query {
+                let query = query.to_lowercase();
+                let filtered = serde_json::from_str::<Vec<serde_json::Value>>(&content)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|note| {
+                        note["text"]
+                            .as_str()
+                            .map(|text| text.to_lowercase().contains(&query))
+                            .unwrap_or(false)
+                    })
+                    .collect::<Vec<_>>();
+                (
+                    StatusCode::OK,
+                    serde_json::to_string(&filtered).unwrap_or_else(|_| "[]".into()),
+                )
+            } else {
+                (StatusCode::OK, content)
+            }
+        }
         Err(_) => (StatusCode::OK, "[]".into()),
     }
 }
@@ -388,6 +414,61 @@ async fn post_note_close(
     let cmd = serde_json::json!({"type": "NoteClose", "id": id});
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn delete_note(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> (StatusCode, String) {
+    if id.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Missing note id".into());
+    }
+
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").ok()
+    } else {
+        std::env::var("HOME").ok()
+    };
+    let Some(home) = home else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "No home directory".into());
+    };
+
+    let path = std::path::PathBuf::from(home)
+        .join(".hyperia")
+        .join("stickys")
+        .join("notes.json");
+
+    let notes = match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str::<Vec<serde_json::Value>>(&content).unwrap_or_default(),
+        Err(_) => return (StatusCode::NOT_FOUND, String::new()),
+    };
+    let original_len = notes.len();
+
+    let filtered: Vec<serde_json::Value> = notes
+        .into_iter()
+        .filter(|note| note["id"].as_str() != Some(id.as_str()))
+        .collect();
+
+    if filtered.len() == original_len {
+        return (StatusCode::NOT_FOUND, String::new());
+    }
+
+    let serialized = match serde_json::to_string_pretty(&filtered) {
+        Ok(content) => content,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    if let Err(e) = std::fs::write(&path, serialized) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+
+    let cmd = serde_json::json!({"type": "NoteDelete", "id": id});
+    match state.bridge.send_command(cmd).await {
+        Ok(_) => (
+            StatusCode::OK,
+            serde_json::json!({"ok": true}).to_string(),
+        ),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
@@ -507,6 +588,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ui/key", axum::routing::post(post_ui_key))
         .route("/api/pane/describe", axum::routing::post(post_auto_describe))
         .route("/api/notes", axum::routing::get(get_notes).post(post_note_create))
+        .route("/api/notes/{id}", axum::routing::delete(delete_note))
         .route("/api/notes/close", axum::routing::post(post_note_close))
         .with_state(state);
 
