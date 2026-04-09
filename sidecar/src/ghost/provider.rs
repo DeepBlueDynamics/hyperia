@@ -12,7 +12,9 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     pub fn new(config: &GhostConfig) -> Self {
         let model = match config.model.as_str() {
-            "anthropic" => "claude-sonnet-4-6".to_string(),
+            // Legacy provider key — default to Haiku 4.5
+            "anthropic" => "claude-haiku-4-5-20251001".to_string(),
+            // Full model IDs passed through directly
             other => other.to_string(),
         };
         Self {
@@ -83,12 +85,16 @@ impl AnthropicProvider {
             let status = resp.status();
             let raw = resp.text().await.unwrap_or_default();
             // Parse Anthropic error body for a clean message, but always include the raw body
+            // Parse the Anthropic error body for a human-readable message first
+            let api_message = serde_json::from_str::<serde_json::Value>(&raw)
+                .ok()
+                .and_then(|j| j["error"]["message"].as_str().map(|s| s.to_string()));
             let label = if status.as_u16() == 529 {
                 format!("Anthropic overloaded (529) after {} retries — try again shortly.\nFull response: {}", attempt, raw)
             } else if status.as_u16() == 401 {
                 format!("Invalid API key (401). Check your token in Settings.\nFull response: {}", raw)
-            } else if status.as_u16() == 400 {
-                format!("Bad request (400) — likely invalid model or parameters.\nFull response: {}", raw)
+            } else if let Some(msg) = api_message {
+                format!("API error {} — {}\nFull response: {}", status, msg, raw)
             } else {
                 format!("API error {} — {}", status, raw)
             };

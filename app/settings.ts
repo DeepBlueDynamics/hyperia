@@ -337,13 +337,35 @@ function buildSettingsHtml(): string {
   <div class="input-area" id="tokenArea" style="${hasToken ? 'display:none' : ''}">
     <select class="model-select" id="modelSelect">
       <option value="" disabled ${!currentModel ? 'selected' : ''}>Select model...</option>
-      <option value="anthropic" ${currentModel === 'anthropic' ? 'selected' : ''}>Anthropic</option>
-      <option value="openai" ${currentModel === 'openai' ? 'selected' : ''}>OpenAI</option>
-      <option value="google" ${currentModel === 'google' ? 'selected' : ''}>Google</option>
-      <option value="openrouter" ${currentModel === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
+      <optgroup label="Anthropic">
+        <option value="claude-haiku-4-5-20251001" ${currentModel === 'claude-haiku-4-5-20251001' ? 'selected' : ''}>Claude Haiku 4.5 (fast)</option>
+        <option value="claude-sonnet-4-6" ${currentModel === 'claude-sonnet-4-6' ? 'selected' : ''}>Claude Sonnet 4.6</option>
+        <option value="claude-opus-4-6" ${currentModel === 'claude-opus-4-6' ? 'selected' : ''}>Claude Opus 4.6</option>
+      </optgroup>
+      <optgroup label="Other">
+        <option value="openai" ${currentModel === 'openai' ? 'selected' : ''}>OpenAI</option>
+        <option value="google" ${currentModel === 'google' ? 'selected' : ''}>Google</option>
+        <option value="openrouter" ${currentModel === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
+      </optgroup>
     </select>
     <input type="password" id="tokenInput" placeholder="Enter token..." onkeydown="if(event.key==='Enter')setToken()">
     <button class="set-btn" onclick="setToken()">Set</button>
+  </div>
+
+  <div class="input-area" id="modelChangeArea" style="${hasToken ? '' : 'display:none'}">
+    <select class="model-select" id="modelChangeSelect">
+      <optgroup label="Anthropic">
+        <option value="claude-haiku-4-5-20251001" ${currentModel === 'claude-haiku-4-5-20251001' ? 'selected' : ''}>Claude Haiku 4.5 (fast)</option>
+        <option value="claude-sonnet-4-6" ${currentModel === 'claude-sonnet-4-6' ? 'selected' : ''}>Claude Sonnet 4.6</option>
+        <option value="claude-opus-4-6" ${currentModel === 'claude-opus-4-6' ? 'selected' : ''}>Claude Opus 4.6</option>
+      </optgroup>
+      <optgroup label="Other">
+        <option value="openai" ${currentModel === 'openai' ? 'selected' : ''}>OpenAI</option>
+        <option value="google" ${currentModel === 'google' ? 'selected' : ''}>Google</option>
+        <option value="openrouter" ${currentModel === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
+      </optgroup>
+    </select>
+    <button class="set-btn" onclick="changeModel()">Change Model</button>
   </div>
 
   <div class="input-area" id="chatArea" style="${hasToken ? '' : 'display:none'}">
@@ -399,6 +421,17 @@ function buildSettingsHtml(): string {
     document.getElementById('tokenArea').style.display = 'none';
     document.getElementById('chatArea').style.display = '';
     document.getElementById('chatInput').focus();
+  }
+
+  function changeModel() {
+    const model = document.getElementById('modelChangeSelect').value;
+    if (!model) { addMsg('Select a model first.', 'error'); return; }
+    const cfg = readConfig();
+    if (!cfg.config) cfg.config = {};
+    cfg.config.agentModel = model;
+    saveConfig(cfg);
+    const label = document.getElementById('modelChangeSelect').options[document.getElementById('modelChangeSelect').selectedIndex].text;
+    addMsg('Model changed to <code>' + label + '</code>. Takes effect on next message.', 'success');
   }
 
   function editConfig() {

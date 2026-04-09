@@ -291,6 +291,14 @@ function upsertNote(note: NoteData) {
   writeAllNotes(notes);
 }
 
+function deleteNote(id: string): boolean {
+  const notes = readAllNotes();
+  const next = notes.filter((note) => note.id !== id);
+  if (next.length === notes.length) return false;
+  writeAllNotes(next);
+  return true;
+}
+
 function createStickyNote(
   options: {
     id?: string;
@@ -543,6 +551,15 @@ export function closeStickyNote(noteId: string): boolean {
     return true;
   }
   return false;
+}
+
+export function deleteStickyNote(noteId: string): boolean {
+  const deleted = deleteNote(noteId);
+  const win = stickyWindows.get(noteId);
+  if (win && !win.isDestroyed()) {
+    win.close();
+  }
+  return deleted;
 }
 
 export {createStickyNote, readAllNotes};
