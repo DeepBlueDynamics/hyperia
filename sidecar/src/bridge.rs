@@ -52,6 +52,8 @@ struct BridgeInner {
     sessions: Mutex<HashMap<String, SessionInfo>>,
     /// Last focused Hyperia window id.
     focused_window_id: Mutex<Option<u32>>,
+    /// Per-session output subscribers: uid → list of senders waiting for PTY bytes
+    output_subs: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>,
 }
 
 impl Bridge {
@@ -63,6 +65,7 @@ impl Bridge {
                 seq: AtomicU64::new(1),
                 sessions: Mutex::new(HashMap::new()),
                 focused_window_id: Mutex::new(None),
+                output_subs: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -128,6 +131,48 @@ impl Bridge {
                 .join("\n")
         } else {
             "No screen data".into()
+        }
+    }
+
+    /// Send keys to a session and collect PTY output until `quiet_ms` of silence.
+    /// Returns the raw text that came back, or falls back to a screen snapshot.
+    pub async fn type_and_collect(&self, uid: &str, keys: &str, quiet_ms: u64) -> String {
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        // Register subscriber before sending keys
+        {
+            let mut subs = self.inner.output_subs.lock().await;
+            subs.entry(uid.to_string()).or_default().push(tx);
+        }
+
+        let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys});
+        let _ = self.send_command(cmd).await;
+
+        // Collect output until quiet_ms of silence, cap at 8s total
+        let mut collected: Vec<u8> = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() { break; }
+            match tokio::time::timeout(Duration::from_millis(quiet_ms), rx.recv()).await {
+                Ok(Some(chunk)) => collected.extend_from_slice(&chunk),
+                Ok(None) => break, // channel closed
+                Err(_) => break,   // quiet_ms elapsed with no new data
+            }
+        }
+
+        // Clean up subscriber
+        {
+            let mut subs = self.inner.output_subs.lock().await;
+            if let Some(txs) = subs.get_mut(uid) {
+                txs.retain(|t| !t.is_closed());
+            }
+        }
+
+        if collected.is_empty() {
+            // Nothing came back — return screen snapshot
+            self.get_screen_text_by_uid(uid).await
+        } else {
+            String::from_utf8_lossy(&collected).into_owned()
         }
     }
 
@@ -422,6 +467,12 @@ impl Bridge {
                         let mut sessions = self.inner.sessions.lock().await;
                         if let Some(info) = sessions.get_mut(uid) {
                             info.screen.process(&bytes);
+                        }
+                        drop(sessions);
+                        // Forward raw bytes to any waiting output subscribers
+                        let mut subs = self.inner.output_subs.lock().await;
+                        if let Some(txs) = subs.get_mut(uid) {
+                            txs.retain(|tx| tx.send(bytes.clone()).is_ok());
                         }
                     }
                 }

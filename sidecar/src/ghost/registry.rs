@@ -387,13 +387,15 @@ impl ToolRegistry {
             "terminal_keys" => {
                 let keys = input["keys"].as_str().unwrap_or("");
                 let keys = unescape_keys(keys);
-                let _ = self.client
-                    .post(build_target_url("/api/type"))
+                match self.client
+                    .post(build_target_url("/api/type-and-collect"))
                     .body(keys)
                     .send()
-                    .await;
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                return self.read_screen(&build_target_url("/api/screen")).await;
+                    .await
+                {
+                    Ok(resp) => return resp.text().await.unwrap_or_default(),
+                    Err(e) => return format!("Error: {}", e),
+                }
             }
             "terminal_run" => {
                 let command = input["command"].as_str().unwrap_or("");

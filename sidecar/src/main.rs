@@ -206,6 +206,28 @@ async fn post_type(
     }
 }
 
+async fn post_type_and_collect(
+    State(state): State<AppState>,
+    Query(addr): Query<PaneAddress>,
+    body: String,
+) -> (StatusCode, String) {
+    if body.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Empty body".into());
+    }
+    let uid = match state
+        .bridge
+        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .await
+    {
+        Some(u) => u,
+        None => {
+            return (StatusCode::NOT_FOUND, "No pane at that address".into());
+        }
+    };
+    let output = state.bridge.type_and_collect(&uid, &body, 400).await;
+    (StatusCode::OK, output)
+}
+
 async fn post_split(
     State(state): State<AppState>,
     body: String,
@@ -650,6 +672,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/screen", axum::routing::get(get_screen))
         // Write endpoints
         .route("/api/type", axum::routing::post(post_type))
+        .route("/api/type-and-collect", axum::routing::post(post_type_and_collect))
         .route("/api/pane/split", axum::routing::post(post_split))
         .route("/api/pane/focus", axum::routing::post(post_focus))
         .route("/api/pane/close", axum::routing::post(post_close))
