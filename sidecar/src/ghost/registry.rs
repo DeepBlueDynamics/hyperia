@@ -526,6 +526,30 @@ impl ToolRegistry {
                     Err(e) => format!("Error writing file: {}", e),
                 };
             }
+            "note_create" => {
+                let body = serde_json::json!({
+                    "text": input["text"].as_str().unwrap_or(""),
+                    "x": input["x"],
+                    "y": input["y"],
+                    "width": input["width"],
+                    "height": input["height"],
+                });
+                self.client
+                    .post(format!("{}/api/notes", base))
+                    .json(&body)
+                    .send()
+                    .await
+            }
+            "note_list" => self.client.get(format!("{}/api/notes", base)).send().await,
+            "note_close" => {
+                let id = input["id"].as_str().unwrap_or("");
+                let body = serde_json::json!({ "id": id });
+                self.client
+                    .post(format!("{}/api/notes/close", base))
+                    .json(&body)
+                    .send()
+                    .await
+            }
             "web_fetch" => {
                 let url = input["url"].as_str().unwrap_or("");
                 let method = input["method"].as_str().unwrap_or("GET");
@@ -904,6 +928,37 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                     "append": { "type": "boolean", "description": "Append instead of overwrite" }
                 },
                 "required": ["path", "content"]
+            }
+        },
+        {
+            "name": "note_create",
+            "description": "Create a sticky note. The note appears as a floating window. Optionally specify position and size.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "Note content" },
+                    "x": { "type": "integer", "description": "X position (optional)" },
+                    "y": { "type": "integer", "description": "Y position (optional)" },
+                    "width": { "type": "integer", "description": "Width in pixels (optional)" },
+                    "height": { "type": "integer", "description": "Height in pixels (optional)" }
+                },
+                "required": ["text"]
+            }
+        },
+        {
+            "name": "note_list",
+            "description": "List all sticky notes. Returns their ids, text content, and position.",
+            "input_schema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "note_close",
+            "description": "Close (hide) a sticky note by id. Does not delete it.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Note id from note_list" }
+                },
+                "required": ["id"]
             }
         },
         {
