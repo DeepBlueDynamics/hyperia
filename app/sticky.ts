@@ -291,6 +291,20 @@ function upsertNote(note: NoteData) {
   writeAllNotes(notes);
 }
 
+function updateNote(id: string, text: string): boolean {
+  const notes = readAllNotes();
+  const note = notes.find((n) => n.id === id);
+  if (!note) return false;
+  note.text = text;
+  writeAllNotes(notes);
+  // If the window is open, send it a message to refresh
+  const win = stickyWindows.get(id);
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('note-updated', {id, text});
+  }
+  return true;
+}
+
 function deleteNote(id: string): boolean {
   const notes = readAllNotes();
   const next = notes.filter((note) => note.id !== id);
@@ -560,6 +574,10 @@ export function deleteStickyNote(noteId: string): boolean {
     win.close();
   }
   return deleted;
+}
+
+export function updateStickyNote(noteId: string, text: string): boolean {
+  return updateNote(noteId, text);
 }
 
 export {createStickyNote, readAllNotes};

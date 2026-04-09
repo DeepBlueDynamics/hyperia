@@ -13,7 +13,7 @@ import isDev from 'electron-is-dev';
 import WebSocket from 'ws';
 
 import type Session from './session';
-import {createStickyNote, closeStickyNote, deleteStickyNote} from './sticky';
+import {createStickyNote, closeStickyNote, deleteStickyNote, updateStickyNote} from './sticky';
 
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
@@ -484,6 +484,14 @@ function handleCommand(msg: Record<string, unknown>) {
       const noteId = msg.id as string;
       const deleted = deleteStickyNote(noteId);
       sendResult(seq, deleted ? 'ok' : 'Note not found');
+      break;
+    }
+
+    case 'NoteUpdate': {
+      const noteId = msg.id as string;
+      const text = msg.text as string;
+      const updated = updateStickyNote(noteId, text);
+      sendResult(seq, updated ? 'ok' : 'Note not found');
       break;
     }
 
