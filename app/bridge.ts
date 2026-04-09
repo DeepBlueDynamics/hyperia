@@ -378,6 +378,17 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'NewWindow': {
+      const createWin = (app as any).createWindow as (() => void) | undefined;
+      if (createWin) {
+        createWin();
+        sendResult(seq, 'ok');
+      } else {
+        sendResult(seq, 'createWindow not available');
+      }
+      break;
+    }
+
     case 'Rename': {
       const targetUid = msg.uid as string | undefined;
       const id = msg.id as number | undefined;

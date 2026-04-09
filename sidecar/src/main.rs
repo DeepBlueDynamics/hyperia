@@ -288,6 +288,14 @@ async fn post_new_tab(
     }
 }
 
+async fn post_new_window(State(state): State<AppState>) -> (StatusCode, String) {
+    let cmd = serde_json::json!({"type": "NewWindow"});
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
 async fn post_rename_tab(
     State(state): State<AppState>,
     body: String,
@@ -646,6 +654,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pane/focus", axum::routing::post(post_focus))
         .route("/api/pane/close", axum::routing::post(post_close))
         .route("/api/pane/new", axum::routing::post(post_new_tab))
+        .route("/api/window/new", axum::routing::post(post_new_window))
         .route("/api/pane/rename", axum::routing::post(post_rename_tab))
         .route("/api/agent/status", axum::routing::post(post_agent_status))
         .route("/api/ui/key", axum::routing::post(post_ui_key))

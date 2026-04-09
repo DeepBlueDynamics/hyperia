@@ -442,6 +442,13 @@ impl ToolRegistry {
                     .send()
                     .await
             }
+            "terminal_new_window" => {
+                self.client
+                    .post(format!("{}/api/window/new", base))
+                    .json(&serde_json::json!({}))
+                    .send()
+                    .await
+            }
             "terminal_new_tab" => {
                 let body = serde_json::json!({
                     "command": input["command"],
@@ -911,6 +918,11 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                 },
                 "required": ["name"]
             }
+        },
+        {
+            "name": "terminal_new_window",
+            "description": "Open a new Hyperia window (separate OS window). Use terminal_status after to get its window id for targeting. Use this when the user wants a separate window, not just a new tab.",
+            "input_schema": { "type": "object", "properties": {} }
         },
         {
             "name": "terminal_new_tab",
