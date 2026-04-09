@@ -322,12 +322,25 @@ function handleCommand(msg: Record<string, unknown>) {
     }
 
     case 'Close': {
-      const win = getFocusedHyperiaWindow();
-      if (win) {
-        win.rpc.emit('termgroup close req');
-        sendResult(seq, 'ok');
+      const targetUid = msg.uid as string | undefined;
+      if (targetUid) {
+        const tracked = trackedSessions.get(targetUid);
+        const win = tracked ? getHyperiaWindowById(tracked.windowId) : null;
+        if (win) {
+          win.rpc.emit('session set active', {uid: targetUid});
+          setTimeout(() => win.rpc.emit('termgroup close req'), 80);
+          sendResult(seq, 'ok');
+        } else {
+          sendResult(seq, 'No tab at that uid');
+        }
       } else {
-        sendResult(seq, 'No focused window');
+        const win = getFocusedHyperiaWindow();
+        if (win) {
+          win.rpc.emit('termgroup close req');
+          sendResult(seq, 'ok');
+        } else {
+          sendResult(seq, 'No focused window');
+        }
       }
       break;
     }

@@ -260,8 +260,14 @@ async fn post_focus(
     }
 }
 
-async fn post_close(State(state): State<AppState>) -> (StatusCode, String) {
-    let cmd = serde_json::json!({"type": "Close"});
+async fn post_close(State(state): State<AppState>, body: String) -> (StatusCode, String) {
+    let uid = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v["uid"].as_str().map(|s| s.to_string()));
+    let mut cmd = serde_json::json!({"type": "Close"});
+    if let Some(uid) = uid {
+        cmd["uid"] = serde_json::Value::String(uid);
+    }
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),

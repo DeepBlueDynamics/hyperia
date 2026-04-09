@@ -453,9 +453,10 @@ impl ToolRegistry {
                     .await
             }
             "terminal_close" => {
+                let body = serde_json::json!({ "uid": input["uid"] });
                 self.client
                     .post(format!("{}/api/pane/close", base))
-                    .json(&serde_json::json!({}))
+                    .json(&body)
                     .send()
                     .await
             }
@@ -923,8 +924,13 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "terminal_close",
-            "description": "Close the focused pane.",
-            "input_schema": { "type": "object", "properties": {} }
+            "description": "Close a pane/tab. Always call terminal_status first to get the uid of the tab you want to close, then pass that uid. Without a uid it closes whatever is currently focused — which is often the wrong tab.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "uid": { "type": "string", "description": "Session uid from terminal_status — identifies exactly which tab to close" }
+                }
+            }
         },
         {
             "name": "terminal_status",
