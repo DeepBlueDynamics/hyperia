@@ -464,7 +464,7 @@ function buildSettingsHtml(): string {
     // Use official installation script from nemesis8.nuts.services
     const installCmd = isWin
       ? 'powershell -c "irm https://nemesis8.nuts.services/install.ps1 | iex"'
-      : 'curl -fsSL https://nemesis8.nuts.services/install.sh | sh';
+      : 'curl -fsSL https://nemesis8.nuts.services/install.sh | bash';
 
     exec(installCmd, {timeout: 300000}, (err, stdout, stderr) => {
       if (err) {
