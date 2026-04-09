@@ -418,6 +418,63 @@ async fn post_note_close(
     }
 }
 
+async fn patch_note(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: String,
+) -> (StatusCode, String) {
+    if id.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Missing note id".into());
+    }
+    let payload: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()),
+    };
+    let text = match payload["text"].as_str() {
+        Some(t) => t.to_string(),
+        None => return (StatusCode::BAD_REQUEST, "Missing 'text' field".into()),
+    };
+
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").ok()
+    } else {
+        std::env::var("HOME").ok()
+    };
+    let Some(home) = home else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "No home directory".into());
+    };
+
+    let path = std::path::PathBuf::from(home)
+        .join(".hyperia")
+        .join("stickys")
+        .join("notes.json");
+
+    let mut notes = match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str::<Vec<serde_json::Value>>(&content).unwrap_or_default(),
+        Err(_) => return (StatusCode::NOT_FOUND, String::new()),
+    };
+
+    let found = notes.iter_mut().find(|n| n["id"].as_str() == Some(id.as_str()));
+    let Some(note) = found else {
+        return (StatusCode::NOT_FOUND, String::new());
+    };
+    note["text"] = serde_json::Value::String(text.clone());
+
+    let serialized = match serde_json::to_string_pretty(&notes) {
+        Ok(content) => content,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    if let Err(e) = std::fs::write(&path, serialized) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+
+    let cmd = serde_json::json!({"type": "NoteUpdate", "id": id, "text": text});
+    match state.bridge.send_command(cmd).await {
+        Ok(_) => (StatusCode::OK, serde_json::json!({"ok": true}).to_string()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
 async fn delete_note(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -588,7 +645,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ui/key", axum::routing::post(post_ui_key))
         .route("/api/pane/describe", axum::routing::post(post_auto_describe))
         .route("/api/notes", axum::routing::get(get_notes).post(post_note_create))
-        .route("/api/notes/{id}", axum::routing::delete(delete_note))
+        .route("/api/notes/{id}", axum::routing::delete(delete_note).patch(patch_note))
         .route("/api/notes/close", axum::routing::post(post_note_close))
         .with_state(state);
 

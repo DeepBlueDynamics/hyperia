@@ -540,13 +540,51 @@ impl ToolRegistry {
                     .send()
                     .await
             }
-            "note_list" => self.client.get(format!("{}/api/notes", base)).send().await,
+            "note_list" => {
+                match self.client.get(format!("{}/api/notes", base)).send().await {
+                    Ok(resp) => {
+                        let text = resp.text().await.unwrap_or_default();
+                        if let Ok(notes) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
+                            let summaries: Vec<String> = notes.iter().map(|n| {
+                                let id = n["id"].as_str().unwrap_or("?");
+                                let full = n["text"].as_str().unwrap_or("");
+                                let preview: String = full.chars().take(80).collect();
+                                let preview = if full.len() > 80 { format!("{}…", preview) } else { preview };
+                                format!("{}: {}", id, preview)
+                            }).collect();
+                            return if summaries.is_empty() {
+                                "No notes.".into()
+                            } else {
+                                summaries.join("\n")
+                            };
+                        }
+                        return text;
+                    }
+                    Err(e) => return format!("HTTP error: {}", e),
+                }
+            }
             "note_close" => {
                 let id = input["id"].as_str().unwrap_or("");
                 let body = serde_json::json!({ "id": id });
                 self.client
                     .post(format!("{}/api/notes/close", base))
                     .json(&body)
+                    .send()
+                    .await
+            }
+            "note_update" => {
+                let id = input["id"].as_str().unwrap_or("");
+                let body = serde_json::json!({ "text": input["text"] });
+                self.client
+                    .patch(format!("{}/api/notes/{}", base, id))
+                    .json(&body)
+                    .send()
+                    .await
+            }
+            "note_delete" => {
+                let id = input["id"].as_str().unwrap_or("");
+                self.client
+                    .delete(format!("{}/api/notes/{}", base, id))
                     .send()
                     .await
             }
@@ -953,6 +991,29 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         {
             "name": "note_close",
             "description": "Close (hide) a sticky note by id. Does not delete it.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Note id from note_list" }
+                },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "note_update",
+            "description": "Update the text of an existing sticky note.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Note id from note_list" },
+                    "text": { "type": "string", "description": "New note content" }
+                },
+                "required": ["id", "text"]
+            }
+        },
+        {
+            "name": "note_delete",
+            "description": "Permanently delete a sticky note by id.",
             "input_schema": {
                 "type": "object",
                 "properties": {
