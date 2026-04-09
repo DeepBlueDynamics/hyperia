@@ -130,74 +130,78 @@ impl FerriculaBackend {
         vec![0.0; 768]
     }
 
-    /// Recall memories relevant to a query using hybrid BM25 + vector + keyword search.
+    /// Recall memories relevant to a query: BM25 (real scores) + vector + keyword backfill.
+    /// Boosts by importance/keystone, deduplicates by ID, filters ghost-history throughout.
     pub async fn recall(&self, query: &str) -> String {
-        // (score, text) — higher is more relevant
-        let mut scored: Vec<(f32, String)> = Vec::new();
+        // Primary store: id → (score, text). Dedup by ID before ranking.
+        let mut by_id: std::collections::HashMap<u32, (f32, String)> = Default::default();
+        // Seen texts for remote dedup (no IDs available from remote).
+        let mut seen_texts: std::collections::HashSet<String> = Default::default();
 
-        // Query embedding for semantic search — only meaningful if Shivvr is configured
+        // Query embedding for semantic search — requires Shivvr to be configured.
         let query_vec = self.embed(query).await;
         let has_embeddings = query_vec.iter().any(|&v| v != 0.0);
+        if !has_embeddings && self.shivvr_url.is_some() {
+            tracing::warn!("Ferricula recall: Shivvr embedding failed — falling back to BM25+keyword only");
+        }
 
         if let Some(ref core) = self.local {
             let db = core.engine.lock().unwrap();
             let search = core.search.lock().unwrap();
-            let mut seen: std::collections::HashSet<u32> = Default::default();
 
-            // BM25 — increased cap, score descends by rank position
+            // --- Stage 1: BM25 with real scores, normalized to [0,1] ---
             let hits = search.bm25_search(query, 25, db.prime_tree());
-            for (i, hit) in hits.iter().enumerate() {
+            let max_bm25 = hits.iter().map(|h| h.bm25_score).fold(0.0f64, f64::max);
+            for hit in &hits {
                 if let Some(row) = db.engine().get(hit.id) {
-                    if row.tags.get("channel").map(|s| s.as_str()) == Some("ghost-history") {
-                        continue;
-                    }
+                    if row.tags.get("channel").map(|s| s.as_str()) == Some("ghost-history") { continue; }
                     if let Some(text) = row.tags.get("text") {
-                        let score = 1.0 - (i as f32 * 0.04); // 1.0, 0.96, 0.92 …
-                        scored.push((score, text.clone()));
-                        seen.insert(hit.id);
+                        let base = if max_bm25 > 0.0 { (hit.bm25_score / max_bm25) as f32 } else { 0.5 };
+                        let score = importance_boost(base, db.memory_store().get(hit.id));
+                        by_id.insert(hit.id, (score, text.clone()));
+                        seen_texts.insert(text.clone());
                     }
                 }
             }
 
-            // Vector similarity — scan all non-history rows (up to 2000), merge with BM25
+            // --- Stage 2: Vector similarity — scan ALL rows, no cap ---
             if has_embeddings {
                 let bitmap = db.engine().all_bitmap();
-                let mut scanned = 0u32;
                 for id in bitmap.iter() {
-                    if scanned >= 2000 { break; }
-                    scanned += 1;
-                    if seen.contains(&id) { continue; }
+                    if by_id.contains_key(&id) { continue; }
                     if let Some(row) = db.engine().get(id) {
-                        if row.tags.get("channel").map(|s| s.as_str()) == Some("ghost-history") {
-                            continue;
-                        }
+                        if row.tags.get("channel").map(|s| s.as_str()) == Some("ghost-history") { continue; }
                         if row.vector.iter().all(|&v| v == 0.0) { continue; }
                         let sim = cosine_similarity(&query_vec, &row.vector);
                         if sim > 0.45 {
                             if let Some(text) = row.tags.get("text") {
-                                scored.push((sim, text.clone()));
-                                seen.insert(id);
+                                let score = importance_boost(sim, db.memory_store().get(id));
+                                by_id.insert(id, (score, text.clone()));
+                                seen_texts.insert(text.clone());
                             }
                         }
                     }
                 }
             }
 
-            // Keyword fallback — scan ALL rows, no recency limit
-            if scored.is_empty() {
-                let terms: Vec<String> = query.split_whitespace()
-                    .map(|s| s.to_lowercase()).take(5).collect();
+            // --- Stage 3: Keyword backfill — always runs, fills gaps not covered above ---
+            let terms: Vec<String> = query.split_whitespace()
+                .map(|s| s.to_lowercase()).take(5).collect();
+            if !terms.is_empty() {
                 let bitmap = db.engine().all_bitmap();
+                let mut backfill = 0usize;
                 for id in bitmap.iter() {
-                    if scored.len() >= 10 { break; }
+                    if backfill >= 10 { break; }
+                    if by_id.contains_key(&id) { continue; }
                     if let Some(row) = db.engine().get(id) {
-                        if row.tags.get("channel").map(|s| s.as_str()) == Some("ghost-history") {
-                            continue;
-                        }
+                        if row.tags.get("channel").map(|s| s.as_str()) == Some("ghost-history") { continue; }
                         if let Some(text) = row.tags.get("text") {
                             let lower = text.to_lowercase();
                             if terms.iter().any(|t| lower.contains(t)) {
-                                scored.push((0.1, text.clone()));
+                                let score = importance_boost(0.1, db.memory_store().get(id));
+                                by_id.insert(id, (score, text.clone()));
+                                seen_texts.insert(text.clone());
+                                backfill += 1;
                             }
                         }
                     }
@@ -205,16 +209,20 @@ impl FerriculaBackend {
             }
         }
 
-        // Remote recall — append with a mid-tier score
+        let mut scored: Vec<(f32, String)> = by_id.into_values().collect();
+
+        // --- Remote recall: filter ghost-history, dedup against local results ---
         if let Some(ref url) = self.remote_url {
             let body = serde_json::json!({ "query": query });
             if let Ok(resp) = self.remote_client.post(format!("{}/recall", url)).json(&body).send().await {
                 if let Ok(text) = resp.text().await {
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
                         let mut remote: Vec<String> = Vec::new();
-                        Self::extract_recall_texts(&json, &mut remote);
+                        Self::extract_recall_texts_filtered(&json, &mut remote);
                         for r in remote {
-                            scored.push((0.5, r));
+                            if !seen_texts.contains(&r) {
+                                scored.push((0.5, r));
+                            }
                         }
                     }
                 }
@@ -225,9 +233,7 @@ impl FerriculaBackend {
             return String::new();
         }
 
-        // Sort by score descending, deduplicate, return top 8
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        scored.dedup_by(|a, b| a.1 == b.1);
         let formatted: Vec<String> = scored.iter().take(8).map(|(_, t)| format!("- {}", t)).collect();
         format!("\n## Recalled memories\n{}", formatted.join("\n"))
     }
@@ -490,13 +496,18 @@ impl FerriculaBackend {
         }
     }
 
-    fn extract_recall_texts(json: &serde_json::Value, results: &mut Vec<String>) {
+    /// Extract recall texts from remote API response, filtering ghost-history rows.
+    fn extract_recall_texts_filtered(json: &serde_json::Value, results: &mut Vec<String>) {
         let result = Self::parse_result(json);
         let rows = result.as_array()
             .or_else(|| result["rows"].as_array())
             .or_else(|| result["results"].as_array());
         if let Some(rows) = rows {
-            for row in rows.iter().take(5) {
+            for row in rows.iter().take(10) {
+                let channel = row["tags"]["channel"].as_str()
+                    .or_else(|| row["channel"].as_str())
+                    .unwrap_or("");
+                if channel == "ghost-history" { continue; }
                 if let Some(text) = row["tags"]["text"].as_str().or(row["text"].as_str()) {
                     if !text.is_empty() {
                         results.push(text.to_string());
@@ -514,6 +525,15 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm_a == 0.0 || norm_b == 0.0 { return 0.0; }
     dot / (norm_a * norm_b)
+}
+
+/// Boost a base retrieval score using the memory record's importance and keystone flag.
+/// importance is 0..1 (default 0.5); keystone adds a flat bonus.
+fn importance_boost(base: f32, record: Option<&ferricula::memory::MemoryRecord>) -> f32 {
+    let Some(rec) = record else { return base; };
+    let factor = 0.5 + 0.5 * rec.importance.clamp(0.0, 1.0);
+    let keystone_bonus = if rec.keystone { 0.15 } else { 0.0 };
+    (base * factor + keystone_bonus).min(1.5)
 }
 
 fn get_entropy() -> Vec<u8> {
