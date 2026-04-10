@@ -268,23 +268,54 @@ function collectPaneLayout(
 
   const totalLeaves = countLeaves(group, termGroups);
   const needLabels = totalLeaves > 1 || !isRoot;
-  let offset = splitOffset;
   const panes: Array<{uid: string; splitLabel: string}> = [];
 
-  for (const childUid of group?.children || []) {
-    const child = termGroups[childUid];
-    if (!child) continue;
-    const leafCount = countLeaves(child, termGroups);
-    const splitLabel = needLabels ? String.fromCharCode(97 + offset) : '';
-    if (child.sessionUid) {
-      panes.push({uid: child.sessionUid, splitLabel});
-    } else {
-      panes.push(...collectPaneLayout(child, termGroups, offset, false));
-    }
-    offset += leafCount;
+  // Collect all leaf uids first (in order), then assign unique sequential labels
+  function collectLeaves(g: Record<string, any>): string[] {
+    if (!g) return [];
+    if (g.sessionUid) return [g.sessionUid as string];
+    const children: string[] = (g.children as string[]) || [];
+    return children.flatMap((cUid: string) => collectLeaves(termGroups[cUid] as Record<string, any>));
   }
 
+  const leaves = collectLeaves(group as Record<string, any>);
+  leaves.forEach((uid, idx) => {
+    panes.push({uid, splitLabel: needLabels ? String.fromCharCode(97 + splitOffset + idx) : ''});
+  });
+
   return panes;
+}
+
+function calcBspLayout(
+  node: Record<string, any>,
+  termGroups: Record<string, any>,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  results: Array<{uid: string; x: number; y: number; width: number; height: number}>
+): void {
+  if (!node) return;
+  if (node.sessionUid) {
+    results.push({uid: node.sessionUid as string, x, y, width: w, height: h});
+    return;
+  }
+  const children: string[] = (node.children as string[]) || [];
+  if (children.length < 2) {
+    if (children[0]) calcBspLayout(termGroups[children[0]] as Record<string, any>, termGroups, x, y, w, h, results);
+    return;
+  }
+  const ratio: number = (node.sizes?.[0] as number) ?? 0.5;
+  // direction: "HORIZONTAL" = top/bottom split, "VERTICAL" = left/right split (Hyper convention)
+  if (node.direction === 'HORIZONTAL') {
+    const topH = Math.round(h * ratio);
+    calcBspLayout(termGroups[children[0]] as Record<string, any>, termGroups, x, y, w, topH, results);
+    calcBspLayout(termGroups[children[1]] as Record<string, any>, termGroups, x, y + topH, w, h - topH, results);
+  } else {
+    const leftW = Math.round(w * ratio);
+    calcBspLayout(termGroups[children[0]] as Record<string, any>, termGroups, x, y, leftW, h, results);
+    calcBspLayout(termGroups[children[1]] as Record<string, any>, termGroups, x + leftW, y, w - leftW, h, results);
+  }
 }
 
 let lastLayoutSignature = '';
@@ -292,12 +323,25 @@ store_.subscribe(() => {
   const state = store_.getState();
   // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
   const rootGroups = getRootGroups(state as any);
-  const tabs = rootGroups.map((rootGroup: any, order: number) => ({
-    rootGroupUid: rootGroup.uid,
-    order,
-    active: rootGroup.uid === state.termGroups.activeRootGroup,
-    panes: collectPaneLayout(rootGroup, state.termGroups.termGroups)
-  }));
+  const tabs = rootGroups.map((rootGroup: any, order: number) => {
+    const bspResults: Array<{uid: string; x: number; y: number; width: number; height: number}> = [];
+    calcBspLayout(
+      rootGroup as Record<string, any>,
+      state.termGroups.termGroups as Record<string, any>,
+      0,
+      0,
+      100,
+      100,
+      bspResults
+    );
+    return {
+      rootGroupUid: rootGroup.uid,
+      order,
+      active: rootGroup.uid === state.termGroups.activeRootGroup,
+      panes: collectPaneLayout(rootGroup, state.termGroups.termGroups),
+      bsp: bspResults
+    };
+  });
   const signature = JSON.stringify(tabs);
   if (signature === lastLayoutSignature) return;
   lastLayoutSignature = signature;

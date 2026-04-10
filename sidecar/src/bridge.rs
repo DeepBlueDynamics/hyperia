@@ -30,6 +30,11 @@ pub struct SessionInfo {
     pub tab_active: bool,
     pub pane_active: bool,
     pub screen: ScreenBuffer,
+    /// BSP bounding box in 0–100 percentage units
+    pub bsp_x: f32,
+    pub bsp_y: f32,
+    pub bsp_w: f32,
+    pub bsp_h: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +398,10 @@ impl Bridge {
                         tab_active,
                         pane_active,
                         screen: ScreenBuffer::new(rows, cols, 1000),
+                        bsp_x: 0.0,
+                        bsp_y: 0.0,
+                        bsp_w: 100.0,
+                        bsp_h: 100.0,
                     },
                 );
             }
@@ -428,6 +437,7 @@ impl Bridge {
                 let split_label = msg["splitLabel"].as_str().unwrap_or("").to_string();
                 let tab_order = msg["tabOrder"].as_u64().unwrap_or(0) as u32;
                 let tab_active = msg["tabActive"].as_bool().unwrap_or(false);
+                let bsp = &msg["bsp"];
                 if let Some(info) = self.inner.sessions.lock().await.get_mut(uid) {
                     if !root_tab_uid.is_empty() {
                         info.root_tab_uid = root_tab_uid;
@@ -435,6 +445,12 @@ impl Bridge {
                     info.split_label = split_label;
                     info.tab_order = tab_order;
                     info.tab_active = tab_active;
+                    if bsp.is_object() {
+                        info.bsp_x = bsp["x"].as_f64().unwrap_or(0.0) as f32;
+                        info.bsp_y = bsp["y"].as_f64().unwrap_or(0.0) as f32;
+                        info.bsp_w = bsp["width"].as_f64().unwrap_or(100.0) as f32;
+                        info.bsp_h = bsp["height"].as_f64().unwrap_or(100.0) as f32;
+                    }
                 }
             }
 
@@ -625,6 +641,10 @@ mod tests {
             tab_active,
             pane_active,
             screen: ScreenBuffer::new(24, 80, 1000),
+            bsp_x: 0.0,
+            bsp_y: 0.0,
+            bsp_w: 100.0,
+            bsp_h: 100.0,
         }
     }
 

@@ -43,6 +43,10 @@ interface TrackedSession {
   tabOrder: number;
   tabActive: boolean;
   paneActive: boolean;
+  bspX: number; // BSP bounding box (0–100 percentage units)
+  bspY: number;
+  bspW: number;
+  bspH: number;
 }
 const trackedSessions = new Map<string, TrackedSession>();
 let focusedWindowId: number | null = null; // eslint-disable-line @typescript-eslint/no-unused-vars
@@ -286,7 +290,8 @@ function handleCommand(msg: Record<string, unknown>) {
         rows: t.rows,
         cols: t.cols,
         pid: t.session.pty?.pid ?? 0,
-        windowId: t.windowId
+        windowId: t.windowId,
+        bsp: {x: t.bspX, y: t.bspY, width: t.bspW, height: t.bspH}
       }));
       sendResult(seq, JSON.stringify({panes}));
       break;
@@ -588,7 +593,11 @@ export function registerSession(
     splitLabel: '',
     tabOrder: 0,
     tabActive: false,
-    paneActive: !Array.from(trackedSessions.values()).some((existing) => existing.windowId === windowId)
+    paneActive: !Array.from(trackedSessions.values()).some((existing) => existing.windowId === windowId),
+    bspX: 0,
+    bspY: 0,
+    bspW: 100,
+    bspH: 100
   };
   trackedSessions.set(uid, tracked);
 
@@ -685,11 +694,13 @@ export function updateSessionLayout(
     order: number;
     active: boolean;
     panes: Array<{uid: string; splitLabel: string}>;
+    bsp?: Array<{uid: string; x: number; y: number; width: number; height: number}>;
   }>
 ) {
   const seen = new Set<string>();
 
   for (const tab of tabs) {
+    const bspMap = new Map((tab.bsp || []).map((b) => [b.uid, b]));
     for (const pane of tab.panes) {
       const tracked = trackedSessions.get(pane.uid);
       if (!tracked) continue;
@@ -697,6 +708,11 @@ export function updateSessionLayout(
       tracked.splitLabel = pane.splitLabel || '';
       tracked.tabOrder = tab.order;
       tracked.tabActive = tab.active;
+      const bsp = bspMap.get(pane.uid);
+      tracked.bspX = bsp?.x ?? 0;
+      tracked.bspY = bsp?.y ?? 0;
+      tracked.bspW = bsp?.width ?? 100;
+      tracked.bspH = bsp?.height ?? 100;
       seen.add(pane.uid);
       send({
         type: 'SessionLayout',

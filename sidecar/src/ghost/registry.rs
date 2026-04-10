@@ -444,6 +444,18 @@ impl ToolRegistry {
                     .send()
                     .await
             }
+            "where_pane" => {
+                let a = input["a"].as_str().unwrap_or("");
+                let b = input["b"].as_str().unwrap_or("");
+                match self.client
+                    .get(format!("{}/api/pane/where?a={}&b={}", base, a, b))
+                    .send()
+                    .await
+                {
+                    Ok(resp) => return resp.text().await.unwrap_or_default(),
+                    Err(e) => return format!("Error: {}", e),
+                }
+            }
             "terminal_new_window" => {
                 self.client
                     .post(format!("{}/api/window/new", base))
@@ -919,6 +931,18 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                     "tab": { "type": "string" }
                 },
                 "required": ["name"]
+            }
+        },
+        {
+            "name": "where_pane",
+            "description": "Describe the spatial relationship between two panes — e.g. 'pane b is below and to the right of pane a'. Use uids from terminal_status.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "a": { "type": "string", "description": "uid of the reference pane" },
+                    "b": { "type": "string", "description": "uid of the pane to locate relative to a" }
+                },
+                "required": ["a", "b"]
             }
         },
         {

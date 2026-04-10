@@ -310,6 +310,57 @@ async fn post_new_tab(
     }
 }
 
+async fn get_where_pane(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> (StatusCode, String) {
+    let a = params.get("a").map(|s| s.as_str()).unwrap_or("");
+    let b = params.get("b").map(|s| s.as_str()).unwrap_or("");
+    if a.is_empty() || b.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Provide ?a=uid&b=uid".into());
+    }
+    let sessions = state.bridge.sessions().await;
+    let sa = match sessions.get(a) {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, format!("Pane '{}' not found", a)),
+    };
+    let sb = match sessions.get(b) {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, format!("Pane '{}' not found", b)),
+    };
+
+    let mut parts: Vec<&str> = Vec::new();
+
+    // Vertical position
+    if sb.bsp_y >= sa.bsp_y + sa.bsp_h - 1.0 {
+        parts.push("below");
+    } else if sb.bsp_y + sb.bsp_h <= sa.bsp_y + 1.0 {
+        parts.push("above");
+    }
+
+    // Horizontal position
+    if sb.bsp_x >= sa.bsp_x + sa.bsp_w - 1.0 {
+        parts.push("to the right of");
+    } else if sb.bsp_x + sb.bsp_w <= sa.bsp_x + 1.0 {
+        parts.push("to the left of");
+    }
+
+    let label_a = if sa.split_label.is_empty() { a } else { sa.split_label.as_str() };
+    let label_b = if sb.split_label.is_empty() { b } else { sb.split_label.as_str() };
+
+    let relation = if parts.is_empty() {
+        format!("pane {} overlaps or is the same position as pane {}", label_b, label_a)
+    } else {
+        format!("pane {} is {} pane {}", label_b, parts.join(" and "), label_a)
+    };
+
+    (StatusCode::OK, serde_json::json!({
+        "relation": relation,
+        "a": {"uid": a, "label": label_a, "x": sa.bsp_x, "y": sa.bsp_y, "width": sa.bsp_w, "height": sa.bsp_h},
+        "b": {"uid": b, "label": label_b, "x": sb.bsp_x, "y": sb.bsp_y, "width": sb.bsp_w, "height": sb.bsp_h}
+    }).to_string())
+}
+
 async fn post_new_window(State(state): State<AppState>) -> (StatusCode, String) {
     let cmd = serde_json::json!({"type": "NewWindow"});
     match state.bridge.send_command(cmd).await {
@@ -678,6 +729,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pane/close", axum::routing::post(post_close))
         .route("/api/pane/new", axum::routing::post(post_new_tab))
         .route("/api/window/new", axum::routing::post(post_new_window))
+        .route("/api/pane/where", axum::routing::get(get_where_pane))
         .route("/api/pane/rename", axum::routing::post(post_rename_tab))
         .route("/api/agent/status", axum::routing::post(post_agent_status))
         .route("/api/ui/key", axum::routing::post(post_ui_key))
