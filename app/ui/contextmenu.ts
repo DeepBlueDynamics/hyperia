@@ -1,5 +1,5 @@
-import {ipcMain} from 'electron';
-import type {MenuItemConstructorOptions, BrowserWindow} from 'electron';
+import {ipcMain, BrowserWindow} from 'electron';
+import type {MenuItemConstructorOptions} from 'electron';
 
 import {execCommand} from '../commands';
 import {getDecoratedKeymaps} from '../plugins';
@@ -12,6 +12,12 @@ const getCommandKeys = (keymaps: Record<string, string[]>): Record<string, strin
       [command]: keymaps[command][0]
     });
   }, {});
+
+// Capture the focused window at click time so execCommand has a target.
+const cmd =
+  (command: string): MenuItemConstructorOptions['click'] =>
+  () =>
+    execCommand(command, BrowserWindow.getFocusedWindow() ?? undefined);
 
 const contextMenuTemplate = (
   createWindow: (fn?: (win: BrowserWindow) => void, options?: Record<string, any>) => BrowserWindow,
@@ -27,66 +33,26 @@ const contextMenuTemplate = (
   menu.push({label: 'Paste', role: 'paste'});
 
   menu.push(separator);
-  menu.push({
-    label: 'Split Down',
-    accelerator: commandKeys['pane:splitDown'],
-    click: () => execCommand('pane:splitDown')
-  });
-  menu.push({
-    label: 'Split Right',
-    accelerator: commandKeys['pane:splitRight'],
-    click: () => execCommand('pane:splitRight')
-  });
-  menu.push({
-    label: 'Close Pane',
-    accelerator: commandKeys['pane:close'],
-    click: () => execCommand('pane:close')
-  });
-
-  menu.push({
-    label: 'Open as Web Pane…',
-    click: () => execCommand('pane:openWebPane')
-  });
+  menu.push({label: 'Split Down', accelerator: commandKeys['pane:splitDown'], click: cmd('pane:splitDown')});
+  menu.push({label: 'Split Right', accelerator: commandKeys['pane:splitRight'], click: cmd('pane:splitRight')});
+  menu.push({label: 'Close Pane', accelerator: commandKeys['pane:close'], click: cmd('pane:close')});
+  menu.push({label: 'Open as Web Pane…', click: cmd('pane:openWebPane')});
 
   menu.push(separator);
-  menu.push({
-    label: 'New Tab',
-    accelerator: commandKeys['tab:new'],
-    click: () => execCommand('tab:new')
-  });
-  menu.push({
-    label: 'New Window',
-    click: () => createWindow()
-  });
+  menu.push({label: 'New Tab', accelerator: commandKeys['tab:new'], click: cmd('tab:new')});
+  menu.push({label: 'New Window', click: () => createWindow()});
 
   menu.push(separator);
-  menu.push({
-    label: 'New Note',
-    click: () => ipcMain.emit('new-sticky', {})
-  });
-  menu.push({
-    label: 'Ask Hyperia',
-    click: () => ipcMain.emit('open-ghost')
-  });
+  menu.push({label: 'New Note', click: () => ipcMain.emit('new-sticky', {})});
+  menu.push({label: 'Ask Hyperia', click: () => ipcMain.emit('open-ghost')});
 
   menu.push(separator);
-  menu.push({
-    label: 'Clear Buffer',
-    accelerator: commandKeys['editor:clearBuffer'],
-    click: () => execCommand('editor:clearBuffer')
-  });
-  menu.push({
-    label: 'Search',
-    accelerator: commandKeys['editor:search'],
-    click: () => execCommand('editor:search')
-  });
+  menu.push({label: 'Clear Buffer', accelerator: commandKeys['editor:clearBuffer'], click: cmd('editor:clearBuffer')});
+  menu.push({label: 'Search', accelerator: commandKeys['editor:search'], click: cmd('editor:search')});
 
   if (process.platform !== 'darwin') {
     menu.push(separator);
-    menu.push({
-      label: 'Preferences',
-      click: () => execCommand('window:preferences')
-    });
+    menu.push({label: 'Preferences', click: cmd('window:preferences')});
   }
 
   return menu;

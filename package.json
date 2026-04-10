@@ -1,6 +1,6 @@
 {
   "name": "hyperia",
-  "version": "0.7.13",
+  "version": "0.7.14",
   "repository": "deepbluedynamics/hyperia",
   "scripts": {
     "start": "concurrently -n \"Webpack,TypeScript,App\" -c \"cyan.bold,blue.bold,green.bold\" \"webpack -w\" \"tsc --build -v --pretty --watch --preserveWatchOutput\" \"cross-env ELECTRONMON_LOGLEVEL=error electronmon target\" -k",
