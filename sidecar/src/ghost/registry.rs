@@ -571,6 +571,25 @@ impl ToolRegistry {
                     .send()
                     .await
             }
+            "sticky_note_create_code" => {
+                let theme = match input["theme"].as_str().unwrap_or("dark") {
+                    "light" => "code:light",
+                    _ => "code:dark",
+                };
+                let body = serde_json::json!({
+                    "text": input["text"].as_str().unwrap_or(""),
+                    "color": theme,
+                    "x": input["x"],
+                    "y": input["y"],
+                    "width": input["width"].as_i64().unwrap_or(400),
+                    "height": input["height"].as_i64().unwrap_or(300),
+                });
+                self.client
+                    .post(format!("{}/api/notes", base))
+                    .json(&body)
+                    .send()
+                    .await
+            }
             "sticky_note_list" => {
                 match self.client.get(format!("{}/api/notes", base)).send().await {
                     Ok(resp) => {
@@ -1033,6 +1052,22 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                     "y": { "type": "integer", "description": "Y position (optional)" },
                     "width": { "type": "integer", "description": "Width in pixels (optional)" },
                     "height": { "type": "integer", "description": "Height in pixels (optional)" }
+                },
+                "required": ["text"]
+            }
+        },
+        {
+            "name": "sticky_note_create_code",
+            "description": "Create a sticky note with code highlighting. Use this when displaying code, scripts, config, or any structured text. Defaults to a wider size. theme: 'dark' (default) or 'light'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "Code or structured text content" },
+                    "theme": { "type": "string", "enum": ["dark", "light"], "description": "dark (default) or light code theme" },
+                    "x": { "type": "integer", "description": "X position (optional)" },
+                    "y": { "type": "integer", "description": "Y position (optional)" },
+                    "width": { "type": "integer", "description": "Width in pixels (default 400)" },
+                    "height": { "type": "integer", "description": "Height in pixels (default 300)" }
                 },
                 "required": ["text"]
             }
