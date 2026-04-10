@@ -58,6 +58,10 @@ pub struct GhostSession {
     turn: usize,
     max_turns: usize,
     state: SessionState,
+    /// Cumulative tool calls across all messages this conversation — drives throttle tier.
+    tool_call_count: usize,
+    /// Recent (name+input, output) pairs for repeat detection — persists across messages.
+    recent_calls: Vec<(String, String)>,
     pub stop_requested: Arc<AtomicBool>,
     pub window_closed: Arc<AtomicBool>,
 }
@@ -69,6 +73,8 @@ impl GhostSession {
             turn: 0,
             max_turns,
             state: SessionState::Idle,
+            tool_call_count: 0,
+            recent_calls: Vec::new(),
             stop_requested: Arc::new(AtomicBool::new(false)),
             window_closed: Arc::new(AtomicBool::new(false)),
         }
@@ -139,6 +145,8 @@ impl GhostSession {
         let messages = self.messages.clone();
         let max_turns = self.max_turns;
         let turn_start = self.turn;
+        let initial_tool_call_count = self.tool_call_count;
+        let initial_recent_calls = self.recent_calls.clone();
 
         tokio::spawn(async move {
             let result = run_loop(
@@ -152,12 +160,15 @@ impl GhostSession {
                 &ferricula,
                 &stop_requested,
                 &window_closed,
+                initial_tool_call_count,
+                initial_recent_calls,
             ).await;
             match result {
-                Ok((final_messages, stop_reason)) => {
-                    // Write the full conversation history back to the session
+                Ok((final_messages, stop_reason, final_tool_call_count, final_recent_calls)) => {
+                    // Write the full conversation history and throttle state back to the session
                     let mut session = session_mutex.lock().await;
                     session.set_messages(final_messages);
+                    session.set_throttle_state(final_tool_call_count, final_recent_calls);
                     session.set_state(SessionState::Completed(stop_reason));
                 }
                 Err(e) => {
@@ -182,10 +193,17 @@ impl GhostSession {
         self.state = state;
     }
 
+    pub fn set_throttle_state(&mut self, tool_call_count: usize, recent_calls: Vec<(String, String)>) {
+        self.tool_call_count = tool_call_count;
+        self.recent_calls = recent_calls;
+    }
+
     pub fn reset(&mut self) {
         self.messages.clear();
         self.turn = 0;
         self.state = SessionState::Idle;
+        self.tool_call_count = 0;
+        self.recent_calls.clear();
         self.stop_requested.store(false, Ordering::Relaxed);
         self.window_closed.store(false, Ordering::Relaxed);
     }
@@ -202,15 +220,18 @@ async fn run_loop(
     ferricula: &FerriculaBackend,
     stop_requested: &AtomicBool,
     window_closed: &AtomicBool,
-) -> anyhow::Result<(Vec<serde_json::Value>, String)> {
+    initial_tool_call_count: usize,
+    initial_recent_calls: Vec<(String, String)>,
+) -> anyhow::Result<(Vec<serde_json::Value>, String, usize, Vec<(String, String)>)> {
     let tool_defs = registry.tool_defs();
 
-    // Progressive throttle counters (persist across all loop iterations in this turn)
-    let mut tool_call_count: usize = 0; // total tool calls made this run
-    let mut screen_poll_streak: usize = 0; // consecutive iterations where ONLY terminal_screen was called
+    // Progressive throttle counters — seeded from session so they persist across messages.
+    // Reset only when the user explicitly resets the conversation.
+    let mut tool_call_count: usize = initial_tool_call_count;
+    let mut screen_poll_streak: usize = 0; // consecutive iterations where ONLY terminal_screen was called (resets per message)
 
-    // Track recent tool calls for repeat detection
-    let mut recent_calls: Vec<(String, String)> = Vec::new(); // (name+input, output)
+    // Track recent tool calls for repeat detection — seeded from session
+    let mut recent_calls: Vec<(String, String)> = initial_recent_calls;
 
     // Recall memories from Ferricula before the first model call
     let mut system = SYSTEM_PROMPT.to_string();
@@ -249,7 +270,7 @@ async fn run_loop(
                     turns: turn_start + turns - 1,
                 })
                 .await;
-            return Ok((messages, "max_turns".into()));
+            return Ok((messages, "max_turns".into(), tool_call_count, recent_calls));
         }
 
         // Compute throttle tier and filter tools accordingly
@@ -367,7 +388,7 @@ After cleanup, reply to the human and end the turn."
                 }
                 ProviderEvent::Error(msg) => {
                     let _ = tx.send(GhostEvent::Error { message: msg }).await;
-                    return Ok((messages, "error".into()));
+                    return Ok((messages, "error".into(), tool_call_count, recent_calls));
                 }
             }
         }
@@ -516,7 +537,7 @@ After cleanup, reply to the human and end the turn."
                         turns: turn_start + turns - 1,
                     })
                     .await;
-                return Ok((messages, "watercooler".into()));
+                return Ok((messages, "watercooler".into(), tool_call_count, recent_calls));
             }
 
             // Continue the loop
@@ -553,9 +574,6 @@ After cleanup, reply to the human and end the turn."
                 turns: turn_start + turns - 1,
             })
             .await;
-        return Ok((
-            messages,
-            final_stop_reason,
-        ));
+        return Ok((messages, final_stop_reason, tool_call_count, recent_calls));
     }
 }
