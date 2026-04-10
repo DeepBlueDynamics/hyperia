@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use super::ferricula::FerriculaBackend;
 use super::provider::AnthropicProvider;
 use super::registry::ToolRegistry;
-use super::types::{GhostEvent, PendingToolCall, ProviderEvent};
+use super::types::{GhostEvent, PendingToolCall, ProviderEvent, ToolDef};
 
 const SYSTEM_PROMPT: &str = "\
 You are Hyperia, the ghost in the machine — an agent inside the Hyperia terminal emulator.
@@ -201,6 +201,10 @@ async fn run_loop(
 ) -> anyhow::Result<(Vec<serde_json::Value>, String)> {
     let tool_defs = registry.tool_defs();
 
+    // Progressive throttle counters (persist across all loop iterations in this turn)
+    let mut tool_call_count: usize = 0; // total tool calls made this run
+    let mut screen_poll_streak: usize = 0; // consecutive iterations where ONLY terminal_screen was called
+
     // Track recent tool calls for repeat detection
     let mut recent_calls: Vec<(String, String)> = Vec::new(); // (name+input, output)
 
@@ -233,7 +237,52 @@ async fn run_loop(
             return Ok((messages, "max_turns".into()));
         }
 
+        // Compute throttle tier and filter tools accordingly
+        let throttle_tier: u8 = if tool_call_count > 32 { 3 }
+            else if tool_call_count > 24 { 2 }
+            else if tool_call_count > 16 { 1 }
+            else { 0 };
+
+        let effective_tool_defs: Vec<ToolDef> = match throttle_tier {
+            1 => tool_defs.iter()
+                .filter(|t| t.name != "terminal_screen")
+                .cloned()
+                .collect(),
+            2 => tool_defs.iter()
+                .filter(|t| !t.name.starts_with("terminal_"))
+                .cloned()
+                .collect(),
+            3 => tool_defs.iter()
+                .filter(|t| t.name == "watercooler" || t.name.starts_with("memory_"))
+                .cloned()
+                .collect(),
+            _ => tool_defs.clone(),
+        };
+
         let mut effective_system = system.clone();
+        if throttle_tier == 1 {
+            effective_system.push_str(&format!(
+                "\n\n## Tool throttle (tier 1 — {} calls made)\n\
+                terminal_screen has been removed: you have been making too many tool calls this turn. \
+                Stop polling. Use watercooler to check in with the user.",
+                tool_call_count
+            ));
+        } else if throttle_tier == 2 {
+            effective_system.push_str(&format!(
+                "\n\n## Tool throttle (tier 2 — {} calls made)\n\
+                All terminal tools have been removed. You have exceeded your tool budget for this turn. \
+                Use watercooler to ask the user for guidance before continuing.",
+                tool_call_count
+            ));
+        } else if throttle_tier == 3 {
+            effective_system.push_str(&format!(
+                "\n\n## Tool throttle (tier 3 — {} calls made)\n\
+                Only memory and watercooler tools are available. \
+                You MUST use watercooler to check in with the user before doing anything else.",
+                tool_call_count
+            ));
+        }
+
         if window_closed.load(Ordering::Relaxed) {
             effective_system.push_str(
                 "\n\n## Window closed\nThe Hyperia chat window has been closed by the user.\n\
@@ -254,7 +303,7 @@ After cleanup, reply to the human and end the turn."
 
         // Call the provider
         let mut event_rx = provider
-            .stream(&effective_system, &messages, &tool_defs, 4096)
+            .stream(&effective_system, &messages, &effective_tool_defs, 4096)
             .await?;
 
         // Accumulate assistant content and tool calls
@@ -393,6 +442,36 @@ After cleanup, reply to the human and end the turn."
                     "tool_use_id": tool.id,
                     "content": result_content,
                 }));
+            }
+
+            // Update throttle counters
+            let only_screen_this_round = pending_tools.iter().all(|t| t.name == "terminal_screen");
+            tool_call_count += pending_tools.len();
+            if only_screen_this_round && !pending_tools.is_empty() {
+                screen_poll_streak += 1;
+            } else {
+                screen_poll_streak = 0;
+            }
+
+            // Inject screen-polling warning when hammering terminal_screen
+            if screen_poll_streak >= 3 {
+                if let Some(last) = tool_results.last_mut() {
+                    let current = last["content"].as_str().unwrap_or("").to_string();
+                    last["content"] = serde_json::Value::String(format!(
+                        "{}\n\n[SYSTEM: You have called terminal_screen {} times in a row without \
+                        making progress. The output is not changing. STOP polling. \
+                        Use watercooler to check in with the user, or wait for an explicit signal \
+                        before reading the screen again.]",
+                        current, screen_poll_streak
+                    ));
+                }
+            }
+
+            // Forced slow-down when excessively polling the screen
+            if screen_poll_streak >= 5 {
+                tokio::time::sleep(tokio::time::Duration::from_secs(
+                    (screen_poll_streak - 4).min(8) as u64
+                )).await;
             }
 
             messages.push(serde_json::json!({
