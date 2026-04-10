@@ -106,6 +106,10 @@ impl GhostSession {
         self.messages.len()
     }
 
+    pub fn messages(&self) -> &Vec<serde_json::Value> {
+        &self.messages
+    }
+
     /// Run the agent loop for a user message. Returns a channel of GhostEvents.
     /// Takes the session mutex so the spawned task can write back the conversation history.
     pub fn run(
@@ -219,6 +223,17 @@ async fn run_loop(
     let state_client = reqwest::Client::new();
     if let Ok(resp) = state_client.get(format!("http://localhost:{}/api/status", http_port)).send().await {
         if let Ok(status) = resp.text().await {
+            // Extract platform for an explicit OS note so the agent uses the right shell commands
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&status) {
+                let platform = parsed["platform"].as_str().unwrap_or("unknown");
+                let os_note = match platform {
+                    "win32" => "## OS: Windows\nYou are on Windows. Use PowerShell or CMD syntax. Do NOT suggest brew, apt, macOS paths, or Unix-only tools unless explicitly using WSL. Available shell profiles are listed in the terminal state below.",
+                    "darwin" => "## OS: macOS\nYou are on macOS. Use bash/zsh syntax. Homebrew is common. Do NOT use apt or Windows paths.",
+                    "linux" => "## OS: Linux\nYou are on Linux. Use bash syntax, apt/dnf/pacman as appropriate.",
+                    _ => "## OS: Unknown platform",
+                };
+                system.push_str(&format!("\n\n{}", os_note));
+            }
             system.push_str(&format!("\n\n## Current terminal state\n```json\n{}\n```", status));
         }
     }

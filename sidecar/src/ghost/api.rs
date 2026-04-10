@@ -151,3 +151,14 @@ pub async fn ghost_window_closed(State(state): State<GhostState>) -> &'static st
     session.notify_window_closed();
     "ok"
 }
+
+/// GET /api/ghost/session — full current session messages for analysis/reporting.
+pub async fn ghost_session_dump(State(state): State<GhostState>) -> Json<serde_json::Value> {
+    let session = state.session.lock().await;
+    let messages = session.messages();
+    Json(serde_json::json!({
+        "turn": session.turn(),
+        "message_count": session.message_count(),
+        "messages": messages,
+    }))
+}

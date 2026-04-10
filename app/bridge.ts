@@ -14,6 +14,7 @@ import WebSocket from 'ws';
 
 import type Session from './session';
 import {createStickyNote, closeStickyNote, deleteStickyNote, updateStickyNote} from './sticky';
+import {getProfiles, getConfig} from './config';
 
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
@@ -293,7 +294,17 @@ function handleCommand(msg: Record<string, unknown>) {
         windowId: t.windowId,
         bsp: {x: t.bspX, y: t.bspY, width: t.bspW, height: t.bspH}
       }));
-      sendResult(seq, JSON.stringify({panes}));
+      // Include OS and available shell profiles so the agent knows what shells to use
+      const profiles = (getProfiles() || []).map((p: any) => ({
+        name: p.name as string,
+        shell: p.config?.shell as string | undefined,
+        isDefault: p.name === (getConfig() as any).defaultProfile,
+      }));
+      sendResult(seq, JSON.stringify({
+        panes,
+        platform: process.platform,
+        profiles,
+      }));
       break;
     }
 

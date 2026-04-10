@@ -882,6 +882,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ghost/status", axum::routing::get(ghost::api::ghost_status))
         .route("/api/ghost/history", axum::routing::get(ghost::api::ghost_history))
         .route("/api/ghost/memory", axum::routing::get(ghost::api::ghost_memory))
+        .route("/api/ghost/session", axum::routing::get(ghost::api::ghost_session_dump))
         .route("/api/ghost/stop", axum::routing::post(ghost::api::ghost_stop))
         .route("/api/ghost/continue", axum::routing::post(ghost::api::ghost_continue))
         .route("/api/ghost/reset", axum::routing::post(ghost::api::ghost_reset))

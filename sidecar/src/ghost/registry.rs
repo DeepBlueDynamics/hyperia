@@ -474,6 +474,7 @@ impl ToolRegistry {
             }
             "terminal_new_tab" => {
                 let body = serde_json::json!({
+                    "profile": input["profile"],
                     "command": input["command"],
                 });
                 self.client
@@ -645,6 +646,53 @@ impl ToolRegistry {
                     .delete(format!("{}/api/notes/{}", base, id))
                     .send()
                     .await
+            }
+            "session_report" => {
+                let note = input["note"].as_str().unwrap_or("").to_string();
+                // Fetch the full session dump
+                let session_json = match self.client
+                    .get(format!("{}/api/ghost/session", base))
+                    .send()
+                    .await
+                {
+                    Ok(r) => r.text().await.unwrap_or_else(|_| "{}".into()),
+                    Err(e) => return format!("Error fetching session: {}", e),
+                };
+
+                // Determine output path
+                let out_path = if let Some(p) = input["path"].as_str().filter(|s| !s.is_empty()) {
+                    std::path::PathBuf::from(p)
+                } else {
+                    let home = if cfg!(windows) {
+                        std::env::var("USERPROFILE").unwrap_or_default()
+                    } else {
+                        std::env::var("HOME").unwrap_or_default()
+                    };
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    std::path::PathBuf::from(home)
+                        .join(".hyperia")
+                        .join("reports")
+                        .join(format!("{}.json", now))
+                };
+
+                if let Some(parent) = out_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+
+                // Wrap with metadata
+                let report = serde_json::json!({
+                    "note": note,
+                    "session": serde_json::from_str::<serde_json::Value>(&session_json).unwrap_or_default(),
+                });
+                let report_str = serde_json::to_string_pretty(&report).unwrap_or_default();
+
+                return match std::fs::write(&out_path, &report_str) {
+                    Ok(()) => format!("Report saved to {}", out_path.display()),
+                    Err(e) => format!("Error saving report: {}", e),
+                };
             }
             "open_web_pane" => {
                 let url = input["url"].as_str().unwrap_or("").trim().to_string();
@@ -1010,11 +1058,12 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "terminal_new_tab",
-            "description": "Open a new tab. Optionally run a startup command in it.",
+            "description": "Open a new tab. Use 'profile' to start a specific shell (e.g. 'WSL', 'PowerShell', 'Command Prompt') — get the exact name from terminal_status profiles[]. Omit profile to use the default shell. 'command' types a startup command into the new shell after it opens.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "Shell command to run after the tab opens" }
+                    "profile": { "type": "string", "description": "Shell profile name from terminal_status profiles[] (e.g. 'WSL', 'Command Prompt'). Use this to open a specific shell." },
+                    "command": { "type": "string", "description": "Command to run after the shell opens" }
                 }
             }
         },
@@ -1152,6 +1201,17 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                     "headers": { "type": "object" }
                 },
                 "required": ["url"]
+            }
+        },
+        {
+            "name": "session_report",
+            "description": "Save the current session's full tool call log to a file for analysis. Captures all tool calls, inputs, outputs, and text responses from this run. Saves to ~/.hyperia/reports/ by default. Use this when something went wrong, to capture a bug report, or to save a record of complex work.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "note": { "type": "string", "description": "Optional note to include at the top of the report (e.g. 'agent looped on terminal_screen', 'new feature test')" },
+                    "path": { "type": "string", "description": "Override output file path. Defaults to ~/.hyperia/reports/YYYY-MM-DD-HH-MM.json" }
+                }
             }
         },
         {
