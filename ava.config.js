@@ -1,5 +1,6 @@
 module.exports = {
   files: ['test/unit/*'],
   extensions: ['ts'],
-  require: ['ts-node/register/transpile-only']
+  require: ['ts-node/register/transpile-only'],
+  cache: false
 };
