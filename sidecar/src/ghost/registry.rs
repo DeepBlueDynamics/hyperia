@@ -920,7 +920,7 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "terminal_focus",
-            "description": "Change which pane has focus.",
+            "description": "Direct the human's attention to a pane — use this only when you want the human to look at a specific pane. Do NOT use this as a routing step before terminal_keys, terminal_run, or terminal_split; those tools address panes directly without needing a focus change.",
             "input_schema": {
                 "type": "object",
                 "properties": {
