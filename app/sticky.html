@@ -358,7 +358,7 @@ document.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   const textarea = document.getElementById('noteText');
   const hasSelection = textarea && textarea.selectionStart !== textarea.selectionEnd;
-  ipcRenderer.send('sticky-context-menu', noteId, hasSelection);
+  ipcRenderer.send('sticky-context-menu', noteId, hasSelection, bgColor);
 });
 
 // Handle actions dispatched from the native menu

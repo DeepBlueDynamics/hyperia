@@ -468,7 +468,7 @@ export function initSticky() {
   });
 
   // Native context menu — can extend beyond window bounds
-  ipcMain.on('sticky-context-menu', (event, noteId: string, hasSelection: boolean) => {
+  ipcMain.on('sticky-context-menu', (event, noteId: string, hasSelection: boolean, currentColor: string) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) return;
 
@@ -515,23 +515,27 @@ export function initSticky() {
           ...codeThemes
         ]
       },
-      {
-        label: 'Highlight',
-        submenu: [
-          {
-            label: 'Auto (highlight.js)',
-            click: () => event.sender.send('sticky-set-highlight', 'static')
-          },
-          {
-            label: 'AI Highlight',
-            click: () => event.sender.send('sticky-set-highlight', 'agent')
-          },
-          {
-            label: 'Off',
-            click: () => event.sender.send('sticky-set-highlight', 'off')
-          }
-        ]
-      },
+      ...(currentColor?.startsWith('code:')
+        ? [
+            {
+              label: 'Highlight',
+              submenu: [
+                {
+                  label: 'Auto (highlight.js)',
+                  click: () => event.sender.send('sticky-set-highlight', 'static')
+                },
+                {
+                  label: 'AI Highlight',
+                  click: () => event.sender.send('sticky-set-highlight', 'agent')
+                },
+                {
+                  label: 'Off',
+                  click: () => event.sender.send('sticky-set-highlight', 'off')
+                }
+              ]
+            } as Electron.MenuItemConstructorOptions
+          ]
+        : []),
       {type: 'separator'},
       {
         label: 'Cut',
