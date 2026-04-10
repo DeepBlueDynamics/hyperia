@@ -359,3 +359,10 @@ root.render(
 rpc.on('reload', () => {
   plugins.reload();
 });
+
+rpc.on('open web pane req', ({url}: {url?: string}) => {
+  const resolvedUrl = url || prompt('Open URL in web pane:');
+  if (!resolvedUrl) return;
+  const full = /^https?:\/\//i.test(resolvedUrl) ? resolvedUrl : 'https://' + resolvedUrl;
+  store_.dispatch(termGroupActions.setWebPane(full) as any);
+});

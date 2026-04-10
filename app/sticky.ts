@@ -5,7 +5,7 @@ import {readFileSync, writeFileSync, mkdirSync} from 'fs';
 import {homedir} from 'os';
 import {join, resolve} from 'path';
 
-import {BrowserWindow, ipcMain, Menu, screen, app, nativeImage} from 'electron';
+import {BrowserWindow, ipcMain, Menu, screen, app, nativeImage, shell} from 'electron';
 
 import isDev from 'electron-is-dev';
 
@@ -568,6 +568,30 @@ export function initSticky() {
 
     const menu = Menu.buildFromTemplate(template);
     menu.popup({window: win});
+  });
+
+  // Open source file in default OS editor
+  ipcMain.on('sticky-open-file', (_event, filePath: string) => {
+    void shell.openPath(filePath);
+  });
+
+  // Open URL in default OS browser
+  ipcMain.on('sticky-open-external', (_event, url: string) => {
+    void shell.openExternal(url);
+  });
+
+  // Open a URL in the main terminal window as a web pane
+  ipcMain.on('sticky-open-web-pane', (_event, url: string) => {
+    const stickyWinSet = new Set(stickyWindows.values());
+    const target = BrowserWindow.getAllWindows().find((w) => !stickyWinSet.has(w) && !w.isDestroyed() && (w as any).rpc);
+    if (target) (target as any).rpc.emit('open web pane req', {url});
+  });
+
+  // Open a note by name or ID from a [From: name] link
+  ipcMain.on('sticky-open-note', (_event, nameOrId: string) => {
+    const notes = readAllNotes();
+    const note = notes.find((n) => n.id === nameOrId) ?? notes.find((n) => n.name === nameOrId);
+    if (note) createStickyNote({id: note.id});
   });
 
   // Renderer reported geometry change (redundant with win events, keeps alive)

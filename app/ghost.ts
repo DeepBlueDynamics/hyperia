@@ -238,6 +238,27 @@ function buildHyperiaHtml(): string {
     text-align: center;
   }
 
+  .thinking {
+    display: flex;
+    gap: 5px;
+    align-self: flex-start;
+    padding: 10px 14px;
+    align-items: center;
+  }
+  .thinking span {
+    width: 6px;
+    height: 6px;
+    background: #444;
+    border-radius: 50%;
+    animation: thinking-bounce 1.1s ease-in-out infinite;
+  }
+  .thinking span:nth-child(2) { animation-delay: 0.18s; }
+  .thinking span:nth-child(3) { animation-delay: 0.36s; }
+  @keyframes thinking-bounce {
+    0%, 80%, 100% { transform: translateY(0); opacity: 0.35; }
+    40% { transform: translateY(-5px); opacity: 1; background: #c839c5; }
+  }
+
   .status-indicator {
     align-self: flex-start;
     color: #555;
@@ -613,6 +634,18 @@ function buildHyperiaHtml(): string {
     input.focus();
   }
 
+  let thinkingDiv = null;
+  function showThinking() {
+    thinkingDiv = document.createElement('div');
+    thinkingDiv.className = 'thinking';
+    thinkingDiv.innerHTML = '<span></span><span></span><span></span>';
+    chat.appendChild(thinkingDiv);
+    chat.scrollTop = chat.scrollHeight;
+  }
+  function removeThinking() {
+    if (thinkingDiv) { thinkingDiv.remove(); thinkingDiv = null; }
+  }
+
   async function send() {
     if (streaming) return;
     const text = input.value.trim();
@@ -622,6 +655,7 @@ function buildHyperiaHtml(): string {
     addMsg(text, 'user');
     stopRequested = false;
     setStreaming(true);
+    showThinking();
 
     let assistantDiv = null;
     let assistantText = '';
@@ -668,6 +702,7 @@ function buildHyperiaHtml(): string {
 
             switch (event.type) {
               case 'text_delta':
+                removeThinking();
                 if (!assistantDiv) {
                   assistantDiv = addMsg('', 'assistant streaming');
                 }
@@ -677,6 +712,7 @@ function buildHyperiaHtml(): string {
                 break;
 
               case 'tool_start':
+                removeThinking();
                 // Finalize any pending assistant text
                 if (assistantDiv) {
                   assistantDiv.classList.remove('streaming');
@@ -701,6 +737,7 @@ function buildHyperiaHtml(): string {
                 break;
 
               case 'retrying':
+                removeThinking();
                 addMsg('Anthropic overloaded — retrying in ' + event.wait_secs + 's (attempt ' + event.attempt + '/3)...', 'watercooler');
                 break;
 
@@ -715,6 +752,7 @@ function buildHyperiaHtml(): string {
                 break;
 
               case 'error':
+                removeThinking();
                 addMsg('Error: ' + event.message, 'error');
                 if (String(event.message).includes('token')) {
                   try { require('electron').ipcRenderer.send('open-settings'); } catch (_) {}
@@ -729,6 +767,7 @@ function buildHyperiaHtml(): string {
         }
       }
     } catch (e) {
+      removeThinking();
       addMsg('Cannot reach sidecar. Make sure Hyperia is running and restart if needed.', 'error');
     }
 

@@ -70,6 +70,50 @@
   .close-btn:hover { background: rgba(180, 0, 0, 0.25); }
   .lines-btn:hover { background: rgba(128, 128, 128, 0.2); }
 
+  /* Link bar */
+  .link-bar {
+    display: none;
+    flex-direction: column;
+    flex-shrink: 0;
+    background: rgba(0,0,0,0.06);
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+    font-size: 10px;
+    padding: 2px 4px;
+    gap: 1px;
+  }
+  .link-bar.visible { display: flex; }
+  .link-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    height: 16px;
+  }
+  .link-icon { opacity: 0.5; flex-shrink: 0; font-size: 9px; }
+  .link-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.75;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .link-label:hover { opacity: 1; text-decoration: underline; }
+  .link-action {
+    flex-shrink: 0;
+    cursor: pointer;
+    opacity: 0.45;
+    font-size: 10px;
+    padding: 0 2px;
+    border-radius: 2px;
+    transition: opacity 0.1s;
+    -webkit-app-region: no-drag;
+  }
+  .link-action:hover { opacity: 1; background: rgba(128,128,128,0.2); }
+  .link-action.disabled { opacity: 0.2; cursor: default; }
+  .link-action.disabled:hover { background: none; }
+
   .content {
     flex: 1;
     overflow: hidden;
@@ -142,8 +186,8 @@
   .with-lines .line::before {
     content: counter(line);
     display: inline-block;
-    width: 3em;
-    margin-right: 1em;
+    width: 2ch;
+    margin-right: 0.75em;
     text-align: right;
     opacity: 0.3;
     font-size: 10px;
@@ -158,6 +202,7 @@
     <span class="titlebar-btn lines-btn" id="linesBtn" style="display:none" title="Toggle line numbers">#</span>
     <span class="titlebar-btn close-btn" id="closeBtn" title="Close">&times;</span>
   </div>
+  <div class="link-bar" id="linkBar"></div>
   <div class="ai-highlight-banner" id="aiBanner" style="display:none"></div>
   <div class="content" id="content"></div>
 
@@ -300,6 +345,95 @@ function applyHighlight(content, codeEl) {
   }
 }
 
+// ── Link bar ─────────────────────────────────────────────────────────────────
+const linkBar = document.getElementById('linkBar');
+const URL_RE = /https?:\/\/[^\s"'<>)\]]+/g;
+// [From: note-name-or-id] and app://sticky/note-id
+const NOTE_FROM_RE = /\[From:\s*([^\]]+)\]/g;
+const NOTE_URL_RE  = /app:\/\/sticky\/([^\s"'<>)\]]+)/g;
+
+function addLinkRow(icon, label, title, onLabelClick, actions) {
+  const row = document.createElement('div');
+  row.className = 'link-row';
+
+  const ic = document.createElement('span');
+  ic.className = 'link-icon';
+  ic.textContent = icon;
+  row.appendChild(ic);
+
+  const lbl = document.createElement('span');
+  lbl.className = 'link-label';
+  lbl.textContent = label;
+  lbl.title = title || label;
+  lbl.addEventListener('click', onLabelClick);
+  row.appendChild(lbl);
+
+  for (const {text, title: aTitle, onClick, disabled} of actions) {
+    const btn = document.createElement('span');
+    btn.className = 'link-action' + (disabled ? ' disabled' : '');
+    btn.textContent = text;
+    btn.title = aTitle;
+    if (!disabled) btn.addEventListener('click', onClick);
+    row.appendChild(btn);
+  }
+
+  linkBar.appendChild(row);
+  linkBar.classList.add('visible');
+}
+
+function addSourceLink(filePath) {
+  const parts = filePath.replace(/\\/g, '/').split('/');
+  const label = parts.length > 1
+    ? parts.slice(-2).join('/')
+    : parts[parts.length - 1];
+
+  addLinkRow('📄', label, filePath,
+    () => ipcRenderer.send('sticky-open-file', filePath),
+    []
+  );
+}
+
+function addWebLinks(text) {
+  const matches = [...new Set((text.match(URL_RE) || []))].slice(0, 3);
+  for (const url of matches) {
+    const short = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    addLinkRow('🔗', short, url,
+      () => ipcRenderer.send('sticky-open-external', url),
+      [
+        { text: '↗', title: 'Open in browser',   onClick: () => ipcRenderer.send('sticky-open-external', url) },
+        { text: '⬜', title: 'Open in web pane', onClick: () => ipcRenderer.send('sticky-open-web-pane', url) }
+      ]
+    );
+  }
+}
+
+function addNoteLinks(text) {
+  const seen = new Set();
+  // [From: note-name] pattern
+  NOTE_FROM_RE.lastIndex = 0;
+  let m;
+  while ((m = NOTE_FROM_RE.exec(text)) !== null) {
+    const ref = m[1].trim();
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    addLinkRow('📝', ref, `Open note: ${ref}`,
+      () => ipcRenderer.send('sticky-open-note', ref),
+      []
+    );
+  }
+  // app://sticky/id pattern
+  NOTE_URL_RE.lastIndex = 0;
+  while ((m = NOTE_URL_RE.exec(text)) !== null) {
+    const id = m[1].trim();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    addLinkRow('📝', id, `Open note: ${id}`,
+      () => ipcRenderer.send('sticky-open-note', id),
+      []
+    );
+  }
+}
+
 ipcRenderer.on('sticky-set-highlight', (_e, mode) => {
   highlightMode = mode;
   const codeEl = document.getElementById('codeBlock')?.querySelector('code');
@@ -403,6 +537,7 @@ if (filePath) {
 
   titleText.textContent = fileName;
   linesBtn.style.display = '';
+  addSourceLink(filePath);
 
   const langMap = {
     js: 'javascript', ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
@@ -427,7 +562,7 @@ if (filePath) {
   // Re-wrap lines after highlight (static mode wraps after hljs; agent mode skips)
   function wrapLines() {
     const lines = code.innerHTML.split('\n');
-    code.innerHTML = lines.map(l => '<span class="line">' + l + '</span>').join('\n');
+    code.innerHTML = lines.map(l => '<span class="line">' + l + '</span>').join('');
   }
   if (highlightMode !== 'agent') wrapLines();
 
@@ -442,6 +577,22 @@ if (filePath) {
   textarea.value = (saved && saved.text) || '';
   textarea.spellcheck = false;
   content.appendChild(textarea);
+
+  // Show web links and note references found in initial content
+  addWebLinks(textarea.value);
+  addNoteLinks(textarea.value);
+
+  // Rescan links after a pause while typing (debounced)
+  let linkScanTimer;
+  textarea.addEventListener('input', () => {
+    clearTimeout(linkScanTimer);
+    linkScanTimer = setTimeout(() => {
+      linkBar.innerHTML = '';
+      linkBar.classList.remove('visible');
+      addWebLinks(textarea.value);
+      addNoteLinks(textarea.value);
+    }, 800);
+  });
 
   const forceFocus = () => {
     textarea.focus();

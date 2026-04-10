@@ -19,6 +19,9 @@ const commands: Record<string, (focusedWindow?: BrowserWindow) => void> = {
       setTimeout(app.createWindow, 0);
     }
   },
+  'pane:openWebPane': (focusedWindow) => {
+    focusedWindow?.rpc.emit('open web pane req', {});
+  },
   'pane:splitRight': (focusedWindow) => {
     focusedWindow?.rpc.emit('split request vertical', {});
   },

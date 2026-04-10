@@ -2,8 +2,6 @@ import {ipcMain} from 'electron';
 import type {MenuItemConstructorOptions, BrowserWindow} from 'electron';
 
 import {execCommand} from '../commands';
-import editMenu from '../menus/menus/edit';
-import shellMenu from '../menus/menus/shell';
 import {getDecoratedKeymaps} from '../plugins';
 
 const separator: MenuItemConstructorOptions = {type: 'separator'};
@@ -15,52 +13,83 @@ const getCommandKeys = (keymaps: Record<string, string[]>): Record<string, strin
     });
   }, {});
 
-// only display cut/copy when there's a cursor selection
-const filterCutCopy = (selection: string, menuItem: MenuItemConstructorOptions) => {
-  if (/^cut$|^copy$/.test(menuItem.role!) && !selection) {
-    return;
-  }
-  return menuItem;
-};
-
 const contextMenuTemplate = (
   createWindow: (fn?: (win: BrowserWindow) => void, options?: Record<string, any>) => BrowserWindow,
   selection: string
-) => {
+): MenuItemConstructorOptions[] => {
   const commandKeys = getCommandKeys(getDecoratedKeymaps());
-  const _shellFull = shellMenu(
-    commandKeys,
-    execCommand,
-    [] // no profiles in context menu — keep it clean for terminal actions only
-  ).submenu as MenuItemConstructorOptions[];
-  const _edit = editMenu(commandKeys, execCommand).submenu.filter(filterCutCopy.bind(null, selection));
 
-  // Primary actions at the top
-  const topActions: MenuItemConstructorOptions[] = [
-    {
-      label: 'New Terminal',
-      click: () => createWindow()
-    },
-    {
-      label: 'New Tab',
-      click: () => execCommand('tab:new')
-    },
-    {
-      label: 'New Note',
-      click: () => ipcMain.emit('new-sticky', {})
-    },
-    separator,
-    {
-      label: 'Ask Hyperia',
-      click: () => ipcMain.emit('open-ghost')
-    },
-    separator
-  ];
+  const menu: MenuItemConstructorOptions[] = [];
 
-  return topActions
-    .concat(_edit)
-    .concat(separator, _shellFull)
-    .filter((menuItem) => !Object.prototype.hasOwnProperty.call(menuItem, 'enabled') || menuItem.enabled);
+  if (selection) {
+    menu.push({label: 'Copy', role: 'copy'});
+  }
+  menu.push({label: 'Paste', role: 'paste'});
+
+  menu.push(separator);
+  menu.push({
+    label: 'Split Down',
+    accelerator: commandKeys['pane:splitDown'],
+    click: () => execCommand('pane:splitDown')
+  });
+  menu.push({
+    label: 'Split Right',
+    accelerator: commandKeys['pane:splitRight'],
+    click: () => execCommand('pane:splitRight')
+  });
+  menu.push({
+    label: 'Close Pane',
+    accelerator: commandKeys['pane:close'],
+    click: () => execCommand('pane:close')
+  });
+
+  menu.push({
+    label: 'Open as Web Pane…',
+    click: () => execCommand('pane:openWebPane')
+  });
+
+  menu.push(separator);
+  menu.push({
+    label: 'New Tab',
+    accelerator: commandKeys['tab:new'],
+    click: () => execCommand('tab:new')
+  });
+  menu.push({
+    label: 'New Window',
+    click: () => createWindow()
+  });
+
+  menu.push(separator);
+  menu.push({
+    label: 'New Note',
+    click: () => ipcMain.emit('new-sticky', {})
+  });
+  menu.push({
+    label: 'Ask Hyperia',
+    click: () => ipcMain.emit('open-ghost')
+  });
+
+  menu.push(separator);
+  menu.push({
+    label: 'Clear Buffer',
+    accelerator: commandKeys['editor:clearBuffer'],
+    click: () => execCommand('editor:clearBuffer')
+  });
+  menu.push({
+    label: 'Search',
+    accelerator: commandKeys['editor:search'],
+    click: () => execCommand('editor:search')
+  });
+
+  if (process.platform !== 'darwin') {
+    menu.push(separator);
+    menu.push({
+      label: 'Preferences',
+      click: () => execCommand('window:preferences')
+    });
+  }
+
+  return menu;
 };
 
 export default contextMenuTemplate;

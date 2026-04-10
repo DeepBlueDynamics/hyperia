@@ -8,6 +8,7 @@ import {decorate, getTermProps, getTermGroupProps} from '../utils/plugins';
 
 import SplitPane_ from './split-pane';
 import Term_ from './term';
+import WebPane from './web-pane';
 
 const Term = decorate(Term_, 'Term');
 const SplitPane = decorate(SplitPane_, 'SplitPane');
@@ -140,6 +141,10 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
     const {childGroups, termGroup} = this.props;
     const splitOffset = ((this.props as any).splitOffset as number) || 0;
     const isRoot = !(this.props as any).splitLabel && !splitOffset;
+
+    if ((termGroup as any).webUrl) {
+      return <WebPane url={(termGroup as any).webUrl} groupUid={termGroup.uid} />;
+    }
 
     if (termGroup.sessionUid) {
       const label = (this.props as any).splitLabel as string | undefined;

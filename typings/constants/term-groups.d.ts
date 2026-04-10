@@ -29,9 +29,17 @@ export interface TermGroupReorderAction {
   toIndex: number;
 }
 
+export const TERM_GROUP_SET_WEB_URL = 'TERM_GROUP_SET_WEB_URL';
+export interface TermGroupSetWebUrlAction {
+  type: typeof TERM_GROUP_SET_WEB_URL;
+  uid: string;
+  url: string | null;
+}
+
 export type TermGroupActions =
   | TermGroupRequestAction
   | TermGroupExitAction
   | TermGroupResizeAction
   | TermGroupExitActiveAction
-  | TermGroupReorderAction;
+  | TermGroupReorderAction
+  | TermGroupSetWebUrlAction;

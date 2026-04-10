@@ -4,7 +4,8 @@ import {
   TERM_GROUP_RESIZE,
   TERM_GROUP_REQUEST,
   TERM_GROUP_EXIT,
-  TERM_GROUP_EXIT_ACTIVE
+  TERM_GROUP_EXIT_ACTIVE,
+  TERM_GROUP_SET_WEB_URL
 } from '../../typings/constants/term-groups';
 import type {ITermState, ITermGroup, HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
@@ -165,6 +166,15 @@ export function userExitTermGroup(uid: string) {
         }
       }
     });
+  };
+}
+
+export function setWebPane(url: string | null) {
+  return (dispatch: HyperDispatch, getState: () => HyperState) => {
+    const {sessions, termGroups} = getState();
+    const group = findBySession(termGroups, sessions.activeUid!);
+    if (!group) return;
+    dispatch({type: TERM_GROUP_SET_WEB_URL, uid: group.uid, url} as any);
   };
 }
 

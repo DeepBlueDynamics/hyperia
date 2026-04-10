@@ -4,7 +4,7 @@ import {v4 as uuidv4} from 'uuid';
 
 import {SESSION_ADD, SESSION_SET_ACTIVE} from '../../typings/constants/sessions';
 import type {SessionAddAction} from '../../typings/constants/sessions';
-import {TERM_GROUP_EXIT, TERM_GROUP_RESIZE, TERM_GROUP_REORDER} from '../../typings/constants/term-groups';
+import {TERM_GROUP_EXIT, TERM_GROUP_RESIZE, TERM_GROUP_REORDER, TERM_GROUP_SET_WEB_URL} from '../../typings/constants/term-groups';
 import type {ITermGroup, ITermState, ITermGroups, ITermGroupReducer, Mutable} from '../../typings/hyper';
 import {decorateTermGroupsReducer} from '../utils/plugins';
 import findBySession from '../utils/term-groups';
@@ -221,6 +221,10 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       return resizeGroup(state, action.uid, action.sizes);
     case TERM_GROUP_EXIT:
       return removeGroup(state, action.uid);
+    case TERM_GROUP_SET_WEB_URL: {
+      const {uid, url} = action as unknown as {uid: string; url: string | null};
+      return state.setIn(['termGroups', uid, 'webUrl'], url);
+    }
     case TERM_GROUP_REORDER: {
       const {fromUid, toIndex} = action as unknown as {fromUid: string; toIndex: number};
       // Get root group UIDs in current order

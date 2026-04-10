@@ -103,6 +103,7 @@ export type RendererEvents = {
   'leave full screen': never;
   'session data send': {uid: string | null; data: string; escaped?: boolean};
   'agent status': {sessionUid?: string; connected: boolean; working?: boolean; label?: string; humanPercent?: number};
+  'open web pane req': {url?: string};
 };
 
 /**

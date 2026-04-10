@@ -30,6 +30,7 @@ export type ITermGroup = Immutable<{
   direction: 'HORIZONTAL' | 'VERTICAL' | null;
   sizes: number[] | null;
   children: string[];
+  webUrl?: string | null;
 }>;
 
 export type ITermGroups = Immutable<Record<string, ITermGroup>>;

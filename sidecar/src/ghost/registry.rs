@@ -572,12 +572,20 @@ impl ToolRegistry {
                     .await
             }
             "sticky_note_create_code" => {
+                let file_path = input["file_path"].as_str().unwrap_or("").to_string();
+                if file_path.is_empty() {
+                    return "Error: file_path is required".to_string();
+                }
+                // Validate the file exists before creating the note — so errors come back to the agent, not the UI
+                if let Err(e) = std::fs::metadata(&file_path) {
+                    return format!("Error: cannot open '{}': {}", file_path, e);
+                }
                 let theme = match input["theme"].as_str().unwrap_or("dark") {
                     "light" => "code:light",
                     _ => "code:dark",
                 };
                 let body = serde_json::json!({
-                    "file_path": input["file_path"].as_str().unwrap_or(""),
+                    "file_path": file_path,
                     "color": theme,
                     "x": input["x"],
                     "y": input["y"],
@@ -1058,7 +1066,7 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "sticky_note_create_code",
-            "description": "Open a source file as a code-highlighted sticky note. The note reads directly from disk — it is a window into the file, not a copy. Always provide the actual file path the code is from.",
+            "description": "Open a source file as a code-highlighted sticky note. The note reads directly from disk — it is a window into the file, not a copy. IMPORTANT: You MUST provide a verified absolute path. Do NOT guess paths — use terminal_run (e.g. 'pwd' or 'ls') or file_read to confirm the exact path before calling this tool. The sidecar will reject the call with an error if the file does not exist.",
             "input_schema": {
                 "type": "object",
                 "properties": {
