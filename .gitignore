@@ -24,6 +24,7 @@ plugins
 
 # per-machine config
 .mcp.json
+.signing.env
 .mcp.json.bak
 .mcp.json.host
 .nemesis8.toml
