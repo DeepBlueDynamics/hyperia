@@ -4,12 +4,18 @@
 <meta charset="utf-8">
 <title>Sticky</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+<style>
+  /* Override hljs dark-mode media query — note bg/text color is set by JS */
+  @media (prefers-color-scheme: dark) {
+    .hljs { background: transparent !important; color: inherit !important; }
+  }
+</style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; }
   body {
-    color: #222;
+    /* color set dynamically by textColorForBg() */
     font-family: 'Cascadia Code', 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
     font-size: 13px;
     display: flex;
@@ -52,9 +58,9 @@
     line-height: 1;
   }
   .titlebar-btn:hover { opacity: 1; }
-  .close-btn { color: #c00; font-weight: bold; }
-  .close-btn:hover { background: rgba(255, 0, 0, 0.3); }
-  .lines-btn:hover { background: rgba(0, 0, 0, 0.12); }
+  .close-btn { font-weight: bold; }
+  .close-btn:hover { background: rgba(180, 0, 0, 0.25); }
+  .lines-btn:hover { background: rgba(128, 128, 128, 0.2); }
 
   .content {
     flex: 1;
@@ -96,12 +102,12 @@
   }
   .note-text::-webkit-scrollbar-thumb,
   pre::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.25);
+    background: rgba(128, 128, 128, 0.35);
     border-radius: 3px;
   }
   .note-text::-webkit-scrollbar-thumb:hover,
   pre::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 0, 0, 0.4);
+    background: rgba(128, 128, 128, 0.55);
   }
 
   pre {
@@ -160,12 +166,20 @@ const nameParam = params.get('name') || '';
 const stickysDir = path.join(os.homedir(), '.hyperia', 'stickys');
 const notesJson = path.join(stickysDir, 'notes.json');
 
-const STICKY_COLORS = [
-  '#fff9c4', '#ffb6c1', '#c8e6c9', '#bbdefb',
-  '#f8bbd0', '#e1bee7', '#ffe0b2', '#f0e68c',
-  '#dda0dd', '#ff6347', '#ffd700', '#add8e6',
-  '#90ee90', '#ffa07a', '#e6e6fa', '#afeeee'
-];
+// Compute readable text color from background using relative luminance (WCAG).
+function textColorForBg(hex) {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const toLinear = c => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  const L = 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+  return L > 0.25 ? '#1a1a1a' : '#f0f0f0';
+}
+
+function applyBgColor(color) {
+  document.body.style.background = color;
+  document.body.style.color = textColorForBg(color);
+}
 
 function readNotes() {
   try { return JSON.parse(fs.readFileSync(notesJson, 'utf8')); }
@@ -197,12 +211,12 @@ const saved = noteId ? findNote(noteId) : null;
 let bgColor = (saved && saved.color) || params.get('color') || '#fff9c4';
 let displayName = (saved && saved.name) || nameParam || noteId;
 
-document.body.style.background = bgColor;
+applyBgColor(bgColor);
 titleText.textContent = displayName;
 
 function setColor(color) {
   bgColor = color;
-  document.body.style.background = color;
+  applyBgColor(color);
   const note = findNote(noteId) || { id: noteId, name: displayName };
   note.color = color;
   note.saved_at = new Date().toISOString();
