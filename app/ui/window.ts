@@ -361,7 +361,7 @@ export function newWindow(
   });
   rpc.on('open context menu', (selection) => {
     const {createWindow} = app;
-    Menu.buildFromTemplate(contextMenuTemplate(createWindow, selection)).popup({
+    Menu.buildFromTemplate(contextMenuTemplate(createWindow, selection, window)).popup({
       window
     });
   });

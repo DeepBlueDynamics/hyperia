@@ -380,6 +380,19 @@ async fn post_new_window(State(state): State<AppState>) -> (StatusCode, String) 
     }
 }
 
+async fn post_open_web_pane(State(state): State<AppState>, body: String) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let url = match parsed["url"].as_str() {
+        Some(u) if !u.is_empty() => u.to_string(),
+        _ => return (StatusCode::BAD_REQUEST, "url is required".into()),
+    };
+    let cmd = serde_json::json!({"type": "OpenWebPane", "url": url});
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
 async fn post_rename_tab(
     State(state): State<AppState>,
     body: String,
@@ -840,6 +853,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pane/close", axum::routing::post(post_close))
         .route("/api/pane/new", axum::routing::post(post_new_tab))
         .route("/api/window/new", axum::routing::post(post_new_window))
+        .route("/api/web-pane", axum::routing::post(post_open_web_pane))
         .route("/api/pane/where", axum::routing::get(get_where_pane))
         .route("/api/pane/rename", axum::routing::post(post_rename_tab))
         .route("/api/agent/status", axum::routing::post(post_agent_status))

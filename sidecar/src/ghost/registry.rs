@@ -646,6 +646,27 @@ impl ToolRegistry {
                     .send()
                     .await
             }
+            "open_web_pane" => {
+                let url = input["url"].as_str().unwrap_or("").trim().to_string();
+                if url.is_empty() {
+                    return "Error: url is required".into();
+                }
+                let full_url = if url.starts_with("http://") || url.starts_with("https://") {
+                    url
+                } else {
+                    format!("https://{}", url)
+                };
+                let body = serde_json::json!({ "url": full_url });
+                return match self.client
+                    .post(format!("{}/api/web-pane", base))
+                    .json(&body)
+                    .send()
+                    .await
+                {
+                    Ok(_) => format!("Opened web pane: {}", full_url),
+                    Err(e) => format!("Error: {}", e),
+                };
+            }
             "web_fetch" => {
                 let url = input["url"].as_str().unwrap_or("");
                 let method = input["method"].as_str().unwrap_or("GET");
@@ -1129,6 +1150,17 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                     "method": { "type": "string", "enum": ["GET", "POST", "PUT", "DELETE"] },
                     "body": { "type": "string" },
                     "headers": { "type": "object" }
+                },
+                "required": ["url"]
+            }
+        },
+        {
+            "name": "open_web_pane",
+            "description": "Open a URL in a web pane inside the current Hyperia tab, replacing the terminal view. The user can close it with the × button to return to the terminal. Use this to show documentation, dashboards, or any web content inline.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "Full URL to open (https://...)" }
                 },
                 "required": ["url"]
             }

@@ -7,9 +7,10 @@ export interface Props {
   defaultProfile: string;
   profiles: configOptions['profiles'];
   openNewTab: (name: string) => void;
+  openWebPane?: (url: string) => void;
 }
 
-const Toolbar = ({defaultProfile, profiles, openNewTab}: Props) => {
+const Toolbar = ({defaultProfile, profiles, openNewTab, openWebPane}: Props) => {
   const [profileOpen, setProfileOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -41,6 +42,12 @@ const Toolbar = ({defaultProfile, profiles, openNewTab}: Props) => {
   };
   const handleNewSticky = () => {
     ipcRenderer.send('new-sticky');
+  };
+  const handleNewWebPane = () => {
+    const input = prompt('Open URL in web pane:');
+    if (!input) return;
+    const url = /^https?:\/\//i.test(input) ? input : 'https://' + input;
+    openWebPane?.(url);
   };
 
   return (
@@ -77,6 +84,16 @@ const Toolbar = ({defaultProfile, profiles, openNewTab}: Props) => {
             <path d="M9 8v5l4-4H9z" fill="currentColor" opacity="0.35" />
             <line x1="4" y1="5" x2="10" y2="5" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
             <line x1="4" y1="7.5" x2="8" y2="7.5" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
+          </svg>
+        </div>
+
+        {/* New web pane */}
+        <div className="toolbar_btn" onClick={handleNewWebPane} title="New Web Pane">
+          <svg viewBox="0 0 14 14" width="13" height="13">
+            <circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
+            <ellipse cx="7" cy="7" rx="2.2" ry="5.5" fill="none" stroke="currentColor" strokeWidth="0.9" />
+            <line x1="1.5" y1="5" x2="12.5" y2="5" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
+            <line x1="1.5" y1="9" x2="12.5" y2="9" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
           </svg>
         </div>
       </div>

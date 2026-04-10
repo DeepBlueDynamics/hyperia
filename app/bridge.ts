@@ -494,6 +494,18 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'OpenWebPane': {
+      const url = msg.url as string | undefined;
+      const win = getFocusedHyperiaWindow();
+      if (win && url) {
+        win.rpc.emit('open web pane req', {url});
+        sendResult(seq, 'ok');
+      } else {
+        sendResult(seq, win ? 'No url provided' : 'No focused window');
+      }
+      break;
+    }
+
     case 'NoteCreate': {
       const text = msg.text as string | undefined;
       const color = msg.color as string | undefined;

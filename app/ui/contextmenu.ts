@@ -1,5 +1,5 @@
-import {ipcMain, BrowserWindow} from 'electron';
-import type {MenuItemConstructorOptions} from 'electron';
+import {ipcMain} from 'electron';
+import type {BrowserWindow, MenuItemConstructorOptions} from 'electron';
 
 import {execCommand} from '../commands';
 import {getDecoratedKeymaps} from '../plugins';
@@ -13,16 +13,18 @@ const getCommandKeys = (keymaps: Record<string, string[]>): Record<string, strin
     });
   }, {});
 
-// Capture the focused window at click time so execCommand has a target.
-const cmd =
-  (command: string): MenuItemConstructorOptions['click'] =>
-  () =>
-    execCommand(command, BrowserWindow.getFocusedWindow() ?? undefined);
-
 const contextMenuTemplate = (
   createWindow: (fn?: (win: BrowserWindow) => void, options?: Record<string, any>) => BrowserWindow,
-  selection: string
+  selection: string,
+  win: BrowserWindow
 ): MenuItemConstructorOptions[] => {
+  // Capture the window NOW (before the menu is shown), not at click time.
+  // getFocusedWindow() returns null once the context menu is visible.
+  const cmd =
+    (command: string): MenuItemConstructorOptions['click'] =>
+    () =>
+      execCommand(command, win);
+
   const commandKeys = getCommandKeys(getDecoratedKeymaps());
 
   const menu: MenuItemConstructorOptions[] = [];
