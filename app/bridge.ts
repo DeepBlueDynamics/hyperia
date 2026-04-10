@@ -720,7 +720,8 @@ export function updateSessionLayout(
         rootTabUid: tracked.rootTabUid,
         splitLabel: tracked.splitLabel,
         tabOrder: tracked.tabOrder,
-        tabActive: tracked.tabActive
+        tabActive: tracked.tabActive,
+        bsp: {x: tracked.bspX, y: tracked.bspY, width: tracked.bspW, height: tracked.bspH}
       });
     }
   }
