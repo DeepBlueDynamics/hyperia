@@ -577,12 +577,12 @@ impl ToolRegistry {
                     _ => "code:dark",
                 };
                 let body = serde_json::json!({
-                    "text": input["text"].as_str().unwrap_or(""),
+                    "file_path": input["file_path"].as_str().unwrap_or(""),
                     "color": theme,
                     "x": input["x"],
                     "y": input["y"],
-                    "width": input["width"].as_i64().unwrap_or(400),
-                    "height": input["height"].as_i64().unwrap_or(300),
+                    "width": input["width"].as_i64().unwrap_or(500),
+                    "height": input["height"].as_i64().unwrap_or(400),
                 });
                 self.client
                     .post(format!("{}/api/notes", base))
@@ -1058,18 +1058,18 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "sticky_note_create_code",
-            "description": "Create a sticky note with code highlighting. Use this when displaying code, scripts, config, or any structured text. Defaults to a wider size. theme: 'dark' (default) or 'light'.",
+            "description": "Open a source file as a code-highlighted sticky note. The note reads directly from disk — it is a window into the file, not a copy. Always provide the actual file path the code is from.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "text": { "type": "string", "description": "Code or structured text content" },
+                    "file_path": { "type": "string", "description": "Absolute path to the source file on disk" },
                     "theme": { "type": "string", "enum": ["dark", "light"], "description": "dark (default) or light code theme" },
                     "x": { "type": "integer", "description": "X position (optional)" },
                     "y": { "type": "integer", "description": "Y position (optional)" },
-                    "width": { "type": "integer", "description": "Width in pixels (default 400)" },
-                    "height": { "type": "integer", "description": "Height in pixels (default 300)" }
+                    "width": { "type": "integer", "description": "Width in pixels (default 500)" },
+                    "height": { "type": "integer", "description": "Height in pixels (default 400)" }
                 },
-                "required": ["text"]
+                "required": ["file_path"]
             }
         },
         {

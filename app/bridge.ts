@@ -497,7 +497,8 @@ function handleCommand(msg: Record<string, unknown>) {
     case 'NoteCreate': {
       const text = msg.text as string | undefined;
       const color = msg.color as string | undefined;
-      createStickyNote({text, color});
+      const filePath = msg.filePath as string | undefined;
+      createStickyNote({text, color, filePath});
       sendResult(seq, 'ok');
       break;
     }

@@ -493,6 +493,7 @@ async fn post_note_create(
         "type": "NoteCreate",
         "text": parsed["text"],
         "color": parsed["color"],
+        "filePath": parsed["file_path"],
     });
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
