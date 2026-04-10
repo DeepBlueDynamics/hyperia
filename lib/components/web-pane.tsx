@@ -27,17 +27,19 @@ class WebPane_ extends React.PureComponent<WebPaneProps> {
         }}
       >
         <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '3px 8px',
-            background: '#1a1a2e',
-            borderBottom: '1px solid #0d0d1a',
-            flexShrink: 0,
-            height: 28,
-            WebkitAppRegion: 'no-drag'
-          } as React.CSSProperties}
+          style={
+            {
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '3px 8px',
+              background: '#1a1a2e',
+              borderBottom: '1px solid #0d0d1a',
+              flexShrink: 0,
+              height: 28,
+              WebkitAppRegion: 'no-drag'
+            } as React.CSSProperties
+          }
         >
           <span style={{fontSize: 11, color: '#888', flexShrink: 0}}>🌐</span>
           <span
@@ -79,7 +81,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps> {
   }
 }
 
-const mapDispatchToProps = (dispatch: HyperDispatch, ownProps: {groupUid: string}) => ({
+const mapDispatchToProps = (dispatch: HyperDispatch) => ({
   onClose() {
     dispatch(setWebPane(null) as any);
   }

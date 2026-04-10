@@ -583,8 +583,11 @@ export function initSticky() {
   // Open a URL in the main terminal window as a web pane
   ipcMain.on('sticky-open-web-pane', (_event, url: string) => {
     const stickyWinSet = new Set(stickyWindows.values());
-    const target = BrowserWindow.getAllWindows().find((w) => !stickyWinSet.has(w) && !w.isDestroyed() && (w as any).rpc);
-    if (target) (target as any).rpc.emit('open web pane req', {url});
+    const target = BrowserWindow.getAllWindows().find(
+      (w) => !stickyWinSet.has(w) && !w.isDestroyed() && (w as any).rpc
+    );
+    if (target)
+      (target as unknown as {rpc: {emit: (ch: string, data: unknown) => void}}).rpc.emit('open web pane req', {url});
   });
 
   // Open a note by name or ID from a [From: name] link
