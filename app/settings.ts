@@ -81,6 +81,7 @@ function buildSettingsHtml(): string {
   }
   const hasToken = !!cfg.config?.agentToken;
   const currentModel = cfg.config?.agentModel || '';
+  const currentShivvr = cfg.config?.shivvr?.url || '';
   const cfgPathEscaped = JSON.stringify(cfgPath.replace(/\\/g, '\\\\'));
 
   return `<!DOCTYPE html>
@@ -368,6 +369,13 @@ function buildSettingsHtml(): string {
     <button class="set-btn" onclick="changeModel()">Change Model</button>
   </div>
 
+  <div class="input-area" id="shivvrArea" style="${hasToken ? '' : 'display:none'}">
+    <input type="text" id="shivvrInput" placeholder="Shivvr URL for embeddings..."
+           value="${currentShivvr}"
+           onkeydown="if(event.key==='Enter')setShivvr()">
+    <button class="set-btn" onclick="setShivvr()">Set</button>
+  </div>
+
   <div class="input-area" id="chatArea" style="${hasToken ? '' : 'display:none'}">
     <input type="text" id="chatInput" placeholder="Ask about settings..."
            onkeydown="if(event.key==='Enter')sendChat()">
@@ -419,6 +427,8 @@ function buildSettingsHtml(): string {
     addMsg('Token set for <code>' + model + '</code>. Settings agent ready.', 'success');
     // Swap to chat input
     document.getElementById('tokenArea').style.display = 'none';
+    document.getElementById('modelChangeArea').style.display = '';
+    document.getElementById('shivvrArea').style.display = '';
     document.getElementById('chatArea').style.display = '';
     document.getElementById('chatInput').focus();
   }
@@ -432,6 +442,22 @@ function buildSettingsHtml(): string {
     saveConfig(cfg);
     const label = document.getElementById('modelChangeSelect').options[document.getElementById('modelChangeSelect').selectedIndex].text;
     addMsg('Model changed to <code>' + label + '</code>. Takes effect on next message.', 'success');
+  }
+
+  function setShivvr() {
+    const url = document.getElementById('shivvrInput').value.trim();
+    const cfg = readConfig();
+    if (!cfg.config) cfg.config = {};
+    if (!cfg.config.shivvr) cfg.config.shivvr = {};
+    if (url) {
+      cfg.config.shivvr.url = url;
+      saveConfig(cfg);
+      addMsg('Shivvr set to <code>' + url + '</code>. Embeddings active on next message.', 'success');
+    } else {
+      delete cfg.config.shivvr;
+      saveConfig(cfg);
+      addMsg('Shivvr cleared. Falling back to BM25-only recall.', 'success');
+    }
   }
 
   function editConfig() {
