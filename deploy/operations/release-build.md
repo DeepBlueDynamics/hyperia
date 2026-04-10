@@ -22,6 +22,10 @@ The installer picks up whatever binary is in `sidecar/target/release/`. If you s
 this step and the binary is stale, the packaged sidecar will have the wrong version
 and potentially missing features/fixes.
 
+```bash
+cd sidecar && cargo build --release && cd ..
+```
+
 If `cargo build` fails with "Access is denied" on `hyperia-sidecar.exe`, check whether
 `sidecar\target\release\hyperia-sidecar.exe` already exists — if it does, the build
 **succeeded**. Cargo is only failing to delete its `.old.exe` backup (Windows Defender
@@ -34,28 +38,54 @@ del /F "sidecar\target\release\hyperia-sidecar.old.exe"
 del /F "sidecar\target\release\hyperia-sidecar.old2.exe"
 ```
 
-Then build:
+### Step 4 — Code signing setup
 
-```bash
-cd sidecar && cargo build --release && cd ..
+Signing is handled automatically via `build/win/sign.js` using Azure Trusted Signing.
+
+**Local builds:** fill in `.signing.env` at the repo root (gitignored):
+
+```
+AZURE_CLIENT_SECRET=<secret from Azure portal>
 ```
 
-### Step 4 — Build and package
+Get the secret from:
+`Azure Portal → Entra ID → App registrations → hyperia → Certificates & secrets`
+Copy the **Value** (not the ID) — only visible immediately after creation.
+
+The tenant ID and client ID are already hardcoded in `build/win/sign.js`.
+If `AZURE_CLIENT_SECRET` is not set, signing is skipped and the build still completes
+(unsigned installer).
+
+**CI/build server:** set `AZURE_CLIENT_SECRET` as a repository secret in GitHub Actions
+(Settings → Secrets → Actions). The sign.js loader only reads `.signing.env` if the
+env var isn't already in the environment.
+
+### Step 5 — Build and package
 
 ```bash
-set AZURE_CLIENT_SECRET=<secret>
-yarn run dist
+yarn dist
 ```
 
 Output: `dist/Hyperia-X.Y.Z-x64.exe`
 
-### Step 5 — Verify
+### Step 6 — Verify
 
 ```bash
 ls -la dist/Hyperia-X.Y.Z*.exe
 ```
 
 Confirm the file timestamp is fresh and the version in the filename matches.
+Check the build output for `Signed: Hyperia.exe` lines — if signing worked you'll see
+them. `AZURE_CLIENT_SECRET not set — skipping signing` means the secret wasn't loaded.
+
+### Step 7 — Push release to GitHub
+
+```bash
+gh release create vX.Y.Z dist/Hyperia-X.Y.Z-x64.exe dist/Hyperia-X.Y.Z-x64.exe.blockmap \
+  --title "vX.Y.Z" \
+  --notes "release notes here" \
+  --target canary
+```
 
 ---
 
@@ -67,3 +97,5 @@ Confirm the file timestamp is fresh and the version in the filename matches.
 | Forgot to bump `app/package.json` | Installer named with old version |
 | Hyperia was open during sidecar build | `cargo build` fails: "Access is denied" |
 | Bumped version after build started | Installer has wrong version in binary |
+| `.signing.env` missing or empty secret | Build succeeds but installer is unsigned |
+| Used secret ID instead of secret Value | Signing fails silently or with auth error |
