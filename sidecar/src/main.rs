@@ -628,6 +628,105 @@ async fn delete_note(
     }
 }
 
+// In-memory cache for highlight results: content_hash → rules JSON
+static HIGHLIGHT_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u64, String>>> =
+    std::sync::OnceLock::new();
+
+fn highlight_cache() -> &'static std::sync::Mutex<std::collections::HashMap<u64, String>> {
+    HIGHLIGHT_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn content_hash(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+#[derive(Deserialize)]
+struct HighlightRequest {
+    content: String,
+    hint: Option<String>,
+}
+
+async fn post_notes_highlight(
+    Json(body): Json<HighlightRequest>,
+) -> (StatusCode, String) {
+    let content = body.content.chars().take(4000).collect::<String>();
+    let key = content_hash(&content);
+
+    // Cache hit
+    if let Ok(cache) = highlight_cache().lock() {
+        if let Some(cached) = cache.get(&key) {
+            return (StatusCode::OK, cached.clone());
+        }
+    }
+
+    let cfg = match ghost::load_config() {
+        Some(c) => c,
+        None => return (StatusCode::SERVICE_UNAVAILABLE, r#"{"error":"no api key configured"}"#.into()),
+    };
+
+    let hint = body.hint.unwrap_or_default();
+    let user_msg = if hint.is_empty() {
+        format!("Highlight this content:\n\n{}", content)
+    } else {
+        format!("Hint: {}\n\nHighlight this content:\n\n{}", hint, content)
+    };
+
+    // Resolve model ID (same logic as provider.rs)
+    let model = match cfg.model.as_str() {
+        "anthropic" => "claude-haiku-4-5-20251001".to_string(),
+        other => other.to_string(),
+    };
+
+    let req_body = serde_json::json!({
+        "model": model,
+        "max_tokens": 1024,
+        "system": "You are a syntax highlighter. Analyze the given content and return a JSON object with a single key \"rules\" containing an array of highlight rules. Each rule has: \"pattern\" (regex string), \"flags\" (optional, default \"g\"), \"className\" (an hljs CSS class like hljs-keyword, hljs-string, hljs-comment, hljs-number, hljs-title, hljs-built_in, hljs-literal), and optionally \"color\" (hex color override). Identify keywords, literals, identifiers, operators, and domain-specific terms. Return ONLY valid JSON, no explanation, no markdown.",
+        "messages": [{"role": "user", "content": user_msg}]
+    });
+
+    let client = reqwest::Client::new();
+    let resp = match client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &cfg.api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&req_body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!(r#"{{"error":"{}"}}"#, e)),
+    };
+
+    let resp_json: serde_json::Value = match resp.json().await {
+        Ok(j) => j,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!(r#"{{"error":"{}"}}"#, e)),
+    };
+
+    // Extract text from response
+    let text = resp_json["content"][0]["text"].as_str().unwrap_or("{}");
+
+    // Parse and validate — must have a "rules" array
+    let parsed: serde_json::Value = serde_json::from_str(text).unwrap_or(serde_json::json!({"rules": []}));
+    let result = if parsed["rules"].is_array() {
+        parsed
+    } else {
+        serde_json::json!({"rules": []})
+    };
+
+    let out = result.to_string();
+
+    // Store in cache
+    if let Ok(mut cache) = highlight_cache().lock() {
+        cache.insert(key, out.clone());
+    }
+
+    (StatusCode::OK, out)
+}
+
 async fn post_agent_status(
     State(state): State<AppState>,
     body: String,
@@ -746,6 +845,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ui/key", axum::routing::post(post_ui_key))
         .route("/api/pane/describe", axum::routing::post(post_auto_describe))
         .route("/api/notes", axum::routing::get(get_notes).post(post_note_create))
+        .route("/api/notes/highlight", axum::routing::post(post_notes_highlight))
         .route("/api/notes/{id}", axum::routing::delete(delete_note).patch(patch_note))
         .route("/api/notes/close", axum::routing::post(post_note_close))
         .with_state(state);

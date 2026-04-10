@@ -46,6 +46,11 @@ const config: webpack.Configuration[] = [
             to: '[name][ext]'
           },
           {
+            from: './app/*.min.css',
+            globOptions: {ignore: ['**/node_modules/**']},
+            to: '[name][ext]'
+          },
+          {
             from: './app/config/*.json',
             globOptions: {ignore: ['**/node_modules/**']},
             to: './config/[name][ext]'

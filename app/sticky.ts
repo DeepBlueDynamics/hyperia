@@ -459,10 +459,10 @@ export function initSticky() {
     }
   });
 
-  // Color change from renderer — update window backgroundColor
+  // Color change from renderer — update window backgroundColor (hex only, not code:* tokens)
   ipcMain.on('sticky-color', (_event, noteId: string, color: string) => {
     const win = stickyWindows.get(noteId);
-    if (win && !win.isDestroyed()) {
+    if (win && !win.isDestroyed() && color.startsWith('#')) {
       win.setBackgroundColor(color);
     }
   });
@@ -487,16 +487,50 @@ export function initSticky() {
       {name: 'Salmon', hex: '#ffa07a'}
     ];
 
+    const codeThemes: Electron.MenuItemConstructorOptions[] = [
+      {type: 'separator'},
+      {
+        label: 'Code Highlighting — Light',
+        icon: makeColorSwatch('#f8f8f2'),
+        click: () => event.sender.send('sticky-set-color', 'code:light')
+      },
+      {
+        label: 'Code Highlighting — Dark',
+        icon: makeColorSwatch('#1e1e2e'),
+        click: () => event.sender.send('sticky-set-color', 'code:dark')
+      }
+    ];
+
     const template: Electron.MenuItemConstructorOptions[] = [
       {
         label: 'Color',
-        submenu: colors.map((c) => ({
-          label: c.name,
-          icon: makeColorSwatch(c.hex),
-          click: () => {
-            event.sender.send('sticky-set-color', c.hex);
+        submenu: [
+          ...colors.map((c) => ({
+            label: c.name,
+            icon: makeColorSwatch(c.hex),
+            click: () => {
+              event.sender.send('sticky-set-color', c.hex);
+            }
+          })),
+          ...codeThemes
+        ]
+      },
+      {
+        label: 'Highlight',
+        submenu: [
+          {
+            label: 'Auto (highlight.js)',
+            click: () => event.sender.send('sticky-set-highlight', 'static')
+          },
+          {
+            label: 'AI Highlight',
+            click: () => event.sender.send('sticky-set-highlight', 'agent')
+          },
+          {
+            label: 'Off',
+            click: () => event.sender.send('sticky-set-highlight', 'off')
           }
-        }))
+        ]
       },
       {type: 'separator'},
       {

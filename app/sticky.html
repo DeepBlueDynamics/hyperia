@@ -3,12 +3,20 @@
 <head>
 <meta charset="utf-8">
 <title>Sticky</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+<link id="hlTheme" rel="stylesheet" href="atom-one-light.min.css">
 <style>
-  /* Override hljs dark-mode media query — note bg/text color is set by JS */
-  @media (prefers-color-scheme: dark) {
-    .hljs { background: transparent !important; color: inherit !important; }
+  /* hljs bg always transparent — note background is set by JS */
+  .hljs { background: transparent !important; }
+  .ai-highlight-banner {
+    font-size: 10px;
+    opacity: 0.6;
+    padding: 2px 8px;
+    flex-shrink: 0;
+    font-style: italic;
   }
+  .ai-highlight-banner.loading { opacity: 0.8; }
+  .ai-spinner { display: inline-block; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <style>
@@ -150,6 +158,7 @@
     <span class="titlebar-btn lines-btn" id="linesBtn" style="display:none" title="Toggle line numbers">#</span>
     <span class="titlebar-btn close-btn" id="closeBtn" title="Close">&times;</span>
   </div>
+  <div class="ai-highlight-banner" id="aiBanner" style="display:none"></div>
   <div class="content" id="content"></div>
 
 <script>
@@ -166,6 +175,11 @@ const nameParam = params.get('name') || '';
 const stickysDir = path.join(os.homedir(), '.hyperia', 'stickys');
 const notesJson = path.join(stickysDir, 'notes.json');
 
+const CODE_THEMES = {
+  'code:light': { bg: '#f8f8f2', text: '#383a42', css: 'atom-one-light.min.css' },
+  'code:dark':  { bg: '#1e1e2e', text: '#cdd6f4', css: 'atom-one-dark.min.css'  }
+};
+
 // Compute readable text color from background using relative luminance (WCAG).
 function textColorForBg(hex) {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
@@ -176,10 +190,125 @@ function textColorForBg(hex) {
   return L > 0.25 ? '#1a1a1a' : '#f0f0f0';
 }
 
-function applyBgColor(color) {
-  document.body.style.background = color;
-  document.body.style.color = textColorForBg(color);
+function applyBgColor(colorOrCode) {
+  const theme = CODE_THEMES[colorOrCode];
+  if (theme) {
+    document.body.style.background = theme.bg;
+    document.body.style.color = theme.text;
+    document.getElementById('hlTheme').href = theme.css;
+  } else {
+    document.body.style.background = colorOrCode;
+    document.body.style.color = textColorForBg(colorOrCode);
+    document.getElementById('hlTheme').href = 'atom-one-light.min.css';
+  }
 }
+
+// ── AI highlight ─────────────────────────────────────────────────────────────
+const agentCache = new Map(); // content hash → rules
+let highlightMode = 'static'; // 'static' | 'agent' | 'off'
+
+function simpleHash(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  return h.toString(36);
+}
+
+function applyRules(content, rules) {
+  // Build annotated HTML from rules applied in order
+  // Mark positions to annotate
+  const marks = []; // {start, end, className, color}
+  for (const rule of rules) {
+    try {
+      const re = new RegExp(rule.pattern, rule.flags || 'g');
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        marks.push({start: m.index, end: m.index + m[0].length, className: rule.className || '', color: rule.color || ''});
+        if (m[0].length === 0) re.lastIndex++;
+      }
+    } catch { /* invalid regex from agent — skip */ }
+  }
+  // Sort by start, resolve overlaps (later rules win — skip overlapping marks)
+  marks.sort((a, b) => a.start - b.start);
+  let out = '';
+  let pos = 0;
+  for (const mark of marks) {
+    if (mark.start < pos) continue; // overlapping, skip
+    out += escHtml(content.slice(pos, mark.start));
+    const style = mark.color ? ` style="color:${mark.color}"` : '';
+    out += `<span class="${mark.className}"${style}>${escHtml(content.slice(mark.start, mark.end))}</span>`;
+    pos = mark.end;
+  }
+  out += escHtml(content.slice(pos));
+  return out;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+const aiBanner = document.getElementById('aiBanner');
+
+async function runAgentHighlight(content, codeEl) {
+  const key = simpleHash(content);
+  aiBanner.style.display = '';
+  aiBanner.className = 'ai-highlight-banner loading';
+  aiBanner.innerHTML = '<span class="ai-spinner">↻</span> AI highlighting…';
+
+  let rules;
+  if (agentCache.has(key)) {
+    rules = agentCache.get(key);
+  } else {
+    try {
+      const port = 9800;
+      const resp = await fetch(`http://localhost:${port}/api/notes/highlight`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({content: content.slice(0, 4000)})
+      });
+      const data = await resp.json();
+      rules = data.rules || [];
+      agentCache.set(key, rules);
+    } catch (e) {
+      aiBanner.className = 'ai-highlight-banner';
+      aiBanner.textContent = 'AI highlight unavailable — using auto';
+      rules = null;
+    }
+  }
+
+  if (rules) {
+    codeEl.innerHTML = applyRules(content, rules);
+    aiBanner.className = 'ai-highlight-banner';
+    aiBanner.textContent = `AI highlighted · ${rules.length} rule${rules.length !== 1 ? 's' : ''}`;
+  } else {
+    // fallback to static
+    if (window.hljs) { codeEl.textContent = content; window.hljs.highlightElement(codeEl); }
+    aiBanner.style.display = 'none';
+  }
+}
+
+function applyHighlight(content, codeEl) {
+  if (highlightMode === 'off') {
+    codeEl.textContent = content;
+    aiBanner.style.display = 'none';
+  } else if (highlightMode === 'agent') {
+    runAgentHighlight(content, codeEl);
+  } else {
+    // static — highlight.js
+    codeEl.textContent = content;
+    if (window.hljs) window.hljs.highlightElement(codeEl);
+    aiBanner.style.display = 'none';
+  }
+}
+
+ipcRenderer.on('sticky-set-highlight', (_e, mode) => {
+  highlightMode = mode;
+  const codeEl = document.getElementById('codeBlock')?.querySelector('code');
+  if (codeEl) {
+    const raw = codeEl.dataset.raw || codeEl.textContent;
+    codeEl.dataset.raw = raw;
+    applyHighlight(raw, codeEl);
+  }
+});
 
 function readNotes() {
   try { return JSON.parse(fs.readFileSync(notesJson, 'utf8')); }
@@ -289,14 +418,18 @@ if (filePath) {
   pre.className = 'with-lines';
   const code = document.createElement('code');
   code.className = lang ? 'language-' + lang : '';
-  code.textContent = fileContent;
+  code.dataset.raw = fileContent; // preserve raw for re-highlighting
   pre.appendChild(code);
   content.appendChild(pre);
 
-  if (window.hljs) window.hljs.highlightAll();
+  applyHighlight(fileContent, code);
 
-  const lines = code.innerHTML.split('\n');
-  code.innerHTML = lines.map(l => '<span class="line">' + l + '</span>').join('\n');
+  // Re-wrap lines after highlight (static mode wraps after hljs; agent mode skips)
+  function wrapLines() {
+    const lines = code.innerHTML.split('\n');
+    code.innerHTML = lines.map(l => '<span class="line">' + l + '</span>').join('\n');
+  }
+  if (highlightMode !== 'agent') wrapLines();
 
   linesBtn.addEventListener('click', () => {
     pre.classList.toggle('with-lines');
