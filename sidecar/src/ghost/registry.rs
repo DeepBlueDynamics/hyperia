@@ -411,6 +411,15 @@ impl ToolRegistry {
                 return self.read_screen(&build_target_url("/api/screen")).await;
             }
             "terminal_split" => {
+                // If a label is given, focus that pane first
+                if let Some(label) = input["label"].as_str() {
+                    let _ = self.client
+                        .post(format!("{}/api/pane/focus", base))
+                        .json(&serde_json::json!({ "pane": label }))
+                        .send()
+                        .await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+                }
                 let dir = input["direction"].as_str().unwrap_or("vertical");
                 let body = serde_json::json!({ "direction": dir });
                 self.client
@@ -444,7 +453,7 @@ impl ToolRegistry {
                     .send()
                     .await
             }
-            "where_pane" => {
+            "terminal_where_pane" => {
                 let a = input["a"].as_str().unwrap_or("");
                 let b = input["b"].as_str().unwrap_or("");
                 match self.client
@@ -548,7 +557,7 @@ impl ToolRegistry {
                     Err(e) => format!("Error writing file: {}", e),
                 };
             }
-            "note_create" => {
+            "sticky_note_create" => {
                 let body = serde_json::json!({
                     "text": input["text"].as_str().unwrap_or(""),
                     "x": input["x"],
@@ -562,7 +571,7 @@ impl ToolRegistry {
                     .send()
                     .await
             }
-            "note_list" => {
+            "sticky_note_list" => {
                 match self.client.get(format!("{}/api/notes", base)).send().await {
                     Ok(resp) => {
                         let text = resp.text().await.unwrap_or_default();
@@ -585,7 +594,7 @@ impl ToolRegistry {
                     Err(e) => return format!("HTTP error: {}", e),
                 }
             }
-            "note_close" => {
+            "sticky_note_close" => {
                 let id = input["id"].as_str().unwrap_or("");
                 let body = serde_json::json!({ "id": id });
                 self.client
@@ -594,7 +603,7 @@ impl ToolRegistry {
                     .send()
                     .await
             }
-            "note_update" => {
+            "sticky_note_update" => {
                 let id = input["id"].as_str().unwrap_or("");
                 let body = serde_json::json!({ "text": input["text"] });
                 self.client
@@ -603,7 +612,7 @@ impl ToolRegistry {
                     .send()
                     .await
             }
-            "note_delete" => {
+            "sticky_note_delete" => {
                 let id = input["id"].as_str().unwrap_or("");
                 self.client
                     .delete(format!("{}/api/notes/{}", base, id))
@@ -899,11 +908,12 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "terminal_split",
-            "description": "Split the focused pane.",
+            "description": "Split a pane. Pass a label (e.g. 'b') to split that specific pane; omit label to split the currently focused pane.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "direction": { "type": "string", "enum": ["horizontal", "vertical"] }
+                    "direction": { "type": "string", "enum": ["horizontal", "vertical"] },
+                    "label": { "type": "string", "description": "Pane label from terminal_status (e.g. 'a', 'b'). Focuses that pane before splitting." }
                 },
                 "required": ["direction"]
             }
@@ -934,13 +944,13 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
             }
         },
         {
-            "name": "where_pane",
-            "description": "Describe the spatial relationship between two panes — e.g. 'pane b is below and to the right of pane a'. Use uids from terminal_status.",
+            "name": "terminal_where_pane",
+            "description": "Describe the spatial relationship between two panes — e.g. 'pane b is below and to the right of pane a'. Pass pane labels (e.g. 'a', 'b') from terminal_status.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "a": { "type": "string", "description": "uid of the reference pane" },
-                    "b": { "type": "string", "description": "uid of the pane to locate relative to a" }
+                    "a": { "type": "string", "description": "Label of the reference pane (e.g. 'a')" },
+                    "b": { "type": "string", "description": "Label of the pane to locate relative to a (e.g. 'b')" }
                 },
                 "required": ["a", "b"]
             }
@@ -1013,7 +1023,7 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
             }
         },
         {
-            "name": "note_create",
+            "name": "sticky_note_create",
             "description": "Create a sticky note. The note appears as a floating window. Optionally specify position and size.",
             "input_schema": {
                 "type": "object",
@@ -1028,12 +1038,12 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
             }
         },
         {
-            "name": "note_list",
+            "name": "sticky_note_list",
             "description": "List all sticky notes. Returns their ids, text content, and position.",
             "input_schema": { "type": "object", "properties": {} }
         },
         {
-            "name": "note_close",
+            "name": "sticky_note_close",
             "description": "Close (hide) a sticky note by id. Does not delete it.",
             "input_schema": {
                 "type": "object",
@@ -1044,7 +1054,7 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
             }
         },
         {
-            "name": "note_update",
+            "name": "sticky_note_update",
             "description": "Update the text of an existing sticky note.",
             "input_schema": {
                 "type": "object",
@@ -1056,7 +1066,7 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
             }
         },
         {
-            "name": "note_delete",
+            "name": "sticky_note_delete",
             "description": "Permanently delete a sticky note by id.",
             "input_schema": {
                 "type": "object",

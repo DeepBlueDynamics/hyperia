@@ -317,17 +317,28 @@ async fn get_where_pane(
     let a = params.get("a").map(|s| s.as_str()).unwrap_or("");
     let b = params.get("b").map(|s| s.as_str()).unwrap_or("");
     if a.is_empty() || b.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Provide ?a=uid&b=uid".into());
+        return (StatusCode::BAD_REQUEST, "Provide ?a=label&b=label".into());
     }
     let sessions = state.bridge.sessions().await;
-    let sa = match sessions.get(a) {
-        Some(s) => s,
+    // Resolve by uid first, then fall back to split_label
+    let find = |key: &str| -> Option<(String, _)> {
+        if let Some(s) = sessions.get(key) {
+            return Some((key.to_string(), s.clone()));
+        }
+        sessions.iter()
+            .find(|(_, s)| s.split_label == key)
+            .map(|(uid, s)| (uid.clone(), s.clone()))
+    };
+    let (uid_a, sa) = match find(a) {
+        Some(v) => v,
         None => return (StatusCode::NOT_FOUND, format!("Pane '{}' not found", a)),
     };
-    let sb = match sessions.get(b) {
-        Some(s) => s,
+    let (uid_b, sb) = match find(b) {
+        Some(v) => v,
         None => return (StatusCode::NOT_FOUND, format!("Pane '{}' not found", b)),
     };
+    let (a, b) = (uid_a.as_str(), uid_b.as_str());
+    let (sa, sb) = (&sa, &sb);
 
     let mut parts: Vec<&str> = Vec::new();
 
