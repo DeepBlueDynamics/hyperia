@@ -12,9 +12,9 @@ import type {BrowserWindow} from 'electron';
 import isDev from 'electron-is-dev';
 import WebSocket from 'ws';
 
+import {getProfiles, getConfig} from './config';
 import type Session from './session';
 import {createStickyNote, closeStickyNote, deleteStickyNote, updateStickyNote} from './sticky';
-import {getProfiles, getConfig} from './config';
 
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
@@ -298,13 +298,16 @@ function handleCommand(msg: Record<string, unknown>) {
       const profiles = (getProfiles() || []).map((p: any) => ({
         name: p.name as string,
         shell: p.config?.shell as string | undefined,
-        isDefault: p.name === (getConfig() as any).defaultProfile,
+        isDefault: p.name === (getConfig() as any).defaultProfile
       }));
-      sendResult(seq, JSON.stringify({
-        panes,
-        platform: process.platform,
-        profiles,
-      }));
+      sendResult(
+        seq,
+        JSON.stringify({
+          panes,
+          platform: process.platform,
+          profiles
+        })
+      );
       break;
     }
 
