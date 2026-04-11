@@ -30,6 +30,29 @@ const getTabs = createSelector(
     rootGroups.map((t): ITab => {
       const activeSessionUid = activeSessions[t.uid];
       const session = sessions[activeSessionUid];
+      if (!session) {
+        // Web pane tab — derive title from URL
+        const webUrl = (t as any).webUrl as string | undefined;
+        let title = 'Web Pane';
+        if (webUrl) {
+          try {
+            title = new URL(webUrl).hostname || webUrl;
+          } catch {
+            title = webUrl;
+          }
+        }
+        return {
+          uid: t.uid,
+          title,
+          tabName: title,
+          description: '',
+          isActive: t.uid === activeRootGroup,
+          hasActivity: false,
+          hasBell: false,
+          agentStatus: undefined,
+          isWebPane: true
+        };
+      }
       return {
         uid: t.uid,
         title: session.title,

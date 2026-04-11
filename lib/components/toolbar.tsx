@@ -2,6 +2,7 @@ import React, {useState, useRef, useEffect} from 'react';
 
 import type {configOptions} from '../../typings/config';
 import {ipcRenderer} from '../utils/ipc';
+import {showWebPaneDialog} from './web-pane-dialog';
 
 export interface Props {
   defaultProfile: string;
@@ -44,10 +45,7 @@ const Toolbar = ({defaultProfile, profiles, openNewTab, openWebPane}: Props) => 
     ipcRenderer.send('new-sticky');
   };
   const handleNewWebPane = () => {
-    const input = prompt('Open URL in web pane:');
-    if (!input) return;
-    const url = /^https?:\/\//i.test(input) ? input : 'https://' + input;
-    openWebPane?.(url);
+    showWebPaneDialog((url) => openWebPane?.(url));
   };
 
   return (

@@ -14,6 +14,7 @@ import * as sessionActions from './actions/sessions';
 import * as termGroupActions from './actions/term-groups';
 import * as uiActions from './actions/ui';
 import * as updaterActions from './actions/updater';
+import WebPaneDialog, {showWebPaneDialog} from './components/web-pane-dialog';
 import HyperContainer from './containers/hyper';
 import rpc from './rpc';
 import {getRootGroups} from './selectors';
@@ -353,6 +354,7 @@ const root = createRoot(document.getElementById('mount')!);
 root.render(
   <Provider store={store_}>
     <HyperContainer />
+    <WebPaneDialog />
   </Provider>
 );
 
@@ -361,8 +363,14 @@ rpc.on('reload', () => {
 });
 
 rpc.on('open web pane req', ({url}: {url?: string}) => {
-  const resolvedUrl = url || prompt('Open URL in web pane:');
-  if (!resolvedUrl) return;
-  const full = /^https?:\/\//i.test(resolvedUrl) ? resolvedUrl : 'https://' + resolvedUrl;
-  store_.dispatch(termGroupActions.setWebPane(full) as any);
+  if (url) {
+    // Called from sidecar tool — overlay the current active pane
+    const full = /^https?:\/\//i.test(url) ? url : 'https://' + url;
+    store_.dispatch(termGroupActions.setWebPane(full) as any);
+  } else {
+    // Called from toolbar/menu with no URL — open a fresh tab via dialog
+    showWebPaneDialog((full) => {
+      store_.dispatch(termGroupActions.openWebPaneInNewTab(full) as any);
+    });
+  }
 });

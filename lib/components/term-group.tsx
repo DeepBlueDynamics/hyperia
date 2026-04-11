@@ -143,7 +143,7 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
     const isRoot = !(this.props as any).splitLabel && !splitOffset;
 
     if ((termGroup as any).webUrl) {
-      return <WebPane url={(termGroup as any).webUrl} groupUid={termGroup.uid} />;
+      return <WebPane url={(termGroup as any).webUrl} groupUid={termGroup.uid} hasSession={!!termGroup.sessionUid} />;
     }
 
     if (termGroup.sessionUid) {

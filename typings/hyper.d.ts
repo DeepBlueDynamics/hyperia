@@ -245,6 +245,7 @@ export type TabProps = {
   description: string;
   uid: string;
   agentStatus?: AgentStatus;
+  isWebPane?: boolean;
 } & extensionProps;
 
 export type AgentStatus = {
@@ -263,6 +264,7 @@ export type ITab = {
   hasActivity: boolean;
   hasBell: boolean;
   agentStatus?: AgentStatus;
+  isWebPane?: boolean;
 };
 
 export type TabsProps = {

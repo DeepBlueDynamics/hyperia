@@ -36,10 +36,24 @@ export interface TermGroupSetWebUrlAction {
   url: string | null;
 }
 
+export const TERM_GROUP_ADD_WEB_TAB = 'TERM_GROUP_ADD_WEB_TAB';
+export interface TermGroupAddWebTabAction {
+  type: typeof TERM_GROUP_ADD_WEB_TAB;
+  url: string;
+}
+
+export const TERM_GROUP_ACTIVATE_WEB_TAB = 'TERM_GROUP_ACTIVATE_WEB_TAB';
+export interface TermGroupActivateWebTabAction {
+  type: typeof TERM_GROUP_ACTIVATE_WEB_TAB;
+  uid: string;
+}
+
 export type TermGroupActions =
   | TermGroupRequestAction
   | TermGroupExitAction
   | TermGroupResizeAction
   | TermGroupExitActiveAction
   | TermGroupReorderAction
-  | TermGroupSetWebUrlAction;
+  | TermGroupSetWebUrlAction
+  | TermGroupAddWebTabAction
+  | TermGroupActivateWebTabAction;

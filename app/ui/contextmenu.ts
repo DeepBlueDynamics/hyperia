@@ -38,7 +38,7 @@ const contextMenuTemplate = (
   menu.push({label: 'Split Down', accelerator: commandKeys['pane:splitDown'], click: cmd('pane:splitDown')});
   menu.push({label: 'Split Right', accelerator: commandKeys['pane:splitRight'], click: cmd('pane:splitRight')});
   menu.push({label: 'Close Pane', accelerator: commandKeys['pane:close'], click: cmd('pane:close')});
-  menu.push({label: 'Open as Web Pane…', click: cmd('pane:openWebPane')});
+  menu.push({label: 'New Web Pane…', click: cmd('pane:openWebPane')});
 
   menu.push(separator);
   menu.push({label: 'New Tab', accelerator: commandKeys['tab:new'], click: cmd('tab:new')});

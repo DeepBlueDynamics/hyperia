@@ -1216,7 +1216,7 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "open_web_pane",
-            "description": "Open a URL in a web pane inside the current Hyperia tab, replacing the terminal view. The user can close it with the × button to return to the terminal. Use this to show documentation, dashboards, or any web content inline.",
+            "description": "Open a URL in a new web pane tab. Opens a dedicated browser tab inside Hyperia showing the given URL. Use this to show documentation, dashboards, search results, or any web content. Example: open_web_pane with url='https://google.com'",
             "input_schema": {
                 "type": "object",
                 "properties": {

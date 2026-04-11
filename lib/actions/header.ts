@@ -6,13 +6,20 @@ import {
   UI_WINDOW_MINIMIZE,
   UI_WINDOW_CLOSE
 } from '../../typings/constants/ui';
-import type {HyperDispatch} from '../../typings/hyper';
+import type {HyperDispatch, HyperState} from '../../typings/hyper';
 import rpc from '../rpc';
 
-import {userExitTermGroup, setActiveGroup} from './term-groups';
+import {userExitTermGroup, clearWebPane, setActiveGroup} from './term-groups';
 
 export function closeTab(uid: string) {
-  return (dispatch: HyperDispatch) => {
+  return (dispatch: HyperDispatch, getState: () => HyperState) => {
+    const {termGroups} = getState();
+    const group = termGroups.termGroups[uid];
+    // If a web pane is overlaying a real terminal, just clear the URL — don't kill the session
+    if (group && (group as any).webUrl && group.sessionUid) {
+      dispatch(clearWebPane(uid) as any);
+      return;
+    }
     dispatch({
       type: CLOSE_TAB,
       uid,

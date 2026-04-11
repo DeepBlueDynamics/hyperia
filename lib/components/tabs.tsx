@@ -70,7 +70,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         className={`tabs_list ${fullScreen && isMac ? 'tabs_fullScreen' : ''}`}
       >
         {tabs.map((tab, i) => {
-          const {uid, title, isActive, hasActivity, hasBell, agentStatus, tabName, description} = tab;
+          const {uid, title, isActive, hasActivity, hasBell, agentStatus, tabName, description, isWebPane} = tab;
           const tabProps = getTabProps(tab, props, {
             text: tabName || title || 'Shell',
             tabName: tabName || title || 'Shell',
@@ -83,6 +83,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             hasActivity,
             hasBell,
             agentStatus,
+            isWebPane,
             onSelect: onChange.bind(null, uid),
             onClose: onClose.bind(null, uid),
             onDescribe: (desc: string) => onDescribe(uid, desc),

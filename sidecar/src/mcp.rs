@@ -76,6 +76,12 @@ pub struct RenameTabRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct OpenWebPaneRequest {
+    /// Full URL to open (e.g. "https://localhost:3000" or "https://example.com")
+    pub url: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct StyleCreateRequest {
     /// Name for the new style
     pub name: String,
@@ -299,6 +305,15 @@ impl HyperiaMcp {
             body["command"] = serde_json::json!(cmd);
         }
         let resp = self.post_json("/api/pane/new", &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Open a URL in a web pane inside the active Hyperia terminal pane, replacing the terminal view with an embedded browser. Pass a full URL (https://...). Use this to show any web content — docs, dashboards, localhost servers, search results — inline in the terminal.")]
+    async fn open_web_pane(
+        &self,
+        Parameters(req): Parameters<OpenWebPaneRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let resp = self.post_json("/api/web-pane", &serde_json::json!({"url": req.url})).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -945,7 +960,7 @@ impl ServerHandler for HyperiaMcp {
                  For a full view of all pane contents, use tab_snapshot. \
                  \n\nTerminal: terminal_keys, terminal_run, terminal_screen, terminal_status, \
                  terminal_split, terminal_focus, terminal_close, terminal_new_tab, tab_snapshot, \
-                 shell_state, shell_confirm. \
+                 shell_state, shell_confirm, open_web_pane. \
                  \n\nAgent: agent_status, auto_describe. \
                  \n\nStyles: style_list, style_create, style_delete. \
                  \n\nTelemetry: telemetry_toggle, telemetry_snapshot, telemetry_record, telemetry_reset. \

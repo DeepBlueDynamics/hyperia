@@ -5,7 +5,9 @@ import {
   TERM_GROUP_REQUEST,
   TERM_GROUP_EXIT,
   TERM_GROUP_EXIT_ACTIVE,
-  TERM_GROUP_SET_WEB_URL
+  TERM_GROUP_SET_WEB_URL,
+  TERM_GROUP_ADD_WEB_TAB,
+  TERM_GROUP_ACTIVATE_WEB_TAB
 } from '../../typings/constants/term-groups';
 import type {ITermState, ITermGroup, HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
@@ -68,7 +70,13 @@ export function requestTermGroup(_activeUid: string | undefined, _profile: strin
 export function setActiveGroup(uid: string) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     const {termGroups} = getState();
-    dispatch(setActiveSession(termGroups.activeSessions[uid]));
+    const sessionUid = termGroups.activeSessions[uid];
+    if (sessionUid) {
+      dispatch(setActiveSession(sessionUid));
+    } else {
+      // Web pane tab — no session, just set the active root group
+      dispatch({type: TERM_GROUP_ACTIVATE_WEB_TAB, uid} as any);
+    }
   };
 }
 
@@ -146,24 +154,42 @@ export function userExitTermGroup(uid: string) {
       effect: () => {
         const group = termGroups.termGroups[uid];
         if (Object.keys(termGroups.termGroups).length <= 1) {
-          // No need to attempt finding a new active session
-          // if this is the last one we've got:
-          return dispatch(userExitSession(group.sessionUid!));
+          // Last group — exit the session if there is one
+          if (group.sessionUid) dispatch(userExitSession(group.sessionUid));
+          return;
         }
 
         const activeSessionUid = termGroups.activeSessions[termGroups.activeRootGroup!];
-        if (termGroups.activeRootGroup === uid || activeSessionUid === group.sessionUid) {
-          const nextSessionUid = findNextSessionUid(termGroups, group);
-          dispatch(setActiveSession(nextSessionUid!));
+        const isActive = termGroups.activeRootGroup === uid || activeSessionUid === group.sessionUid;
+
+        if (isActive) {
+          // Try to find the next session the normal way first
+          const nextSessionUid = group.sessionUid ? findNextSessionUid(termGroups, group) : undefined;
+          if (nextSessionUid) {
+            dispatch(setActiveSession(nextSessionUid));
+          } else {
+            // Next tab may be a web pane — find the previous root group directly
+            const rootGroups = getRootGroups({termGroups});
+            const nextGroup = findPrevious(rootGroups, group);
+            if (nextGroup) {
+              const nextSession = termGroups.activeSessions[nextGroup.uid];
+              if (nextSession) {
+                dispatch(setActiveSession(nextSession));
+              } else {
+                dispatch({type: TERM_GROUP_ACTIVATE_WEB_TAB, uid: nextGroup.uid} as any);
+              }
+            }
+          }
         }
 
         if (group.sessionUid) {
           dispatch(userExitSession(group.sessionUid));
-        } else {
+        } else if (group.children && group.children.length > 0) {
           group.children.forEach((childUid) => {
             dispatch(userExitTermGroup(childUid));
           });
         }
+        // Web pane root tab with no children: TERM_GROUP_EXIT already removes the group
       }
     });
   };
@@ -175,6 +201,18 @@ export function setWebPane(url: string | null) {
     const group = findBySession(termGroups, sessions.activeUid!);
     if (!group) return;
     dispatch({type: TERM_GROUP_SET_WEB_URL, uid: group.uid, url} as any);
+  };
+}
+
+export function clearWebPane(groupUid: string) {
+  return (dispatch: HyperDispatch) => {
+    dispatch({type: TERM_GROUP_SET_WEB_URL, uid: groupUid, url: null} as any);
+  };
+}
+
+export function openWebPaneInNewTab(url: string) {
+  return (dispatch: HyperDispatch) => {
+    dispatch({type: TERM_GROUP_ADD_WEB_TAB, url} as any);
   };
 }
 

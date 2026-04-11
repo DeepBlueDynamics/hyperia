@@ -87,7 +87,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     /* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
   };
 
-  const {isActive, isFirst, isLast, borderColor, hasActivity, hasBell, agentStatus, tabName, description} = props;
+  const {isActive, isFirst, isLast, borderColor, hasActivity, hasBell, agentStatus, tabName, description, isWebPane} = props;
 
   const displayText = tabName || description || props.text;
 
@@ -113,7 +113,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         style={{borderColor}}
         className={`tab_tab ${isFirst ? 'tab_first' : ''} ${isActive ? 'tab_active' : ''} ${
           isFirst && isActive ? 'tab_firstActive' : ''
-        } ${hasActivity ? 'tab_hasActivity' : ''}`}
+        } ${hasActivity ? 'tab_hasActivity' : ''} ${isWebPane ? 'tab_webPane' : ''}`}
         ref={ref}
       >
         {props.customChildrenBefore}
@@ -196,6 +196,25 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         .tab_active:hover {
           color: #fff;
           background: #000;
+        }
+
+        .tab_webPane {
+          background: #13131f;
+          border-right-color: rgba(0, 100, 200, 0.3);
+          color: #7aabdd;
+        }
+        .tab_webPane:hover {
+          background: #191928;
+          color: #aaccff;
+        }
+        .tab_webPane.tab_active {
+          background: #13131f;
+          color: #c8e0ff;
+          border-bottom: 2px solid rgba(0, 150, 255, 0.5);
+        }
+        .tab_webPane.tab_active:hover {
+          background: #13131f;
+          color: #c8e0ff;
         }
 
         .tab_hasActivity {

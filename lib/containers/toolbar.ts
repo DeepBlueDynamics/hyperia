@@ -1,7 +1,7 @@
 import {connect} from 'react-redux';
 
 import type {HyperState, HyperDispatch} from '../../typings/hyper';
-import {requestTermGroup, setWebPane} from '../actions/term-groups';
+import {requestTermGroup, openWebPaneInNewTab} from '../actions/term-groups';
 import Toolbar from '../components/toolbar';
 
 const mapStateToProps = (state: HyperState) => ({
@@ -14,7 +14,7 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => ({
     dispatch(requestTermGroup(undefined, profile));
   },
   openWebPane: (url: string) => {
-    dispatch(setWebPane(url) as any);
+    dispatch(openWebPaneInNewTab(url) as any);
   }
 });
 
