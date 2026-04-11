@@ -2,6 +2,7 @@ import React, {useState, useRef, useEffect} from 'react';
 
 import type {configOptions} from '../../typings/config';
 import {ipcRenderer} from '../utils/ipc';
+
 import {showWebPaneDialog} from './web-pane-dialog';
 
 export interface Props {

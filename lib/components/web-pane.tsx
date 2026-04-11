@@ -30,19 +30,22 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   }
 
   componentDidMount() {
+    if (!this.webviewRef.current) return;
+    // webviewRef is typed as `any` so we can call Electron webview methods
     const wv = this.webviewRef.current;
-    if (!wv) return;
 
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     wv.addEventListener('did-start-loading', () => {
       this.setState({loading: true, error: null});
     });
 
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     wv.addEventListener('did-stop-loading', () => {
       this.setState({loading: false});
     });
 
-    wv.addEventListener('did-fail-load', (e: any) => {
-      // Error code -3 is ABORTED (e.g. redirect), ignore it
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    wv.addEventListener('did-fail-load', (e: {errorCode: number; errorDescription: string}) => {
       if (e.errorCode === -3) return;
       this.setState({loading: false, error: e.errorDescription || 'Failed to load'});
     });
@@ -134,14 +137,15 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         )}
 
         {/* Webview — always mounted so it can navigate */}
-        {/* eslint-disable-next-line @typescript-eslint/ban-ts-comment */}
-        {/* @ts-ignore — webview is a valid Electron tag but not in React types */}
+        {/* eslint-disable react/no-unknown-property */}
+        {/* @ts-expect-error — webview is a valid Electron tag but not in React types */}
         <webview
           ref={this.webviewRef}
           src={url}
           useragent={BROWSER_UA}
           style={{flex: 1, display: error ? 'none' : 'flex'}}
         />
+        {/* eslint-enable react/no-unknown-property */}
       </div>
     );
   }

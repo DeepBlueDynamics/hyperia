@@ -87,7 +87,8 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     /* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
   };
 
-  const {isActive, isFirst, isLast, borderColor, hasActivity, hasBell, agentStatus, tabName, description, isWebPane} = props;
+  const {isActive, isFirst, isLast, borderColor, hasActivity, hasBell, agentStatus, tabName, description, isWebPane} =
+    props;
 
   const displayText = tabName || description || props.text;
 
