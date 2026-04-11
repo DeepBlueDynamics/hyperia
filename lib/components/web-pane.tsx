@@ -4,6 +4,7 @@ import {connect} from 'react-redux';
 
 import type {HyperDispatch} from '../../typings/hyper';
 import {clearWebPane} from '../actions/term-groups';
+import rpc from '../rpc';
 
 // Match a real Chrome UA so sites don't block the request
 const BROWSER_UA =
@@ -57,6 +58,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     return (
       <div
+        onContextMenu={(e) => {
+          e.preventDefault();
+          rpc.emit('open context menu', '');
+        }}
         style={{
           position: 'absolute',
           top: 0,

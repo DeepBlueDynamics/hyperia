@@ -308,7 +308,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Open a URL in a web pane inside the active Hyperia terminal pane, replacing the terminal view with an embedded browser. Pass a full URL (https://...). Use this to show any web content — docs, dashboards, localhost servers, search results — inline in the terminal.")]
+    #[tool(description = "Open a URL in a new dedicated web pane tab inside Hyperia. Opens an embedded browser tab alongside your terminal tabs — does NOT replace or overlay any existing terminal. Pass a full URL (https://...). Use this to show docs, dashboards, localhost servers, or any web content.")]
     async fn open_web_pane(
         &self,
         Parameters(req): Parameters<OpenWebPaneRequest>,

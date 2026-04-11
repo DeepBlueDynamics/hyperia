@@ -364,11 +364,9 @@ rpc.on('reload', () => {
 
 rpc.on('open web pane req', ({url}: {url?: string}) => {
   if (url) {
-    // Called from sidecar tool — overlay the current active pane
     const full = /^https?:\/\//i.test(url) ? url : 'https://' + url;
-    store_.dispatch(termGroupActions.setWebPane(full) as any);
+    store_.dispatch(termGroupActions.openWebPaneInNewTab(full) as any);
   } else {
-    // Called from toolbar/menu with no URL — open a fresh tab via dialog
     showWebPaneDialog((full) => {
       store_.dispatch(termGroupActions.openWebPaneInNewTab(full) as any);
     });
