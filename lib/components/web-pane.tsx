@@ -138,7 +138,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
         {/* Webview — always mounted so it can navigate */}
         {/* eslint-disable react/no-unknown-property */}
-        {/* @ts-expect-error — webview is a valid Electron tag but not in React types */}
         <webview
           ref={this.webviewRef}
           src={url}
