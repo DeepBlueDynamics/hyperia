@@ -564,9 +564,11 @@ export function initSettings() {
   ipcMain.on('edit-config-external', () => {
     // Try VS Code first, fall back to TextEdit on Mac or system default
     if (process.platform === 'darwin') {
-      // macOS: try VS Code, then TextEdit
+      // macOS: try VS Code, then TextEdit, then default app
       spawn('open', ['-a', 'Visual Studio Code', cfgPath]).on('error', () => {
-        spawn('open', ['-e', cfgPath]); // TextEdit
+        spawn('open', ['-e', cfgPath]).on('error', () => {
+          void shell.openPath(cfgPath); // Final fallback
+        });
       });
     } else {
       // Windows/Linux: try VS Code, fall back to system default
