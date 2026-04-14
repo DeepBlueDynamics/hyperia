@@ -552,9 +552,12 @@ impl HyperiaMcp {
                         if let Some(panes) = tab["panes"].as_array() {
                             for pane in panes {
                                 let label = pane["label"].as_str().unwrap_or("");
+                                let pane_id = pane["paneId"].as_str().unwrap_or("");
+                                // Use paneId when label is empty so unlabeled panes are addressed individually
+                                let pane_key = if label.is_empty() { pane_id } else { label };
                                 let cols = pane["cols"].as_u64().unwrap_or(0);
                                 let rows = pane["rows"].as_u64().unwrap_or(0);
-                                let screen = self.get(&self.pane_path("/api/screen", Some(win_id as u32), Some(tab_name), Some(label))).await
+                                let screen = self.get(&self.pane_path("/api/screen", Some(win_id as u32), Some(tab_name), Some(pane_key))).await
                                     .unwrap_or_else(|_| "(error reading screen)".into());
 
                                 let header = if label.is_empty() {
@@ -587,15 +590,17 @@ impl HyperiaMcp {
                         if let Some(panes) = tab["panes"].as_array() {
                             for pane in panes {
                                 let label = pane["label"].as_str().unwrap_or("");
+                                let pane_id = pane["paneId"].as_str().unwrap_or("");
+                                let pane_key = if label.is_empty() { pane_id } else { label };
                                 let tab_name = tab["name"].as_str().unwrap_or("shell");
-                                let screen = self.get(&self.pane_path("/api/screen", Some(win["id"].as_u64().unwrap_or(0) as u32), Some(tab_name), Some(label))).await
+                                let screen = self.get(&self.pane_path("/api/screen", Some(win["id"].as_u64().unwrap_or(0) as u32), Some(tab_name), Some(pane_key))).await
                                     .unwrap_or_default();
 
                                 let state = detect_shell_state(&screen);
                                 results.push(serde_json::json!({
                                     "window": win["id"],
                                     "tab": tab_name,
-                                    "pane": label,
+                                    "pane": if label.is_empty() { pane_id } else { label },
                                     "state": state.kind,
                                     "detail": state.detail,
                                     "actionable": state.actionable,
@@ -648,18 +653,21 @@ impl HyperiaMcp {
                         if let Some(panes) = tab["panes"].as_array() {
                             for pane in panes {
                                 let label = pane["label"].as_str().unwrap_or("");
-                                let screen = self.get(&self.pane_path("/api/screen", Some(win["id"].as_u64().unwrap_or(0) as u32), Some(tab_name), Some(label))).await
+                                let pane_id = pane["paneId"].as_str().unwrap_or("");
+                                let pane_key = if label.is_empty() { pane_id } else { label };
+                                let win_id = win["id"].as_u64().unwrap_or(0) as u32;
+                                let screen = self.get(&self.pane_path("/api/screen", Some(win_id), Some(tab_name), Some(pane_key))).await
                                     .unwrap_or_default();
                                 let state = detect_shell_state(&screen);
 
                                 let pane_desc = if label.is_empty() {
-                                    tab_name.to_string()
+                                    format!("{} ({})", tab_name, &pane_key[..pane_key.len().min(8)])
                                 } else {
                                     format!("{} ({})", tab_name, label)
                                 };
 
                                 if let Some(keys) = &state.actionable {
-                                    self.post_text(&self.pane_path("/api/type", Some(win["id"].as_u64().unwrap_or(0) as u32), Some(tab_name), Some(label)), keys).await?;
+                                    self.post_text(&self.pane_path("/api/type", Some(win_id), Some(tab_name), Some(pane_key)), keys).await?;
                                     actions.push(format!("{}: sent '{}' ({})", pane_desc, keys.replace('\r', "\\r"), state.detail));
                                 } else {
                                     actions.push(format!("{}: no action needed ({})", pane_desc, state.kind));

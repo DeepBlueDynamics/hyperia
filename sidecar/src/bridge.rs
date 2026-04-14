@@ -256,7 +256,8 @@ impl Bridge {
         if let Some(label) = pane {
             sorted_panes
                 .into_iter()
-                .find(|(_, info)| info.split_label == label)
+                // Match by split_label first; fall back to matching by session uid (paneId)
+                .find(|(uid, info)| info.split_label == label || uid.as_str() == label)
                 .map(|(uid, _)| uid.clone())
         } else {
             sorted_panes
