@@ -42,6 +42,9 @@ Build on what you remember. Don't ask for information you've been told before.
 ## Services
 - shivvr: https://shivvr.nuts.services
 
+## Web content
+- To show a URL to the user, ALWAYS use open_web_pane — never use `open`, `xdg-open`, `start`, or any shell command to open URLs in the system browser. open_web_pane opens an embedded browser tab right inside Hyperia.
+
 ## Watercooler
 Call the watercooler tool to check in with the human after making real progress. Don't run more than a handful of tool calls without checking in.";
 
