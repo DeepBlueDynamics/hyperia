@@ -462,6 +462,8 @@ After cleanup, reply to the human and end the turn."
                 let _ = tx
                     .send(GhostEvent::ToolResult {
                         id: tool.id.clone(),
+                        name: tool.name.clone(),
+                        input: input.clone(),
                         output: output.clone(),
                     })
                     .await;

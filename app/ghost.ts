@@ -501,26 +501,55 @@ function buildHyperiaHtml(): string {
   }
 
   const TOOL_EMOJIS = {
-    terminal_keys: '\uD83D\uDCBB', terminal_run: '\uD83D\uDCBB', terminal_screen: '\uD83D\uDCBB', terminal_new_tab: '\uD83D\uDCBB',
-    terminal_status: '\uD83D\uDCBB', terminal_split: '\uD83D\uDCBB', terminal_focus: '\uD83D\uDCBB',
+    terminal_keys: '\uD83D\uDCBB', terminal_run: '\uD83D\uDCBB', terminal_screen: '\uD83D\uDCBB',
+    terminal_status: '\uD83D\uDCBB', terminal_split: '\u29E7', terminal_focus: '\uD83D\uDCBB',
     terminal_close: '\uD83D\uDCBB', terminal_rename: '\uD83D\uDCBB', terminal_new_tab: '\uD83D\uDCBB',
-    file_read: '\uD83D\uDCC4', file_write: '\uD83D\uDCC4',
-    web_fetch: '\uD83C\uDF10',
+    file_read: '\uD83D\uDCC4', file_write: '\u270F\uFE0F',
+    web_fetch: '\uD83C\uDF10', open_web_pane: '\uD83C\uDF10',
     tool_search: '\uD83D\uDD0D', tool_create: '\uD83D\uDD27',
+    memory_recall: '\uD83E\uDDE0', memory_remember: '\uD83E\uDDE0',
+    tab_snapshot: '\uD83D\uDCF8', shell_state: '\uD83D\uDCBB',
     watercooler: '\u2615',
   };
   const DEFAULT_EMOJI = '\u2699\uFE0F';
+
+  const TOOL_PENDING = {
+    terminal_run: 'run\u2026', terminal_keys: 'type\u2026', terminal_screen: 'read screen\u2026',
+    terminal_status: 'status\u2026', terminal_split: 'split\u2026', terminal_new_tab: 'new tab\u2026',
+    terminal_close: 'close pane\u2026', terminal_focus: 'focus\u2026',
+    open_web_pane: 'opening web pane\u2026',
+    file_read: 'read file\u2026', file_write: 'write file\u2026',
+    web_fetch: 'fetch\u2026', tool_search: 'search\u2026', tool_create: 'create tool\u2026',
+    memory_recall: 'recall\u2026', memory_remember: 'remember\u2026',
+  };
 
   function getToolEmoji(name) {
     return TOOL_EMOJIS[name] || DEFAULT_EMOJI;
   }
 
-  function summarizeOutput(output) {
-    if (!output) return '';
-    const lines = output.split('\\n').filter(l => l.trim());
-    if (lines.length === 0) return '';
-    if (lines.length === 1 && lines[0].length < 60) return lines[0];
-    return lines[0].substring(0, 50) + (lines.length > 1 ? ' +' + (lines.length - 1) + ' lines' : '');
+  function buildToolLabel(name, input) {
+    const inp = input || {};
+    switch (name) {
+      case 'open_web_pane': return 'Web pane: ' + (inp.url || '');
+      case 'terminal_split': return 'Split ' + (inp.direction || 'pane');
+      case 'terminal_new_tab': return 'New tab' + (inp.name ? ': ' + inp.name : '');
+      case 'terminal_close': return 'Close pane' + (inp.pane ? ' ' + inp.pane : '');
+      case 'terminal_focus': return 'Focus pane ' + (inp.pane || '');
+      case 'terminal_run': return (inp.command || inp.keys || '').substring(0, 80);
+      case 'terminal_keys': return (inp.text || inp.keys || '').replace(/\\n/g, '\u21B5').replace(/\\r/g, '\u21B5').substring(0, 80);
+      case 'terminal_screen': return 'Read screen' + (inp.pane !== undefined ? ' (pane ' + inp.pane + ')' : '');
+      case 'terminal_status': return 'Check pane status';
+      case 'file_read': return 'Read: ' + (inp.path || inp.url || '');
+      case 'file_write': return 'Write: ' + (inp.path || '');
+      case 'web_fetch': return 'Fetch: ' + (inp.url || '');
+      case 'tool_search': return 'Search: ' + (inp.query || '');
+      case 'tool_create': return 'Create tool: ' + (inp.name || '');
+      case 'memory_recall': return 'Recall: ' + (inp.query || inp.channel || '');
+      case 'memory_remember': return 'Remember: ' + (inp.content || '').substring(0, 60);
+      case 'tab_snapshot': return 'Tab snapshot';
+      case 'shell_state': return 'Shell state';
+      default: return name;
+    }
   }
 
   function addToolMsg(name, id) {
@@ -528,9 +557,10 @@ function buildHyperiaHtml(): string {
     div.className = 'msg tool';
     div.id = 'tool-' + id;
     const emoji = getToolEmoji(name);
+    const pending = TOOL_PENDING[name] || name;
     div.innerHTML = '<span class="tool-emoji running">' + emoji + '</span>'
       + '<div class="tool-body">'
-      + '<span class="tool-summary">' + escapeHtml(name) + '</span>'
+      + '<span class="tool-summary">' + escapeHtml(pending) + '</span>'
       + '<div class="tool-output"></div>'
       + '</div>';
     div.onclick = () => div.classList.toggle('expanded');
@@ -539,18 +569,15 @@ function buildHyperiaHtml(): string {
     return div;
   }
 
-  function setToolOutput(id, output) {
+  function setToolOutput(id, name, input, output) {
     const div = document.getElementById('tool-' + id);
     if (!div) return;
     // Stop the pulse
     const emojiEl = div.querySelector('.tool-emoji');
     if (emojiEl) emojiEl.classList.remove('running');
-    // Set summary
+    // Set human-readable label
     const summaryEl = div.querySelector('.tool-summary');
-    if (summaryEl) {
-      const short = summarizeOutput(output);
-      summaryEl.textContent = short || summaryEl.textContent;
-    }
+    if (summaryEl) summaryEl.textContent = buildToolLabel(name, input);
     // Set expandable output
     const outputEl = div.querySelector('.tool-output');
     if (outputEl) outputEl.textContent = output;
@@ -723,7 +750,7 @@ function buildHyperiaHtml(): string {
                 break;
 
               case 'tool_result':
-                setToolOutput(event.id, event.output);
+                setToolOutput(event.id, event.name, event.input, event.output);
                 break;
 
               case 'watercooler':

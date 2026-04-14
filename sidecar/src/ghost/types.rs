@@ -9,7 +9,7 @@ pub enum GhostEvent {
     #[serde(rename = "tool_start")]
     ToolStart { name: String, id: String },
     #[serde(rename = "tool_result")]
-    ToolResult { id: String, output: String },
+    ToolResult { id: String, name: String, input: serde_json::Value, output: String },
     #[serde(rename = "watercooler")]
     Watercooler { summary: String, tool_calls: usize },
     #[serde(rename = "retrying")]
