@@ -15,12 +15,15 @@ export function initTray() {
     tray = new Tray(trayIcon);
     tray.setToolTip('Hyperia');
 
-    // Left-click: show/focus window
+    // Left-click: show/focus window, or open a new one if none exist
     tray.on('click', () => {
       const win = getWindow();
       if (win) {
         win.show();
         win.focus();
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        (app as any).createWindow?.();
       }
     });
 

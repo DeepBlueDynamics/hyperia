@@ -291,7 +291,6 @@ if (!gotLock) {
   app.quit();
 }
 app.on('second-instance', () => {
-  // Focus existing window when a second instance tries to launch
   // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   const win = (app as any).getLastFocusedWindow?.();
   if (win) {
@@ -299,6 +298,10 @@ app.on('second-instance', () => {
     if (win.isMinimized()) win.restore();
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     win.focus();
+  } else {
+    // All windows were closed — open a new one
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    (app as any).createWindow?.();
   }
 });
 
@@ -401,7 +404,14 @@ app.on('ready', () => {
       // and we don't have any active windows open,
       // we open one
       app.on('activate', () => {
-        if (!windowSet.size) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        const win = (app as any).getLastFocusedWindow?.();
+        if (win) {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+          win.show();
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+          win.focus();
+        } else {
           createWindow();
         }
       });
