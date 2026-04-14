@@ -75,3 +75,52 @@ cd sidecar && cargo build --release && cd ..
 set AZURE_CLIENT_SECRET=<your secret>
 yarn run dist
 ```
+
+---
+
+## Building on macOS
+
+### Prerequisites
+
+- **Node.js** + **Yarn**
+- **Rust** (stable toolchain via rustup)
+- **Rust targets** — install the target(s) you need:
+  ```bash
+  rustup target add aarch64-apple-darwin   # Apple Silicon
+  rustup target add x86_64-apple-darwin    # Intel
+  ```
+
+### Important: use `--target`, not bare `cargo build --release`
+
+The `afterPack` script (`bin/cp-sidecar.js`) copies the sidecar from
+`sidecar/target/<rust-target>/release/hyperia-sidecar`.
+A bare `cargo build --release` puts the binary at `sidecar/target/release/hyperia-sidecar`
+(no target triple in the path) and the script **will not find it**.
+
+### Step 1 — Bump version (same three files as Windows)
+
+### Step 2 — Build the Rust sidecar with the correct target
+
+```bash
+# Apple Silicon (arm64):
+cd sidecar && cargo build --release --target aarch64-apple-darwin && cd ..
+
+# Intel (x64):
+cd sidecar && cargo build --release --target x86_64-apple-darwin && cd ..
+```
+
+### Step 3 — Package
+
+```bash
+yarn dist
+```
+
+`electron-builder` auto-detects macOS and calls `cp-sidecar.js` to copy the binary into
+`Hyperia.app/Contents/Resources/sidecar/hyperia-sidecar`.
+
+### Full Mac build sequence (Apple Silicon example)
+
+```bash
+cd sidecar && cargo build --release --target aarch64-apple-darwin && cd ..
+yarn dist
+```

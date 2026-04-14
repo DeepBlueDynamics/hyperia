@@ -18,7 +18,7 @@ const WebPaneDialog = () => {
   useEffect(() => {
     _show = (cb: Callback) => {
       callbackRef.current = cb;
-      setValue('');
+      setValue('https://shivvr.nuts.services');
       setOpen(true);
     };
     return () => {
@@ -28,8 +28,10 @@ const WebPaneDialog = () => {
 
   useEffect(() => {
     if (open) {
-      // defer focus so the element is visible first
-      requestAnimationFrame(() => inputRef.current?.focus());
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      });
     }
   }, [open]);
 
