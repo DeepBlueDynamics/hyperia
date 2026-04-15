@@ -4,7 +4,7 @@ Hyperia exposes these tools via its MCP server (`hyperia-sidecar --mcp`) and HTT
 
 ## Addressing
 
-Sessions are organized as **windows > tabs > panes**. Most tools accept optional `window` (index), `tab` (name), and `pane` (label `"a"`, `"b"`, etc.) parameters. Omit all three to target the focused window's active pane.
+Sessions are organized as **windows > tabs > panes**. Most tools accept optional `window` (index), `tab` (name), and `pane` parameters. The `pane` field accepts either the pane label (`"a"`, `"b"`, etc.) or the `paneId` returned by `terminal_status`. When a pane has no label, use its `paneId`. Omit all three to target the focused window's active pane.
 
 ---
 
