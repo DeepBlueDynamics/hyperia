@@ -82,15 +82,32 @@ function findSidecarBinary(): string | null {
 }
 
 function killExistingSidecars(): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-shadow
   return new Promise((resolve) => {
     const cmd =
       process.platform === 'win32'
         ? spawn('taskkill', ['/f', '/im', 'hyperia-sidecar.exe'])
         : spawn('pkill', ['-f', 'hyperia-sidecar']);
     cmd.on('close', () => {
-      // Give OS time to release the port
-      setTimeout(resolve, 1500);
+      if (process.platform !== 'win32') {
+        setTimeout(resolve, 800);
+        return;
+      }
+      // Poll until no more sidecar processes are running (max 4s)
+      let attempts = 0;
+      const poll = () => {
+        const check = spawn('tasklist', ['/fi', 'IMAGENAME eq hyperia-sidecar.exe', '/fo', 'csv', '/nh']);
+        let out = '';
+        check.stdout?.on('data', (d: Buffer) => { out += d.toString(); });
+        check.on('close', () => {
+          if (!out.includes('hyperia-sidecar') || attempts++ >= 20) {
+            resolve();
+          } else {
+            setTimeout(poll, 200);
+          }
+        });
+        check.on('error', () => resolve());
+      };
+      setTimeout(poll, 200);
     });
     cmd.on('error', () => resolve());
   });
@@ -114,15 +131,16 @@ async function spawnSidecar() {
     isDev && console.log(`[sidecar] ${data.toString().trim()}`);
   });
   sidecarProcess.stderr?.on('data', (data: Buffer) => {
-    // Only log non-empty stderr
+    // Always log sidecar stderr so panics/errors are visible
     const msg = data.toString().trim();
-    if (msg) isDev && console.error(`[sidecar] ${msg}`);
+    if (msg) console.error(`[sidecar] ${msg}`);
   });
   sidecarProcess.on('exit', (code: number | null) => {
     console.log(`[sidecar] Exited with code ${code}`);
     sidecarProcess = null;
-    // Auto-restart unless we're shutting down
-    if (!stopped) {
+    // Auto-restart only on crash (non-zero, non-null exit).
+    // Code 0 = clean exit (another instance running, port conflict) — don't loop.
+    if (!stopped && code !== 0) {
       console.log('[sidecar] Auto-restarting in 2s...');
       setTimeout(() => {
         if (!stopped) void spawnSidecar();

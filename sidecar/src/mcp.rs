@@ -21,7 +21,7 @@ pub struct KeysRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RunRequest {
-    /// Shell command to execute (Enter is appended automatically)
+    /// Shell command or text to type
     pub command: String,
     /// Window index (0, 1, 2...). Omit for focused window.
     pub window: Option<u32>,
@@ -31,6 +31,8 @@ pub struct RunRequest {
     pub pane: Option<String>,
     /// Milliseconds to wait for output before reading screen (default: 2000)
     pub wait_ms: Option<u64>,
+    /// Whether to press Enter after typing the command (default: true). Set false to type text without submitting — lets the human review before pressing Enter.
+    pub submit: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -183,7 +185,45 @@ pub struct NoteCreateRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct NoteCloseRequest {
-    /// Note ID from note_list output (e.g. "note-1712345678-abc1")
+    /// Note ID from sticky_note_list output (e.g. "note-1712345678-abc1")
+    pub id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WherePaneRequest {
+    /// Label of the reference pane (e.g. "a")
+    pub a: String,
+    /// Label of the pane to locate relative to a (e.g. "b")
+    pub b: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct StickyNoteCreateCodeRequest {
+    /// Absolute path to the source file on disk
+    pub file_path: String,
+    /// Code theme: "dark" (default) or "light"
+    pub theme: Option<String>,
+    /// X position in pixels (optional)
+    pub x: Option<i64>,
+    /// Y position in pixels (optional)
+    pub y: Option<i64>,
+    /// Width in pixels (default 500)
+    pub width: Option<i64>,
+    /// Height in pixels (default 400)
+    pub height: Option<i64>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct StickyNoteUpdateRequest {
+    /// Note ID from sticky_note_list output
+    pub id: String,
+    /// New text content for the note
+    pub text: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct StickyNoteDeleteRequest {
+    /// Note ID from sticky_note_list output
     pub id: String,
 }
 
@@ -211,7 +251,7 @@ impl HyperiaMcp {
         }
     }
 
-    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab. These are unescaped automatically. Address panes with window/tab/pane. Use terminal_status to see the hierarchy.")]
+    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab. These are unescaped automatically. Address panes with window/tab/pane. The pane field accepts either a pane label or the paneId from terminal_status; if the label is empty, use paneId.")]
     async fn terminal_keys(
         &self,
         Parameters(req): Parameters<KeysRequest>,
@@ -224,25 +264,31 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Run a shell command in a terminal pane. Sends command + Enter, waits, returns screen content. Address panes with window/tab/pane. Use terminal_status to see the hierarchy.")]
+    #[tool(description = "Type text into a terminal pane and press Enter. Works for shell commands and interactive programs (Codex, Python REPL, vim, etc.). Set submit=false to type without pressing Enter — useful to let the human review before submitting.")]
     async fn terminal_run(
         &self,
         Parameters(req): Parameters<RunRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         self.focus_pane(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
-        // Strip trailing newline/return sequences agents love to append — we add our own Enter
+        let pane_path = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
+        // Strip any trailing newline/return the caller may have appended
         let cmd = strip_trailing_returns(&req.command);
-        let keys = format!("{}\r", cmd);
-        self.post_text(&self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref()), &keys).await?;
+        // Type the text first
+        self.post_text(&pane_path, cmd).await?;
+        // Then send Enter as a separate keystroke (unless submit=false)
+        let submit = req.submit.unwrap_or(true);
+        if submit {
+            self.post_text(&pane_path, "\r").await?;
+        }
 
-        let wait = req.wait_ms.unwrap_or(2000);
+        let wait = req.wait_ms.unwrap_or(if submit { 2000 } else { 200 });
         tokio::time::sleep(tokio::time::Duration::from_millis(wait)).await;
 
         let text = self.get(&self.pane_path("/api/screen", req.window, req.tab.as_deref(), req.pane.as_deref())).await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "Read the current screen content of a terminal pane. Address panes with window/tab/pane. Use terminal_status to see the hierarchy.")]
+    #[tool(description = "Read the current screen content of a terminal pane. Address panes with window/tab/pane. The pane field accepts either a pane label or the paneId from terminal_status; if the label is empty, use paneId.")]
     async fn terminal_screen(
         &self,
         Parameters(req): Parameters<ScreenRequest>,
@@ -251,7 +297,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "List all open windows, tabs, and panes in a nested hierarchy. Each window has tabs, each tab has panes labeled a, b, c if split. Use window/tab/pane to address targets in other tools.")]
+    #[tool(description = "List all open windows, tabs, and panes in a nested hierarchy. Each pane includes both a label and a paneId. Use the pane label when present; if the label is empty, use paneId when addressing that pane in other tools.")]
     async fn terminal_status(&self) -> Result<CallToolResult, ErrorData> {
         let text = self.get("/api/status").await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -269,7 +315,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Focus a specific pane by window/tab/pane address. Use terminal_status to see the hierarchy.")]
+    #[tool(description = "Focus a specific pane by window/tab/pane address. The pane field accepts either a pane label or the paneId from terminal_status; if the label is empty, use paneId.")]
     async fn terminal_focus(
         &self,
         Parameters(req): Parameters<FocusRequest>,
@@ -295,6 +341,15 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
+    #[tool(description = "Describe the spatial relationship between two split panes — e.g. 'pane b is below and to the right of pane a'. Pass pane identifiers from terminal_status. Use pane labels when present; otherwise use paneId.")]
+    async fn terminal_where_pane(
+        &self,
+        Parameters(req): Parameters<WherePaneRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let resp = self.get(&format!("/api/pane/where?a={}&b={}", req.a, req.b)).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
     #[tool(description = "Open a new tab. Optionally run a startup command in it.")]
     async fn terminal_new_tab(
         &self,
@@ -305,6 +360,12 @@ impl HyperiaMcp {
             body["command"] = serde_json::json!(cmd);
         }
         let resp = self.post_json("/api/pane/new", &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Open a new Hyperia OS window (separate from the current window). Use terminal_status after to get its window index for targeting. Use when the user wants a separate window, not just a new tab.")]
+    async fn terminal_new_window(&self) -> Result<CallToolResult, ErrorData> {
+        let resp = self.post_json("/api/window/new", &serde_json::json!({})).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -682,13 +743,13 @@ impl HyperiaMcp {
     }
 
     #[tool(description = "List all sticky notes. Returns id, name, text preview, color, and position for each note.")]
-    async fn note_list(&self) -> Result<CallToolResult, ErrorData> {
+    async fn sticky_note_list(&self) -> Result<CallToolResult, ErrorData> {
         let resp = self.get("/api/notes").await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
     #[tool(description = "Create a new sticky note floating window. Optionally provide initial text and a background color hex.")]
-    async fn note_create(
+    async fn sticky_note_create(
         &self,
         Parameters(req): Parameters<NoteCreateRequest>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -697,13 +758,53 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Close an open sticky note window by its ID. Use note_list to get IDs. The note's content is preserved on disk.")]
-    async fn note_close(
+    #[tool(description = "Close an open sticky note window by its ID. Use sticky_note_list to get IDs. The note's content is preserved on disk.")]
+    async fn sticky_note_close(
         &self,
         Parameters(req): Parameters<NoteCloseRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let body = serde_json::json!({"id": req.id});
         let resp = self.post_json("/api/notes/close", &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Open a source file as a code-highlighted sticky note. The note reads directly from disk. Provide a verified absolute path — the sidecar will reject the call if the file does not exist.")]
+    async fn sticky_note_create_code(
+        &self,
+        Parameters(req): Parameters<StickyNoteCreateCodeRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let color = match req.theme.as_deref().unwrap_or("dark") {
+            "light" => "code:light",
+            _ => "code:dark",
+        };
+        let body = serde_json::json!({
+            "file_path": req.file_path,
+            "color": color,
+            "x": req.x,
+            "y": req.y,
+            "width": req.width.unwrap_or(500),
+            "height": req.height.unwrap_or(400),
+        });
+        let resp = self.post_json("/api/notes", &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Update the text content of an existing sticky note. Use sticky_note_list to get IDs.")]
+    async fn sticky_note_update(
+        &self,
+        Parameters(req): Parameters<StickyNoteUpdateRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"text": req.text});
+        let resp = self.patch_json(&format!("/api/notes/{}", req.id), &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Permanently delete a sticky note by its ID. Use sticky_note_list to get IDs. This cannot be undone.")]
+    async fn sticky_note_delete(
+        &self,
+        Parameters(req): Parameters<StickyNoteDeleteRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let resp = self.delete(&format!("/api/notes/{}", req.id)).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -948,6 +1049,27 @@ impl HyperiaMcp {
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
     }
 
+    async fn patch_json(&self, path: &str, body: &serde_json::Value) -> Result<String, ErrorData> {
+        let resp = self.client
+            .patch(format!("{}{}", self.base_url, path))
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+        resp.text().await
+            .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
+    }
+
+    async fn delete(&self, path: &str) -> Result<String, ErrorData> {
+        let resp = self.client
+            .delete(format!("{}{}", self.base_url, path))
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+        resp.text().await
+            .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
+    }
+
 }
 
 // -- ServerHandler impl --
@@ -967,8 +1089,10 @@ impl ServerHandler for HyperiaMcp {
                  - Specify pane to pick a split pane by label (\"a\", \"b\", \"c\"). \
                  For a full view of all pane contents, use tab_snapshot. \
                  \n\nTerminal: terminal_keys, terminal_run, terminal_screen, terminal_status, \
-                 terminal_split, terminal_focus, terminal_close, terminal_new_tab, tab_snapshot, \
-                 shell_state, shell_confirm, open_web_pane. \
+                 terminal_split, terminal_focus, terminal_close, terminal_new_tab, terminal_new_window, \
+                 terminal_where_pane, tab_snapshot, shell_state, shell_confirm, open_web_pane. \
+                 \n\nSticky notes: sticky_note_list, sticky_note_create, sticky_note_create_code, \
+                 sticky_note_update, sticky_note_close, sticky_note_delete. \
                  \n\nAgent: agent_status, auto_describe. \
                  \n\nStyles: style_list, style_create, style_delete. \
                  \n\nTelemetry: telemetry_toggle, telemetry_snapshot, telemetry_record, telemetry_reset. \

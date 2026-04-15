@@ -92,7 +92,9 @@ async fn get_screen(State(state): State<AppState>, Query(addr): Query<PaneAddres
         tracing::warn!("get_screen 404: window={:?} tab={:?} pane={:?} (sessions={})",
             addr.window, addr.tab, addr.pane, session_count);
         return (StatusCode::NOT_FOUND, format!(
-            "No pane at that address (window={:?} tab={:?} pane={:?}, {} sessions registered)",
+            "No pane at that address (window={:?} tab={:?} pane={:?}, {} sessions registered). \
+The pane field accepts either a split label (for example 'a' or 'b') or a paneId from terminal_status. \
+If the pane label is empty, use paneId.",
             addr.window, addr.tab, addr.pane, session_count
         ));
     };
@@ -194,7 +196,9 @@ async fn post_type(
             tracing::warn!("post_type 404: window={:?} tab={:?} pane={:?} (sessions={})",
                 addr.window, addr.tab, addr.pane, session_count);
             return (StatusCode::NOT_FOUND, format!(
-                "No pane at that address (window={:?} tab={:?} pane={:?}, {} sessions registered)",
+                "No pane at that address (window={:?} tab={:?} pane={:?}, {} sessions registered). \
+The pane field accepts either a split label (for example 'a' or 'b') or a paneId from terminal_status. \
+If the pane label is empty, use paneId.",
                 addr.window, addr.tab, addr.pane, session_count
             ));
         }
@@ -221,7 +225,10 @@ async fn post_type_and_collect(
     {
         Some(u) => u,
         None => {
-            return (StatusCode::NOT_FOUND, "No pane at that address".into());
+            return (
+                StatusCode::NOT_FOUND,
+                "No pane at that address. The pane field accepts either a split label or a paneId from terminal_status. If the pane label is empty, use paneId.".into(),
+            );
         }
     };
     let output = state.bridge.type_and_collect(&uid, &body, 400).await;
@@ -781,6 +788,11 @@ async fn post_agent_status(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Log panics to stderr so they appear in the Electron console
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("[sidecar-panic] {info}");
+    }));
+
     let args = Args::parse();
 
     // MCP mode: stdio proxy
@@ -895,12 +907,16 @@ async fn main() -> anyhow::Result<()> {
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(e) => {
-            tracing::error!("Port {} already in use — another sidecar is running. Exiting. ({})", args.port, e);
+            eprintln!("[sidecar] Port {} already in use — another sidecar is running. Exiting. ({})", args.port, e);
             std::process::exit(0); // Exit cleanly so auto-restart doesn't loop
         }
     };
     tracing::info!(%addr, "Sidecar HTTP listening");
-    axum::serve(listener, app).await?;
+    eprintln!("[sidecar] HTTP ready on :{}", args.port);
+    if let Err(e) = axum::serve(listener, app).await {
+        eprintln!("[sidecar] axum::serve error: {e}");
+        std::process::exit(0); // Exit cleanly — Electron will restart if needed
+    }
 
     Ok(())
 }

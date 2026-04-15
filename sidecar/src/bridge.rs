@@ -193,7 +193,7 @@ impl Bridge {
         self.inner.sessions.lock().await.len()
     }
 
-    /// Resolve a window/tab/pane label address to its session uid.
+    /// Resolve a window/tab/pane address to its session uid.
     pub async fn resolve_pane_uid(
         &self,
         window: Option<u32>,

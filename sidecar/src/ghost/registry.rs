@@ -367,19 +367,9 @@ impl ToolRegistry {
             let screen_before = self.read_screen(&build_target_url("/api/screen")).await;
             let interactive = detect_interactive(&screen_before);
 
-            if let Some(program) = &interactive {
-                // If running a shell command into an interactive program, warn hard
-                if name == "terminal_run" {
-                    return format!(
-                        "[BLOCKED] This pane is running '{}' — an interactive program. \
-                        You CANNOT run shell commands here. Either:\n\
-                        - Use this program's own commands/interface\n\
-                        - Switch to a different pane that has a shell prompt\n\
-                        - Open a new tab with terminal_new_tab\n\n\
-                        Current screen:\n{}",
-                        program, &screen_before[..screen_before.len().min(500)]
-                    );
-                }
+            if let Some(_program) = &interactive {
+                // Interactive program detected — terminal_run will send text as keystrokes (same as terminal_keys)
+                // No block: let terminal_run fall through and send command + \r naturally
             }
         }
 
@@ -399,14 +389,22 @@ impl ToolRegistry {
             }
             "terminal_run" => {
                 let command = input["command"].as_str().unwrap_or("");
-                let wait_ms = input["wait_ms"].as_u64().unwrap_or(2000);
+                let submit = input["submit"].as_bool().unwrap_or(true);
+                let wait_ms = input["wait_ms"].as_u64().unwrap_or(if submit { 2000 } else { 200 });
                 let command = command.trim_end_matches('\n').trim_end_matches('\r');
-                let keys = format!("{}\r", command);
+                // Send text first, then Enter as a separate write
                 let _ = self.client
                     .post(build_target_url("/api/type"))
-                    .body(keys)
+                    .body(command.to_string())
                     .send()
                     .await;
+                if submit {
+                    let _ = self.client
+                        .post(build_target_url("/api/type"))
+                        .body("\r")
+                        .send()
+                        .await;
+                }
                 tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
                 return self.read_screen(&build_target_url("/api/screen")).await;
             }
@@ -752,6 +750,147 @@ impl ToolRegistry {
                     Err(e) => return format!("Fetch error: {}", e),
                 }
             }
+            "tab_snapshot" => {
+                let status_text = match self.client.get(format!("{}/api/status", base)).send().await {
+                    Ok(r) => r.text().await.unwrap_or_default(),
+                    Err(e) => return format!("Error: {}", e),
+                };
+                let status: serde_json::Value = match serde_json::from_str(&status_text) {
+                    Ok(v) => v,
+                    Err(e) => return format!("Parse error: {}", e),
+                };
+                let mut output = String::new();
+                if let Some(windows) = status["windows"].as_array() {
+                    for win in windows {
+                        let win_id = win["id"].as_u64().unwrap_or(0);
+                        output.push_str(&format!("=== Window {} ===\n", win_id));
+                        if let Some(tabs) = win["tabs"].as_array() {
+                            for tab in tabs {
+                                let tab_name = tab["name"].as_str().unwrap_or("shell");
+                                if let Some(panes) = tab["panes"].as_array() {
+                                    for pane in panes {
+                                        let label = pane["label"].as_str().unwrap_or("");
+                                        let pane_id = pane["paneId"].as_str().unwrap_or("");
+                                        let pane_key = if label.is_empty() { pane_id } else { label };
+                                        let cols = pane["cols"].as_u64().unwrap_or(0);
+                                        let rows = pane["rows"].as_u64().unwrap_or(0);
+                                        let screen_url = format!("{}/api/screen?window={}&tab={}&pane={}",
+                                            base, win_id, urlencoding::encode(tab_name), urlencoding::encode(pane_key));
+                                        let screen = match self.client.get(&screen_url).send().await {
+                                            Ok(r) => r.text().await.unwrap_or_default(),
+                                            Err(_) => "(error reading screen)".into(),
+                                        };
+                                        let header = if label.is_empty() {
+                                            format!("--- {} | {}x{} ---", tab_name, cols, rows)
+                                        } else {
+                                            format!("--- {} ({}) | {}x{} ---", tab_name, label, cols, rows)
+                                        };
+                                        output.push_str(&format!("{}\n{}\n\n", header, screen.trim()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return output;
+            }
+            "shell_state" => {
+                let status_text = match self.client.get(format!("{}/api/status", base)).send().await {
+                    Ok(r) => r.text().await.unwrap_or_default(),
+                    Err(e) => return format!("Error: {}", e),
+                };
+                let status: serde_json::Value = match serde_json::from_str(&status_text) {
+                    Ok(v) => v,
+                    Err(e) => return format!("Parse error: {}", e),
+                };
+                let mut results = Vec::new();
+                if let Some(windows) = status["windows"].as_array() {
+                    for win in windows {
+                        if let Some(tabs) = win["tabs"].as_array() {
+                            for tab in tabs {
+                                let tab_name = tab["name"].as_str().unwrap_or("shell");
+                                if let Some(panes) = tab["panes"].as_array() {
+                                    for pane in panes {
+                                        let label = pane["label"].as_str().unwrap_or("");
+                                        let pane_id = pane["paneId"].as_str().unwrap_or("");
+                                        let pane_key = if label.is_empty() { pane_id } else { label };
+                                        let win_id = win["id"].as_u64().unwrap_or(0);
+                                        let screen_url = format!("{}/api/screen?window={}&tab={}&pane={}",
+                                            base, win_id, urlencoding::encode(tab_name), urlencoding::encode(pane_key));
+                                        let screen = match self.client.get(&screen_url).send().await {
+                                            Ok(r) => r.text().await.unwrap_or_default(),
+                                            Err(_) => String::new(),
+                                        };
+                                        results.push(serde_json::json!({
+                                            "window": win_id,
+                                            "tab": tab_name,
+                                            "pane": pane_key,
+                                        }));
+                                        let _ = screen; // screen available for future state detection
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return serde_json::to_string_pretty(&results).unwrap_or_default();
+            }
+            "shell_confirm" => {
+                let window = input["window"].as_u64();
+                let tab = input["tab"].as_str().unwrap_or("");
+                let pane = input["pane"].as_str().unwrap_or("");
+                let mut url = format!("{}/api/screen", base);
+                let mut params = Vec::new();
+                if let Some(w) = window { params.push(format!("window={}", w)); }
+                if !tab.is_empty() { params.push(format!("tab={}", urlencoding::encode(tab))); }
+                if !pane.is_empty() { params.push(format!("pane={}", urlencoding::encode(pane))); }
+                if !params.is_empty() { url.push('?'); url.push_str(&params.join("&")); }
+                let screen = match self.client.get(&url).send().await {
+                    Ok(r) => r.text().await.unwrap_or_default(),
+                    Err(e) => return format!("Error: {}", e),
+                };
+                // Detect common confirmations and auto-answer
+                let lower = screen.to_lowercase();
+                let (keys, desc) = if lower.contains("(y/n)") || lower.contains("yes/no") || lower.contains("[y/n]") {
+                    ("y\r", "answered y")
+                } else if lower.contains("continue?") || lower.contains("proceed?") {
+                    ("\r", "pressed Enter to continue")
+                } else if lower.contains("trust") && lower.contains("?") {
+                    ("y\r", "answered y to trust prompt")
+                } else {
+                    return "No actionable prompt detected".into();
+                };
+                let type_url = if params.is_empty() {
+                    format!("{}/api/type", base)
+                } else {
+                    format!("{}/api/type?{}", base, params.join("&"))
+                };
+                match self.client.post(&type_url).body(keys).send().await {
+                    Ok(_) => return format!("shell_confirm: {}", desc),
+                    Err(e) => return format!("Error sending keys: {}", e),
+                }
+            }
+            "terminal_ui_key" => {
+                let body = serde_json::json!({
+                    "keyCode": input["key_code"],
+                    "modifiers": input["modifiers"].as_array().cloned().unwrap_or_default(),
+                    "window": input["window"],
+                    "tab": input["tab"],
+                    "pane": input["pane"],
+                });
+                self.client
+                    .post(format!("{}/api/ui/key", base))
+                    .json(&body)
+                    .send()
+                    .await
+            }
+            "auto_describe" => {
+                self.client
+                    .post(build_target_url("/api/pane/describe"))
+                    .body("")
+                    .send()
+                    .await
+            }
             _ => return format!("Unknown tool: {}", name),
         };
 
@@ -982,18 +1121,19 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                     "keys": { "type": "string", "description": "Keystrokes to type (e.g. \"ls -la\\n\")" },
                     "window": { "type": "integer", "description": "Window id (optional)" },
                     "tab": { "type": "string", "description": "Tab name (optional)" },
-                    "pane": { "type": "string", "description": "Pane label e.g. \"a\" (optional)" }
+                    "pane": { "type": "string", "description": "Pane identifier from terminal_status: use the pane label when present, otherwise use paneId (optional)" }
                 },
                 "required": ["keys"]
             }
         },
         {
             "name": "terminal_run",
-            "description": "Run a shell command in a terminal pane. Sends the command + Enter, waits for output, and returns the screen content so you can see what happened.",
+            "description": "Type text into a terminal pane and press Enter. Works for shell commands and interactive programs (Codex, Python REPL, vim, etc.). Set submit=false to type without pressing Enter — useful to let the human review before submitting.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "Shell command to run" },
+                    "command": { "type": "string", "description": "Text or command to type" },
+                    "submit": { "type": "boolean", "description": "Press Enter after typing (default true). Set false to type without submitting." },
                     "wait_ms": { "type": "integer", "description": "Time to wait for output in ms (default 2000)" },
                     "window": { "type": "integer" },
                     "tab": { "type": "string" },
@@ -1009,7 +1149,7 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                 "type": "object",
                 "properties": {
                     "direction": { "type": "string", "enum": ["horizontal", "vertical"] },
-                    "label": { "type": "string", "description": "Pane label from terminal_status (e.g. 'a', 'b'). Focuses that pane before splitting." }
+                    "label": { "type": "string", "description": "Pane identifier from terminal_status. Use the pane label when present, otherwise use paneId. Focuses that pane before splitting." }
                 },
                 "required": ["direction"]
             }
@@ -1041,7 +1181,7 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "terminal_where_pane",
-            "description": "Describe the spatial relationship between two panes — e.g. 'pane b is below and to the right of pane a'. Pass pane labels (e.g. 'a', 'b') from terminal_status.",
+            "description": "Describe the spatial relationship between two panes — e.g. 'pane b is below and to the right of pane a'. Pass pane identifiers from terminal_status. Use pane labels when present; otherwise use paneId.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -1211,6 +1351,55 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                 "properties": {
                     "note": { "type": "string", "description": "Optional note to include at the top of the report (e.g. 'agent looped on terminal_screen', 'new feature test')" },
                     "path": { "type": "string", "description": "Override output file path. Defaults to ~/.hyperia/reports/YYYY-MM-DD-HH-MM.json" }
+                }
+            }
+        },
+        {
+            "name": "tab_snapshot",
+            "description": "Get the full screen content of every pane across all windows and tabs in one shot. Use this to see everything at once instead of calling terminal_screen per pane.",
+            "input_schema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "shell_state",
+            "description": "Check the state of all panes (idle, running, dialog). Returns window/tab/pane for each.",
+            "input_schema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "shell_confirm",
+            "description": "Auto-handle common shell prompts — y/n, trust dialogs, continue prompts. Target a specific pane with window/tab/pane, or omit to scan the active pane.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "window": { "type": "integer" },
+                    "tab": { "type": "string" },
+                    "pane": { "type": "string" }
+                }
+            }
+        },
+        {
+            "name": "terminal_ui_key",
+            "description": "Send a UI-level keypress (e.g. Escape, Tab, arrow keys) to the Hyperia window — not to the terminal PTY. Use for navigating Hyperia's own UI.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "key_code": { "type": "string", "description": "Key code e.g. 'Escape', 'Tab', 'ArrowUp'" },
+                    "modifiers": { "type": "array", "items": { "type": "string" }, "description": "Modifier keys e.g. ['ctrl'], ['shift']" },
+                    "window": { "type": "integer" },
+                    "tab": { "type": "string" },
+                    "pane": { "type": "string" }
+                },
+                "required": ["key_code"]
+            }
+        },
+        {
+            "name": "auto_describe",
+            "description": "Auto-describe a pane's content using local ollama. Generates a short description and stores it on the tab.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "window": { "type": "integer" },
+                    "tab": { "type": "string" },
+                    "pane": { "type": "string" }
                 }
             }
         },

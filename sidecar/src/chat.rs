@@ -281,7 +281,7 @@ fn compile_system_prompt(screen_text: &str, pane_name: &str) -> String {
          [CONTEXT]\n\
          The user is looking at pane '{pane_name}'. Current screen:\n```\n{screen}\n```\n\n\
          When closing, focusing, or operating on panes, ALWAYS call terminal_status first \
-         to get window/tab/pane labels. Tell the user WHICH pane by name.\n\
+         to get window/tab/pane identifiers. Use the pane label when present, otherwise use paneId. Tell the user WHICH pane you targeted.\n\
          Before installing software, modifying system settings, or running destructive commands, ASK the user first.\n\
          For simple read-only commands (ls, cat, echo, pip list, dir, pwd, git status), execute directly.\n\
          When showing command results, briefly describe what you see. Be concise. Act first, explain after.\n\
@@ -367,7 +367,7 @@ fn tool_definitions() -> Vec<serde_json::Value> {
         },
         {
             "name": "terminal_close",
-            "description": "Close the focused pane. Always check terminal_status first to know window/tab/pane labels.",
+            "description": "Close the focused pane. Always check terminal_status first to know window/tab/pane identifiers. Use the pane label when present, otherwise use paneId.",
             "input_schema": {
                 "type": "object",
                 "properties": {}
