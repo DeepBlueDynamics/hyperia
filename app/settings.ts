@@ -504,8 +504,23 @@ function buildSettingsHtml(): string {
       addMsg('Installation complete. Setting up profile...');
 
       // Verify installation by checking if nemesis8 is now in PATH
-      exec(isWin ? 'where nemesis8' : 'which nemesis8', (err2, binaryPath) => {
-        if (err2) {
+      // On macOS/Linux, also check ~/.local/bin/nemesis8 directly (installer default location)
+      const checkCmd = isWin ? 'where nemesis8' : 'which nemesis8 || echo $HOME/.local/bin/nemesis8';
+
+      exec(checkCmd, (err2, binaryPath) => {
+        // On macOS/Linux, verify the path exists if which failed
+        if (err2 && !isWin) {
+          const {existsSync} = require('fs');
+          const home = process.env.HOME || process.env.USERPROFILE || '';
+          const fallbackPath = '\${home}/.local/bin/nemesis8';
+
+          if (existsSync(fallbackPath)) {
+            binaryPath = fallbackPath + '\n';
+          } else {
+            addMsg('Nemesis8 installed, but could not find binary in PATH. Try restarting Hyperia or add ~/.local/bin to your PATH.', 'error');
+            return;
+          }
+        } else if (err2) {
           addMsg('Nemesis8 installed, but could not find binary in PATH. Try restarting Hyperia.', 'error');
           return;
         }
@@ -515,13 +530,17 @@ function buildSettingsHtml(): string {
         if (!cfg.config.profiles) cfg.config.profiles = [];
         const existing = cfg.config.profiles.findIndex(p => p.name === 'Nemesis8');
 
+        // Use full path if we found it via fallback, otherwise just 'nemesis8'
+        const resolvedBinary = binaryPath.trim();
+        const nemesisCmd = isWin ? 'nemesis8 interactive' : '\${resolvedBinary} interactive';
+
         const profile = {
           name: 'Nemesis8',
           config: {
             shell: isWin ? 'C:\\\\Windows\\\\System32\\\\cmd.exe' : '/bin/bash',
             shellArgs: isWin
               ? ['/c', 'nemesis8 interactive']
-              : ['-c', 'nemesis8 interactive']
+              : ['-c', nemesisCmd]
           }
         };
 
@@ -529,8 +548,9 @@ function buildSettingsHtml(): string {
         else cfg.config.profiles.push(profile);
         saveConfig(cfg);
 
-        // Get installed version
-        exec('nemesis8 -V', {timeout: 5000}, (err3, stdout3) => {
+        // Get installed version (use resolved binary path)
+        const versionCmd = isWin ? 'nemesis8 -V' : '\${resolvedBinary} -V';
+        exec(versionCmd, {timeout: 5000}, (err3, stdout3) => {
           const version = err3 ? 'unknown' : stdout3.trim();
           addMsg('Nemesis8 <code>' + version + '</code> installed and added as a profile. Restart Hyperia to use it.', 'success');
         });
