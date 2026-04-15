@@ -82,6 +82,7 @@ function findSidecarBinary(): string | null {
 }
 
 function killExistingSidecars(): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-shadow
   return new Promise((resolve) => {
     const cmd =
       process.platform === 'win32'
@@ -97,7 +98,9 @@ function killExistingSidecars(): Promise<void> {
       const poll = () => {
         const check = spawn('tasklist', ['/fi', 'IMAGENAME eq hyperia-sidecar.exe', '/fo', 'csv', '/nh']);
         let out = '';
-        check.stdout?.on('data', (d: Buffer) => { out += d.toString(); });
+        check.stdout?.on('data', (d: Buffer) => {
+          out += d.toString();
+        });
         check.on('close', () => {
           if (!out.includes('hyperia-sidecar') || attempts++ >= 20) {
             resolve();
