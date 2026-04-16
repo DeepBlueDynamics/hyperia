@@ -68,7 +68,8 @@ Full tool reference: [docs/mcp-tools.md](docs/mcp-tools.md)
 | [Configuration](docs/configuration.md) | Config file reference, keyboard shortcuts |
 | [Ferricula Memory](docs/ferricula.md) | Memory engine, recall, identity |
 | [Architecture](docs/architecture.md) | Codebase structure, component overview |
-| [Building](BUILDING.md) | Release build + signing (Windows) |
+| [Building](docs/building.md) | Release build — Windows (Azure Trusted Signing) and macOS |
+| [Apple Signing](docs/signing-apple.md) | macOS code signing, notarization, D-U-N-S enrollment |
 
 ---
 
