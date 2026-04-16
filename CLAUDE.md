@@ -18,4 +18,4 @@ terminal_keys  keys="\x03"
 
 ## Building
 
-See `BUILDING.md` for the full release build process.
+See `docs/building.md` for the full release build process.
