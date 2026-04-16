@@ -1,10 +1,10 @@
 import {createSelector} from 'reselect';
 
+import {TERM_GROUP_SET_WEB_NAME} from '../../typings/constants/term-groups';
 import type {HyperState, HyperDispatch, ITab} from '../../typings/hyper';
 import {closeTab, changeTab, maximize, openHamburgerMenu, unmaximize, minimize, close} from '../actions/header';
 import {setSessionDescription} from '../actions/sessions';
 import {requestTermGroup} from '../actions/term-groups';
-import {TERM_GROUP_SET_WEB_NAME} from '../../typings/constants/term-groups';
 import Header from '../components/header';
 import {getRootGroups} from '../selectors';
 import {connect} from '../utils/plugins';
