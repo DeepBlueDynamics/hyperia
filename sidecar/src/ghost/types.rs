@@ -18,6 +18,8 @@ pub enum GhostEvent {
     Done { stop_reason: String, turns: usize },
     #[serde(rename = "error")]
     Error { message: String },
+    #[serde(rename = "stats")]
+    Stats { input_tokens: u64, output_tokens: u64, tool_calls: usize, turns: usize },
 }
 
 /// A tool definition in Anthropic API format.

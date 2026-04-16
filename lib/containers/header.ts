@@ -4,6 +4,7 @@ import type {HyperState, HyperDispatch, ITab} from '../../typings/hyper';
 import {closeTab, changeTab, maximize, openHamburgerMenu, unmaximize, minimize, close} from '../actions/header';
 import {setSessionDescription} from '../actions/sessions';
 import {requestTermGroup} from '../actions/term-groups';
+import {TERM_GROUP_SET_WEB_NAME} from '../../typings/constants/term-groups';
 import Header from '../components/header';
 import {getRootGroups} from '../selectors';
 import {connect} from '../utils/plugins';
@@ -31,10 +32,13 @@ const getTabs = createSelector(
       const activeSessionUid = activeSessions[t.uid];
       const session = sessions[activeSessionUid];
       if (!session) {
-        // Web pane tab — derive title from URL
+        // Web pane tab — derive title from custom name or URL
         const webUrl = (t as any).webUrl as string | undefined;
+        const webName = (t as any).webName as string | undefined;
         let title = 'Web Pane';
-        if (webUrl) {
+        if (webName) {
+          title = webName;
+        } else if (webUrl) {
           try {
             title = new URL(webUrl).hostname || webUrl;
           } catch {
@@ -118,7 +122,14 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
     },
 
     onDescribe: (uid: string, description: string) => {
-      dispatch(setSessionDescription(uid, description) as any);
+      dispatch(((d: HyperDispatch, getState: () => HyperState) => {
+        const group = getState().termGroups.termGroups[uid];
+        if ((group as any)?.webUrl !== undefined) {
+          d({type: TERM_GROUP_SET_WEB_NAME, uid, name: description} as any);
+        } else {
+          d(setSessionDescription(uid, description) as any);
+        }
+      }) as any);
     },
 
     onMoveTab: (fromUid: string, toIndex: number) => {

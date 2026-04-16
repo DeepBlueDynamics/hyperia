@@ -267,6 +267,8 @@ async fn run_loop(
     }
 
     let mut turns = 0;
+    let mut total_input_tokens: u64 = 0;
+    let mut total_output_tokens: u64 = 0;
 
     loop {
         turns += 1;
@@ -389,7 +391,10 @@ After cleanup, reply to the human and end the turn."
                 ProviderEvent::MessageStop { stop_reason: sr } => {
                     stop_reason = sr;
                 }
-                ProviderEvent::Usage { .. } => {}
+                ProviderEvent::Usage { input_tokens, output_tokens } => {
+                    total_input_tokens += input_tokens;
+                    total_output_tokens += output_tokens;
+                }
                 ProviderEvent::Retrying { attempt, wait_secs } => {
                     let _ = tx.send(GhostEvent::Retrying { attempt, wait_secs }).await;
                 }
@@ -399,6 +404,14 @@ After cleanup, reply to the human and end the turn."
                 }
             }
         }
+
+        // Emit cumulative stats after each model call
+        let _ = tx.send(GhostEvent::Stats {
+            input_tokens: total_input_tokens,
+            output_tokens: total_output_tokens,
+            tool_calls: tool_call_count,
+            turns,
+        }).await;
 
         if stop_reason == "tool_use" && !pending_tools.is_empty() {
             // Build assistant content blocks

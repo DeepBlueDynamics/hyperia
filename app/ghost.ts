@@ -393,6 +393,97 @@ function buildHyperiaHtml(): string {
     line-height: 1.4;
   }
   .emoji-item:hover { background: #1a1a2e; }
+
+  /* ── Retro HUD ──────────────────────────────────────────────── */
+  .hud {
+    flex-shrink: 0;
+    background: #020802;
+    border-bottom: 1px solid #0a1f08;
+    padding: 0 10px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    position: relative;
+    overflow: hidden;
+    user-select: none;
+  }
+  /* Scanline overlay */
+  .hud::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.18) 2px,
+      rgba(0,0,0,0.18) 3px
+    );
+    pointer-events: none;
+  }
+  .hud-logo {
+    font-family: 'Courier New', monospace;
+    font-size: 9px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    color: #1a5c18;
+    text-transform: uppercase;
+    flex-shrink: 0;
+    margin-right: 10px;
+  }
+  .hud-logo span {
+    color: #2e9c2a;
+  }
+  .hud-divider {
+    color: #0c2a0a;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    margin: 0 2px;
+    flex-shrink: 0;
+  }
+  .hud-stat {
+    display: flex;
+    align-items: baseline;
+    gap: 3px;
+    padding: 0 8px;
+    flex-shrink: 0;
+  }
+  .hud-lbl {
+    font-family: 'Courier New', monospace;
+    font-size: 8px;
+    letter-spacing: 1.5px;
+    color: #1a4a18;
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+  .hud-val {
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    font-weight: bold;
+    color: #39ff14;
+    text-shadow: 0 0 5px rgba(57,255,20,0.5), 0 0 10px rgba(57,255,20,0.2);
+    min-width: 36px;
+    text-align: right;
+    letter-spacing: 0.5px;
+    transition: color 0.1s, text-shadow 0.1s;
+  }
+  .hud-val.flash {
+    color: #fff;
+    text-shadow: 0 0 8px rgba(255,255,255,0.9);
+  }
+  .hud-spacer { flex: 1; }
+  .hud-blink {
+    font-family: 'Courier New', monospace;
+    font-size: 8px;
+    color: #1a4a18;
+    letter-spacing: 1px;
+    animation: hud-blink 1.4s step-end infinite;
+    flex-shrink: 0;
+  }
+  @keyframes hud-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
 </style>
 </head>
 <body>
@@ -400,6 +491,32 @@ function buildHyperiaHtml(): string {
     <span class="titlebar-text">Hyperia</span>
     <span class="titlebar-btn reset-btn" onclick="resetChat()" title="Reset conversation">\u21BA</span>
     <span class="titlebar-btn close-btn" onclick="window.close()" title="Close">&times;</span>
+  </div>
+
+  <div class="hud" id="hud">
+    <span class="hud-logo">&#x25B6;<span>GHOST</span></span>
+    <span class="hud-divider">&#x2502;</span>
+    <div class="hud-stat">
+      <span class="hud-lbl">IN&#x25B8;</span>
+      <span class="hud-val" id="statIn">0</span>
+    </div>
+    <span class="hud-divider">&#x2502;</span>
+    <div class="hud-stat">
+      <span class="hud-lbl">OUT&#x25B8;</span>
+      <span class="hud-val" id="statOut">0</span>
+    </div>
+    <span class="hud-divider">&#x2502;</span>
+    <div class="hud-stat">
+      <span class="hud-lbl">TOOLS&#x25B8;</span>
+      <span class="hud-val" id="statTools">0</span>
+    </div>
+    <span class="hud-divider">&#x2502;</span>
+    <div class="hud-stat">
+      <span class="hud-lbl">TURNS&#x25B8;</span>
+      <span class="hud-val" id="statTurns">0</span>
+    </div>
+    <span class="hud-spacer"></span>
+    <span class="hud-blink">&#x25A0;</span>
   </div>
 
   <div class="chat" id="chat"></div>
@@ -429,6 +546,37 @@ function buildHyperiaHtml(): string {
   const continueBtn = document.getElementById('continueBtn');
   let streaming = false;
   let stopRequested = false;
+
+  // HUD stats
+  const hudStats = { inTokens: 0, outTokens: 0, tools: 0, turns: 0 };
+  function fmtTokens(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+    return String(n);
+  }
+  function flashVal(el) {
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 120);
+  }
+  function updateHud(s) {
+    const eIn = document.getElementById('statIn');
+    const eOut = document.getElementById('statOut');
+    const eTools = document.getElementById('statTools');
+    const eTurns = document.getElementById('statTurns');
+    const newIn = fmtTokens(s.inTokens);
+    const newOut = fmtTokens(s.outTokens);
+    if (eIn.textContent !== newIn) { eIn.textContent = newIn; flashVal(eIn); }
+    if (eOut.textContent !== newOut) { eOut.textContent = newOut; flashVal(eOut); }
+    if (eTools.textContent !== String(s.tools)) { eTools.textContent = s.tools; flashVal(eTools); }
+    if (eTurns.textContent !== String(s.turns)) { eTurns.textContent = s.turns; flashVal(eTurns); }
+  }
+  function resetHud() {
+    hudStats.inTokens = 0; hudStats.outTokens = 0; hudStats.tools = 0; hudStats.turns = 0;
+    document.getElementById('statIn').textContent = '0';
+    document.getElementById('statOut').textContent = '0';
+    document.getElementById('statTools').textContent = '0';
+    document.getElementById('statTurns').textContent = '0';
+  }
 
   // Log errors to sidecar and chat box
   function logError(msg) {
@@ -657,6 +805,7 @@ function buildHyperiaHtml(): string {
     chat.innerHTML = '';
     setStreaming(false);
     stopRequested = false;
+    resetHud();
     addMsg("I'm Hyperia \u2014 your agent inside the terminal. I can see your panes, type into your shell, fetch URLs, read and write files, and build new tools on the fly when I need them.\\n\\nMemory is persistent across sessions. I remember your setup, what broke, and how you like things done.\\n\\nWhat are we working on?", 'assistant');
     input.focus();
   }
@@ -751,6 +900,15 @@ function buildHyperiaHtml(): string {
 
               case 'tool_result':
                 setToolOutput(event.id, event.name, event.input, event.output);
+                hudStats.tools++;
+                updateHud(hudStats);
+                break;
+
+              case 'stats':
+                hudStats.inTokens = event.input_tokens;
+                hudStats.outTokens = event.output_tokens;
+                hudStats.turns = event.turns;
+                updateHud(hudStats);
                 break;
 
               case 'watercooler':

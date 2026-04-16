@@ -145,7 +145,10 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
                 onBlur={handleRenameSubmit}
               />
             ) : (
-              <span className="tab_textContent">{displayText}</span>
+              <span className="tab_textContent">
+                {isWebPane && <span className="tab_webIcon">🌐</span>}
+                {displayText}
+              </span>
             )}
           </span>
         </span>
@@ -200,22 +203,8 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         }
 
         .tab_webPane {
-          background: #13131f;
-          border-right-color: rgba(0, 100, 200, 0.3);
-          color: #7aabdd;
-        }
-        .tab_webPane:hover {
-          background: #191928;
-          color: #aaccff;
         }
         .tab_webPane.tab_active {
-          background: #13131f;
-          color: #c8e0ff;
-          border-bottom: 2px solid rgba(0, 150, 255, 0.5);
-        }
-        .tab_webPane.tab_active:hover {
-          background: #13131f;
-          color: #c8e0ff;
         }
 
         .tab_hasActivity {
@@ -299,6 +288,13 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
 
         .tab_textContent {
           display: inline-block;
+        }
+
+        .tab_webIcon {
+          font-size: 10px;
+          margin-right: 4px;
+          vertical-align: middle;
+          opacity: 0.7;
         }
 
         .tab_textInnerActive .tab_textContent {

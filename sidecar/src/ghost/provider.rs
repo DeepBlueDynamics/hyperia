@@ -195,7 +195,19 @@ fn parse_sse_event(event_type: &str, data: &str) -> Option<ProviderEvent> {
             }
         }
         "message_stop" => None, // Already handled by message_delta stop_reason
-        "ping" | "message_start" => None,
+        "ping" => None,
+        "message_start" => {
+            // input_tokens only appears in message_start
+            let usage = &json["message"]["usage"];
+            if usage.is_object() {
+                Some(ProviderEvent::Usage {
+                    input_tokens: usage["input_tokens"].as_u64().unwrap_or(0),
+                    output_tokens: 0,
+                })
+            } else {
+                None
+            }
+        }
         "error" => {
             let msg = json["error"]["message"]
                 .as_str()

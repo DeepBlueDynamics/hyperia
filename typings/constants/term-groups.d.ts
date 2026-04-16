@@ -48,6 +48,13 @@ export interface TermGroupActivateWebTabAction {
   uid: string;
 }
 
+export const TERM_GROUP_SET_WEB_NAME = 'TERM_GROUP_SET_WEB_NAME';
+export interface TermGroupSetWebNameAction {
+  type: typeof TERM_GROUP_SET_WEB_NAME;
+  uid: string;
+  name: string;
+}
+
 export type TermGroupActions =
   | TermGroupRequestAction
   | TermGroupExitAction
@@ -56,4 +63,5 @@ export type TermGroupActions =
   | TermGroupReorderAction
   | TermGroupSetWebUrlAction
   | TermGroupAddWebTabAction
-  | TermGroupActivateWebTabAction;
+  | TermGroupActivateWebTabAction
+  | TermGroupSetWebNameAction;

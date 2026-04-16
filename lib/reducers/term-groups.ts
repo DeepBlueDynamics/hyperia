@@ -10,7 +10,8 @@ import {
   TERM_GROUP_REORDER,
   TERM_GROUP_SET_WEB_URL,
   TERM_GROUP_ADD_WEB_TAB,
-  TERM_GROUP_ACTIVATE_WEB_TAB
+  TERM_GROUP_ACTIVATE_WEB_TAB,
+  TERM_GROUP_SET_WEB_NAME
 } from '../../typings/constants/term-groups';
 import type {ITermGroup, ITermState, ITermGroups, ITermGroupReducer, Mutable} from '../../typings/hyper';
 import {decorateTermGroupsReducer} from '../utils/plugins';
@@ -245,6 +246,10 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
     case TERM_GROUP_ACTIVATE_WEB_TAB: {
       const {uid} = action as unknown as {uid: string};
       return state.set('activeRootGroup', uid);
+    }
+    case TERM_GROUP_SET_WEB_NAME: {
+      const {uid, name} = action as unknown as {uid: string; name: string};
+      return state.setIn(['termGroups', uid, 'webName'], name);
     }
     case TERM_GROUP_REORDER: {
       const {fromUid, toIndex} = action as unknown as {fromUid: string; toIndex: number};
