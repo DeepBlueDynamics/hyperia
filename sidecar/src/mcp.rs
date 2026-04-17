@@ -246,7 +246,10 @@ impl HyperiaMcp {
             .unwrap_or_else(|| format!("http://127.0.0.1:{}", http_port));
         Self {
             tool_router: Self::tool_router(),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_default(),
             base_url,
         }
     }
