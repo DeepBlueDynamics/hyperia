@@ -1,3 +1,5 @@
+import {existsSync} from 'fs';
+
 import React, {useState, useRef, useEffect} from 'react';
 
 import type {configOptions} from '../../typings/config';
@@ -27,7 +29,14 @@ const Toolbar = ({defaultProfile, profiles, openNewTab, openWebPane}: Props) => 
     return () => document.removeEventListener('mousedown', handler);
   }, [profileOpen]);
 
-  const shellProfiles = (profiles || []).filter((p: any) => p.config?.shell);
+  const shellProfiles = (profiles || []).filter((p: any) => {
+    if (!p.config?.shell) return false;
+    try {
+      return existsSync(p.config.shell as string);
+    } catch {
+      return false;
+    }
+  });
 
   const handleNewTab = () => openNewTab(defaultProfile);
   const handleNewTabContext = (e: React.MouseEvent) => {
