@@ -82,13 +82,13 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         menu.append(
           new MenuItem({
             label: 'Copy URL',
-            click: () => clipboard.writeText(props.webUrl!)
+            click: () => void clipboard.writeText(props.webUrl!)
           })
         );
       }
       menu.append(new MenuItem({type: 'separator'}));
-      menu.append(new MenuItem({label: 'New Note', click: () => ipcMain.emit('new-sticky', {})}));
-      menu.append(new MenuItem({label: 'Ask Hyperia', click: () => ipcMain.emit('open-ghost')}));
+      menu.append(new MenuItem({label: 'New Note', click: () => void ipcMain.emit('new-sticky', {})}));
+      menu.append(new MenuItem({label: 'Ask Hyperia', click: () => void ipcMain.emit('open-ghost')}));
       menu.append(new MenuItem({type: 'separator'}));
       menu.append(new MenuItem({label: 'Close', click: () => props.onClose()}));
     } else {
@@ -104,7 +104,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
       menu.append(
         new MenuItem({
           label: `Copy ID (${props.uid.substring(0, 8)}...)`,
-          click: () => clipboard.writeText(props.uid)
+          click: () => void clipboard.writeText(props.uid)
         })
       );
       menu.append(new MenuItem({type: 'separator'}));
@@ -115,8 +115,19 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     /* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
   };
 
-  const {isActive, isFirst, isLast, borderColor, hasActivity, hasBell, agentStatus, tabName, description, isWebPane, webUrl} =
-    props;
+  const {
+    isActive,
+    isFirst,
+    isLast,
+    borderColor,
+    hasActivity,
+    hasBell,
+    agentStatus,
+    tabName,
+    description,
+    isWebPane,
+    webUrl
+  } = props;
 
   // For web pane tabs: derive the short display label (host+port) and full tooltip
   let webShortLabel = '';
@@ -187,10 +198,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
               <span className="tab_textContent">
                 <span className="tab_webIcon">{isWebPane ? '🌐' : null}</span>
                 {isWebPane && webShortLabel ? (
-                  <span
-                    className={`tab_webUrl ${isActive ? 'tab_webUrlScroll' : ''}`}
-                    title={webUrl}
-                  >
+                  <span className={`tab_webUrl ${isActive ? 'tab_webUrlScroll' : ''}`} title={webUrl}>
                     {webShortLabel}
                   </span>
                 ) : (
@@ -370,8 +378,14 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         }
 
         @keyframes tab-web-scroll {
-          0%, 20% { transform: translateX(0); }
-          80%, 100% { transform: translateX(calc(-100% + 80px)); }
+          0%,
+          20% {
+            transform: translateX(0);
+          }
+          80%,
+          100% {
+            transform: translateX(calc(-100% + 80px));
+          }
         }
 
         .tab_textInnerActive .tab_textContent {

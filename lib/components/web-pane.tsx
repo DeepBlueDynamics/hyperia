@@ -6,7 +6,7 @@ import type {HyperDispatch} from '../../typings/hyper';
 import {clearWebPane} from '../actions/term-groups';
 import rpc from '../rpc';
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const {ipcMain} = require('electron');
 
 // Match a real Chrome UA so sites don't block the request
@@ -77,13 +77,17 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     const remote = require('@electron/remote');
     const {Menu, MenuItem} = remote;
     const menu = new Menu();
-    menu.append(new MenuItem({
-      label: 'Reload',
-      click: () => { if (this.webviewRef.current) this.webviewRef.current.reload(); }
-    }));
+    menu.append(
+      new MenuItem({
+        label: 'Reload',
+        click: () => {
+          if (this.webviewRef.current) this.webviewRef.current.reload();
+        }
+      })
+    );
     menu.append(new MenuItem({type: 'separator'}));
-    menu.append(new MenuItem({label: 'New Note', click: () => ipcMain.emit('new-sticky', {})}));
-    menu.append(new MenuItem({label: 'Ask Hyperia', click: () => ipcMain.emit('open-ghost')}));
+    menu.append(new MenuItem({label: 'New Note', click: () => void ipcMain.emit('new-sticky', {})}));
+    menu.append(new MenuItem({label: 'Ask Hyperia', click: () => void ipcMain.emit('open-ghost')}));
     menu.append(new MenuItem({type: 'separator'}));
     menu.append(new MenuItem({label: 'Close Tab', click: () => this.props.onClose?.()}));
     menu.popup();
@@ -113,16 +117,18 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       >
         {/* Loading spinner — overlay, no bar */}
         {loading && (
-          <div style={{
-            position: 'absolute',
-            top: 6,
-            right: 10,
-            fontSize: 11,
-            color: '#4af',
-            zIndex: 10,
-            pointerEvents: 'none',
-            animation: 'web-pane-spin 1s linear infinite'
-          }}>
+          <div
+            style={{
+              position: 'absolute',
+              top: 6,
+              right: 10,
+              fontSize: 11,
+              color: '#4af',
+              zIndex: 10,
+              pointerEvents: 'none',
+              animation: 'web-pane-spin 1s linear infinite'
+            }}
+          >
             ⟳
           </div>
         )}
