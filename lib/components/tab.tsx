@@ -259,11 +259,11 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         }
 
         .tab_webPane {
-          background: #0e0e1a;
-          border-right-color: #1a1a2e;
+          background: #1a1a1a;
+          border-right-color: #333;
         }
         .tab_webPane:hover {
-          background: #12121f;
+          background: #252525;
         }
         .tab_webPane.tab_active {
           background: #0a0a12;
@@ -353,7 +353,8 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         }
 
         .tab_textContent {
-          display: inline-block;
+          display: inline-flex;
+          align-items: center;
         }
 
         .tab_webIcon {

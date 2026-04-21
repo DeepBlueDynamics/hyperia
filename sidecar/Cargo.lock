@@ -1030,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "hyperia-sidecar"
-version = "0.7.22"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-stream",

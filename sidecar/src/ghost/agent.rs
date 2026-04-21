@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use super::ferricula::FerriculaBackend;
-use super::provider::AnthropicProvider;
+use super::provider::AnyProvider;
 use super::registry::ToolRegistry;
 use super::types::{GhostEvent, PendingToolCall, ProviderEvent, ToolDef};
 
@@ -129,7 +129,7 @@ impl GhostSession {
         &mut self,
         user_message: String,
         registry: Arc<ToolRegistry>,
-        provider: Arc<AnthropicProvider>,
+        provider: Arc<AnyProvider>,
         session_mutex: Arc<tokio::sync::Mutex<GhostSession>>,
         ferricula: Arc<FerriculaBackend>,
     ) -> mpsc::Receiver<GhostEvent> {
@@ -220,7 +220,7 @@ async fn run_loop(
     tx: mpsc::Sender<GhostEvent>,
     mut messages: Vec<serde_json::Value>,
     registry: Arc<ToolRegistry>,
-    provider: Arc<AnthropicProvider>,
+    provider: Arc<AnyProvider>,
     max_turns: usize,
     turn_start: usize,
     user_message: &str,

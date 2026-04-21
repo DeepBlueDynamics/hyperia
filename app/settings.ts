@@ -15,7 +15,9 @@ let settingsWindow: BrowserWindow | null = null;
 export function hasAgentToken(): boolean {
   try {
     const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
-    return !!(cfg.config?.agentToken && cfg.config?.agentModel);
+    const model = cfg.config?.agentModel || '';
+    if (model.startsWith('ollama:')) return true;
+    return !!(cfg.config?.agentToken && model);
   } catch {
     return false;
   }
@@ -79,8 +81,8 @@ function buildSettingsHtml(): string {
   } catch {
     cfg = {};
   }
-  const hasToken = !!cfg.config?.agentToken;
   const currentModel = cfg.config?.agentModel || '';
+  const hasToken = !!(cfg.config?.agentToken) || currentModel.startsWith('ollama:');
   const currentShivvr = cfg.config?.shivvr?.url || '';
   const cfgPathEscaped = JSON.stringify(cfgPath.replace(/\\/g, '\\\\'));
 
@@ -336,8 +338,12 @@ function buildSettingsHtml(): string {
   </div>
 
   <div class="input-area" id="tokenArea" style="${hasToken ? 'display:none' : ''}">
-    <select class="model-select" id="modelSelect">
+    <select class="model-select" id="modelSelect" onchange="onModelSelectChange(this)">
       <option value="" disabled ${!currentModel ? 'selected' : ''}>Select model...</option>
+      <optgroup label="Local (Ollama)">
+        <option value="ollama:gemma4:e2b" ${currentModel === 'ollama:gemma4:e2b' ? 'selected' : ''}>Gemma4 e2b — local, fast (default)</option>
+        <option value="ollama:gemma4:31b-cloud" ${currentModel === 'ollama:gemma4:31b-cloud' ? 'selected' : ''}>Gemma4 31b — local proxy</option>
+      </optgroup>
       <optgroup label="Anthropic">
         <option value="claude-haiku-4-5-20251001" ${currentModel === 'claude-haiku-4-5-20251001' ? 'selected' : ''}>Claude Haiku 4.5 (fast)</option>
         <option value="claude-sonnet-4-6" ${currentModel === 'claude-sonnet-4-6' ? 'selected' : ''}>Claude Sonnet 4.6</option>
@@ -355,6 +361,10 @@ function buildSettingsHtml(): string {
 
   <div class="input-area" id="modelChangeArea" style="${hasToken ? '' : 'display:none'}">
     <select class="model-select" id="modelChangeSelect">
+      <optgroup label="Local (Ollama)">
+        <option value="ollama:gemma4:e2b" ${currentModel === 'ollama:gemma4:e2b' ? 'selected' : ''}>Gemma4 e2b — local, fast</option>
+        <option value="ollama:gemma4:31b-cloud" ${currentModel === 'ollama:gemma4:31b-cloud' ? 'selected' : ''}>Gemma4 31b — local proxy</option>
+      </optgroup>
       <optgroup label="Anthropic">
         <option value="claude-haiku-4-5-20251001" ${currentModel === 'claude-haiku-4-5-20251001' ? 'selected' : ''}>Claude Haiku 4.5 (fast)</option>
         <option value="claude-sonnet-4-6" ${currentModel === 'claude-sonnet-4-6' ? 'selected' : ''}>Claude Sonnet 4.6</option>
@@ -379,13 +389,23 @@ function buildSettingsHtml(): string {
   <div class="input-area" id="chatArea" style="${hasToken ? '' : 'display:none'}">
     <input type="text" id="chatInput" placeholder="Ask about settings..."
            onkeydown="if(event.key==='Enter')sendChat()">
-    <button class="set-btn" onclick="sendChat()">Send</button>
+    <button id="settingsSendBtn" class="set-btn" onclick="sendChat()">Send</button>
   </div>
 
 <script>
+  const SIDECAR_URL = 'http://localhost:9800';
   const fs = require('fs');
   const cfgPath = ${cfgPathEscaped};
   const chat = document.getElementById('chat');
+
+  // Surface JS errors in the chat area
+  window.onerror = function(msg, src, line) {
+    addMsg('[Error] ' + msg + ' (' + (src || '') + ':' + line + ')', 'error');
+    return false;
+  };
+  window.addEventListener('unhandledrejection', function(e) {
+    addMsg('[Error] ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason)), 'error');
+  });
 
   function readConfig() {
     try { return JSON.parse(fs.readFileSync(cfgPath, 'utf8')); }
@@ -404,15 +424,30 @@ function buildSettingsHtml(): string {
     chat.scrollTop = chat.scrollHeight;
   }
 
+  function onModelSelectChange(sel) {
+    const isOllama = sel.value.startsWith('ollama:');
+    const tokenInput = document.getElementById('tokenInput');
+    const setBtn = document.querySelector('#tokenArea .set-btn');
+    if (isOllama) {
+      tokenInput.style.display = 'none';
+      tokenInput.value = '';
+      if (setBtn) setBtn.textContent = 'Enable';
+    } else {
+      tokenInput.style.display = '';
+      if (setBtn) setBtn.textContent = 'Set';
+    }
+  }
+
   function setToken() {
     const model = document.getElementById('modelSelect').value;
     const token = document.getElementById('tokenInput').value.trim();
+    const isOllama = model.startsWith('ollama:');
 
     if (!model) {
       addMsg('Please select a model first.', 'error');
       return;
     }
-    if (!token) {
+    if (!isOllama && !token) {
       addMsg('Please enter an API token.', 'error');
       return;
     }
@@ -420,11 +455,15 @@ function buildSettingsHtml(): string {
     const cfg = readConfig();
     if (!cfg.config) cfg.config = {};
     cfg.config.agentModel = model;
-    cfg.config.agentToken = token;
+    if (!isOllama) cfg.config.agentToken = token;
     saveConfig(cfg);
 
     document.getElementById('tokenInput').value = '';
-    addMsg('Token set for <code>' + model + '</code>. Settings agent ready.', 'success');
+    if (isOllama) {
+      addMsg('Model set to <code>' + model + '</code>. Using local Ollama — no token needed.', 'success');
+    } else {
+      addMsg('Token set for <code>' + model + '</code>. Settings agent ready.', 'success');
+    }
     // Swap to chat input
     document.getElementById('tokenArea').style.display = 'none';
     document.getElementById('modelChangeArea').style.display = '';
@@ -461,30 +500,44 @@ function buildSettingsHtml(): string {
   }
 
   function editConfig() {
-    const {ipcRenderer} = require('electron');
-    ipcRenderer.send('edit-config-external');
-    addMsg('Opened config in system editor.', 'success');
+    try {
+      const {ipcRenderer} = require('electron');
+      ipcRenderer.send('edit-config-external');
+      addMsg('Opened config in system editor.', 'success');
+    } catch (e) {
+      addMsg('Could not open editor: ' + e.message, 'error');
+    }
   }
 
   function factoryReset() {
     if (!confirm('This will wipe all Hyperia settings AND Ferricula memory (tool history, remembered facts, parrot colors — all of it). Your agent API token will be preserved. Restart Hyperia after. Continue?')) return;
     addMsg('Factory Reset', 'user');
-    const {ipcRenderer} = require('electron');
-    ipcRenderer.send('factory-reset-config');
-    ipcRenderer.once('factory-reset-done', (event, ok) => {
-      if (ok) {
-        addMsg('Config and memory wiped. Your API token was preserved. Restart Hyperia to complete the reset.', 'success');
-      } else {
-        addMsg('Factory reset failed.', 'error');
-      }
-    });
+    try {
+      const {ipcRenderer} = require('electron');
+      ipcRenderer.send('factory-reset-config');
+      ipcRenderer.once('factory-reset-done', (event, ok) => {
+        if (ok) {
+          addMsg('Config and memory wiped. Your API token was preserved. Restart Hyperia to complete the reset.', 'success');
+        } else {
+          addMsg('Factory reset failed.', 'error');
+        }
+      });
+    } catch (e) {
+      addMsg('Factory reset error: ' + e.message, 'error');
+    }
   }
 
   function installNemesis8() {
     addMsg('Install Nemesis8', 'user');
     addMsg('Running official Nemesis8 installer...');
 
-    const {exec} = require('child_process');
+    let exec;
+    try {
+      exec = require('child_process').exec;
+    } catch (e) {
+      addMsg('Cannot run installer: ' + e.message, 'error');
+      return;
+    }
     const isWin = process.platform === 'win32';
 
     // Use official installation script from nemesis8.nuts.services
@@ -559,17 +612,82 @@ function buildSettingsHtml(): string {
   }
 
   function openNemesis8Site() {
-    require('electron').shell.openExternal('https://nemesis8.nuts.services');
+    try {
+      require('electron').shell.openExternal('https://nemesis8.nuts.services');
+    } catch (e) {
+      addMsg('Could not open browser: ' + e.message, 'error');
+    }
   }
 
-  function sendChat() {
-    const input = document.getElementById('chatInput');
-    const text = input.value.trim();
+  let settingsSending = false;
+
+  async function sendChat() {
+    if (settingsSending) return;
+    const inputEl = document.getElementById('chatInput');
+    const text = inputEl.value.trim();
     if (!text) return;
-    input.value = '';
+    inputEl.value = '';
     addMsg(text, 'user');
-    // TODO: wire to sidecar settings agent when available
-    addMsg('Settings agent coming soon. For now, use <b>Edit Config</b> to change settings or right-click <b>New Hyperia</b> for the full agent.', 'system');
+
+    settingsSending = true;
+    const sendBtn = document.getElementById('settingsSendBtn');
+    if (sendBtn) sendBtn.disabled = true;
+
+    let assistantDiv = null;
+    let assistantText = '';
+
+    try {
+      const resp = await fetch(SIDECAR_URL + '/api/ghost/chat', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message: text})
+      });
+
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => '');
+        addMsg('Agent error ' + resp.status + ': ' + (body || resp.statusText), 'error');
+        return;
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, {stream: true});
+        const lines = buffer.split('\\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (!data) continue;
+          try {
+            const event = JSON.parse(data);
+            if (event.type === 'text_delta' && event.text) {
+              if (!assistantDiv) {
+                assistantDiv = document.createElement('div');
+                assistantDiv.className = 'msg system';
+                chat.appendChild(assistantDiv);
+              }
+              assistantText += event.text;
+              assistantDiv.textContent = assistantText;
+              chat.scrollTop = chat.scrollHeight;
+            } else if (event.type === 'error') {
+              addMsg('Agent: ' + event.message, 'error');
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      addMsg('Could not reach agent: ' + e.message + '. Is sidecar running?', 'error');
+    } finally {
+      settingsSending = false;
+      if (sendBtn) sendBtn.disabled = false;
+      if (assistantDiv) assistantDiv.classList.remove('streaming');
+    }
   }
 </script>
 </body>

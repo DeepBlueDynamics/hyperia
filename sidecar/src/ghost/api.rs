@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 
 use super::agent::{GhostSession, SessionState};
 use super::ferricula::{FerriculaBackend, load_ferricula_config};
-use super::provider::AnthropicProvider;
+use super::provider::AnyProvider;
 use super::registry::ToolRegistry;
 use super::types::{ChatRequest, GhostEvent};
 
@@ -59,7 +59,7 @@ pub async fn ghost_chat(
         }
     };
 
-    let provider = Arc::new(AnthropicProvider::new(&config));
+    let provider = Arc::new(AnyProvider::from_config(&config));
     let registry = state.registry.clone();
     let session_mutex = state.session.clone();
     let ferricula = state.ferricula.clone();
