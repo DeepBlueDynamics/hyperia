@@ -15,7 +15,7 @@ let settingsWindow: BrowserWindow | null = null;
 export function hasAgentToken(): boolean {
   try {
     const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
-    const model = cfg.config?.agentModel || '';
+    const model = String(cfg.config?.agentModel || '');
     if (model.startsWith('ollama:')) return true;
     return !!(cfg.config?.agentToken && model);
   } catch {
@@ -81,8 +81,8 @@ function buildSettingsHtml(): string {
   } catch {
     cfg = {};
   }
-  const currentModel = cfg.config?.agentModel || '';
-  const hasToken = !!(cfg.config?.agentToken) || currentModel.startsWith('ollama:');
+  const currentModel = String(cfg.config?.agentModel || '');
+  const hasToken = !!cfg.config?.agentToken || currentModel.startsWith('ollama:');
   const currentShivvr = cfg.config?.shivvr?.url || '';
   const cfgPathEscaped = JSON.stringify(cfgPath.replace(/\\/g, '\\\\'));
 
