@@ -6,6 +6,9 @@ import type {HyperDispatch} from '../../typings/hyper';
 import {clearWebPane} from '../actions/term-groups';
 import rpc from '../rpc';
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call
+const {ipcMain} = require('electron');
+
 // Match a real Chrome UA so sites don't block the request
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -32,7 +35,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
   componentDidMount() {
     if (!this.webviewRef.current) return;
-    // webviewRef is typed as `any` so we can call Electron webview methods
     const wv = this.webviewRef.current;
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
@@ -50,7 +52,43 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       if (e.errorCode === -3) return;
       this.setState({loading: false, error: e.errorDescription || 'Failed to load'});
     });
+
+    // Listen for reload requests from the tab right-click menu
+    this._reloadHandler = (uid: string) => {
+      if (uid === this.props.groupUid && this.webviewRef.current) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        this.webviewRef.current.reload();
+      }
+    };
+    rpc.on('web-pane-reload', this._reloadHandler);
   }
+
+  componentWillUnmount() {
+    if (this._reloadHandler) {
+      rpc.removeListener('web-pane-reload', this._reloadHandler);
+    }
+  }
+
+  _reloadHandler: ((uid: string) => void) | null = null;
+
+  handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    /* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
+    const remote = require('@electron/remote');
+    const {Menu, MenuItem} = remote;
+    const menu = new Menu();
+    menu.append(new MenuItem({
+      label: 'Reload',
+      click: () => { if (this.webviewRef.current) this.webviewRef.current.reload(); }
+    }));
+    menu.append(new MenuItem({type: 'separator'}));
+    menu.append(new MenuItem({label: 'New Note', click: () => ipcMain.emit('new-sticky', {})}));
+    menu.append(new MenuItem({label: 'Ask Hyperia', click: () => ipcMain.emit('open-ghost')}));
+    menu.append(new MenuItem({type: 'separator'}));
+    menu.append(new MenuItem({label: 'Close Tab', click: () => this.props.onClose?.()}));
+    menu.popup();
+    /* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
+  };
 
   render() {
     const {url, onClose, hasSession} = this.props;
@@ -58,10 +96,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     return (
       <div
-        onContextMenu={(e) => {
-          e.preventDefault();
-          rpc.emit('open context menu', '');
-        }}
+        onContextMenu={this.handleContextMenu}
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
         style={{
@@ -73,55 +108,46 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
-          background: '#0e0e16'
+          background: '#0a0a12'
         }}
       >
-        {/* Address bar */}
-        <div
-          style={
-            {
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '3px 8px',
-              background: '#13131f',
-              borderBottom: '1px solid #1a1a2e',
-              flexShrink: 0,
-              height: 28,
-              WebkitAppRegion: 'no-drag'
-            } as React.CSSProperties
-          }
-        >
-          {loading && (
-            <span style={{fontSize: 10, color: '#4af', flexShrink: 0, animation: 'spin 1s linear infinite'}}>⟳</span>
-          )}
-          {!loading && <span style={{fontSize: 11, color: '#556', flexShrink: 0}}>🌐</span>}
+        {/* Loading spinner — overlay, no bar */}
+        {loading && (
+          <div style={{
+            position: 'absolute',
+            top: 6,
+            right: 10,
+            fontSize: 11,
+            color: '#4af',
+            zIndex: 10,
+            pointerEvents: 'none',
+            animation: 'web-pane-spin 1s linear infinite'
+          }}>
+            ⟳
+          </div>
+        )}
+        {/* Overlay × for terminal-overlay mode */}
+        {hasSession && (
           <span
+            onClick={onClose}
+            title="Close web pane"
             style={{
-              flex: 1,
-              fontSize: 11,
-              color: '#778',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              fontFamily: 'inherit'
+              position: 'absolute',
+              top: 6,
+              right: loading ? 28 : 10,
+              fontSize: 14,
+              color: '#445',
+              cursor: 'pointer',
+              zIndex: 10,
+              lineHeight: 1,
+              padding: '0 2px'
             }}
-            title={url}
+            onMouseEnter={(e) => ((e.target as HTMLElement).style.color = '#e08080')}
+            onMouseLeave={(e) => ((e.target as HTMLElement).style.color = '#445')}
           >
-            {url}
+            ×
           </span>
-          {hasSession && (
-            <span
-              onClick={onClose}
-              title="Close web pane"
-              style={{fontSize: 14, color: '#556', cursor: 'pointer', flexShrink: 0, lineHeight: 1, padding: '0 2px'}}
-              onMouseEnter={(e) => ((e.target as HTMLElement).style.color = '#e08080')}
-              onMouseLeave={(e) => ((e.target as HTMLElement).style.color = '#556')}
-            >
-              ×
-            </span>
-          )}
-        </div>
+        )}
 
         {/* Error state */}
         {error && (
@@ -152,6 +178,13 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           style={{flex: 1, display: error ? 'none' : 'flex'}}
         />
         {/* eslint-enable react/no-unknown-property */}
+
+        <style>{`
+          @keyframes web-pane-spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+          }
+        `}</style>
       </div>
     );
   }

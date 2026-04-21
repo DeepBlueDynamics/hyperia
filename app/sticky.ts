@@ -341,9 +341,10 @@ function createStickyNote(
   // Determine or generate note ID
   const noteId = options.id || `note-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
-  // Already open? Focus it.
+  // Already open? Bring it to front and focus.
   const existing = stickyWindows.get(noteId);
   if (existing && !existing.isDestroyed()) {
+    existing.setAlwaysOnTop(true, 'floating');
     existing.focus();
     return existing;
   }
@@ -408,6 +409,7 @@ function createStickyNote(
   // Show and focus once ready
   win.once('ready-to-show', () => {
     win.show();
+    win.setAlwaysOnTop(true, 'floating');
     win.focus();
     win.webContents.focus();
 

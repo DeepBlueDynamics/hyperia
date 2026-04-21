@@ -54,6 +54,16 @@ struct NotesQuery {
     q: Option<String>,
 }
 
+/// Serve the Hyperia Python MCP tool file. Nemesis8 fetches this at container startup.
+async fn get_mcp_python() -> impl axum::response::IntoResponse {
+    const SRC: &str = include_str!("../assets/hyperia-mcp.py");
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        SRC,
+    )
+}
+
 async fn get_logs(State(state): State<AppState>) -> Json<Vec<String>> {
     let lines = state.log_buffer.lock().unwrap();
     Json(lines.iter().cloned().collect())
@@ -851,6 +861,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = axum::Router::new()
         .route("/health", axum::routing::get(|| async { "ok" }))
+        .route("/api/mcp/hyperia.py", axum::routing::get(get_mcp_python))
         .route("/ws", axum::routing::get(bridge::ws_handler))
         // Read endpoints
         .route("/api/logs", axum::routing::get(get_logs))

@@ -1,6 +1,7 @@
 import React, {forwardRef, useState, useRef, useEffect} from 'react';
 
 import type {TabProps} from '../../typings/hyper';
+import rpc from '../rpc';
 
 const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const [renaming, setRenaming] = useState(false);
@@ -57,38 +58,76 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     /* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
     const remote = require('@electron/remote');
     const {Menu, MenuItem} = remote;
-    const {clipboard} = require('electron');
+    const {clipboard, ipcMain} = require('electron');
     const menu = new Menu();
-    menu.append(
-      new MenuItem({
-        label: 'Rename',
-        click: () => {
-          setRenameValue(description || tabName || props.text);
-          setRenaming(true);
-        }
-      })
-    );
-    menu.append(
-      new MenuItem({
-        label: `Copy ID (${props.uid.substring(0, 8)}...)`,
-        click: () => {
-          clipboard.writeText(props.uid);
-        }
-      })
-    );
-    menu.append(new MenuItem({type: 'separator'}));
-    menu.append(
-      new MenuItem({
-        label: 'Close',
-        click: () => props.onClose()
-      })
-    );
+
+    if (props.isWebPane) {
+      menu.append(
+        new MenuItem({
+          label: 'Reload',
+          click: () => rpc.emit('web-pane-reload', props.uid)
+        })
+      );
+      menu.append(new MenuItem({type: 'separator'}));
+      menu.append(
+        new MenuItem({
+          label: 'Rename',
+          click: () => {
+            setRenameValue(description || tabName || props.text);
+            setRenaming(true);
+          }
+        })
+      );
+      if (props.webUrl) {
+        menu.append(
+          new MenuItem({
+            label: 'Copy URL',
+            click: () => clipboard.writeText(props.webUrl!)
+          })
+        );
+      }
+      menu.append(new MenuItem({type: 'separator'}));
+      menu.append(new MenuItem({label: 'New Note', click: () => ipcMain.emit('new-sticky', {})}));
+      menu.append(new MenuItem({label: 'Ask Hyperia', click: () => ipcMain.emit('open-ghost')}));
+      menu.append(new MenuItem({type: 'separator'}));
+      menu.append(new MenuItem({label: 'Close', click: () => props.onClose()}));
+    } else {
+      menu.append(
+        new MenuItem({
+          label: 'Rename',
+          click: () => {
+            setRenameValue(description || tabName || props.text);
+            setRenaming(true);
+          }
+        })
+      );
+      menu.append(
+        new MenuItem({
+          label: `Copy ID (${props.uid.substring(0, 8)}...)`,
+          click: () => clipboard.writeText(props.uid)
+        })
+      );
+      menu.append(new MenuItem({type: 'separator'}));
+      menu.append(new MenuItem({label: 'Close', click: () => props.onClose()}));
+    }
+
     menu.popup();
     /* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
   };
 
-  const {isActive, isFirst, isLast, borderColor, hasActivity, hasBell, agentStatus, tabName, description, isWebPane} =
+  const {isActive, isFirst, isLast, borderColor, hasActivity, hasBell, agentStatus, tabName, description, isWebPane, webUrl} =
     props;
+
+  // For web pane tabs: derive the short display label (host+port) and full tooltip
+  let webShortLabel = '';
+  if (isWebPane && webUrl) {
+    try {
+      const u = new URL(webUrl);
+      webShortLabel = u.port ? `${u.hostname}:${u.port}` : u.hostname;
+    } catch {
+      webShortLabel = webUrl;
+    }
+  }
 
   const displayText = tabName || description || props.text;
 
@@ -146,8 +185,17 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
               />
             ) : (
               <span className="tab_textContent">
-                {isWebPane && <span className="tab_webIcon">🌐</span>}
-                {displayText}
+                <span className="tab_webIcon">{isWebPane ? '🌐' : null}</span>
+                {isWebPane && webShortLabel ? (
+                  <span
+                    className={`tab_webUrl ${isActive ? 'tab_webUrlScroll' : ''}`}
+                    title={webUrl}
+                  >
+                    {webShortLabel}
+                  </span>
+                ) : (
+                  displayText
+                )}
               </span>
             )}
           </span>
@@ -203,8 +251,18 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         }
 
         .tab_webPane {
+          background: #0e0e1a;
+          border-right-color: #1a1a2e;
+        }
+        .tab_webPane:hover {
+          background: #12121f;
         }
         .tab_webPane.tab_active {
+          background: #0a0a12;
+          color: #aabbdd;
+        }
+        .tab_webPane.tab_active:hover {
+          background: #0a0a12;
         }
 
         .tab_hasActivity {
@@ -295,6 +353,25 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           margin-right: 4px;
           vertical-align: middle;
           opacity: 0.7;
+          flex-shrink: 0;
+        }
+
+        .tab_webUrl {
+          overflow: hidden;
+          white-space: nowrap;
+          font-size: 11px;
+          opacity: 0.75;
+          max-width: 100%;
+          display: inline-block;
+        }
+
+        .tab_webUrlScroll {
+          animation: tab-web-scroll 8s ease-in-out 1.5s infinite alternate;
+        }
+
+        @keyframes tab-web-scroll {
+          0%, 20% { transform: translateX(0); }
+          80%, 100% { transform: translateX(calc(-100% + 80px)); }
         }
 
         .tab_textInnerActive .tab_textContent {

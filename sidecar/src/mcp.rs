@@ -207,9 +207,9 @@ pub struct StickyNoteCreateCodeRequest {
     pub x: Option<i64>,
     /// Y position in pixels (optional)
     pub y: Option<i64>,
-    /// Width in pixels (default 500)
+    /// Width in pixels (default 800)
     pub width: Option<i64>,
-    /// Height in pixels (default 400)
+    /// Height in pixels (default 600)
     pub height: Option<i64>,
 }
 
@@ -785,8 +785,8 @@ impl HyperiaMcp {
             "color": color,
             "x": req.x,
             "y": req.y,
-            "width": req.width.unwrap_or(500),
-            "height": req.height.unwrap_or(400),
+            "width": req.width.unwrap_or(800),
+            "height": req.height.unwrap_or(600),
         });
         let resp = self.post_json("/api/notes", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))

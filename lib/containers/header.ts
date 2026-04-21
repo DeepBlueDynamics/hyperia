@@ -54,7 +54,8 @@ const getTabs = createSelector(
           hasActivity: false,
           hasBell: false,
           agentStatus: undefined,
-          isWebPane: true
+          isWebPane: true,
+          webUrl: webUrl || undefined
         };
       }
       return {

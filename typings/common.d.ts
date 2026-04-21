@@ -55,6 +55,7 @@ export type MainEvents = {
     panes: Array<{uid: string; splitLabel: string}>;
   }>;
   unmaximize: never;
+  'web-pane-reload': string;
 };
 
 export type RendererEvents = {
@@ -94,6 +95,7 @@ export type RendererEvents = {
   'split request vertical': {activeUid?: string; profile?: string};
   'termgroup add req': {activeUid?: string; profile?: string};
   'termgroup close req': never;
+  'web-pane-reload': string;
   'session add': Session;
   'session data': string;
   'session exit': {uid: string};
