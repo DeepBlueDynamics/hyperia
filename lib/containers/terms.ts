@@ -73,7 +73,13 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
     },
 
     onActive(uid: string) {
-      dispatch(setActiveSession(uid));
+      dispatch(((d: HyperDispatch, getState: () => HyperState) => {
+        const activeGroupUid = getState().termGroups.activeRootGroup;
+        const activeGroup = activeGroupUid ? getState().termGroups.termGroups[activeGroupUid] : null;
+        if (!(activeGroup as any)?.webUrl) {
+          d(setActiveSession(uid));
+        }
+      }) as any);
     },
 
     onBell(uid: string) {

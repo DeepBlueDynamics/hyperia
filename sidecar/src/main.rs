@@ -912,7 +912,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ghost/window-closed", axum::routing::post(ghost::api::ghost_window_closed))
         .with_state(ghost_state);
 
-    let app = app.merge(dash_routes).merge(ghost_routes);
+    let app = app
+        .merge(dash_routes)
+        .merge(ghost_routes)
+        .nest_service("/mcp", mcp::streamable_http_service(args.port));
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
     let listener = match tokio::net::TcpListener::bind(addr).await {

@@ -11,7 +11,7 @@ use rmcp::{
 pub struct KeysRequest {
     /// Keystrokes to type into the terminal. Use \n for Enter, \t for Tab.
     pub keys: String,
-    /// Window index (0, 1, 2...). Omit for focused window.
+    /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
@@ -23,7 +23,7 @@ pub struct KeysRequest {
 pub struct RunRequest {
     /// Shell command or text to type
     pub command: String,
-    /// Window index (0, 1, 2...). Omit for focused window.
+    /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
@@ -37,7 +37,7 @@ pub struct RunRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ScreenRequest {
-    /// Window index (0, 1, 2...). Omit for focused window.
+    /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
@@ -53,7 +53,7 @@ pub struct SplitRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct FocusRequest {
-    /// Window index (0, 1, 2...). Omit for focused window.
+    /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
@@ -71,7 +71,7 @@ pub struct NewTabRequest {
 pub struct RenameTabRequest {
     /// New name for the tab
     pub name: String,
-    /// Window index (0, 1, 2...). Omit for focused window.
+    /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
     /// Current tab name to rename. Omit for active tab.
     pub tab: Option<String>,
@@ -109,7 +109,7 @@ pub struct AgentStatusRequest {
     pub label: Option<String>,
     /// Human interaction percentage (0-100). How much of this session is human-driven.
     pub human_percent: Option<u8>,
-    /// Window index (0, 1, 2...). Omit for focused window.
+    /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
@@ -123,7 +123,7 @@ pub struct UIKeyRequest {
     pub key_code: String,
     /// Modifier keys: ['ctrl'], ['alt'], ['shift'], ['meta'], or combinations
     pub modifiers: Option<Vec<String>>,
-    /// Window index (0, 1, 2...). Omit for focused window.
+    /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
 }
 
@@ -157,7 +157,7 @@ pub struct DashboardWidgetsRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ShellConfirmRequest {
-    /// Window index (0, 1, 2...). Omit for focused window.
+    /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
@@ -167,7 +167,7 @@ pub struct ShellConfirmRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct AutoDescribeRequest {
-    /// Window index (0, 1, 2...). Omit for focused window.
+    /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
@@ -300,7 +300,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "List all open windows, tabs, and panes in a nested hierarchy. Each pane includes both a label and a paneId. Use the pane label when present; if the label is empty, use paneId when addressing that pane in other tools.")]
+    #[tool(description = "List all open windows, tabs, and panes in a nested hierarchy. Each window has an `id` field — pass that exact value as the `window` parameter in other tools (it is NOT 0-based; the first window is typically id=1). Each pane includes both a label and a paneId. Use the pane label when present; if the label is empty, use paneId when addressing that pane in other tools.")]
     async fn terminal_status(&self) -> Result<CallToolResult, ErrorData> {
         let text = self.get("/api/status").await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -366,7 +366,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Open a new Hyperia OS window (separate from the current window). Use terminal_status after to get its window index for targeting. Use when the user wants a separate window, not just a new tab.")]
+    #[tool(description = "Open a new Hyperia OS window (separate from the current window). Use terminal_status after to get its window `id` for targeting other tools. Use when the user wants a separate window, not just a new tab.")]
     async fn terminal_new_window(&self) -> Result<CallToolResult, ErrorData> {
         let resp = self.post_json("/api/window/new", &serde_json::json!({})).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
@@ -1085,9 +1085,9 @@ impl ServerHandler for HyperiaMcp {
                 "Hyperia MCP server — controls a running Hyperia terminal emulator. \
                  \n\nAddressing: Hyperia organizes sessions as windows > tabs > panes. \
                  Call terminal_status to see the full hierarchy. Most tools accept optional \
-                 window (index), tab (name), and pane (label) parameters: \
+                 window (id), tab (name), and pane (label) parameters: \
                  - Omit all three to target the focused window's active tab's first pane. \
-                 - Specify window to pick a window by index (0, 1, 2...). \
+                 - Specify window using the `id` field from terminal_status (NOT 0-based; first window is typically id=1). \
                  - Specify tab to pick a tab by name (e.g. \"Capybara\"). \
                  - Specify pane to pick a split pane by label (\"a\", \"b\", \"c\"). \
                  For a full view of all pane contents, use tab_snapshot. \
@@ -1116,4 +1116,20 @@ pub async fn run_mcp_stdio(http_port: u16) -> anyhow::Result<()> {
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+/// Return a Tower service that serves MCP over the Streamable HTTP transport.
+/// Mount with `.nest_service("/mcp", mcp::streamable_http_service(port))`.
+/// Claude Code connects via: claude mcp add hyperia --sse http://localhost:9800/mcp
+pub fn streamable_http_service(
+    http_port: u16,
+) -> rmcp::transport::streamable_http_server::StreamableHttpService<HyperiaMcp> {
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService,
+    };
+    StreamableHttpService::new(
+        move || Ok(HyperiaMcp::new(http_port)),
+        Default::default(),
+        StreamableHttpServerConfig::default(),
+    )
 }
