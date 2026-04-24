@@ -5476,7 +5476,7 @@ module-not-found-error@^1.0.1:
 
 mousetrap@chabou/mousetrap#useCapture:
   version "1.6.1"
-  resolved "git+ssh://git@github.com/chabou/mousetrap.git#c95eeeaafba1131dd8d35bc130d4a79b2ff9261a"
+  resolved "git+https://github.com/chabou/mousetrap.git#c95eeeaafba1131dd8d35bc130d4a79b2ff9261a"
 
 mri@1.1.4:
   version "1.1.4"
