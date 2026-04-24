@@ -72,8 +72,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
       - name: Archive Build Artifacts
-        uses: LabhanshAgrawal/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
+          name: hyperia-${{ matrix.os }}
           path: |
             dist/*.dmg
             dist/*.snap
@@ -93,9 +94,9 @@ jobs:
         env:
           SHELL: /bin/bash
       - name: Archive E2E test screenshot
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: e2e
+          name: e2e-${{ matrix.os }}
           path: dist/tmp/*.png
       - name: Save the pr number in an artifact
         if: github.event_name == 'pull_request'
@@ -103,7 +104,7 @@ jobs:
           PR_NUM: ${{ github.event.number }}
         run: echo $PR_NUM > pr_num.txt
       - name: Upload the pr num
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: github.event_name == 'pull_request'
         with:
           name: pr_num
@@ -180,8 +181,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Archive Build Artifacts
-        uses: LabhanshAgrawal/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
+          name: hyperia-linux-${{ matrix.name }}
           path: |
             dist/*.snap
             dist/*.AppImage
