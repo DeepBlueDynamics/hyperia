@@ -84,7 +84,6 @@ function buildSettingsHtml(): string {
   const currentModel = String(cfg.config?.agentModel || '');
   const hasToken = !!cfg.config?.agentToken || currentModel.startsWith('ollama:');
   const currentShivvr = cfg.config?.shivvr?.url || '';
-  const cfgPathEscaped = JSON.stringify(cfgPath.replace(/\\/g, '\\\\'));
 
   return `<!DOCTYPE html>
 <html>
@@ -306,22 +305,22 @@ function buildSettingsHtml(): string {
 <body>
   <div class="titlebar">
     <span class="titlebar-text">Settings</span>
-    <span class="titlebar-btn close-btn" onclick="window.close()">&times;</span>
+    <span class="titlebar-btn close-btn" id="closeBtn">&times;</span>
   </div>
 
   <div class="actions">
-    <div class="action-btn" onclick="editConfig()">
+    <div class="action-btn" id="editConfigBtn">
       <span>{}</span>
       <span>Edit Config</span>
     </div>
-    <div class="action-btn" onclick="installNemesis8()">
+    <div class="action-btn" id="installNemesisBtn">
       <span>N</span>
       <span>Install Nemesis8</span>
     </div>
-    <div class="action-btn" onclick="openNemesis8Site()" style="flex:0;padding:10px;min-width:36px" title="nemesis8.nuts.services">
+    <div class="action-btn" id="openNemesisSiteBtn" style="flex:0;padding:10px;min-width:36px" title="nemesis8.nuts.services">
       <span>&#x2197;</span>
     </div>
-    <div class="action-btn" onclick="factoryReset()">
+    <div class="action-btn" id="factoryResetBtn">
       <span>!</span>
       <span>Factory Reset</span>
     </div>
@@ -338,7 +337,7 @@ function buildSettingsHtml(): string {
   </div>
 
   <div class="input-area" id="tokenArea" style="${hasToken ? 'display:none' : ''}">
-    <select class="model-select" id="modelSelect" onchange="onModelSelectChange(this)">
+    <select class="model-select" id="modelSelect">
       <option value="" disabled ${!currentModel ? 'selected' : ''}>Select model...</option>
       <optgroup label="Local (Ollama)">
         <option value="ollama:gemma4:e2b" ${currentModel === 'ollama:gemma4:e2b' ? 'selected' : ''}>Gemma4 e2b — local, fast (default)</option>
@@ -355,8 +354,8 @@ function buildSettingsHtml(): string {
         <option value="openrouter" ${currentModel === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
       </optgroup>
     </select>
-    <input type="password" id="tokenInput" placeholder="Enter token..." onkeydown="if(event.key==='Enter')setToken()">
-    <button class="set-btn" onclick="setToken()">Set</button>
+    <input type="password" id="tokenInput" placeholder="Enter token...">
+    <button class="set-btn" id="setTokenBtn">Set</button>
   </div>
 
   <div class="input-area" id="modelChangeArea" style="${hasToken ? '' : 'display:none'}">
@@ -376,29 +375,35 @@ function buildSettingsHtml(): string {
         <option value="openrouter" ${currentModel === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
       </optgroup>
     </select>
-    <button class="set-btn" onclick="changeModel()">Change Model</button>
+    <button class="set-btn" id="changeModelBtn">Change Model</button>
   </div>
 
   <div class="input-area" id="shivvrArea" style="${hasToken ? '' : 'display:none'}">
     <input type="text" id="shivvrInput" placeholder="Shivvr URL for embeddings..."
-           value="${currentShivvr}"
-           onkeydown="if(event.key==='Enter')setShivvr()">
-    <button class="set-btn" onclick="setShivvr()">Set</button>
+           value="${currentShivvr}">
+    <button class="set-btn" id="setShivvrBtn">Set</button>
   </div>
 
   <div class="input-area" id="chatArea" style="${hasToken ? '' : 'display:none'}">
-    <input type="text" id="chatInput" placeholder="Ask about settings..."
-           onkeydown="if(event.key==='Enter')sendChat()">
-    <button id="settingsSendBtn" class="set-btn" onclick="sendChat()">Send</button>
+    <input type="text" id="chatInput" placeholder="Ask about settings...">
+    <button id="settingsSendBtn" class="set-btn">Send</button>
   </div>
 
 <script>
   const SIDECAR_URL = 'http://localhost:9800';
-  const fs = require('fs');
-  const cfgPath = ${cfgPathEscaped};
   const chat = document.getElementById('chat');
 
-  // Surface JS errors in the chat area
+  // addMsg defined first — onerror and everything else depends on it
+  function addMsg(text, type) {
+    if (!chat) return;
+    const div = document.createElement('div');
+    div.className = 'msg ' + (type || 'system');
+    div.innerHTML = text;
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  // Surface JS errors in the chat area — must come after addMsg
   window.onerror = function(msg, src, line) {
     addMsg('[Error] ' + msg + ' (' + (src || '') + ':' + line + ')', 'error');
     return false;
@@ -407,6 +412,10 @@ function buildSettingsHtml(): string {
     addMsg('[Error] ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason)), 'error');
   });
 
+  // require() calls deferred until after DOM+error-handler setup
+  const fs = require('fs');
+  const cfgPath = ${JSON.stringify(cfgPath)};
+
   function readConfig() {
     try { return JSON.parse(fs.readFileSync(cfgPath, 'utf8')); }
     catch { return {}; }
@@ -414,14 +423,6 @@ function buildSettingsHtml(): string {
 
   function saveConfig(cfg) {
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
-  }
-
-  function addMsg(text, type) {
-    const div = document.createElement('div');
-    div.className = 'msg ' + (type || 'system');
-    div.innerHTML = text;
-    chat.appendChild(div);
-    chat.scrollTop = chat.scrollHeight;
   }
 
   function onModelSelectChange(sel) {
@@ -618,6 +619,23 @@ function buildSettingsHtml(): string {
       addMsg('Could not open browser: ' + e.message, 'error');
     }
   }
+
+  // Wire all buttons and inputs — script is at bottom of body so DOM is already available
+  (function wireHandlers() {
+    document.getElementById('closeBtn')?.addEventListener('click', function() { window.close(); });
+    document.getElementById('editConfigBtn')?.addEventListener('click', editConfig);
+    document.getElementById('installNemesisBtn')?.addEventListener('click', installNemesis8);
+    document.getElementById('openNemesisSiteBtn')?.addEventListener('click', openNemesis8Site);
+    document.getElementById('factoryResetBtn')?.addEventListener('click', factoryReset);
+    document.getElementById('setTokenBtn')?.addEventListener('click', setToken);
+    document.getElementById('changeModelBtn')?.addEventListener('click', changeModel);
+    document.getElementById('setShivvrBtn')?.addEventListener('click', setShivvr);
+    document.getElementById('settingsSendBtn')?.addEventListener('click', sendChat);
+    document.getElementById('modelSelect')?.addEventListener('change', function() { onModelSelectChange(this); });
+    document.getElementById('tokenInput')?.addEventListener('keydown', function(e) { if (e.key === 'Enter') setToken(); });
+    document.getElementById('shivvrInput')?.addEventListener('keydown', function(e) { if (e.key === 'Enter') setShivvr(); });
+    document.getElementById('chatInput')?.addEventListener('keydown', function(e) { if (e.key === 'Enter') sendChat(); });
+  })();
 
   let settingsSending = false;
 
