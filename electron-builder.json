@@ -73,9 +73,7 @@
     "gatekeeperAssess": false,
     "entitlements": "./build/mac/entitlements.plist",
     "entitlementsInherit": "./build/mac/entitlements.plist",
-    "notarize": {
-      "teamId": "REPLACE_WITH_TEAM_ID"
-    },
+    "notarize": false,
     "extendInfo": {
       "CFBundleDocumentTypes": [
         {

@@ -70,7 +70,8 @@ const config: webpack.Configuration[] = [
           },
           {
             from: './app/patches',
-            to: './patches'
+            to: './patches',
+            noErrorOnMissing: true
           }
         ]
       })
