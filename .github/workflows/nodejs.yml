@@ -9,7 +9,7 @@ defaults:
   run:
     shell: bash
 env:
-  NODE_VERSION: 18.x
+  NODE_VERSION: 22.x
 jobs:
   build:
     runs-on: ${{matrix.os}}
@@ -162,9 +162,9 @@ jobs:
           copy_artifact_path: target/node_modules/node-pty
           copy_artifact_dest: target/node_modules
           commands: |
-            wget https://nodejs.org/dist/v18.16.0/node-v18.16.0-linux-${{ matrix.name }}.tar.xz
-            tar -xJf node-v18.16.0-linux-${{ matrix.name }}.tar.xz
-            sudo cp node-v18.16.0-linux-${{ matrix.name }}/* /usr/local/ -R
+            wget https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-${{ matrix.name }}.tar.xz
+            tar -xJf node-v22.14.0-linux-${{ matrix.name }}.tar.xz
+            sudo cp node-v22.14.0-linux-${{ matrix.name }}/* /usr/local/ -R
             npm run rebuild-node-pty
       - name: chown node-pty
         run: |
