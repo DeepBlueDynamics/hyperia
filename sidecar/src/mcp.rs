@@ -33,6 +33,8 @@ pub struct RunRequest {
     pub wait_ms: Option<u64>,
     /// Whether to press Enter after typing the command (default: true). Set false to type text without submitting — lets the human review before pressing Enter.
     pub submit: Option<bool>,
+    /// Maximum characters to return from command output (default: 12000). Increase if output is truncated.
+    pub max_output_chars: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -273,22 +275,27 @@ impl HyperiaMcp {
         Parameters(req): Parameters<RunRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         self.focus_pane(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
-        let pane_path = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
-        // Strip any trailing newline/return the caller may have appended
-        let cmd = strip_trailing_returns(&req.command);
-        // Type the text first
-        self.post_text(&pane_path, cmd).await?;
-        // Then send Enter as a separate keystroke (unless submit=false)
         let submit = req.submit.unwrap_or(true);
-        if submit {
-            self.post_text(&pane_path, "\r").await?;
-        }
-
         let wait = req.wait_ms.unwrap_or(if submit { 2000 } else { 200 });
-        tokio::time::sleep(tokio::time::Duration::from_millis(wait)).await;
+        let cmd = strip_trailing_returns(&req.command);
 
-        let text = self.get(&self.pane_path("/api/screen", req.window, req.tab.as_deref(), req.pane.as_deref())).await?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        if submit {
+            // Use type-and-collect: sends the command, streams all PTY output until
+            // wait_ms of silence (up to 8s hard cap). Returns full output, not just
+            // the visible screen — avoids silent truncation of long command output.
+            let base = self.pane_path("/api/type-and-collect", req.window, req.tab.as_deref(), req.pane.as_deref());
+            let sep = if base.contains('?') { '&' } else { '?' };
+            let collect_path = format!("{}{sep}quiet_ms={}", base, wait);
+            let raw = self.post_text(&collect_path, &format!("{}\r", cmd)).await?;
+            let max_chars = req.max_output_chars.unwrap_or(12_000);
+            let text = clean_terminal_output(&raw, max_chars);
+            Ok(CallToolResult::success(vec![Content::text(text)]))
+        } else {
+            // submit=false: just type the text without waiting for output
+            let pane_path = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
+            self.post_text(&pane_path, cmd).await?;
+            Ok(CallToolResult::success(vec![Content::text(String::from("Typed (not submitted). Press Enter to run."))]))
+        }
     }
 
     #[tool(description = "Read the current screen content of a terminal pane. Address panes with window/tab/pane. The pane field accepts either a pane label or the paneId from terminal_status; if the label is empty, use paneId.")]
@@ -660,11 +667,15 @@ impl HyperiaMcp {
                                 let screen = self.get(&self.pane_path("/api/screen", Some(win["id"].as_u64().unwrap_or(0) as u32), Some(tab_name), Some(pane_key))).await
                                     .unwrap_or_default();
 
+                                let shell = pane["shell"].as_str().unwrap_or("").to_string();
+                                let process = pane["process"].as_str().unwrap_or("").to_string();
                                 let state = detect_shell_state(&screen);
                                 results.push(serde_json::json!({
                                     "window": win["id"],
                                     "tab": tab_name,
                                     "pane": if label.is_empty() { pane_id } else { label },
+                                    "shell": shell,
+                                    "process": process,
                                     "state": state.kind,
                                     "detail": state.detail,
                                     "actionable": state.actionable,
@@ -820,6 +831,65 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
+}
+
+// -- Output cleaning --
+
+/// Strip ANSI/VT escape sequences from raw PTY output and truncate at `max_chars`.
+/// Appends a truncation notice with the override hint when content is cut.
+fn clean_terminal_output(raw: &str, max_chars: usize) -> String {
+    // Strip escape sequences: ESC [ ... final-byte  and  ESC single-char
+    let mut out = String::with_capacity(raw.len());
+    let bytes = raw.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            i += 1;
+            if i < bytes.len() {
+                match bytes[i] {
+                    b'[' => {
+                        // CSI sequence: skip until a byte in 0x40..=0x7e
+                        i += 1;
+                        while i < bytes.len() && !(0x40..=0x7eu8).contains(&bytes[i]) {
+                            i += 1;
+                        }
+                        i += 1; // skip the final byte
+                    }
+                    b']' => {
+                        // OSC sequence: skip until ST (ESC \) or BEL
+                        i += 1;
+                        while i < bytes.len() {
+                            if bytes[i] == 0x07 { i += 1; break; }
+                            if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+                                i += 2; break;
+                            }
+                            i += 1;
+                        }
+                    }
+                    _ => { i += 1; } // skip single-char escape
+                }
+            }
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    // Normalise \r\n → \n
+    let out = out.replace("\r\n", "\n").replace('\r', "\n");
+    let total = out.chars().count();
+    if total <= max_chars {
+        out
+    } else {
+        let truncated_at = out.char_indices().nth(max_chars).map(|(i, _)| i).unwrap_or(out.len());
+        let remaining = total - max_chars;
+        format!(
+            "{}\n[Output truncated: {} chars not shown (total {}). Re-run with max_output_chars={} to see more.]",
+            &out[..truncated_at],
+            remaining,
+            total,
+            total + 1000, // suggest a value that would fit everything
+        )
+    }
 }
 
 // -- Key unescaping --

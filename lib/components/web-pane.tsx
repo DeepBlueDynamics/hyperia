@@ -67,6 +67,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (this._reloadHandler) {
       rpc.removeListener('web-pane-reload', this._reloadHandler);
     }
+    // Return keyboard focus to the active terminal after the web pane is removed.
+    // The webview captures focus while mounted; without this the xterm textarea
+    // stays unfocused (hollow cursor, input goes nowhere).
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')?.focus();
+    });
   }
 
   _reloadHandler: ((uid: string) => void) | null = null;

@@ -275,6 +275,11 @@ impl Bridge {
 
     /// Get status of all registered sessions, grouped by window and tab.
     pub async fn get_status(&self) -> serde_json::Value {
+        use sysinfo::{Pid, ProcessesToUpdate, System};
+        // Snapshot all processes once; reused for every pane's foreground detection.
+        let mut sys = System::new();
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+
         let focused_window_id = *self.inner.focused_window_id.lock().await;
         let sessions = self.inner.sessions.lock().await;
 
@@ -321,9 +326,24 @@ impl Bridge {
                 let panes: Vec<serde_json::Value> = sorted_panes
                     .iter()
                     .map(|(uid, info)| {
+                        // Normalise shell path to just the binary name (e.g. /bin/bash → bash)
+                        let shell = std::path::Path::new(&info.name)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(&info.name)
+                            .trim_end_matches(".exe")
+                            .to_string();
+                        // Walk child process tree to find the foreground app.
+                        let process = if info.pid > 0 {
+                            crate::process::foreground_process_with(&sys, info.pid)
+                        } else {
+                            String::new()
+                        };
                         serde_json::json!({
                             "paneId": uid,
                             "label": info.split_label,
+                            "shell": shell,
+                            "process": process,
                             "cols": info.cols,
                             "rows": info.rows,
                             "pid": info.pid,

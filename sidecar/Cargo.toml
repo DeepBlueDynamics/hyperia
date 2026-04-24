@@ -1,6 +1,6 @@
 [package]
 name = "hyperia-sidecar"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2021"
 description = "Rust sidecar for Hyperia: agent engine, MCP, signaling"
 
@@ -49,6 +49,9 @@ urlencoding = "2.1"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
+
+# Process tree (foreground process detection)
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 
 # Ferricula memory core (embedded)
 ferricula = { path = "../../ferricula" }

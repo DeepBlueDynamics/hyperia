@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+	<PropertyGroup>
+		<TrustedSigningDlibVersion>1.0.60</TrustedSigningDlibVersion>
+		<TrustedSigningDlibRootFolder>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..'))</TrustedSigningDlibRootFolder>
+		<TrustedSigningDlibBinFolder>$(TrustedSigningDlibRootFolder)\bin</TrustedSigningDlibBinFolder>
+		<TrustedSigningDlibBinArchFolder>$(TrustedSigningDlibBinFolder)\x64</TrustedSigningDlibBinArchFolder>
+		<TrustedSigningDlibFilePath>$(TrustedSigningDlibBinArchFolder)\Azure.CodeSigning.Dlib.dll</TrustedSigningDlibFilePath>
+	</PropertyGroup>
+</Project>

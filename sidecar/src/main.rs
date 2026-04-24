@@ -6,6 +6,7 @@ mod dashboard;
 mod ghost;
 mod logs;
 mod mcp;
+mod process;
 mod screen;
 mod telemetry;
 
@@ -47,6 +48,7 @@ struct PaneAddress {
     window: Option<u32>,
     tab: Option<String>,
     pane: Option<String>,
+    quiet_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -241,7 +243,8 @@ async fn post_type_and_collect(
             );
         }
     };
-    let output = state.bridge.type_and_collect(&uid, &body, 400).await;
+    let quiet_ms = addr.quiet_ms.unwrap_or(400).clamp(100, 10_000);
+    let output = state.bridge.type_and_collect(&uid, &body, quiet_ms).await;
     (StatusCode::OK, output)
 }
 

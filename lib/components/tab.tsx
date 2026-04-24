@@ -6,6 +6,8 @@ import rpc from '../rpc';
 const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
+  const [pendingName, setPendingName] = useState<string | null>(null);
+  const renamingRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -34,14 +36,19 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const handleDoubleClick = (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    setRenameValue(description || tabName || props.text);
+    setRenameValue(pendingName ?? (description || tabName || props.text));
+    setPendingName(null);
+    renamingRef.current = true;
     setRenaming(true);
   };
 
   const handleRenameSubmit = () => {
-    if (!renaming) return; // prevent double-fire from blur + enter
-    if (props.onDescribe && renameValue.trim()) {
-      props.onDescribe(renameValue.trim());
+    if (!renamingRef.current) return;
+    renamingRef.current = false;
+    const value = renameValue.trim();
+    if (props.onDescribe && value) {
+      setPendingName(value);
+      props.onDescribe(value);
     }
     setRenaming(false);
   };
@@ -49,7 +56,10 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const handleRenameKey = (e: React.KeyboardEvent) => {
     e.stopPropagation();
     if (e.key === 'Enter') handleRenameSubmit();
-    if (e.key === 'Escape') setRenaming(false);
+    if (e.key === 'Escape') {
+      renamingRef.current = false;
+      setRenaming(false);
+    }
   };
 
   const handleContextMenu = (event: React.MouseEvent) => {
@@ -73,7 +83,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         new MenuItem({
           label: 'Rename',
           click: () => {
-            setRenameValue(description || tabName || props.text);
+            setRenameValue(pendingName ?? (description || tabName || props.text));
+            setPendingName(null);
+            renamingRef.current = true;
             setRenaming(true);
           }
         })
@@ -96,7 +108,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         new MenuItem({
           label: 'Rename',
           click: () => {
-            setRenameValue(description || tabName || props.text);
+            setRenameValue(pendingName ?? (description || tabName || props.text));
+            setPendingName(null);
+            renamingRef.current = true;
             setRenaming(true);
           }
         })
@@ -140,7 +154,15 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     }
   }
 
-  const displayText = tabName || description || props.text;
+  // Clear pendingName once Redux state has caught up to the committed rename.
+  useEffect(() => {
+    if (pendingName !== null && (tabName === pendingName || description === pendingName)) {
+      setPendingName(null);
+    }
+  }, [tabName, description, pendingName]);
+
+  // Optimistically show pendingName to avoid any flicker while Redux propagates.
+  const displayText = pendingName ?? (tabName || description || props.text);
 
   // Agent dot color
   const agentDotColor = agentStatus?.working

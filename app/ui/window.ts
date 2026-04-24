@@ -448,12 +448,28 @@ export function newWindow(
     }
   });
   window.webContents.setWindowOpenHandler(({url}) => {
-    const data = handleDroppedURL(url);
-    if (data) {
-      rpc.emit('session data send', data);
-      return {action: 'deny'};
+    try {
+      const {protocol} = new URL(url);
+      if (protocol === 'file:') {
+        const path = fileURLToPath(url);
+        rpc.emit('session data send', {uid: null, data: path, escaped: true});
+      } else if (protocol === 'http:' || protocol === 'https:') {
+        void shell.openExternal(url);
+      }
+    } catch {
+      // malformed URL — ignore
     }
-    return {action: 'allow'};
+    return {action: 'deny'};
+  });
+
+  // When a <webview> is attached (e.g. a web pane), prevent it from opening
+  // popup windows (OAuth flows, target="_blank" links) as new BrowserWindows.
+  // Route them to the system browser instead.
+  window.webContents.on('did-attach-webview', (_event, webviewContents) => {
+    webviewContents.setWindowOpenHandler(({url}) => {
+      void shell.openExternal(url);
+      return {action: 'deny'};
+    });
   });
 
   // expose internals to extension authors
