@@ -41,7 +41,8 @@ impl ToolRegistry {
     }
 
     pub fn with_ferricula(mut self, fc: Arc<FerriculaBackend>) -> Self {
-        self.ferricula = Some(fc);
+        self.ferricula = Some(fc.clone());
+        self.compressor = self.compressor.with_ferricula(fc);
         self
     }
 
@@ -57,6 +58,7 @@ impl ToolRegistry {
         defs.push(memory_dream_def());
         defs.push(memory_connect_def());
         defs.push(memory_status_def());
+        defs.push(maximus_explain_def());
         let dynamic = self.dynamic.lock().unwrap();
         for dt in dynamic.iter() {
             defs.push(dt.def.clone());
@@ -66,30 +68,47 @@ impl ToolRegistry {
 
     /// Execute a tool by name with the given input.
     ///
-    /// If the input contains a `focus` field (natural language description of what
-    /// the agent is looking for), the raw result is filtered through Maximus before
-    /// being returned — the agent receives a targeted extract instead of the full output.
+    /// Tool results pass through Maximus when `focus=` (extract specific info) or
+    /// `raw=true` (bypass with annotation) is provided. Results include a [tokenmax …]
+    /// header explaining what happened and hinting at available params.
     pub async fn execute(&self, name: &str, input: &serde_json::Value) -> String {
-        let result = match name {
-            "tool_search" => self.handle_tool_search(input),
-            "tool_create" => self.handle_tool_create(input),
+        // Internal tools bypass Maximus entirely
+        match name {
+            "tool_search" => return self.handle_tool_search(input),
+            "tool_create" => return self.handle_tool_create(input),
             "watercooler" => {
                 let msg = input["message"].as_str().unwrap_or("Checking in");
-                format!("Yielding to human: {}", msg)
+                return format!("Yielding to human: {}", msg);
             }
-            "memory_recall" => self.handle_memory_recall(input).await,
-            "memory_remember" => self.handle_memory_remember(input).await,
-            "memory_status" => self.handle_memory_status().await,
-            "memory_dream" => self.handle_memory_dream().await,
-            "memory_connect" => self.handle_memory_connect(input).await,
-            _ if self.is_builtin(name) => self.execute_builtin(name, input).await,
-            _ => self.execute_dynamic(name, input).await,
+            "memory_recall" => return self.handle_memory_recall(input).await,
+            "memory_remember" => return self.handle_memory_remember(input).await,
+            "memory_status" => return self.handle_memory_status().await,
+            "memory_dream" => return self.handle_memory_dream().await,
+            "memory_connect" => return self.handle_memory_connect(input).await,
+            "maximus_explain" => return self.compressor.explain_last().await,
+            _ => {}
+        }
+
+        let result = if self.is_builtin(name) {
+            self.execute_builtin(name, input).await
+        } else {
+            self.execute_dynamic(name, input).await
         };
 
-        if let Some(focus) = input["focus"].as_str() {
-            if !focus.trim().is_empty() {
-                return self.compressor.extract_focused(&result, focus).await;
-            }
+        let focus = input["focus"].as_str().unwrap_or("").trim().to_string();
+        let raw = input["raw"].as_bool().unwrap_or(false);
+        let focus_used = !focus.is_empty();
+
+        if raw || focus_used {
+            let mr = self.compressor.extract_maximus(&result, &focus, raw).await;
+            let annotation = crate::ghost::compressor::ContextCompressor::format_annotation(
+                &mr.meta, focus_used, raw,
+            );
+            return if annotation.is_empty() {
+                mr.content
+            } else {
+                format!("{}{}", annotation, mr.content)
+            };
         }
 
         result
@@ -1129,6 +1148,21 @@ fn memory_status_def() -> ToolDef {
     }
 }
 
+fn maximus_explain_def() -> ToolDef {
+    ToolDef {
+        name: "maximus_explain".into(),
+        description: "Show what Maximus (tokenmax) did on the last tool extraction — content type \
+            detected, strategy used, compression ratio, iteration count, and source \
+            (Ollama / learned pattern / passthrough). Call this if a result looks wrong, \
+            seems over-compressed, or you want to understand what was filtered out."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {}
+        }),
+    }
+}
+
 fn builtin_tool_defs() -> Vec<ToolDef> {
     let defs: Vec<serde_json::Value> = serde_json::from_value(serde_json::json!([
         {
@@ -1155,6 +1189,7 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                     "submit": { "type": "boolean", "description": "Press Enter after typing (default true). Set false to type without submitting." },
                     "wait_ms": { "type": "integer", "description": "Time to wait for output in ms (default 2000)" },
                     "focus": { "type": "string", "description": "What you're looking for in the output (e.g. 'port number', 'error messages', 'did it succeed'). Maximus extracts just that — saves tokens." },
+                    "raw": { "type": "boolean", "description": "Pass true to bypass Maximus and receive the full unfiltered output." },
                     "window": { "type": "integer" },
                     "tab": { "type": "string" },
                     "pane": { "type": "string" }
@@ -1249,6 +1284,7 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                 "type": "object",
                 "properties": {
                     "focus": { "type": "string", "description": "What you're looking for on the screen (e.g. 'error messages', 'port number', 'git branch'). Maximus extracts just that — saves tokens." },
+                    "raw": { "type": "boolean", "description": "Pass true to bypass Maximus and receive the full unfiltered output." },
                     "window": { "type": "integer" },
                     "tab": { "type": "string" },
                     "pane": { "type": "string" }
@@ -1263,7 +1299,8 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                 "properties": {
                     "path": { "type": "string", "description": "File path to read" },
                     "max_lines": { "type": "integer", "description": "Max lines (default 200)" },
-                    "focus": { "type": "string", "description": "What you're looking for in the file (e.g. 'database URL', 'function named foo', 'port config'). Maximus extracts just that — saves tokens." }
+                    "focus": { "type": "string", "description": "What you're looking for in the file (e.g. 'database URL', 'function named foo', 'port config'). Maximus extracts just that — saves tokens." },
+                    "raw": { "type": "boolean", "description": "Pass true to bypass Maximus and receive the full unfiltered output." }
                 },
                 "required": ["path"]
             }
@@ -1382,7 +1419,8 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "focus": { "type": "string", "description": "What you're looking for across all panes (e.g. 'running servers', 'error messages', 'active processes'). Maximus extracts just that from the full dump — saves tokens." }
+                    "focus": { "type": "string", "description": "What you're looking for across all panes (e.g. 'running servers', 'error messages', 'active processes'). Maximus extracts just that from the full dump — saves tokens." },
+                    "raw": { "type": "boolean", "description": "Pass true to bypass Maximus and receive the full unfiltered output." }
                 }
             }
         },
@@ -1392,7 +1430,8 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "focus": { "type": "string", "description": "What you're looking for (e.g. 'panes that are still running', 'which tab has a dialog'). Maximus extracts just that — saves tokens." }
+                    "focus": { "type": "string", "description": "What you're looking for (e.g. 'panes that are still running', 'which tab has a dialog'). Maximus extracts just that — saves tokens." },
+                    "raw": { "type": "boolean", "description": "Pass true to bypass Maximus and receive the full unfiltered output." }
                 }
             }
         },

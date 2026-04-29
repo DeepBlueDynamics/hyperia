@@ -368,6 +368,30 @@ impl FerriculaBackend {
         }
     }
 
+    /// Retrieve all text entries stored in a named channel.
+    pub async fn list_channel(&self, channel: &str) -> Vec<String> {
+        let mut entries = Vec::new();
+        if let Some(ref core) = self.local {
+            let db = core.engine.lock().unwrap();
+            let bitmap = db.engine().all_bitmap();
+            if let Some(max) = bitmap.max() {
+                let start = if max > 500 { max - 500 } else { 0 };
+                for id in start..=max {
+                    if let Some(row) = db.engine().get(id) {
+                        if row.tags.get("channel").map(|s| s.as_str()) == Some(channel) {
+                            if let Some(text) = row.tags.get("text") {
+                                if !text.is_empty() {
+                                    entries.push(text.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        entries
+    }
+
     /// Retrieve recent ghost chat history for UI restoration.
     pub async fn history(&self, limit: usize) -> Vec<(String, String)> {
         let mut turns = Vec::new();

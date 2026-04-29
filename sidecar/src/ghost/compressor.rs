@@ -1,17 +1,99 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use serde_json::Value;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
+
+use super::ferricula::FerriculaBackend;
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 const DEFAULT_MODEL: &str = "gemma4:e2b";
 const DEFAULT_KEEP_RECENT: usize = 6;
 const COMPRESS_THRESHOLD: usize = 10;
-const FOCUS_MIN_CHARS: usize = 400;
+pub const FOCUS_MIN_CHARS: usize = 400;
+const MAX_ITERS: u8 = 3;
+const STABILIZE_THRESHOLD: f32 = 0.10;
 
+// -- Public result types --
+
+#[derive(Clone, Debug)]
+pub enum MaximusSource {
+    Ollama { iters: u8 },
+    Learned(String),
+    Passthrough,
+    Raw,
+}
+
+#[derive(Clone, Debug)]
+pub struct MaximusMeta {
+    pub content_type: String,
+    pub pattern: String,
+    pub strategy: String,
+    pub chars_in: usize,
+    pub chars_out: usize,
+    pub source: MaximusSource,
+}
+
+impl MaximusMeta {
+    fn raw(chars_in: usize) -> Self {
+        Self {
+            content_type: "unknown".into(),
+            pattern: "none".into(),
+            strategy: "raw bypass".into(),
+            chars_in,
+            chars_out: chars_in,
+            source: MaximusSource::Raw,
+        }
+    }
+
+    fn passthrough(chars_in: usize, reason: &str) -> Self {
+        Self {
+            content_type: "unknown".into(),
+            pattern: "none".into(),
+            strategy: reason.into(),
+            chars_in,
+            chars_out: chars_in,
+            source: MaximusSource::Passthrough,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MaximusResult {
+    pub content: String,
+    pub meta: MaximusMeta,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct LearnedPattern {
+    pub content_type: String,
+    pub pattern: String,
+    pub strategy: String,
+    pub signature: String,
+    pub hit_count: u32,
+    pub avg_ratio: f32,
+}
+
+struct PipelineResult {
+    content_type: String,
+    pattern: String,
+    strategy: String,
+    extracted: String,
+    iters: u8,
+}
+
+// -- ContextCompressor --
+
+#[derive(Clone)]
 pub struct ContextCompressor {
     client: reqwest::Client,
     pub ollama_url: String,
     pub model: String,
     keep_recent: usize,
+    ferricula: Option<Arc<FerriculaBackend>>,
+    pattern_cache: Arc<RwLock<HashMap<String, LearnedPattern>>>,
+    last_meta: Arc<Mutex<Option<MaximusMeta>>>,
 }
 
 impl ContextCompressor {
@@ -24,6 +106,9 @@ impl ContextCompressor {
             ollama_url: ollama_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             keep_recent: DEFAULT_KEEP_RECENT,
+            ferricula: None,
+            pattern_cache: Arc::new(RwLock::new(HashMap::new())),
+            last_meta: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -31,6 +116,11 @@ impl ContextCompressor {
         let url = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| DEFAULT_OLLAMA_URL.to_string());
         let model = std::env::var("MAXIMUS_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
         Self::new(&url, &model)
+    }
+
+    pub fn with_ferricula(mut self, fc: Arc<FerriculaBackend>) -> Self {
+        self.ferricula = Some(fc);
+        self
     }
 
     pub async fn is_available(&self) -> bool {
@@ -78,6 +168,8 @@ impl ContextCompressor {
         true
     }
 
+    // -- Message history compression (unchanged) --
+
     pub async fn compress_messages(&self, messages: &[Value]) -> Vec<Value> {
         if messages.len() <= COMPRESS_THRESHOLD {
             return messages.to_vec();
@@ -113,41 +205,283 @@ impl ContextCompressor {
         }
     }
 
-    pub async fn extract_focused(&self, content: &str, focus: &str) -> String {
-        if content.len() < FOCUS_MIN_CHARS || focus.trim().is_empty() {
-            return content.to_string();
+    // -- Tool result extraction (new main entrypoint) --
+
+    /// Full Maximus extraction pipeline. Returns annotated result + metadata.
+    pub async fn extract_maximus(&self, content: &str, focus: &str, raw: bool) -> MaximusResult {
+        let chars_in = content.len();
+
+        if raw {
+            let meta = MaximusMeta::raw(chars_in);
+            self.store_last(&meta).await;
+            return MaximusResult { content: content.to_string(), meta };
         }
-        match self.do_focus_extract(content, focus).await {
-            Ok(extracted) => {
-                info!(
-                    "maximus: focus extract {} chars → {} chars (focus: {:?})",
-                    content.len(),
-                    extracted.len(),
-                    &focus[..focus.len().min(60)]
-                );
-                extracted
+
+        if content.len() < FOCUS_MIN_CHARS && focus.trim().is_empty() {
+            let meta = MaximusMeta::passthrough(chars_in, "below threshold");
+            self.store_last(&meta).await;
+            return MaximusResult { content: content.to_string(), meta };
+        }
+
+        match self.run_pipeline(content, focus).await {
+            Ok(pr) => {
+                let meta = MaximusMeta {
+                    content_type: pr.content_type,
+                    pattern: pr.pattern,
+                    strategy: pr.strategy,
+                    chars_in,
+                    chars_out: pr.extracted.len(),
+                    source: MaximusSource::Ollama { iters: pr.iters },
+                };
+                self.store_last(&meta).await;
+                MaximusResult { content: pr.extracted, meta }
             }
             Err(e) => {
-                warn!("maximus: focus extract failed ({}), returning full content", e);
-                content.to_string()
+                warn!("maximus: pipeline failed ({}), checking offline patterns", e);
+                let offline = self.match_pattern_offline(content).await;
+                let meta = match offline {
+                    Some(lp) => MaximusMeta {
+                        content_type: lp.content_type.clone(),
+                        pattern: lp.pattern.clone(),
+                        strategy: lp.strategy,
+                        chars_in,
+                        chars_out: chars_in,
+                        source: MaximusSource::Learned(lp.content_type),
+                    },
+                    None => MaximusMeta::passthrough(chars_in, "ollama unavailable"),
+                };
+                self.store_last(&meta).await;
+                MaximusResult { content: content.to_string(), meta }
             }
         }
     }
 
-    async fn do_focus_extract(&self, content: &str, focus: &str) -> anyhow::Result<String> {
+    /// Backwards-compatible wrapper — returns only the content string.
+    pub async fn extract_focused(&self, content: &str, focus: &str) -> String {
+        self.extract_maximus(content, focus, false).await.content
+    }
+
+    /// Return the metadata from the last extraction for maximus_explain.
+    pub async fn explain_last(&self) -> String {
+        let guard = self.last_meta.lock().await;
+        match &*guard {
+            None => "No Maximus extraction has been performed yet this session.".to_string(),
+            Some(m) => {
+                let ratio = if m.chars_in > 0 {
+                    100.0 * m.chars_out as f32 / m.chars_in as f32
+                } else {
+                    100.0
+                };
+                let source_str = match &m.source {
+                    MaximusSource::Ollama { iters } => format!("Ollama ({iters} iterations)"),
+                    MaximusSource::Learned(name) => format!("learned pattern: {name}"),
+                    MaximusSource::Passthrough => "passthrough (no compression)".into(),
+                    MaximusSource::Raw => "raw bypass".into(),
+                };
+                format!(
+                    "type: {}\npattern: {}\nsource: {}\nstrategy: {}\ncompression: {} → {} chars ({:.0}% of original)",
+                    m.content_type, m.pattern, source_str, m.strategy,
+                    m.chars_in, m.chars_out, ratio
+                )
+            }
+        }
+    }
+
+    /// Format the [tokenmax …] annotation to prepend to tool results.
+    /// Returns empty string when annotation would be pure noise (e.g. short passthrough).
+    pub fn format_annotation(meta: &MaximusMeta, focus_used: bool, raw_used: bool) -> String {
+        match &meta.source {
+            MaximusSource::Raw => "[tokenmax:raw]\n".to_string(),
+            MaximusSource::Passthrough => {
+                if meta.strategy == "below threshold" {
+                    String::new()
+                } else {
+                    "[tokenmax:passthrough — Ollama unavailable, full output shown]\n\
+                     [hints: start Ollama with `ollama serve` to enable tokenmax]\n"
+                        .to_string()
+                }
+            }
+            MaximusSource::Learned(name) => {
+                format!(
+                    "[tokenmax type={} pattern={} src=learned|offline {}→{}chars]\n\
+                     [hints: raw=true → full output | maximus_explain → pattern detail]\n",
+                    meta.content_type, name, meta.chars_in, meta.chars_out
+                )
+            }
+            MaximusSource::Ollama { iters } => {
+                let mut hints: Vec<&str> = Vec::new();
+                if !raw_used {
+                    hints.push("raw=true → full output");
+                }
+                if !focus_used {
+                    hints.push("focus=\"<topic>\" → targeted extract");
+                }
+                hints.push("maximus_explain → pattern detail");
+                format!(
+                    "[tokenmax type={} pattern={} src=ollama/{}i {}→{}chars]\n[hints: {}]\n",
+                    meta.content_type,
+                    meta.pattern,
+                    iters,
+                    meta.chars_in,
+                    meta.chars_out,
+                    hints.join(" | ")
+                )
+            }
+        }
+    }
+
+    // -- Pattern memory --
+
+    pub async fn load_patterns_from_ferricula(&self) {
+        if let Some(fc) = &self.ferricula {
+            let entries = fc.list_channel("maximus-patterns").await;
+            if entries.is_empty() {
+                return;
+            }
+            let mut cache = self.pattern_cache.write().await;
+            for entry in entries {
+                if let Ok(p) = serde_json::from_str::<LearnedPattern>(&entry) {
+                    cache.insert(p.content_type.clone(), p);
+                }
+            }
+            info!("maximus: loaded {} learned patterns", cache.len());
+        }
+    }
+
+    async fn save_pattern(&self, pattern: LearnedPattern) {
+        if let Some(fc) = &self.ferricula {
+            if let Ok(json) = serde_json::to_string(&pattern) {
+                fc.remember(&json, "maximus-patterns").await;
+            }
+        }
+        let mut cache = self.pattern_cache.write().await;
+        cache.insert(pattern.content_type.clone(), pattern);
+    }
+
+    async fn match_pattern_offline(&self, content: &str) -> Option<LearnedPattern> {
+        let type_hint = detect_content_type(content)?;
+        let cache = self.pattern_cache.read().await;
+        cache.get(&type_hint).cloned()
+    }
+
+    // -- Ollama pipeline --
+
+    async fn run_pipeline(&self, content: &str, focus: &str) -> anyhow::Result<PipelineResult> {
+        let cached = self.match_pattern_offline(content).await;
+
+        let (content_type, strategy) = if let Some(ref lp) = cached {
+            (lp.content_type.clone(), lp.strategy.clone())
+        } else {
+            let ct = self.classify_content(content).await?;
+            let st = self.derive_strategy(content, &ct).await?;
+            (ct, st)
+        };
+
+        let mut current = content.to_string();
+        let mut iters = 0u8;
+        let mut prev_len = content.len();
+
+        for i in 0..MAX_ITERS {
+            let next = self.apply_strategy(&current, &strategy, focus).await?;
+            if next.trim().is_empty() {
+                break;
+            }
+            iters = i + 1;
+            let change = if prev_len > 0 {
+                (prev_len as f32 - next.len() as f32).abs() / prev_len as f32
+            } else {
+                0.0
+            };
+            prev_len = next.len();
+            current = next;
+            if i > 0 && change < STABILIZE_THRESHOLD {
+                break;
+            }
+        }
+
+        let pattern_name = cached
+            .as_ref()
+            .map(|lp| lp.pattern.clone())
+            .unwrap_or_else(|| content_type.clone());
+
+        if cached.is_none() && current.len() < content.len() {
+            let first = content.lines().next().unwrap_or("").trim();
+            let sig = &first[..first.len().min(40)];
+            let lp = LearnedPattern {
+                content_type: content_type.clone(),
+                pattern: pattern_name.clone(),
+                strategy: strategy.clone(),
+                signature: format!("starts:{}", sig),
+                hit_count: 1,
+                avg_ratio: current.len() as f32 / content.len().max(1) as f32,
+            };
+            self.save_pattern(lp).await;
+            info!(
+                "maximus: learned pattern '{}' (ratio {:.0}%)",
+                content_type,
+                100.0 * current.len() as f32 / content.len().max(1) as f32
+            );
+        }
+
+        Ok(PipelineResult {
+            content_type,
+            pattern: pattern_name,
+            strategy,
+            extracted: current,
+            iters,
+        })
+    }
+
+    async fn classify_content(&self, content: &str) -> anyhow::Result<String> {
+        let snippet = &content[..content.len().min(800)];
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a precision extractor. Given tool output and a focus request, \
-                        return ONLY the information relevant to the focus. Be concise and direct. \
-                        If the focus is not present in the output, say so in one sentence. \
-                        Do not add commentary."
+                    "content": "You are a content type classifier. Given text, output ONLY a 2-4 word \
+                        kebab-case label for the content type. Examples: cargo-test-output, json-blob, \
+                        git-diff, rust-compiler-output, http-response, shell-session, log-output, \
+                        file-contents, terminal-screen. Output the label only, no explanation."
+                },
+                {"role": "user", "content": snippet}
+            ],
+            "stream": false
+        });
+
+        let resp = self
+            .client
+            .post(format!("{}/api/chat", self.ollama_url))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Ollama classify returned HTTP {}", resp.status());
+        }
+
+        let json: Value = resp.json().await?;
+        json["message"]["content"]
+            .as_str()
+            .map(|s| s.trim().to_lowercase().replace(' ', "-"))
+            .ok_or_else(|| anyhow::anyhow!("no content in classify response"))
+    }
+
+    async fn derive_strategy(&self, content: &str, content_type: &str) -> anyhow::Result<String> {
+        let snippet = &content[..content.len().min(800)];
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a compression strategist. Given content and its type, \
+                        output ONE sentence describing exactly what to extract when summarizing. \
+                        Be specific about which fields, lines, or patterns matter. \
+                        Output only the strategy sentence, no preamble."
                 },
                 {
                     "role": "user",
-                    "content": format!("Focus: {}\n\nOutput:\n{}", focus, content)
+                    "content": format!("Content type: {content_type}\n\nContent:\n{snippet}")
                 }
             ],
             "stream": false
@@ -161,19 +495,63 @@ impl ContextCompressor {
             .await?;
 
         if !resp.status().is_success() {
-            anyhow::bail!("Ollama returned HTTP {}", resp.status());
+            anyhow::bail!("Ollama strategize returned HTTP {}", resp.status());
         }
 
         let json: Value = resp.json().await?;
         json["message"]["content"]
             .as_str()
             .map(str::to_string)
-            .ok_or_else(|| anyhow::anyhow!("no content field in Ollama response"))
+            .ok_or_else(|| anyhow::anyhow!("no content in strategy response"))
+    }
+
+    async fn apply_strategy(
+        &self,
+        content: &str,
+        strategy: &str,
+        focus: &str,
+    ) -> anyhow::Result<String> {
+        let focus_clause = if focus.trim().is_empty() {
+            String::new()
+        } else {
+            format!(" Specific focus: {focus}.")
+        };
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": format!(
+                        "You are a precision extractor. Apply this strategy to the content: {strategy}.{focus_clause} \
+                         Return ONLY the extracted information. No preamble, no explanation. \
+                         If the requested information is not present, respond with: Not found: <topic>"
+                    )
+                },
+                {"role": "user", "content": content}
+            ],
+            "stream": false
+        });
+
+        let resp = self
+            .client
+            .post(format!("{}/api/chat", self.ollama_url))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Ollama apply returned HTTP {}", resp.status());
+        }
+
+        let json: Value = resp.json().await?;
+        json["message"]["content"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("no content in apply response"))
     }
 
     async fn summarize(&self, messages: &[Value]) -> anyhow::Result<String> {
         let text = render_messages(messages);
-
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -186,10 +564,7 @@ impl ContextCompressor {
                         Omit: pleasantries, verbose reasoning, repeated content. \
                         Be dense and precise. Output plain text only."
                 },
-                {
-                    "role": "user",
-                    "content": text
-                }
+                {"role": "user", "content": text}
             ],
             "stream": false
         });
@@ -211,6 +586,37 @@ impl ContextCompressor {
             .map(str::to_string)
             .ok_or_else(|| anyhow::anyhow!("no content field in Ollama response"))
     }
+
+    async fn store_last(&self, meta: &MaximusMeta) {
+        let mut guard = self.last_meta.lock().await;
+        *guard = Some(meta.clone());
+    }
+}
+
+// -- Heuristic content type detection (offline, no Ollama) --
+
+fn detect_content_type(content: &str) -> Option<String> {
+    let first = content.lines().next().unwrap_or("").trim();
+
+    if (first.starts_with("running ") && (first.ends_with(" tests") || first.ends_with(" test")))
+        || content.contains("test result: ok")
+        || content.contains("test result: FAILED")
+    {
+        return Some("cargo-test-output".into());
+    }
+    if content.starts_with('{') || content.starts_with('[') {
+        return Some("json-blob".into());
+    }
+    if content.starts_with("diff --git") || content.contains("\n@@") {
+        return Some("git-diff".into());
+    }
+    if content.contains("error[E") || (content.contains("warning:") && content.contains(" --> ")) {
+        return Some("rust-compiler-output".into());
+    }
+    if first.starts_with("HTTP/") {
+        return Some("http-response".into());
+    }
+    None
 }
 
 fn render_messages(messages: &[Value]) -> String {
@@ -283,7 +689,6 @@ mod tests {
 
     #[test]
     fn from_env_defaults() {
-        // Clear env vars so defaults are used
         std::env::remove_var("OLLAMA_HOST");
         std::env::remove_var("MAXIMUS_MODEL");
         let c = ContextCompressor::from_env();
@@ -306,10 +711,10 @@ mod tests {
 
     #[tokio::test]
     async fn compress_passthrough_at_threshold() {
-        let c = ContextCompressor::new("http://127.0.0.1:1", "m"); // port 1 = unreachable
+        let c = ContextCompressor::new("http://127.0.0.1:1", "m");
         let input = msgs(COMPRESS_THRESHOLD);
         let out = c.compress_messages(&input).await;
-        assert_eq!(out.len(), input.len(), "exactly at threshold: no change");
+        assert_eq!(out.len(), input.len());
         assert_eq!(out, input);
     }
 
@@ -328,23 +733,49 @@ mod tests {
         assert!(out.is_empty());
     }
 
-    // --- compress_messages: fallback when Ollama unreachable ---
-
     #[tokio::test]
     async fn compress_fallback_when_ollama_down() {
-        // Port 1 is not listening — Ollama call will fail → should return original list
         let c = ContextCompressor::new("http://127.0.0.1:1", "m");
-        let input = msgs(COMPRESS_THRESHOLD + 5); // above threshold
+        let input = msgs(COMPRESS_THRESHOLD + 5);
         let out = c.compress_messages(&input).await;
-        assert_eq!(out, input, "fallback: original list returned when Ollama unreachable");
+        assert_eq!(out, input);
     }
 
-    // --- extract_focused: short-circuit conditions ---
+    // --- extract_maximus: raw bypass ---
+
+    #[tokio::test]
+    async fn extract_maximus_raw_returns_original() {
+        let c = ContextCompressor::new("http://127.0.0.1:1", "m");
+        let content = "x".repeat(1000);
+        let result = c.extract_maximus(&content, "find something", true).await;
+        assert_eq!(result.content, content);
+        assert!(matches!(result.meta.source, MaximusSource::Raw));
+    }
+
+    #[tokio::test]
+    async fn extract_maximus_short_passthrough() {
+        let c = ContextCompressor::new("http://127.0.0.1:1", "m");
+        let content = "hello world";
+        let result = c.extract_maximus(content, "", false).await;
+        assert_eq!(result.content, content);
+        assert!(matches!(result.meta.source, MaximusSource::Passthrough));
+    }
+
+    #[tokio::test]
+    async fn extract_maximus_ollama_down_returns_original() {
+        let c = ContextCompressor::new("http://127.0.0.1:1", "m");
+        let content = "x".repeat(FOCUS_MIN_CHARS + 1);
+        let result = c.extract_maximus(&content, "find something", false).await;
+        assert_eq!(result.content, content);
+        assert!(matches!(result.meta.source, MaximusSource::Passthrough));
+    }
+
+    // --- extract_focused backwards compat ---
 
     #[tokio::test]
     async fn extract_focused_short_content_passthrough() {
         let c = ContextCompressor::new("http://127.0.0.1:1", "m");
-        let short = "hello world"; // well under FOCUS_MIN_CHARS
+        let short = "hello world";
         let out = c.extract_focused(short, "find greeting").await;
         assert_eq!(out, short);
     }
@@ -353,7 +784,7 @@ mod tests {
     async fn extract_focused_empty_focus_passthrough() {
         let c = ContextCompressor::new("http://127.0.0.1:1", "m");
         let long = "x".repeat(FOCUS_MIN_CHARS + 1);
-        let out = c.extract_focused(&long, "   ").await; // whitespace-only focus
+        let out = c.extract_focused(&long, "   ").await;
         assert_eq!(out, long);
     }
 
@@ -362,7 +793,98 @@ mod tests {
         let c = ContextCompressor::new("http://127.0.0.1:1", "m");
         let long = "x".repeat(FOCUS_MIN_CHARS + 1);
         let out = c.extract_focused(&long, "find something").await;
-        assert_eq!(out, long, "fallback: original returned when Ollama unreachable");
+        assert_eq!(out, long);
+    }
+
+    // --- format_annotation ---
+
+    #[test]
+    fn annotation_raw() {
+        let meta = MaximusMeta::raw(500);
+        let ann = ContextCompressor::format_annotation(&meta, false, true);
+        assert!(ann.contains("tokenmax:raw"));
+    }
+
+    #[test]
+    fn annotation_passthrough_below_threshold() {
+        let meta = MaximusMeta::passthrough(100, "below threshold");
+        let ann = ContextCompressor::format_annotation(&meta, false, false);
+        assert!(ann.is_empty(), "short passthrough should produce no annotation");
+    }
+
+    #[test]
+    fn annotation_passthrough_ollama_down() {
+        let meta = MaximusMeta::passthrough(1000, "ollama unavailable");
+        let ann = ContextCompressor::format_annotation(&meta, false, false);
+        assert!(ann.contains("tokenmax:passthrough"));
+        assert!(ann.contains("ollama serve"));
+    }
+
+    #[test]
+    fn annotation_ollama_includes_hints() {
+        let meta = MaximusMeta {
+            content_type: "cargo-test-output".into(),
+            pattern: "exit-code-lines".into(),
+            strategy: "extract pass/fail counts".into(),
+            chars_in: 1000,
+            chars_out: 50,
+            source: MaximusSource::Ollama { iters: 2 },
+        };
+        let ann = ContextCompressor::format_annotation(&meta, false, false);
+        assert!(ann.contains("tokenmax type=cargo-test-output"));
+        assert!(ann.contains("ollama/2i"));
+        assert!(ann.contains("1000→50chars"));
+        assert!(ann.contains("raw=true"));
+        assert!(ann.contains("focus="));
+        assert!(ann.contains("maximus_explain"));
+    }
+
+    #[test]
+    fn annotation_ollama_adaptive_hints_focus_used() {
+        let meta = MaximusMeta {
+            content_type: "json-blob".into(),
+            pattern: "json-blob".into(),
+            strategy: "extract key fields".into(),
+            chars_in: 800,
+            chars_out: 40,
+            source: MaximusSource::Ollama { iters: 1 },
+        };
+        // focus was already used — don't hint it again
+        let ann = ContextCompressor::format_annotation(&meta, true, false);
+        assert!(!ann.contains("focus="), "should not hint focus= when already used");
+        assert!(ann.contains("raw=true"));
+    }
+
+    // --- detect_content_type heuristic ---
+
+    #[test]
+    fn detect_cargo_test() {
+        let content = "running 4 tests\ntest foo ... ok\ntest result: ok. 4 passed; 0 failed";
+        assert_eq!(detect_content_type(content), Some("cargo-test-output".into()));
+    }
+
+    #[test]
+    fn detect_json_blob() {
+        let content = r#"{"key": "value", "count": 42}"#;
+        assert_eq!(detect_content_type(content), Some("json-blob".into()));
+    }
+
+    #[test]
+    fn detect_git_diff() {
+        let content = "diff --git a/foo.rs b/foo.rs\nindex abc..def 100644\n@@ -1,3 +1,4 @@";
+        assert_eq!(detect_content_type(content), Some("git-diff".into()));
+    }
+
+    #[test]
+    fn detect_rust_compiler() {
+        let content = "error[E0308]: mismatched types\n --> src/main.rs:10:5";
+        assert_eq!(detect_content_type(content), Some("rust-compiler-output".into()));
+    }
+
+    #[test]
+    fn detect_unknown() {
+        let content = "some random text that doesn't match anything";
+        assert_eq!(detect_content_type(content), None);
     }
 
     // --- render_messages / extract_content ---
@@ -408,7 +930,175 @@ mod tests {
             {"type": "tool_result", "content": long}
         ]);
         let out = extract_content(&v);
-        // Should be truncated to 200 chars inside the bracket
         assert!(out.len() < 300);
+    }
+
+    // --- Live integration tests (require Ollama running with gemma4:e2b) ---
+    // Run with: cargo test ghost::compressor::tests::live -- --ignored --nocapture
+
+    fn agent_msgs() -> Vec<Value> {
+        vec![
+            serde_json::json!({"role":"user","content":"What's running in the terminal? Then run the sidecar tests."}),
+            serde_json::json!({"role":"assistant","content":[
+                {"type":"text","text":"Let me check the terminal state first."},
+                {"type":"tool_use","name":"terminal_status","input":{}}
+            ]}),
+            serde_json::json!({"role":"user","content":[
+                {"type":"tool_result","content":"{\"windows\":[{\"id\":1,\"tabs\":[{\"name\":\"maximus\",\"panes\":[{\"pid\":9288,\"process\":\"pwsh\",\"rows\":68}]}]}]}"}
+            ]}),
+            serde_json::json!({"role":"assistant","content":[
+                {"type":"text","text":"One window, one tab named maximus running pwsh. Running the tests now."},
+                {"type":"tool_use","name":"terminal_run","input":{"command":"cargo test ghost::compressor -- --nocapture 2>&1","tab":"maximus"}}
+            ]}),
+            serde_json::json!({"role":"user","content":[
+                {"type":"tool_result","content":"running 16 tests\ntest ghost::compressor::tests::new_stores_fields ... ok\ntest ghost::compressor::tests::compress_fallback_when_ollama_down ... ok\ntest result: ok. 16 passed; 0 failed; finished in 2.04s"}
+            ]}),
+            serde_json::json!({"role":"assistant","content":"All 16 unit tests passed. No failures."}),
+            serde_json::json!({"role":"user","content":"Good. Now check if Ollama is up and what model is loaded."}),
+            serde_json::json!({"role":"assistant","content":[
+                {"type":"tool_use","name":"terminal_run","input":{"command":"curl -s http://localhost:11434/api/tags | jq '.models[].name'","tab":"maximus"}}
+            ]}),
+            serde_json::json!({"role":"user","content":[
+                {"type":"tool_result","content":"\"gemma4:e2b\"\n\"llama3.2:3b\""}
+            ]}),
+            serde_json::json!({"role":"assistant","content":"Ollama is up. Two models available: gemma4:e2b and llama3.2:3b."}),
+            serde_json::json!({"role":"user","content":"Run the live integration tests too."}),
+            serde_json::json!({"role":"assistant","content":[
+                {"type":"tool_use","name":"terminal_run","input":{"command":"cargo test ghost::compressor::tests::live -- --ignored --nocapture 2>&1","tab":"maximus"}}
+            ]}),
+            serde_json::json!({"role":"user","content":[
+                {"type":"tool_result","content":"running 4 tests\ntest live_is_available ... ok\ntest live_compress_messages ... ok\ntest live_extract_focused ... ok\ntest live_extract_focused_absent_focus ... ok\ntest result: ok. 4 passed; 0 failed; finished in 5.75s"}
+            ]}),
+            serde_json::json!({"role":"assistant","content":"All 4 live tests passed against the real Ollama instance."}),
+            serde_json::json!({"role":"user","content":"Perfect. Commit the tests."}),
+            serde_json::json!({"role":"assistant","content":[
+                {"type":"tool_use","name":"terminal_run","input":{"command":"git add sidecar/src/ghost/compressor.rs && git commit -m 'Add live integration tests for ContextCompressor'","tab":"maximus"}}
+            ]}),
+            serde_json::json!({"role":"user","content":[
+                {"type":"tool_result","content":"[canary abc1234] Add live integration tests for ContextCompressor\n 1 file changed, 60 insertions(+)"}
+            ]}),
+            serde_json::json!({"role":"assistant","content":"Committed. Branch canary is ahead of origin by 1 commit."}),
+        ]
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_is_available() {
+        let c = ContextCompressor::from_env();
+        let available = c.is_available().await;
+        println!("Ollama available: {available}  url={} model={}", c.ollama_url, c.model);
+        assert!(available, "Ollama must be running with model '{}'", c.model);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_compress_messages() {
+        let c = ContextCompressor::from_env();
+        let input = agent_msgs();
+        println!("Input: {} msgs (tool_use + tool_result blocks)", input.len());
+        let out = c.compress_messages(&input).await;
+        println!("\nOutput: {} msgs", out.len());
+        for m in &out {
+            println!(
+                "  [{}] {}",
+                m["role"].as_str().unwrap_or("?"),
+                m["content"]
+                    .as_str()
+                    .map(|s| &s[..s.len().min(120)])
+                    .unwrap_or("(blocks)")
+            );
+        }
+        assert!(
+            out.len() < input.len(),
+            "expected compression: {} → {}",
+            input.len(),
+            out.len()
+        );
+        let summary = out[0]["content"].as_str().unwrap_or("");
+        println!("\nSummary:\n{summary}");
+        assert!(summary.starts_with("[Earlier context"), "expected compressed context header");
+        assert_eq!(out[1]["content"], "Context noted.");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_classify_content() {
+        let c = ContextCompressor::from_env();
+        let cargo_output = "running 4 tests\ntest foo ... ok\ntest bar ... ok\ntest result: ok. 4 passed; 0 failed; finished in 1.2s";
+        let ct = c.classify_content(cargo_output).await.unwrap();
+        println!("classified as: {ct}");
+        assert!(
+            ct.contains("cargo") || ct.contains("test"),
+            "expected cargo-test type, got: {ct}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_iterative_extract() {
+        let c = ContextCompressor::from_env();
+        let screen = r#"running 4 tests
+focus="port number"
+input=The server started on port 8080. There were 3 warnings about deprecated APIs.
+output=The server started on port 8080. There were 3 warnings about deprecated APIs.
+test ghost::compressor::tests::live_extract_focused_from_screen_dump ... ok
+Ollama available: true  url=http://localhost:11434 model=gemma4:e2b
+test ghost::compressor::tests::live_is_available ... ok
+test ghost::compressor::tests::live_compress_messages ... ok
+output: The kubernetes cluster name is not present in the output.
+test ghost::compressor::tests::live_extract_focused_absent_focus ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 5.75s"#;
+
+        let result = c.extract_maximus(screen, "how many tests passed and did any fail", false).await;
+        println!("source: {:?}", result.meta.source);
+        println!("type: {}", result.meta.content_type);
+        println!("iters: {:?}", if let MaximusSource::Ollama { iters } = result.meta.source { iters } else { 0 });
+        println!("{}→{} chars", result.meta.chars_in, result.meta.chars_out);
+        println!("output: {}", result.content);
+        assert!(!result.content.is_empty());
+        assert!(result.content.contains('4') || result.content.to_lowercase().contains("pass"));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_extract_focused_from_screen_dump() {
+        let screen = r#"running 4 tests
+focus="port number"
+input=The server started on port 8080. There were 3 warnings about deprecated APIs.
+output=The server started on port 8080. There were 3 warnings about deprecated APIs.
+test ghost::compressor::tests::live_extract_focused_from_screen_dump ... ok
+Ollama available: true  url=http://localhost:11434 model=gemma4:e2b
+test ghost::compressor::tests::live_is_available ... ok
+test ghost::compressor::tests::live_compress_messages ... ok
+output: The kubernetes cluster name is not present in the output.
+test ghost::compressor::tests::live_extract_focused_absent_focus ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 5.75s"#;
+
+        let c = ContextCompressor::from_env();
+
+        let out = c.extract_focused(screen, "how many tests passed and did any fail").await;
+        println!("focus: test results summary\noutput: {out}");
+        assert!(!out.is_empty());
+        assert!(out.contains('4') || out.to_lowercase().contains("pass"), "expected pass count in: {out}");
+
+        let out2 = c.extract_focused(screen, "which model is Ollama using").await;
+        println!("focus: ollama model\noutput: {out2}");
+        assert!(out2.contains("gemma4") || out2.contains("e2b"), "expected model name in: {out2}");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_extract_focused_absent_focus() {
+        let c = ContextCompressor::from_env();
+        let screen = r#"running 4 tests
+test ghost::compressor::tests::live_is_available ... ok
+test ghost::compressor::tests::live_compress_messages ... ok
+test ghost::compressor::tests::live_extract_focused ... ok
+test ghost::compressor::tests::live_extract_focused_absent_focus ... ok
+test result: ok. 4 passed; 0 failed; finished in 5.75s
+PS C:\Users\kordl\Code\DeepBlueDynamics\hyperia\sidecar>"#;
+        let out = c.extract_focused(screen, "database connection error").await;
+        println!("output ({} chars): {out}", out.len());
+        assert!(!out.is_empty());
     }
 }

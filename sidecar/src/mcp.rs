@@ -5,6 +5,8 @@ use rmcp::{
     schemars, tool, tool_handler, tool_router,
 };
 
+use crate::ghost::compressor::{ContextCompressor, FOCUS_MIN_CHARS};
+
 // -- Tool request schemas --
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -35,6 +37,10 @@ pub struct RunRequest {
     pub submit: Option<bool>,
     /// Maximum characters to return from command output (default: 12000). Increase if output is truncated.
     pub max_output_chars: Option<usize>,
+    /// What you're looking for in the output — Maximus extracts just that and saves tokens. Example: "exit code", "error messages", "port number".
+    pub focus: Option<String>,
+    /// Pass true to bypass Maximus and receive the full unfiltered output. A [tokenmax:raw] header confirms the bypass.
+    pub raw: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -45,6 +51,10 @@ pub struct ScreenRequest {
     pub tab: Option<String>,
     /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
     pub pane: Option<String>,
+    /// What you're looking for on the screen — Maximus extracts just that. Example: "last error", "current directory", "running process name".
+    pub focus: Option<String>,
+    /// Pass true to bypass Maximus and receive the full unfiltered output.
+    pub raw: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -242,6 +252,7 @@ pub struct HyperiaMcp {
     tool_router: ToolRouter<Self>,
     client: reqwest::Client,
     base_url: String,
+    compressor: ContextCompressor,
 }
 
 #[tool_router]
@@ -259,6 +270,23 @@ impl HyperiaMcp {
                 .build()
                 .unwrap_or_default(),
             base_url,
+            compressor: ContextCompressor::from_env(),
+        }
+    }
+
+    /// Apply Maximus to a tool result string. Returns annotated content.
+    async fn maximus_filter(&self, text: &str, focus: Option<&str>, raw: bool) -> String {
+        let focus = focus.unwrap_or("").trim();
+        let focus_used = !focus.is_empty();
+        if !raw && !focus_used && text.len() < FOCUS_MIN_CHARS {
+            return text.to_string();
+        }
+        let mr = self.compressor.extract_maximus(text, focus, raw).await;
+        let annotation = ContextCompressor::format_annotation(&mr.meta, focus_used, raw);
+        if annotation.is_empty() {
+            mr.content
+        } else {
+            format!("{}{}", annotation, mr.content)
         }
     }
 
@@ -275,7 +303,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Type text into a terminal pane and press Enter. Works for shell commands and interactive programs (Codex, Python REPL, vim, etc.). Set submit=false to type without pressing Enter — useful to let the human review before submitting.")]
+    #[tool(description = "Type text into a terminal pane and press Enter. Works for shell commands and interactive programs (Codex, Python REPL, vim, etc.). Set submit=false to type without pressing Enter — useful to let the human review before submitting. Pass focus= to receive only the relevant part of the output — Maximus filters the result so you only see what you asked for. Pass raw=true to bypass Maximus and see the full output.")]
     async fn terminal_run(
         &self,
         Parameters(req): Parameters<RunRequest>,
@@ -292,10 +320,11 @@ impl HyperiaMcp {
             let base = self.pane_path("/api/type-and-collect", req.window, req.tab.as_deref(), req.pane.as_deref());
             let sep = if base.contains('?') { '&' } else { '?' };
             let collect_path = format!("{}{sep}quiet_ms={}", base, wait);
-            let raw = self.post_text(&collect_path, &format!("{}\r", cmd)).await?;
+            let raw_output = self.post_text(&collect_path, &format!("{}\r", cmd)).await?;
             let max_chars = req.max_output_chars.unwrap_or(12_000);
-            let text = clean_terminal_output(&raw, max_chars);
-            Ok(CallToolResult::success(vec![Content::text(text)]))
+            let text = clean_terminal_output(&raw_output, max_chars);
+            let out = self.maximus_filter(&text, req.focus.as_deref(), req.raw.unwrap_or(false)).await;
+            Ok(CallToolResult::success(vec![Content::text(out)]))
         } else {
             // submit=false: just type the text without waiting for output
             let pane_path = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
@@ -304,13 +333,14 @@ impl HyperiaMcp {
         }
     }
 
-    #[tool(description = "Read the current screen content of a terminal pane. Address panes with window/tab/pane. The pane field accepts either a pane label or the paneId from terminal_status; if the label is empty, use paneId.")]
+    #[tool(description = "Read the current screen content of a terminal pane. Address panes with window/tab/pane. The pane field accepts either a pane label or the paneId from terminal_status; if the label is empty, use paneId. Pass focus= to receive only the relevant part — Maximus filters the output. Pass raw=true to bypass Maximus.")]
     async fn terminal_screen(
         &self,
         Parameters(req): Parameters<ScreenRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let text = self.get(&self.pane_path("/api/screen", req.window, req.tab.as_deref(), req.pane.as_deref())).await?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        let out = self.maximus_filter(&text, req.focus.as_deref(), req.raw.unwrap_or(false)).await;
+        Ok(CallToolResult::success(vec![Content::text(out)]))
     }
 
     #[tool(description = "List all open windows, tabs, and panes in a nested hierarchy. Each window has an `id` field — pass that exact value as the `window` parameter in other tools (it is NOT 0-based; the first window is typically id=1). Each pane includes both a label and a paneId. Use the pane label when present; if the label is empty, use paneId when addressing that pane in other tools.")]
