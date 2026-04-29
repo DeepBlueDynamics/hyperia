@@ -251,3 +251,164 @@ fn extract_content(v: &Value) -> String {
         other => other.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg(role: &str, content: &str) -> Value {
+        serde_json::json!({"role": role, "content": content})
+    }
+
+    fn msgs(n: usize) -> Vec<Value> {
+        (0..n)
+            .map(|i| msg(if i % 2 == 0 { "user" } else { "assistant" }, &format!("message {}", i)))
+            .collect()
+    }
+
+    // --- Construction ---
+
+    #[test]
+    fn new_stores_fields() {
+        let c = ContextCompressor::new("http://my-ollama:1234", "llama3");
+        assert_eq!(c.ollama_url, "http://my-ollama:1234");
+        assert_eq!(c.model, "llama3");
+    }
+
+    #[test]
+    fn new_strips_trailing_slash() {
+        let c = ContextCompressor::new("http://localhost:11434/", "m");
+        assert_eq!(c.ollama_url, "http://localhost:11434");
+    }
+
+    #[test]
+    fn from_env_defaults() {
+        // Clear env vars so defaults are used
+        std::env::remove_var("OLLAMA_HOST");
+        std::env::remove_var("MAXIMUS_MODEL");
+        let c = ContextCompressor::from_env();
+        assert_eq!(c.ollama_url, "http://localhost:11434");
+        assert_eq!(c.model, "gemma4:e2b");
+    }
+
+    #[test]
+    fn from_env_reads_vars() {
+        std::env::set_var("OLLAMA_HOST", "http://custom:9999");
+        std::env::set_var("MAXIMUS_MODEL", "mistral");
+        let c = ContextCompressor::from_env();
+        std::env::remove_var("OLLAMA_HOST");
+        std::env::remove_var("MAXIMUS_MODEL");
+        assert_eq!(c.ollama_url, "http://custom:9999");
+        assert_eq!(c.model, "mistral");
+    }
+
+    // --- compress_messages: passthrough when under threshold ---
+
+    #[tokio::test]
+    async fn compress_passthrough_at_threshold() {
+        let c = ContextCompressor::new("http://127.0.0.1:1", "m"); // port 1 = unreachable
+        let input = msgs(COMPRESS_THRESHOLD);
+        let out = c.compress_messages(&input).await;
+        assert_eq!(out.len(), input.len(), "exactly at threshold: no change");
+        assert_eq!(out, input);
+    }
+
+    #[tokio::test]
+    async fn compress_passthrough_under_threshold() {
+        let c = ContextCompressor::new("http://127.0.0.1:1", "m");
+        let input = msgs(3);
+        let out = c.compress_messages(&input).await;
+        assert_eq!(out, input);
+    }
+
+    #[tokio::test]
+    async fn compress_empty_list() {
+        let c = ContextCompressor::new("http://127.0.0.1:1", "m");
+        let out = c.compress_messages(&[]).await;
+        assert!(out.is_empty());
+    }
+
+    // --- compress_messages: fallback when Ollama unreachable ---
+
+    #[tokio::test]
+    async fn compress_fallback_when_ollama_down() {
+        // Port 1 is not listening — Ollama call will fail → should return original list
+        let c = ContextCompressor::new("http://127.0.0.1:1", "m");
+        let input = msgs(COMPRESS_THRESHOLD + 5); // above threshold
+        let out = c.compress_messages(&input).await;
+        assert_eq!(out, input, "fallback: original list returned when Ollama unreachable");
+    }
+
+    // --- extract_focused: short-circuit conditions ---
+
+    #[tokio::test]
+    async fn extract_focused_short_content_passthrough() {
+        let c = ContextCompressor::new("http://127.0.0.1:1", "m");
+        let short = "hello world"; // well under FOCUS_MIN_CHARS
+        let out = c.extract_focused(short, "find greeting").await;
+        assert_eq!(out, short);
+    }
+
+    #[tokio::test]
+    async fn extract_focused_empty_focus_passthrough() {
+        let c = ContextCompressor::new("http://127.0.0.1:1", "m");
+        let long = "x".repeat(FOCUS_MIN_CHARS + 1);
+        let out = c.extract_focused(&long, "   ").await; // whitespace-only focus
+        assert_eq!(out, long);
+    }
+
+    #[tokio::test]
+    async fn extract_focused_fallback_when_ollama_down() {
+        let c = ContextCompressor::new("http://127.0.0.1:1", "m");
+        let long = "x".repeat(FOCUS_MIN_CHARS + 1);
+        let out = c.extract_focused(&long, "find something").await;
+        assert_eq!(out, long, "fallback: original returned when Ollama unreachable");
+    }
+
+    // --- render_messages / extract_content ---
+
+    #[test]
+    fn render_messages_simple() {
+        let msgs = vec![msg("user", "hello"), msg("assistant", "world")];
+        let rendered = render_messages(&msgs);
+        assert!(rendered.contains("user: hello"));
+        assert!(rendered.contains("assistant: world"));
+    }
+
+    #[test]
+    fn extract_content_string() {
+        let v = Value::String("plain text".into());
+        assert_eq!(extract_content(&v), "plain text");
+    }
+
+    #[test]
+    fn extract_content_array_text_parts() {
+        let v = serde_json::json!([
+            {"type": "text", "text": "first"},
+            {"type": "text", "text": "second"}
+        ]);
+        let out = extract_content(&v);
+        assert!(out.contains("first"));
+        assert!(out.contains("second"));
+    }
+
+    #[test]
+    fn extract_content_tool_use() {
+        let v = serde_json::json!([
+            {"type": "tool_use", "name": "shell_run", "input": {"cmd": "ls"}}
+        ]);
+        let out = extract_content(&v);
+        assert!(out.contains("tool_use: shell_run"));
+    }
+
+    #[test]
+    fn extract_content_tool_result_truncates() {
+        let long = "a".repeat(300);
+        let v = serde_json::json!([
+            {"type": "tool_result", "content": long}
+        ]);
+        let out = extract_content(&v);
+        // Should be truncated to 200 chars inside the bracket
+        assert!(out.len() < 300);
+    }
+}
