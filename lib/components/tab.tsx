@@ -243,8 +243,8 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           color: #999;
           list-style-type: none;
           flex: 1 1 0;
-          min-width: 120px;
-          max-width: 240px;
+          min-width: 72px;
+          max-width: 200px;
           position: relative;
           background: #1a1a1a;
           border-right: 1px solid #333;

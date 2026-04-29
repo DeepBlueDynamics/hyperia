@@ -25,6 +25,7 @@ pub struct ToolRegistry {
     client: reqwest::Client,
     http_port: u16,
     ferricula: Option<Arc<FerriculaBackend>>,
+    compressor: maximus::ContextCompressor,
 }
 
 impl ToolRegistry {
@@ -35,6 +36,7 @@ impl ToolRegistry {
             client: reqwest::Client::new(),
             http_port,
             ferricula: None,
+            compressor: maximus::ContextCompressor::from_env(),
         }
     }
 
@@ -63,8 +65,12 @@ impl ToolRegistry {
     }
 
     /// Execute a tool by name with the given input.
+    ///
+    /// If the input contains a `focus` field (natural language description of what
+    /// the agent is looking for), the raw result is filtered through Maximus before
+    /// being returned — the agent receives a targeted extract instead of the full output.
     pub async fn execute(&self, name: &str, input: &serde_json::Value) -> String {
-        match name {
+        let result = match name {
             "tool_search" => self.handle_tool_search(input),
             "tool_create" => self.handle_tool_create(input),
             "watercooler" => {
@@ -78,7 +84,15 @@ impl ToolRegistry {
             "memory_connect" => self.handle_memory_connect(input).await,
             _ if self.is_builtin(name) => self.execute_builtin(name, input).await,
             _ => self.execute_dynamic(name, input).await,
+        };
+
+        if let Some(focus) = input["focus"].as_str() {
+            if !focus.trim().is_empty() {
+                return self.compressor.extract_focused(&result, focus).await;
+            }
         }
+
+        result
     }
 
     async fn handle_memory_recall(&self, input: &serde_json::Value) -> String {
@@ -341,6 +355,11 @@ impl ToolRegistry {
 
     /// Execute a built-in tool by calling the sidecar HTTP API.
     async fn execute_builtin(&self, name: &str, input: &serde_json::Value) -> String {
+        // Electron-side actions — return sentinel without HTTP round-trip
+        if name == "open_settings" {
+            return "ACTION:open_settings".into();
+        }
+
         let base = format!("http://localhost:{}", self.http_port);
 
         let build_target_url = |path: &str| {
@@ -1128,13 +1147,14 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "terminal_run",
-            "description": "Type text into a terminal pane and press Enter. Works for shell commands and interactive programs (Codex, Python REPL, vim, etc.). Set submit=false to type without pressing Enter — useful to let the human review before submitting.",
+            "description": "Type text into a terminal pane and press Enter. Works for shell commands and interactive programs (Codex, Python REPL, vim, etc.). Set submit=false to type without pressing Enter — useful to let the human review before submitting. Pass focus= to receive only the relevant part of the output (e.g. \"exit code\", \"error messages\", \"port number\") — Maximus filters the result so you only see what you asked for.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "Text or command to type" },
                     "submit": { "type": "boolean", "description": "Press Enter after typing (default true). Set false to type without submitting." },
                     "wait_ms": { "type": "integer", "description": "Time to wait for output in ms (default 2000)" },
+                    "focus": { "type": "string", "description": "What you're looking for in the output (e.g. 'port number', 'error messages', 'did it succeed'). Maximus extracts just that — saves tokens." },
                     "window": { "type": "integer" },
                     "tab": { "type": "string" },
                     "pane": { "type": "string" }
@@ -1224,10 +1244,11 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "terminal_screen",
-            "description": "Read the current screen content of a pane as text.",
+            "description": "Read the current screen content of a pane as text. Pass focus= to receive only the relevant part (e.g. \"last error\", \"current directory\", \"running process name\") — Maximus filters the output so you only see what you asked for.",
             "input_schema": {
                 "type": "object",
                 "properties": {
+                    "focus": { "type": "string", "description": "What you're looking for on the screen (e.g. 'error messages', 'port number', 'git branch'). Maximus extracts just that — saves tokens." },
                     "window": { "type": "integer" },
                     "tab": { "type": "string" },
                     "pane": { "type": "string" }
@@ -1236,12 +1257,13 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "file_read",
-            "description": "Read a file from disk.",
+            "description": "Read a file from disk. Pass focus= to extract only the relevant section (e.g. \"the database config block\", \"function named foo\") — Maximus filters so you only see what you asked for.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "File path to read" },
-                    "max_lines": { "type": "integer", "description": "Max lines (default 200)" }
+                    "max_lines": { "type": "integer", "description": "Max lines (default 200)" },
+                    "focus": { "type": "string", "description": "What you're looking for in the file (e.g. 'database URL', 'function named foo', 'port config'). Maximus extracts just that — saves tokens." }
                 },
                 "required": ["path"]
             }
@@ -1356,13 +1378,23 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "tab_snapshot",
-            "description": "Get the full screen content of every pane across all windows and tabs in one shot. Use this to see everything at once instead of calling terminal_screen per pane.",
-            "input_schema": { "type": "object", "properties": {} }
+            "description": "Get the full screen content of every pane across all windows and tabs in one shot. Use this to see everything at once instead of calling terminal_screen per pane. Pass focus= to extract only what you care about across all panes (e.g. \"any running servers\", \"errors or failures\") — Maximus filters the dump so you only see what you asked for.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "focus": { "type": "string", "description": "What you're looking for across all panes (e.g. 'running servers', 'error messages', 'active processes'). Maximus extracts just that from the full dump — saves tokens." }
+                }
+            }
         },
         {
             "name": "shell_state",
             "description": "Check the state of all panes (idle, running, dialog). Returns window/tab/pane for each.",
-            "input_schema": { "type": "object", "properties": {} }
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "focus": { "type": "string", "description": "What you're looking for (e.g. 'panes that are still running', 'which tab has a dialog'). Maximus extracts just that — saves tokens." }
+                }
+            }
         },
         {
             "name": "shell_confirm",
@@ -1412,6 +1444,14 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                     "url": { "type": "string", "description": "Full URL to open (https://...)" }
                 },
                 "required": ["url"]
+            }
+        },
+        {
+            "name": "open_settings",
+            "description": "Open the Hyperia Settings window. Use this when the user needs to configure their API token, change the agent model, set the Shivvr endpoint, or adjust other Hyperia settings.",
+            "input_schema": {
+                "type": "object",
+                "properties": {}
             }
         }
     ]))

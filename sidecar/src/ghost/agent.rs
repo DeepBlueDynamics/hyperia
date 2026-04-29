@@ -266,6 +266,14 @@ async fn run_loop(
         }
     }
 
+    // Check once whether Maximus context compression is available for this run.
+    // Disabled silently if Ollama is not running — no impact on the agent loop.
+    let compressor = maximus::ContextCompressor::from_env();
+    let compress = compressor.is_available().await;
+    if compress {
+        tracing::info!("maximus: context compression active ({})", compressor.model);
+    }
+
     let mut turns = 0;
     let mut total_input_tokens: u64 = 0;
     let mut total_output_tokens: u64 = 0;
@@ -346,9 +354,18 @@ After cleanup, reply to the human and end the turn."
             );
         }
 
+        // Compress older messages via local Ollama before sending to the primary model.
+        // Recent messages are kept verbatim; `messages` itself is never modified so
+        // tool results continue accumulating against the full history.
+        let send_messages = if compress {
+            compressor.compress_messages(&messages).await
+        } else {
+            messages.clone()
+        };
+
         // Call the provider
         let mut event_rx = provider
-            .stream(&effective_system, &messages, &effective_tool_defs, 4096)
+            .stream(&effective_system, &send_messages, &effective_tool_defs, 4096)
             .await?;
 
         // Accumulate assistant content and tool calls

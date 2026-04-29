@@ -17,6 +17,7 @@ import {WebLinksAddon} from 'xterm-addon-web-links';
 import {WebglAddon} from 'xterm-addon-webgl';
 
 import type {TermProps} from '../../typings/hyper';
+import rpc from '../rpc';
 import terms from '../terms';
 import processClipboard from '../utils/paste';
 import {decorate} from '../utils/plugins';
@@ -50,6 +51,20 @@ const isWebgl2Supported = (() => {
     return isSupported;
   };
 })();
+
+function openUrl(uri: string): void {
+  try {
+    const {hostname} = new URL(uri);
+    const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0' || hostname === '::1';
+    if (isLocal) {
+      rpc.emitter.emit('open web pane req', {url: uri});
+    } else {
+      void shell.openExternal(uri);
+    }
+  } catch {
+    void shell.openExternal(uri);
+  }
+}
 
 const getTermOptions = (props: TermProps): ITerminalOptions => {
   // Set a background color only if it is opaque
@@ -96,7 +111,10 @@ const getTermOptions = (props: TermProps): ITerminalOptions => {
     },
     screenReaderMode: props.screenReaderMode,
     overviewRulerWidth: 20,
-    allowProposedApi: true
+    allowProposedApi: true,
+    linkHandler: {
+      activate: (_event: MouseEvent, uri: string) => openUrl(uri)
+    }
   };
 };
 
@@ -219,7 +237,7 @@ export default class Term extends React.PureComponent<
       this.term.loadAddon(this.searchAddon);
       this.term.loadAddon(
         new WebLinksAddon((event, uri) => {
-          if (shallActivateWebLink(event)) void shell.openExternal(uri);
+          if (shallActivateWebLink(event)) openUrl(uri);
         })
       );
       // Custom link provider for URLs that wrap across multiple rows
@@ -318,7 +336,7 @@ export default class Term extends React.PureComponent<
               },
               text: url,
               activate: (_event: MouseEvent, text: string) => {
-                if (shallActivateWebLink(_event)) void shell.openExternal(text);
+                if (shallActivateWebLink(_event)) openUrl(text);
               }
             });
           }

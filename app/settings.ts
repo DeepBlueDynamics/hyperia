@@ -32,8 +32,8 @@ function openSettings() {
   const cursor = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursor);
 
-  const width = 480;
-  const height = 580;
+  const width = 520;
+  const height = 700;
   const x = Math.round(display.workArea.x + display.workArea.width / 2 - width / 2);
   const y = Math.round(display.workArea.y + display.workArea.height / 2 - height / 2);
 
@@ -93,6 +93,7 @@ function buildSettingsHtml(): string {
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; }
+  body { overflow-y: auto; }
   body {
     background: #0a0a12;
     color: #c8d0e0;
@@ -300,6 +301,23 @@ function buildSettingsHtml(): string {
     background: #468cff40;
     box-shadow: 0 0 12px rgba(70,140,255,0.2);
   }
+
+  .tool-pill { display:flex; align-items:center; gap:6px; align-self:flex-start;
+    padding:4px 10px; border-radius:6px; font-size:11px; color:#556; }
+  .pill-emoji.running { animation:pulse-emoji .8s ease-in-out infinite; }
+  @keyframes pulse-emoji { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.2)} }
+  .shivvr-widget { background:#12121e; border:1px solid #1a1a2e; border-radius:10px;
+    padding:12px 14px; align-self:flex-start; max-width:95%; display:flex;
+    flex-direction:column; gap:8px; animation:fadeIn .2s ease; }
+  .shivvr-widget label { font-size:11px; color:#668; text-transform:uppercase; letter-spacing:.5px; }
+  .shivvr-widget input { background:#0a0a14; border:1px solid #2a2a3e; border-radius:6px;
+    padding:8px 10px; color:#c8d0e0; font-size:13px; font-family:inherit; outline:none; }
+  .shivvr-widget input:focus { border-color:#468cff60; }
+  .shivvr-widget .widget-btn { align-self:flex-end; background:#468cff20; border:1px solid #468cff40;
+    border-radius:6px; color:#468cff; padding:6px 14px; cursor:pointer; font-size:12px; }
+  .shivvr-widget .widget-btn:hover { background:#468cff40; }
+  .shivvr-widget.confirmed { border-color:#1dc12140; background:#0a1a0a; }
+  .shivvr-widget .confirmed-text { color:#80c080; font-size:12px; }
 </style>
 </head>
 <body>
@@ -392,6 +410,10 @@ function buildSettingsHtml(): string {
 <script>
   const SIDECAR_URL = 'http://localhost:9800';
   const chat = document.getElementById('chat');
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
 
   // addMsg defined first — onerror and everything else depends on it
   function addMsg(text, type) {
@@ -569,7 +591,7 @@ function buildSettingsHtml(): string {
           const fallbackPath = '\${home}/.local/bin/nemesis8';
 
           if (existsSync(fallbackPath)) {
-            binaryPath = fallbackPath + '\n';
+            binaryPath = fallbackPath + '\\n';
           } else {
             addMsg('Nemesis8 installed, but could not find binary in PATH. Try restarting Hyperia or add ~/.local/bin to your PATH.', 'error');
             return;
@@ -637,7 +659,49 @@ function buildSettingsHtml(): string {
     document.getElementById('chatInput')?.addEventListener('keydown', function(e) { if (e.key === 'Enter') sendChat(); });
   })();
 
-  let settingsSending = false;
+  const activeWidgets = {};
+
+  function addToolPill(name, id) {
+    const div = document.createElement('div');
+    div.className = 'tool-pill'; div.id = 'tool-' + id;
+    const pending = { set_shivvr_endpoint: 'configuring shivvr\u2026', read_config: 'reading config\u2026' };
+    div.innerHTML = '<span class="pill-emoji running">\u{1F527}</span>'
+      + '<span>' + escapeHtml(pending[name] || name + '\u2026') + '</span>';
+    chat.appendChild(div); chat.scrollTop = chat.scrollHeight;
+  }
+
+  function renderShivvrWidget(id, defaultUrl) {
+    const div = document.createElement('div');
+    div.className = 'shivvr-widget'; div.id = 'tool-' + id;
+    div.innerHTML = '<label>Shivvr Endpoint URL</label>'
+      + '<input type="text" id="wi-' + id + '" value="' + escapeHtml(defaultUrl || 'shivvr.nuts.services') + '">'
+      + '<button class="widget-btn" onclick="confirmWidget(\\'' + id + '\\')">Set</button>';
+    chat.appendChild(div); chat.scrollTop = chat.scrollHeight;
+    document.getElementById('wi-' + id).addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') confirmWidget(id);
+    });
+    activeWidgets[id] = { confirmed: false };
+  }
+
+  function confirmWidget(id) {
+    if (activeWidgets[id] && activeWidgets[id].confirmed) return;
+    const url = (document.getElementById('wi-' + id)?.value || '').trim();
+    const cfg = readConfig();
+    if (!cfg.config) cfg.config = {};
+    if (url) { if (!cfg.config.shivvr) cfg.config.shivvr = {}; cfg.config.shivvr.url = url; }
+    else { delete cfg.config.shivvr; }
+    saveConfig(cfg);
+    if (activeWidgets[id]) activeWidgets[id].confirmed = true;
+    const widgetDiv = document.getElementById('tool-' + id);
+    if (widgetDiv) {
+      widgetDiv.classList.add('confirmed');
+      widgetDiv.innerHTML = '<span class=\"confirmed-text\">\u2713 ' + escapeHtml(url || '(cleared)') + '</span>';
+    }
+    const shivvrEl = document.getElementById('shivvrInput');
+    if (shivvrEl) shivvrEl.value = url;
+  }
+
+    let settingsSending = false;
 
   async function sendChat() {
     if (settingsSending) return;
@@ -655,7 +719,7 @@ function buildSettingsHtml(): string {
     let assistantText = '';
 
     try {
-      const resp = await fetch(SIDECAR_URL + '/api/ghost/chat', {
+      const resp = await fetch(SIDECAR_URL + '/api/settings/chat', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({message: text})
@@ -684,17 +748,38 @@ function buildSettingsHtml(): string {
           if (!data) continue;
           try {
             const event = JSON.parse(data);
-            if (event.type === 'text_delta' && event.text) {
-              if (!assistantDiv) {
-                assistantDiv = document.createElement('div');
-                assistantDiv.className = 'msg system';
-                chat.appendChild(assistantDiv);
-              }
-              assistantText += event.text;
-              assistantDiv.textContent = assistantText;
-              chat.scrollTop = chat.scrollHeight;
-            } else if (event.type === 'error') {
-              addMsg('Agent: ' + event.message, 'error');
+            switch (event.type) {
+              case 'text_delta':
+                if (!assistantDiv) {
+                  assistantDiv = document.createElement('div');
+                  assistantDiv.className = 'msg system'; chat.appendChild(assistantDiv);
+                }
+                assistantText += event.text; assistantDiv.textContent = assistantText;
+                chat.scrollTop = chat.scrollHeight; break;
+              case 'tool_start':
+                if (assistantDiv) { assistantDiv = null; assistantText = ''; }
+                if (event.name === 'set_shivvr_endpoint') renderShivvrWidget(event.id, 'shivvr.nuts.services');
+                else addToolPill(event.name, event.id); break;
+              case 'tool_result':
+                if (event.name === 'set_shivvr_endpoint') {
+                  const m = (event.output || '').match(/ACTION:set_shivvr url=(.*)$/);
+                  const url = m ? m[1].trim() : (event.input && event.input.url || '');
+                  const wi = document.getElementById('wi-' + event.id);
+                  if (wi && url) wi.value = url;
+                  confirmWidget(event.id);
+                } else {
+                  const d = document.getElementById('tool-' + event.id);
+                  if (d) {
+                    const emoji = d.querySelector('.pill-emoji'); if (emoji) emoji.classList.remove('running');
+                    const spans = d.querySelectorAll('span'); if (spans[1]) spans[1].textContent = event.name + ': done';
+                  }
+                } break;
+              case 'done':
+                if (assistantDiv) { assistantDiv = null; assistantText = ''; } break;
+              case 'error':
+                addMsg('Error: ' + event.message, 'error'); break;
+              case 'retrying':
+                addMsg('Retrying in ' + event.wait_secs + 's\u2026', 'system'); break;
             }
           } catch (_) {}
         }

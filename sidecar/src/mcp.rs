@@ -229,6 +229,12 @@ pub struct StickyNoteDeleteRequest {
     pub id: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct StickyNoteReadRequest {
+    /// Note ID from sticky_note_list output
+    pub id: String,
+}
+
 // -- MCP Server --
 
 #[derive(Clone)]
@@ -819,6 +825,15 @@ impl HyperiaMcp {
         Parameters(req): Parameters<StickyNoteDeleteRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let resp = self.delete(&format!("/api/notes/{}", req.id)).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Read the full text content of a sticky note by its ID. Use sticky_note_list to get IDs.")]
+    async fn sticky_note_read(
+        &self,
+        Parameters(req): Parameters<StickyNoteReadRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let resp = self.get(&format!("/api/notes/{}", req.id)).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 

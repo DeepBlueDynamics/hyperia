@@ -658,6 +658,7 @@ function buildHyperiaHtml(): string {
     memory_recall: '\uD83E\uDDE0', memory_remember: '\uD83E\uDDE0',
     tab_snapshot: '\uD83D\uDCF8', shell_state: '\uD83D\uDCBB',
     watercooler: '\u2615',
+    open_settings: '\u2699\uFE0F',
   };
   const DEFAULT_EMOJI = '\u2699\uFE0F';
 
@@ -666,6 +667,7 @@ function buildHyperiaHtml(): string {
     terminal_status: 'status\u2026', terminal_split: 'split\u2026', terminal_new_tab: 'new tab\u2026',
     terminal_close: 'close pane\u2026', terminal_focus: 'focus\u2026',
     open_web_pane: 'opening web pane\u2026',
+    open_settings: 'opening settings\u2026',
     file_read: 'read file\u2026', file_write: 'write file\u2026',
     web_fetch: 'fetch\u2026', tool_search: 'search\u2026', tool_create: 'create tool\u2026',
     memory_recall: 'recall\u2026', memory_remember: 'remember\u2026',
@@ -679,6 +681,7 @@ function buildHyperiaHtml(): string {
     const inp = input || {};
     switch (name) {
       case 'open_web_pane': return 'Web pane: ' + (inp.url || '');
+      case 'open_settings': return 'Open Settings';
       case 'terminal_split': return 'Split ' + (inp.direction || 'pane');
       case 'terminal_new_tab': return 'New tab' + (inp.name ? ': ' + inp.name : '');
       case 'terminal_close': return 'Close pane' + (inp.pane ? ' ' + inp.pane : '');
@@ -720,6 +723,9 @@ function buildHyperiaHtml(): string {
   function setToolOutput(id, name, input, output) {
     const div = document.getElementById('tool-' + id);
     if (!div) return;
+    if (name === 'open_settings' && output === 'ACTION:open_settings') {
+      try { require('electron').ipcRenderer.send('open-settings'); } catch (_) {}
+    }
     // Stop the pulse
     const emojiEl = div.querySelector('.tool-emoji');
     if (emojiEl) emojiEl.classList.remove('running');

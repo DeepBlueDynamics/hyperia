@@ -103,12 +103,26 @@ export function newWindow(
   // Enable remote module on this window
   remoteEnable(window.webContents);
 
-  // Log renderer crashes and console errors
-  window.webContents.on('console-message', (_ev, level, message, line, sourceId) => {
-    if (level >= 2) {
-      // warnings and errors
-      console.error(`[renderer] ${message} (${sourceId}:${line})`);
+  // Electron >= 28: @electron/remote's module.parent traversal loses the app
+  // root as base for relative requires. Intercept and resolve manually.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window.webContents as any).on('remote-require', (event: any, moduleName: string) => {
+    if (moduleName === './plugins') {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      event.returnValue = require('../plugins');
+    } else if (moduleName === './config') {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      event.returnValue = require('../config');
     }
+  });
+
+  // Log renderer console output to main process (all levels)
+  window.webContents.on('console-message', (_ev, level, message, line, sourceId) => {
+    const tag = `[renderer] ${message} (${sourceId}:${line})`;
+    if (level >= 3) console.error(tag);
+    else if (level >= 2) console.warn(tag);
+    else if (level >= 1) console.log(tag);
+    else isDev && console.log(tag);
   });
   window.webContents.on('render-process-gone', (_ev, details) => {
     console.error('[renderer] Process gone:', details.reason);

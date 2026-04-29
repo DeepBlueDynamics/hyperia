@@ -264,6 +264,7 @@ impl FerriculaBackend {
                 id: next_id,
                 tags,
                 vector,
+                refs: None,
             };
 
             let mut record = MemoryRecord::new(next_id);
@@ -326,7 +327,7 @@ impl FerriculaBackend {
                 tags.insert("role".into(), role.to_string());
                 tags.insert("channel".into(), "ghost-history".to_string());
                 tags.insert("source".into(), "hyperia-ghost".to_string());
-                let row = ferricula::Row { id: next_id, tags, vector };
+                let row = ferricula::Row { id: next_id, tags, vector, refs: None };
                 let record = MemoryRecord::new(next_id);
                 search.add_document(next_id, text);
                 let _ = db.remember(row, record);

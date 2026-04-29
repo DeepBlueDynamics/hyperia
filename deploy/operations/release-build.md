@@ -87,6 +87,55 @@ gh release create vX.Y.Z dist/Hyperia-X.Y.Z-x64.exe dist/Hyperia-X.Y.Z-x64.exe.b
   --target canary
 ```
 
+### Step 8 — Deploy install scripts to hyperia-web
+
+The install scripts live in `site/` in this repo. After a release, copy them to the
+`DeepBlueDynamics/hyperia-web` repo root so they're served at the correct URLs:
+
+| Script | URL |
+|--------|-----|
+| `site/install.ps1` | `https://hyperia.nuts.services/install.ps1` |
+| `site/install.sh` | `https://hyperia.nuts.services/install.sh` |
+
+Both scripts auto-detect platform/arch and pull the latest release from GitHub.
+The nginx server in `hyperia-web` serves them as `text/plain` — no changes needed
+to `nginx.conf` as long as the files are in the repo root.
+
+```bash
+# quick copy — assumes hyperia-web is cloned alongside this repo
+cp site/install.ps1 site/install.sh ../hyperia-web/
+cd ../hyperia-web && git add install.ps1 install.sh && git commit -m "Update install scripts for vX.Y.Z" && git push
+```
+
+After pushing, redeploy hyperia-web:
+
+```bash
+cd ../hyperia-web
+gcloud builds submit --tag gcr.io/gnosis-459403/hyperia-site --project gnosis-459403 --quiet
+gcloud run deploy hyperia-site --image gcr.io/gnosis-459403/hyperia-site --platform managed --region us-central1 --project gnosis-459403 --quiet
+```
+
+**hyperia-web is cloned at** `C:/Users/kordl/Code/DeepBlueDynamics/hyperia-web`.
+
+### install.ps1 known pitfalls
+
+- **Do NOT use `[System.Net.Http.HttpClient]::new()`** — the `System.Net.Http` assembly is not
+  loaded when the script runs via `irm ... | iex`, causing `Unable to find type` errors.
+  Use `[System.Net.HttpWebRequest]::Create($url)` instead — always available, no assembly load needed.
+- **Do NOT use `Invoke-WebRequest` for large files** — it buffers the entire response before writing,
+  making it appear hung. Stream manually via `HttpWebRequest` for live progress.
+
+### Step 9 — Update Deep Blue Dynamics GitHub profile
+
+Update the version shown on the [DeepBlueDynamics organization profile](https://github.com/DeepBlueDynamics) to reflect the new release.
+
+Edit `.github/profile/README.md` in the `DeepBlueDynamics/.github` repo and update any version badges, download links, or release callouts to `vX.Y.Z`.
+
+```bash
+gh api repos/DeepBlueDynamics/.github/contents/.github/profile/README.md
+# edit and push, or clone the repo and update manually
+```
+
 ---
 
 ## Common mistakes
@@ -99,3 +148,6 @@ gh release create vX.Y.Z dist/Hyperia-X.Y.Z-x64.exe dist/Hyperia-X.Y.Z-x64.exe.b
 | Bumped version after build started | Installer has wrong version in binary |
 | `.signing.env` missing or empty secret | Build succeeds but installer is unsigned |
 | Used secret ID instead of secret Value | Signing fails silently or with auth error |
+| Forgot to update DeepBlueDynamics profile | GitHub org page shows stale version |
+| Forgot to deploy install scripts to hyperia-web | `install.ps1` / `install.sh` download old version |
+| Used `HttpClient` in install.ps1 | `Unable to find type [System.Net.Http.HttpClient]` via `irm \| iex` — use `HttpWebRequest` |

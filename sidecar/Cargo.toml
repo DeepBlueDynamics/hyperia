@@ -1,6 +1,6 @@
 [package]
 name = "hyperia-sidecar"
-version = "0.8.3"
+version = "0.8.9"
 edition = "2021"
 description = "Rust sidecar for Hyperia: agent engine, MCP, signaling"
 
@@ -55,3 +55,6 @@ sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 
 # Ferricula memory core (embedded)
 ferricula = { path = "../../ferricula" }
+
+# Maximus context compression (local Ollama)
+maximus = { path = "../../../DeepBlueDynamics/maximus" }

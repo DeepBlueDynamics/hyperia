@@ -1,4 +1,4 @@
-import React, {forwardRef, useEffect, useRef, useCallback} from 'react';
+import React, {forwardRef, useEffect, useRef, useCallback, useState} from 'react';
 
 import type {TabsProps} from '../../typings/hyper';
 import {decorate, getTabProps} from '../utils/plugins';
@@ -15,6 +15,15 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   const onMoveTab = (props as any).onMoveTab as ((fromUid: string, toIndex: number) => void) | undefined;
   const listRef = useRef<HTMLUListElement>(null);
   const dragUidRef = useRef<string | null>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollState = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 0);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  }, []);
 
   // Scroll active tab into view
   useEffect(() => {
@@ -24,14 +33,32 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         active.scrollIntoView({block: 'nearest', inline: 'nearest'});
       }
     }
-  }, [tabs.find((t) => t.isActive)?.uid]);
+    updateScrollState();
+  }, [tabs.find((t) => t.isActive)?.uid, tabs.length, updateScrollState]);
+
+  // Update scroll arrows on resize
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(updateScrollState);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [updateScrollState]);
 
   // Horizontal scroll with mouse wheel
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (listRef.current) {
       listRef.current.scrollLeft += e.deltaY;
+      updateScrollState();
     }
-  }, []);
+  }, [updateScrollState]);
+
+  const scrollBy = useCallback((dir: 1 | -1) => {
+    if (listRef.current) {
+      listRef.current.scrollBy({left: dir * 120, behavior: 'smooth'});
+      setTimeout(updateScrollState, 150);
+    }
+  }, [updateScrollState]);
 
   // Tab drag-to-reorder
   const handleDragStart = useCallback((uid: string) => {
@@ -63,10 +90,16 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   return (
     <nav className="tabs_nav" ref={ref}>
       {props.customChildrenBefore}
+      {canScrollLeft && (
+        <button className="tabs_scrollBtn tabs_scrollLeft" onClick={() => scrollBy(-1)} aria-label="Scroll tabs left">
+          ‹
+        </button>
+      )}
       <ul
         key="list"
         ref={listRef}
         onWheel={handleWheel}
+        onScroll={updateScrollState}
         className={`tabs_list ${fullScreen && isMac ? 'tabs_fullScreen' : ''}`}
       >
         {tabs.map((tab, i) => {
@@ -97,6 +130,11 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           return <Tab key={`tab-${uid}`} {...tabProps} />;
         })}
       </ul>
+      {canScrollRight && (
+        <button className="tabs_scrollBtn tabs_scrollRight" onClick={() => scrollBy(1)} aria-label="Scroll tabs right">
+          ›
+        </button>
+      )}
       {isMac && tabs.length > 1 && (
         <div
           key="shim"
@@ -152,6 +190,37 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           flex: 0 0 ${trailingDragWidth}px;
           min-width: ${trailingDragWidth}px;
           -webkit-app-region: drag;
+        }
+
+        .tabs_scrollBtn {
+          flex: 0 0 auto;
+          width: 20px;
+          height: 34px;
+          background: #1a1a1a;
+          border: none;
+          border-right: 1px solid #333;
+          color: #888;
+          font-size: 16px;
+          line-height: 34px;
+          cursor: pointer;
+          padding: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          -webkit-app-region: no-drag;
+          z-index: 1;
+          transition: color 0.15s, background 0.15s;
+        }
+
+        .tabs_scrollBtn:hover {
+          color: #fff;
+          background: #252525;
+        }
+
+        .tabs_scrollRight {
+          border-right: none;
+          border-left: 1px solid #333;
+          order: 99;
         }
 
         .tabs_borderShim {

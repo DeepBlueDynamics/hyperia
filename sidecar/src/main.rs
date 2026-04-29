@@ -8,6 +8,7 @@ mod logs;
 mod mcp;
 mod process;
 mod screen;
+mod settings;
 mod telemetry;
 
 use axum::extract::{Path, Query, State};
@@ -550,6 +551,34 @@ async fn post_note_close(
     }
 }
 
+async fn get_note(Path(id): Path<String>) -> (StatusCode, String) {
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").ok()
+    } else {
+        std::env::var("HOME").ok()
+    };
+    let Some(home) = home else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "No home directory".into());
+    };
+    let path = std::path::PathBuf::from(home)
+        .join(".hyperia")
+        .join("stickys")
+        .join("notes.json");
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            let note = serde_json::from_str::<Vec<serde_json::Value>>(&content)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|n| n["id"].as_str() == Some(&id));
+            match note {
+                Some(n) => (StatusCode::OK, serde_json::to_string(&n).unwrap_or_else(|_| "{}".into())),
+                None => (StatusCode::NOT_FOUND, format!("Note {} not found", id)),
+            }
+        }
+        Err(_) => (StatusCode::NOT_FOUND, format!("Note {} not found", id)),
+    }
+}
+
 async fn patch_note(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -887,7 +916,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pane/describe", axum::routing::post(post_auto_describe))
         .route("/api/notes", axum::routing::get(get_notes).post(post_note_create))
         .route("/api/notes/highlight", axum::routing::post(post_notes_highlight))
-        .route("/api/notes/{id}", axum::routing::delete(delete_note).patch(patch_note))
+        .route("/api/notes/{id}", axum::routing::get(get_note).delete(delete_note).patch(patch_note))
         .route("/api/notes/close", axum::routing::post(post_note_close))
         .with_state(state);
 
@@ -915,9 +944,17 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ghost/window-closed", axum::routing::post(ghost::api::ghost_window_closed))
         .with_state(ghost_state);
 
+    // Settings agent routes — separate session, limited tool set
+    let settings_state = settings::SettingsState::new();
+    let settings_routes = axum::Router::new()
+        .route("/api/settings/chat", axum::routing::post(settings::api::settings_chat))
+        .route("/api/settings/reset", axum::routing::post(settings::api::settings_reset))
+        .with_state(settings_state);
+
     let app = app
         .merge(dash_routes)
         .merge(ghost_routes)
+        .merge(settings_routes)
         .nest_service("/mcp", mcp::streamable_http_service(args.port));
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));

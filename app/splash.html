@@ -20,6 +20,29 @@ canvas { display: block; }
   pointer-events: none;
   z-index: 10;
 }
+#title-tm {
+  position: absolute;
+  top: -18px; right: -22px;
+  font-size: 14px;
+  font-weight: 300;
+  letter-spacing: 0;
+  color: rgba(255,255,255,0.55);
+  text-shadow: none;
+}
+#brand {
+  position: absolute;
+  top: calc(50% + 52px); left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Segoe UI', -apple-system, sans-serif;
+  font-size: 13px;
+  font-weight: 300;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 10;
+  white-space: nowrap;
+}
 #fade {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
@@ -33,6 +56,7 @@ canvas { display: block; }
 <body>
 <canvas id="c"></canvas>
 <div id="title">HYPERIA</div>
+<div id="brand"><span style="color:#fff">Deep</span><span style="color:#468cff">Blue</span> <span style="color:#888">Dynamics, LLC</span></div>
 <div id="fade"></div>
 <script>
 // --- Weber's Electrodynamics Particle Simulation ---
@@ -41,6 +65,7 @@ canvas { display: block; }
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const title = document.getElementById('title');
+const brand = document.getElementById('brand');
 const fade = document.getElementById('fade');
 
 let W, H;
@@ -122,6 +147,19 @@ for (let i = 0; i < 5; i++) {
   p.maxTrail = 20;
   particles.push(p);
 }
+
+// ™ node — orbits in the field like any other particle
+const tmParticle = new Particle();
+tmParticle.x = W / 2 + 180;
+tmParticle.y = H / 2 - 80;
+tmParticle.vx = 20;
+tmParticle.vy = 60;
+tmParticle.q = 1.5;
+tmParticle.mass = 3;
+tmParticle.r = 200; tmParticle.g = 200; tmParticle.b = 255;
+tmParticle.isTm = true;
+tmParticle.maxTrail = 16;
+particles.push(tmParticle);
 
 function weberForce(p1, p2) {
   const dx = p2.x - p1.x;
@@ -237,22 +275,40 @@ function draw() {
       ctx.stroke();
     }
 
-    // Glow
-    const size = Math.abs(p.q) * 3 + 1;
-    const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, size * 6);
-    glow.addColorStop(0, `rgba(${p.r}, ${p.g}, ${p.b}, 0.6)`);
-    glow.addColorStop(0.4, `rgba(${p.r}, ${p.g}, ${p.b}, 0.15)`);
-    glow.addColorStop(1, `rgba(${p.r}, ${p.g}, ${p.b}, 0)`);
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, size * 6, 0, Math.PI * 2);
-    ctx.fill();
+    if (p.isTm) {
+      // ™ glow halo
+      const tmGlow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 22);
+      tmGlow.addColorStop(0, `rgba(${p.r}, ${p.g}, ${p.b}, 0.45)`);
+      tmGlow.addColorStop(0.5, `rgba(${p.r}, ${p.g}, ${p.b}, 0.1)`);
+      tmGlow.addColorStop(1, `rgba(${p.r}, ${p.g}, ${p.b}, 0)`);
+      ctx.fillStyle = tmGlow;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 22, 0, Math.PI * 2);
+      ctx.fill();
+      // ™ text
+      ctx.font = '600 13px "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = `rgb(${p.r}, ${p.g}, ${p.b})`;
+      ctx.fillText('™', p.x, p.y);
+    } else {
+      // Glow
+      const size = Math.abs(p.q) * 3 + 1;
+      const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, size * 6);
+      glow.addColorStop(0, `rgba(${p.r}, ${p.g}, ${p.b}, 0.6)`);
+      glow.addColorStop(0.4, `rgba(${p.r}, ${p.g}, ${p.b}, 0.15)`);
+      glow.addColorStop(1, `rgba(${p.r}, ${p.g}, ${p.b}, 0)`);
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, size * 6, 0, Math.PI * 2);
+      ctx.fill();
 
-    // Core
-    ctx.fillStyle = `rgb(${p.r}, ${p.g}, ${p.b})`;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
-    ctx.fill();
+      // Core
+      ctx.fillStyle = `rgb(${p.r}, ${p.g}, ${p.b})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 }
 
@@ -274,10 +330,11 @@ function loop() {
   step();
   draw();
 
-  // Title fade in
+  // Title + brand fade in
   if (elapsed > TITLE_FADE_IN && !readyToClose) {
     const t = Math.min(1, (elapsed - TITLE_FADE_IN) / (TITLE_FULL - TITLE_FADE_IN));
     title.style.opacity = t;
+    brand.style.opacity = t * 0.7;
   }
 
   // Don't close until minimum time has passed AND app is ready
@@ -295,6 +352,7 @@ function loop() {
     const t = Math.min(1, fadeElapsed / FADE_DURATION);
     fade.style.opacity = t;
     title.style.opacity = 1 - t;
+    brand.style.opacity = (1 - t) * 0.7;
 
     // Signal done after fade completes
     if (t >= 1 && !signaled) {
