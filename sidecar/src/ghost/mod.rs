@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod api;
+pub mod compressor;
 pub mod ferricula;
 pub mod provider;
 pub mod registry;

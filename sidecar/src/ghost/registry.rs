@@ -25,7 +25,7 @@ pub struct ToolRegistry {
     client: reqwest::Client,
     http_port: u16,
     ferricula: Option<Arc<FerriculaBackend>>,
-    compressor: maximus::ContextCompressor,
+    compressor: crate::ghost::compressor::ContextCompressor,
 }
 
 impl ToolRegistry {
@@ -36,7 +36,7 @@ impl ToolRegistry {
             client: reqwest::Client::new(),
             http_port,
             ferricula: None,
-            compressor: maximus::ContextCompressor::from_env(),
+            compressor: crate::ghost::compressor::ContextCompressor::from_env(),
         }
     }
 

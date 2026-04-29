@@ -268,7 +268,7 @@ async fn run_loop(
 
     // Check once whether Maximus context compression is available for this run.
     // Disabled silently if Ollama is not running — no impact on the agent loop.
-    let compressor = maximus::ContextCompressor::from_env();
+    let compressor = crate::ghost::compressor::ContextCompressor::from_env();
     let compress = compressor.is_available().await;
     if compress {
         tracing::info!("maximus: context compression active ({})", compressor.model);

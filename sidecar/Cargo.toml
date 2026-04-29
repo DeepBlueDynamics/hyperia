@@ -55,6 +55,3 @@ sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 
 # Ferricula memory core (embedded)
 ferricula = { path = "../../ferricula" }
-
-# Maximus context compression (local Ollama)
-maximus = { path = "../../../DeepBlueDynamics/maximus" }
