@@ -55,7 +55,8 @@ const isWebgl2Supported = (() => {
 function openUrl(uri: string): void {
   try {
     const {hostname} = new URL(uri);
-    const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0' || hostname === '::1';
+    const isLocal =
+      hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0' || hostname === '::1';
     if (isLocal) {
       rpc.emitter.emit('open web pane req', {url: uri});
     } else {
@@ -252,7 +253,11 @@ export default class Term extends React.PureComponent<
           // with metadata about the original column where each character lives.
           // We strip trailing whitespace before concatenation so that padding
           // doesn't get spliced into URLs.
-          type Segment = {row: number; trimmedText: string; charCols: number[]};
+          type Segment = {
+            row: number;
+            trimmedText: string;
+            charCols: number[];
+          };
           let segments: Segment[] = [];
 
           for (let r = startRow; r <= endRow; r++) {
@@ -290,9 +295,17 @@ export default class Term extends React.PureComponent<
 
           // Concatenate trimmed segments — wrapped continuations join cleanly.
           let combined = '';
-          const segOffsets: {row: number; offset: number; charCols: number[]}[] = [];
+          const segOffsets: {
+            row: number;
+            offset: number;
+            charCols: number[];
+          }[] = [];
           for (const seg of segments) {
-            segOffsets.push({row: seg.row, offset: combined.length, charCols: seg.charCols});
+            segOffsets.push({
+              row: seg.row,
+              offset: combined.length,
+              charCols: seg.charCols
+            });
             combined += seg.trimmedText;
           }
 
@@ -315,7 +328,10 @@ export default class Term extends React.PureComponent<
                     return {row: so.row, col: so.charCols[localIdx]};
                   } else if (localIdx === so.charCols.length && so.charCols.length > 0) {
                     // End-of-segment — point past the last char
-                    return {row: so.row, col: so.charCols[so.charCols.length - 1] + 1};
+                    return {
+                      row: so.row,
+                      col: so.charCols[so.charCols.length - 1] + 1
+                    };
                   }
                 }
               }

@@ -105,13 +105,13 @@ export function newWindow(
 
   // Electron >= 28: @electron/remote's module.parent traversal loses the app
   // root as base for relative requires. Intercept and resolve manually.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window.webContents as any).on('remote-require', (event: any, moduleName: string) => {
+
+  const wc = window.webContents as any;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+  wc.on('remote-require', (event: any, moduleName: string) => {
     if (moduleName === './plugins') {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
       event.returnValue = require('../plugins');
     } else if (moduleName === './config') {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
       event.returnValue = require('../config');
     }
   });

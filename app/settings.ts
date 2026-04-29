@@ -695,7 +695,7 @@ function buildSettingsHtml(): string {
     const widgetDiv = document.getElementById('tool-' + id);
     if (widgetDiv) {
       widgetDiv.classList.add('confirmed');
-      widgetDiv.innerHTML = '<span class=\"confirmed-text\">\u2713 ' + escapeHtml(url || '(cleared)') + '</span>';
+      widgetDiv.innerHTML = '<span class="confirmed-text">\u2713 ' + escapeHtml(url || '(cleared)') + '</span>';
     }
     const shivvrEl = document.getElementById('shivvrInput');
     if (shivvrEl) shivvrEl.value = url;
@@ -855,7 +855,9 @@ export function initSettings() {
 
       // Best-effort: tell sidecar to reset ghost session (in-memory state)
       const port = process.env.HYPERIA_PORT || '9800';
-      fetch(`http://localhost:${port}/api/ghost/reset`, {method: 'POST'}).catch(() => {});
+      fetch(`http://localhost:${port}/api/ghost/reset`, {
+        method: 'POST'
+      }).catch(() => {});
 
       event.reply('factory-reset-done', true);
     } catch (e) {

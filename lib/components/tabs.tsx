@@ -46,19 +46,25 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   }, [updateScrollState]);
 
   // Horizontal scroll with mouse wheel
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    if (listRef.current) {
-      listRef.current.scrollLeft += e.deltaY;
-      updateScrollState();
-    }
-  }, [updateScrollState]);
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      if (listRef.current) {
+        listRef.current.scrollLeft += e.deltaY;
+        updateScrollState();
+      }
+    },
+    [updateScrollState]
+  );
 
-  const scrollBy = useCallback((dir: 1 | -1) => {
-    if (listRef.current) {
-      listRef.current.scrollBy({left: dir * 120, behavior: 'smooth'});
-      setTimeout(updateScrollState, 150);
-    }
-  }, [updateScrollState]);
+  const scrollBy = useCallback(
+    (dir: 1 | -1) => {
+      if (listRef.current) {
+        listRef.current.scrollBy({left: dir * 120, behavior: 'smooth'});
+        setTimeout(updateScrollState, 150);
+      }
+    },
+    [updateScrollState]
+  );
 
   // Tab drag-to-reorder
   const handleDragStart = useCallback((uid: string) => {
@@ -209,7 +215,9 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           justify-content: center;
           -webkit-app-region: no-drag;
           z-index: 1;
-          transition: color 0.15s, background 0.15s;
+          transition:
+            color 0.15s,
+            background 0.15s;
         }
 
         .tabs_scrollBtn:hover {
