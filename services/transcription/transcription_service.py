@@ -220,7 +220,11 @@ async def process_queue():
                 job["progress"] = "Transcribing audio..."
 
                 start_time = datetime.now(timezone.utc)
-                result = MODEL.transcribe(job["wav_file"], beam_size=5, verbose=False)
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: MODEL.transcribe(job["wav_file"], beam_size=5, verbose=False)
+                )
                 end_time = datetime.now(timezone.utc)
 
                 transcript_text = result["text"].strip()
