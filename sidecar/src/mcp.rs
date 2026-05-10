@@ -245,6 +245,14 @@ pub struct StickyNoteReadRequest {
     pub id: String,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct TabSnapshotRequest {
+    /// What you're looking for across all panes — Maximus extracts just that. Example: "error messages", "current git status".
+    pub focus: Option<String>,
+    /// Pass true to bypass Maximus and receive the full unfiltered snapshot.
+    pub raw: Option<bool>,
+}
+
 // -- MCP Server --
 
 #[derive(Clone)]
@@ -641,8 +649,11 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Read all pane screens across all windows and tabs. Returns labeled output grouped by window and tab. Great for getting a holistic view of everything.")]
-    async fn tab_snapshot(&self) -> Result<CallToolResult, ErrorData> {
+    #[tool(description = "Read all pane screens across all windows and tabs. Returns labeled output grouped by window and tab. Great for getting a holistic view of everything. Pass focus= to extract only the relevant part — Maximus filters so you only see what you asked for. Pass raw=true to bypass Maximus.")]
+    async fn tab_snapshot(
+        &self,
+        Parameters(req): Parameters<TabSnapshotRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
         let status_text = self.get("/api/status").await?;
         let status: serde_json::Value = serde_json::from_str(&status_text)
             .map_err(|e| ErrorData::internal_error(format!("Parse: {e}"), None))?;
@@ -680,7 +691,8 @@ impl HyperiaMcp {
                 }
             }
         }
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        let out = self.maximus_filter(&output, req.focus.as_deref(), req.raw.unwrap_or(false)).await;
+        Ok(CallToolResult::success(vec![Content::text(out)]))
     }
 
     #[tool(description = "Analyze all panes' screens and return their state: idle (at prompt), dialog (waiting for selection), running (command in progress), or empty.")]

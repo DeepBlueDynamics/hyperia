@@ -272,7 +272,10 @@ impl OllamaProvider {
             .unwrap_or(&config.model)
             .to_string();
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .unwrap_or_default(),
             model,
         }
     }

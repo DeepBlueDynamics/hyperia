@@ -164,7 +164,7 @@ impl GhostSession {
                 max_turns,
                 turn_start,
                 &user_msg,
-                &ferricula,
+                ferricula,
                 &stop_requested,
                 &window_closed,
                 initial_tool_call_count,
@@ -224,7 +224,7 @@ async fn run_loop(
     max_turns: usize,
     turn_start: usize,
     user_message: &str,
-    ferricula: &FerriculaBackend,
+    ferricula: Arc<FerriculaBackend>,
     stop_requested: &AtomicBool,
     window_closed: &AtomicBool,
     initial_tool_call_count: usize,
@@ -268,7 +268,8 @@ async fn run_loop(
 
     // Check once whether Maximus context compression is available for this run.
     // Disabled silently if Ollama is not running — no impact on the agent loop.
-    let compressor = crate::ghost::compressor::ContextCompressor::from_env();
+    let compressor = crate::ghost::compressor::ContextCompressor::from_env()
+        .with_ferricula(ferricula.clone());
     compressor.load_patterns_from_ferricula().await;
     let compress = compressor.is_available().await;
     if compress {
