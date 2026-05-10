@@ -31,6 +31,9 @@ export type ITermGroup = Immutable<{
   sizes: number[] | null;
   children: string[];
   webUrl?: string | null;
+  // User-set tab name. Lives on the root group so it survives splits.
+  // null = use the auto-generated name from the active session.
+  tabName?: string | null;
 }>;
 
 export type ITermGroups = Immutable<Record<string, ITermGroup>>;

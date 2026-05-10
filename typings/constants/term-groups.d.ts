@@ -55,6 +55,14 @@ export interface TermGroupSetWebNameAction {
   name: string;
 }
 
+export const TERM_GROUP_SET_TAB_NAME = 'TERM_GROUP_SET_TAB_NAME';
+export interface TermGroupSetTabNameAction {
+  type: typeof TERM_GROUP_SET_TAB_NAME;
+  // uid of any group in the tab — reducer walks up to the root group.
+  uid: string;
+  tabName: string;
+}
+
 export type TermGroupActions =
   | TermGroupRequestAction
   | TermGroupExitAction
@@ -64,4 +72,5 @@ export type TermGroupActions =
   | TermGroupSetWebUrlAction
   | TermGroupAddWebTabAction
   | TermGroupActivateWebTabAction
-  | TermGroupSetWebNameAction;
+  | TermGroupSetWebNameAction
+  | TermGroupSetTabNameAction;

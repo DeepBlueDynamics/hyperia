@@ -15,6 +15,7 @@ import {
   SESSION_SEARCH,
   SESSION_SET_DESCRIPTION
 } from '../../typings/constants/sessions';
+import {TERM_GROUP_SET_TAB_NAME} from '../../typings/constants/term-groups';
 import type {HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
 import {keys} from '../utils/object';
@@ -125,29 +126,37 @@ export function clearActiveSession(): HyperActions {
   };
 }
 
+// Sets the per-pane description (used by the agent's auto_describe). Does NOT
+// touch the tab name — tab names live on the root group, not on sessions.
 export function setSessionDescription(uid: string, description: string) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     // uid might be a termGroup uid — resolve to session uid
     const sessionUid = getState().termGroups.activeSessions[uid] || uid;
-    const session = getState().sessions.sessions[sessionUid];
-    const tabName = description || session?.title || session?.tabName || '';
     window.rpc.emit('session set description', {uid: sessionUid, description});
-    window.rpc.emit('session set tab name', {uid: sessionUid, tabName});
+    // Keep the second field for back-compat with the SESSION_SET_DESCRIPTION
+    // reducer signature, but pass empty so it does not overwrite a real tab name.
     dispatch({
       type: SESSION_SET_DESCRIPTION,
       uid: sessionUid,
       description,
-      tabName
+      tabName: ''
     });
   };
 }
 
+// Sets the tab name on the root term group (the sole source of truth).
+// Also dispatches the legacy SESSION_SET_TAB_NAME so any consumer that still
+// reads session.tabName (e.g. the bridge sync) stays in sync.
 export function setSessionTabName(uid: string, tabName: string, sync = true) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     const sessionUid = getState().termGroups.activeSessions[uid] || uid;
     if (sync) {
       window.rpc.emit('session set tab name', {uid: sessionUid, tabName});
     }
+    // Source of truth: the root group.
+    dispatch({type: TERM_GROUP_SET_TAB_NAME, uid: sessionUid, tabName} as any);
+    // Back-compat: also update the per-session field so anything still reading it
+    // (bridge mirror, plugins) sees the same name.
     dispatch({
       type: SESSION_SET_TAB_NAME,
       uid: sessionUid,

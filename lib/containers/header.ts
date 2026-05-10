@@ -3,7 +3,7 @@ import {createSelector} from 'reselect';
 import {TERM_GROUP_SET_WEB_NAME} from '../../typings/constants/term-groups';
 import type {HyperState, HyperDispatch, ITab} from '../../typings/hyper';
 import {closeTab, changeTab, maximize, openHamburgerMenu, unmaximize, minimize, close} from '../actions/header';
-import {setSessionDescription} from '../actions/sessions';
+import {setSessionTabName} from '../actions/sessions';
 import {requestTermGroup} from '../actions/term-groups';
 import Header from '../components/header';
 import {getRootGroups} from '../selectors';
@@ -58,10 +58,13 @@ const getTabs = createSelector(
           webUrl: webUrl || undefined
         };
       }
+      // Source of truth for the tab label: the root group's tabName.
+      // Falls back to per-session fields for tabs created before this change.
+      const groupTabName = (t as any).tabName as string | null | undefined;
       return {
         uid: t.uid,
         title: session.title,
-        tabName: session.tabName || session.title,
+        tabName: groupTabName || session.tabName || session.title,
         description: session.description || '',
         isActive: t.uid === activeRootGroup,
         hasActivity: activityMarkers[session.uid],
@@ -128,7 +131,11 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
         if ((group as any)?.webUrl !== undefined) {
           d({type: TERM_GROUP_SET_WEB_NAME, uid, name: description} as any);
         } else {
-          d(setSessionDescription(uid, description) as any);
+          // The rename UI surfaces this as a "describe" hook but for terminal
+          // tabs it just renames the tab. Route directly to the tab-name setter
+          // so we update the root group's tabName (the source of truth) without
+          // touching session.description.
+          d(setSessionTabName(uid, description) as any);
         }
       }) as any);
     },

@@ -11,7 +11,8 @@ import {
   TERM_GROUP_SET_WEB_URL,
   TERM_GROUP_ADD_WEB_TAB,
   TERM_GROUP_ACTIVATE_WEB_TAB,
-  TERM_GROUP_SET_WEB_NAME
+  TERM_GROUP_SET_WEB_NAME,
+  TERM_GROUP_SET_TAB_NAME
 } from '../../typings/constants/term-groups';
 import type {ITermGroup, ITermState, ITermGroups, ITermGroupReducer, Mutable} from '../../typings/hyper';
 import {decorateTermGroupsReducer} from '../utils/plugins';
@@ -250,6 +251,19 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
     case TERM_GROUP_SET_WEB_NAME: {
       const {uid, name} = action as unknown as {uid: string; name: string};
       return state.setIn(['termGroups', uid, 'webName'], name);
+    }
+    case TERM_GROUP_SET_TAB_NAME: {
+      const {uid, tabName} = action as unknown as {uid: string; tabName: string};
+      // uid may be a session uid OR a term-group uid — resolve to the root group.
+      let groupUid: string | null = null;
+      if (state.termGroups[uid]) {
+        groupUid = findRootGroup(state.termGroups, uid).uid;
+      } else {
+        const child = findBySession(state, uid);
+        if (child) groupUid = findRootGroup(state.termGroups, child.uid).uid;
+      }
+      if (!groupUid) return state;
+      return state.setIn(['termGroups', groupUid, 'tabName'], tabName);
     }
     case TERM_GROUP_REORDER: {
       const {fromUid, toIndex} = action as unknown as {fromUid: string; toIndex: number};
