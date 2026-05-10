@@ -328,7 +328,12 @@ impl HyperiaMcp {
             let base = self.pane_path("/api/type-and-collect", req.window, req.tab.as_deref(), req.pane.as_deref());
             let sep = if base.contains('?') { '&' } else { '?' };
             let collect_path = format!("{}{sep}quiet_ms={}", base, wait);
-            let raw_output = self.post_text(&collect_path, &format!("{}\r", cmd)).await?;
+            // Give the HTTP client headroom over the server's quiet window so it doesn't
+            // time out before /api/type-and-collect finishes draining PTY output.
+            let req_timeout = std::time::Duration::from_millis(wait + 15_000);
+            let raw_output = self
+                .post_text_with_timeout(&collect_path, &format!("{}\r", cmd), Some(req_timeout))
+                .await?;
             let max_chars = req.max_output_chars.unwrap_or(12_000);
             let text = clean_terminal_output(&raw_output, max_chars);
             let out = self.maximus_filter(&text, req.focus.as_deref(), req.raw.unwrap_or(false)).await;
@@ -1133,11 +1138,25 @@ impl HyperiaMcp {
     }
 
     async fn post_text(&self, path: &str, body: &str) -> Result<String, ErrorData> {
-        let resp = self.client
+        self.post_text_with_timeout(path, body, None).await
+    }
+
+    /// POST with an optional per-request timeout that overrides the client default.
+    /// Use this for endpoints that can legitimately take longer than 10s (e.g. type-and-collect
+    /// with a long quiet_ms). Pass None to use the client's default 10s timeout.
+    async fn post_text_with_timeout(
+        &self,
+        path: &str,
+        body: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<String, ErrorData> {
+        let mut req = self.client
             .post(format!("{}{}", self.base_url, path))
-            .body(body.to_string())
-            .send()
-            .await
+            .body(body.to_string());
+        if let Some(t) = timeout {
+            req = req.timeout(t);
+        }
+        let resp = req.send().await
             .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
         resp.text().await
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
