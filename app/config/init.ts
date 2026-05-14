@@ -1,3 +1,4 @@
+import {existsSync} from 'fs';
 import vm from 'vm';
 
 import merge from 'lodash/merge';
@@ -5,6 +6,41 @@ import merge from 'lodash/merge';
 import type {parsedConfig, rawConfig, configOptions} from '../../typings/config';
 import notify from '../notify';
 import mapKeys from '../utils/map-keys';
+
+// Probe candidate Windows shells in priority order. Returns the profile
+// definitions for whichever ones actually exist on this machine.
+// Skipped entirely on non-Windows platforms.
+function detectWindowsShells(): Array<{name: string; config: {shell: string; shellArgs: string[]}}> {
+  if (process.platform !== 'win32') return [];
+  const candidates: Array<{name: string; shell: string; shellArgs: string[]}> = [
+    // PowerShell 7+ (Microsoft Store + MSI install paths)
+    {name: 'PowerShell', shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', shellArgs: []},
+    // Windows PowerShell 5.1 (always present on modern Windows)
+    {
+      name: 'Windows PowerShell',
+      shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      shellArgs: []
+    },
+    // Command Prompt (always present)
+    {name: 'CMD', shell: 'C:\\Windows\\System32\\cmd.exe', shellArgs: []},
+    // WSL — only present if the optional Windows feature is installed
+    {name: 'WSL', shell: 'C:\\Windows\\System32\\wsl.exe', shellArgs: []}
+  ];
+  return candidates
+    .filter((c) => existsSync(c.shell))
+    .map((c) => ({name: c.name, config: {shell: c.shell, shellArgs: c.shellArgs}}));
+}
+
+// Decide a sensible default profile name from a list of profile names,
+// preferring shells in the order pwsh > powershell > cmd > wsl > first.
+function pickWindowsDefault(profileNames: string[]): string | null {
+  if (process.platform !== 'win32') return null;
+  const preference = ['PowerShell', 'Windows PowerShell', 'CMD', 'WSL'];
+  for (const name of preference) {
+    if (profileNames.includes(name)) return name;
+  }
+  return null;
+}
 
 const _extract = (script?: vm.Script): Record<string, any> => {
   const module: Record<string, any> = {};
@@ -43,8 +79,28 @@ const _init = (userCfg: rawConfig, defaultCfg: rawConfig): parsedConfig => {
           name: p.name || `profile-${i + 1}`,
           config: p.config || {}
         }));
-        if (!conf.profiles.map((p) => p.name).includes(conf.defaultProfile)) {
-          conf.defaultProfile = conf.profiles[0].name;
+
+        // Windows: probe for installed shells and merge in profiles for any
+        // we find that aren't already configured (PowerShell, Windows
+        // PowerShell, CMD, WSL). User's existing profiles win on name
+        // collision.
+        const detected = detectWindowsShells();
+        if (detected.length > 0) {
+          const existingNames = new Set(conf.profiles.map((p) => p.name));
+          for (const d of detected) {
+            if (!existingNames.has(d.name)) {
+              conf.profiles.push(d);
+            }
+          }
+        }
+
+        // Resolve defaultProfile. If user explicitly set one that resolves,
+        // honor it. Otherwise on Windows prefer pwsh > powershell > cmd > wsl;
+        // otherwise fall back to the first profile.
+        const profileNames = conf.profiles.map((p) => p.name);
+        if (!profileNames.includes(conf.defaultProfile) || conf.defaultProfile === 'default') {
+          const winDefault = pickWindowsDefault(profileNames);
+          conf.defaultProfile = winDefault || conf.profiles[0].name;
         }
         return merge({}, defaultCfg.config, conf);
       } else {

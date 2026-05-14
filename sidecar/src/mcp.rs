@@ -253,6 +253,25 @@ pub struct TabSnapshotRequest {
     pub raw: Option<bool>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SettingsGetRequest {
+    /// Dot-separated path into hyperia.json. Examples: "config.fontSize",
+    /// "config.defaultProfile", "config.ferricula.url", "config.profiles".
+    /// Pass an empty string to return the whole config object.
+    pub path: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SettingsSetRequest {
+    /// Dot-separated path into hyperia.json. Intermediate objects are
+    /// created if missing. Examples: "config.fontSize",
+    /// "config.defaultProfile", "config.ferricula.url".
+    pub path: String,
+    /// New value to set at that path. Can be a string, number, boolean,
+    /// object, or array. Pass null to remove the key.
+    pub value: serde_json::Value,
+}
+
 // -- MCP Server --
 
 #[derive(Clone)]
@@ -598,6 +617,85 @@ impl HyperiaMcp {
         self.write_config(&cfg).await?;
         Ok(CallToolResult::success(vec![Content::text(
             format!("Style '{}' deleted", req.name),
+        )]))
+    }
+
+    #[tool(description = "Read a value from the Hyperia config (~/.hyperia/hyperia.json). \
+        Pass a dot-separated path like 'config.fontSize' or 'config.defaultProfile' or \
+        'config.ferricula.url'. Pass an empty string to dump the entire config. Returns the \
+        JSON value as a string.")]
+    async fn settings_get(
+        &self,
+        Parameters(req): Parameters<SettingsGetRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let cfg = self.read_config().await?;
+        let value = walk_path(&cfg, &req.path);
+        let body = serde_json::to_string_pretty(&value)
+            .unwrap_or_else(|_| "null".into());
+        Ok(CallToolResult::success(vec![Content::text(body)]))
+    }
+
+    #[tool(description = "Write a value to the Hyperia config (~/.hyperia/hyperia.json). \
+        Pass a dot-separated path like 'config.fontSize' or 'config.defaultProfile' or \
+        'config.ferricula.url', and the new value. Intermediate objects are created if needed. \
+        Pass null as the value to remove the key. The change takes effect on next Hyperia \
+        launch (or whenever the renderer re-reads config).")]
+    async fn settings_set(
+        &self,
+        Parameters(req): Parameters<SettingsSetRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if req.path.trim().is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "Error: path is required (e.g. 'config.fontSize').",
+            )]));
+        }
+        let mut cfg = self.read_config().await?;
+        let old = walk_path(&cfg, &req.path);
+        match set_path(&mut cfg, &req.path, req.value.clone()) {
+            Ok(()) => {
+                self.write_config(&cfg).await?;
+                let summary = serde_json::json!({
+                    "ok": true,
+                    "path": req.path,
+                    "old_value": old,
+                    "new_value": req.value,
+                });
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&summary).unwrap_or_default(),
+                )]))
+            }
+            Err(e) => Ok(CallToolResult::success(vec![Content::text(
+                format!("Error setting '{}': {}", req.path, e),
+            )])),
+        }
+    }
+
+    #[tool(description = "List all terminal profiles defined in the Hyperia config. Returns \
+        each profile's name and shell path so the agent can choose a sensible default or \
+        propose changes.")]
+    async fn settings_list_profiles(&self) -> Result<CallToolResult, ErrorData> {
+        let cfg = self.read_config().await?;
+        let profiles = cfg["config"]["profiles"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let summary: Vec<serde_json::Value> = profiles
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "name": p["name"].as_str().unwrap_or(""),
+                    "shell": p["config"]["shell"].as_str().unwrap_or(""),
+                    "shellArgs": p["config"]["shellArgs"].clone(),
+                })
+            })
+            .collect();
+        let default_profile = cfg["config"]["defaultProfile"].as_str().unwrap_or("");
+        let body = serde_json::json!({
+            "defaultProfile": default_profile,
+            "profiles": summary,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&body).unwrap_or_default(),
         )]))
     }
 
@@ -994,6 +1092,64 @@ fn unescape_keys(s: &str) -> String {
         }
     }
     out
+}
+
+// -- Settings path helpers --
+
+/// Walk a dot-separated path into a JSON value, returning a clone of the
+/// matching subtree (or Null if the path doesn't exist). Empty path = the
+/// whole document.
+fn walk_path(value: &serde_json::Value, path: &str) -> serde_json::Value {
+    if path.trim().is_empty() {
+        return value.clone();
+    }
+    let mut cur = value;
+    for key in path.split('.') {
+        match cur {
+            serde_json::Value::Object(map) => match map.get(key) {
+                Some(v) => cur = v,
+                None => return serde_json::Value::Null,
+            },
+            _ => return serde_json::Value::Null,
+        }
+    }
+    cur.clone()
+}
+
+/// Set a value at a dot-separated path, creating intermediate objects as
+/// needed. Passing Null as the new value removes the leaf key.
+fn set_path(
+    value: &mut serde_json::Value,
+    path: &str,
+    new_value: serde_json::Value,
+) -> Result<(), String> {
+    let keys: Vec<&str> = path.split('.').collect();
+    if keys.is_empty() {
+        return Err("empty path".into());
+    }
+    let (last, parents) = keys.split_last().unwrap();
+    let mut cur = value;
+    for key in parents {
+        // Promote non-object intermediates to objects (overwrites primitives).
+        if !cur.is_object() {
+            *cur = serde_json::Value::Object(serde_json::Map::new());
+        }
+        let map = cur.as_object_mut().unwrap();
+        if !map.contains_key(*key) {
+            map.insert((*key).to_string(), serde_json::Value::Object(serde_json::Map::new()));
+        }
+        cur = map.get_mut(*key).unwrap();
+    }
+    if !cur.is_object() {
+        *cur = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let map = cur.as_object_mut().unwrap();
+    if new_value.is_null() {
+        map.remove(*last);
+    } else {
+        map.insert((*last).to_string(), new_value);
+    }
+    Ok(())
 }
 
 // -- Shell state detection --
