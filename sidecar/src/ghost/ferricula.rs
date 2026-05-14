@@ -186,14 +186,142 @@ impl FerriculaBackend {
         }
     }
 
-    /// Retrieve all text entries stored in a named channel.
-    ///
-    /// TODO: ferricula has no list-by-channel endpoint. Until one exists,
-    /// this returns empty — callers fall back to cold-start behavior (e.g.
-    /// Maximus re-learns patterns on first encounter of each content type).
-    /// Tracked: see related issue for adding /list?channel=X.
-    pub async fn list_channel(&self, _channel: &str) -> Vec<String> {
-        Vec::new()
+    /// Retrieve all text entries stored in a named channel via SQL.
+    /// Used by Maximus to load saved compression patterns at startup.
+    pub async fn list_channel(&self, channel: &str) -> Vec<String> {
+        // Escape single quotes in the channel name for SQL safety.
+        let safe = channel.replace('\'', "''");
+        let sql = format!(
+            "SELECT text FROM memories WHERE channel = '{}' LIMIT 500",
+            safe
+        );
+        let body = self.sql(&sql).await;
+        let json: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(j) => j,
+            Err(_) => return Vec::new(),
+        };
+        let result = Self::parse_result(&json);
+        let rows = result
+            .as_array()
+            .or_else(|| result["rows"].as_array());
+        let mut out = Vec::new();
+        if let Some(rows) = rows {
+            for row in rows {
+                if let Some(t) = row["text"]
+                    .as_str()
+                    .or_else(|| row["tags"]["text"].as_str())
+                {
+                    if !t.is_empty() {
+                        out.push(t.to_string());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Run a raw SQL query against ferricula's memory store. Returns the raw
+    /// JSON response body. The agent uses this for ad-hoc analysis the
+    /// other endpoints can't express.
+    pub async fn sql(&self, sql: &str) -> String {
+        match self
+            .client
+            .post(format!("{}/query", self.url))
+            .body(sql.to_string())
+            .send()
+            .await
+        {
+            Ok(resp) => resp.text().await.unwrap_or_default(),
+            Err(e) => format!("{{\"error\":\"sql request failed: {}\"}}", e),
+        }
+    }
+
+    /// Inspect a memory row by id — returns the full row JSON.
+    pub async fn inspect(&self, id: u32) -> String {
+        match self
+            .client
+            .get(format!("{}/inspect/{}", self.url, id))
+            .send()
+            .await
+        {
+            Ok(resp) => resp.text().await.unwrap_or_default(),
+            Err(e) => format!("{{\"error\":\"inspect failed: {}\"}}", e),
+        }
+    }
+
+    /// Mark a memory as a keystone (resists decay).
+    pub async fn keystone(&self, id: u32) -> String {
+        match self
+            .client
+            .post(format!("{}/keystone/{}", self.url, id))
+            .send()
+            .await
+        {
+            Ok(resp) => resp.text().await.unwrap_or_default(),
+            Err(e) => format!("{{\"error\":\"keystone failed: {}\"}}", e),
+        }
+    }
+
+    /// List graph neighbors of a memory (ids and edge labels).
+    pub async fn neighbors(&self, id: u32) -> String {
+        match self
+            .client
+            .get(format!("{}/neighbors/{}", self.url, id))
+            .send()
+            .await
+        {
+            Ok(resp) => resp.text().await.unwrap_or_default(),
+            Err(e) => format!("{{\"error\":\"neighbors failed: {}\"}}", e),
+        }
+    }
+
+    /// Embody — combined snapshot of identity, status, and latest dream.
+    /// Composed client-side from three GET calls.
+    pub async fn embody(&self) -> String {
+        let identity = self
+            .client
+            .get(format!("{}/identity", self.url))
+            .send()
+            .await
+            .ok();
+        let status = self
+            .client
+            .get(format!("{}/status", self.url))
+            .send()
+            .await
+            .ok();
+        let dream = self
+            .client
+            .get(format!("{}/dream/latest", self.url))
+            .send()
+            .await
+            .ok();
+
+        let identity_body = match identity {
+            Some(r) => r.text().await.unwrap_or_default(),
+            None => "{}".into(),
+        };
+        let status_body = match status {
+            Some(r) => r.text().await.unwrap_or_default(),
+            None => "{}".into(),
+        };
+        let dream_body = match dream {
+            Some(r) => r.text().await.unwrap_or_default(),
+            None => "{}".into(),
+        };
+
+        let parse = |s: &str| -> serde_json::Value {
+            serde_json::from_str::<serde_json::Value>(s)
+                .map(|j| Self::parse_result(&j))
+                .unwrap_or(serde_json::Value::Null)
+        };
+
+        serde_json::json!({
+            "identity": parse(&identity_body),
+            "status": parse(&status_body),
+            "latest_dream": parse(&dream_body),
+        })
+        .to_string()
     }
 
     /// Retrieve recent ghost chat history for UI restoration.

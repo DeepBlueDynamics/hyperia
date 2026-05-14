@@ -58,6 +58,11 @@ impl ToolRegistry {
         defs.push(memory_dream_def());
         defs.push(memory_connect_def());
         defs.push(memory_status_def());
+        defs.push(memory_sql_def());
+        defs.push(memory_inspect_def());
+        defs.push(memory_keystone_def());
+        defs.push(memory_neighbors_def());
+        defs.push(memory_embody_def());
         defs.push(maximus_explain_def());
         let dynamic = self.dynamic.lock().unwrap();
         for dt in dynamic.iter() {
@@ -85,6 +90,11 @@ impl ToolRegistry {
             "memory_status" => return self.handle_memory_status().await,
             "memory_dream" => return self.handle_memory_dream().await,
             "memory_connect" => return self.handle_memory_connect(input).await,
+            "memory_sql" => return self.handle_memory_sql(input).await,
+            "memory_inspect" => return self.handle_memory_inspect(input).await,
+            "memory_keystone" => return self.handle_memory_keystone(input).await,
+            "memory_neighbors" => return self.handle_memory_neighbors(input).await,
+            "memory_embody" => return self.handle_memory_embody().await,
             "maximus_explain" => return self.compressor.explain_last().await,
             _ => {}
         }
@@ -166,6 +176,57 @@ impl ToolRegistry {
                 let info = fc.config_json();
                 serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".into())
             }
+            None => "Ferricula not configured.".into(),
+        }
+    }
+
+    async fn handle_memory_sql(&self, input: &serde_json::Value) -> String {
+        let sql = input["sql"].as_str().unwrap_or("");
+        if sql.is_empty() {
+            return "Error: 'sql' is required.".into();
+        }
+        match &self.ferricula {
+            Some(fc) => fc.sql(sql).await,
+            None => "Ferricula not configured.".into(),
+        }
+    }
+
+    async fn handle_memory_inspect(&self, input: &serde_json::Value) -> String {
+        let id = input["id"].as_u64().unwrap_or(0) as u32;
+        if id == 0 {
+            return "Error: 'id' is required.".into();
+        }
+        match &self.ferricula {
+            Some(fc) => fc.inspect(id).await,
+            None => "Ferricula not configured.".into(),
+        }
+    }
+
+    async fn handle_memory_keystone(&self, input: &serde_json::Value) -> String {
+        let id = input["id"].as_u64().unwrap_or(0) as u32;
+        if id == 0 {
+            return "Error: 'id' is required.".into();
+        }
+        match &self.ferricula {
+            Some(fc) => fc.keystone(id).await,
+            None => "Ferricula not configured.".into(),
+        }
+    }
+
+    async fn handle_memory_neighbors(&self, input: &serde_json::Value) -> String {
+        let id = input["id"].as_u64().unwrap_or(0) as u32;
+        if id == 0 {
+            return "Error: 'id' is required.".into();
+        }
+        match &self.ferricula {
+            Some(fc) => fc.neighbors(id).await,
+            None => "Ferricula not configured.".into(),
+        }
+    }
+
+    async fn handle_memory_embody(&self) -> String {
+        match &self.ferricula {
+            Some(fc) => fc.embody().await,
             None => "Ferricula not configured.".into(),
         }
     }
@@ -1141,6 +1202,91 @@ fn memory_status_def() -> ToolDef {
     ToolDef {
         name: "memory_status".into(),
         description: "Check the status of your Ferricula memory system — mode, data location, whether it's active.".into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {}
+        }),
+    }
+}
+
+fn memory_sql_def() -> ToolDef {
+    ToolDef {
+        name: "memory_sql".into(),
+        description: "Run a SQL query against your Ferricula memory store. Use this when recall \
+            isn't enough — for example to list all memories on a channel, count by tag, or join \
+            across tags. The memory store exposes columns including id, text, channel, role, source, \
+            importance, keystone. Example: SELECT text FROM memories WHERE channel = 'thinking' \
+            ORDER BY id DESC LIMIT 20."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "sql": { "type": "string", "description": "The SQL query to run" }
+            },
+            "required": ["sql"]
+        }),
+    }
+}
+
+fn memory_inspect_def() -> ToolDef {
+    ToolDef {
+        name: "memory_inspect".into(),
+        description: "Inspect a single memory by id — returns the full row including all tags, \
+            vector status, importance, keystone flag, and connections. Use this after recall when \
+            you want the full context of a specific hit."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "integer", "description": "Memory ID to inspect" }
+            },
+            "required": ["id"]
+        }),
+    }
+}
+
+fn memory_keystone_def() -> ToolDef {
+    ToolDef {
+        name: "memory_keystone".into(),
+        description: "Mark a memory as a keystone — protects it from decay during dream cycles. \
+            Use this for memories that should persist permanently (core facts about the user, \
+            project, or recurring patterns)."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "integer", "description": "Memory ID to mark as keystone" }
+            },
+            "required": ["id"]
+        }),
+    }
+}
+
+fn memory_neighbors_def() -> ToolDef {
+    ToolDef {
+        name: "memory_neighbors".into(),
+        description: "List the graph neighbors of a memory — connected memories and the edge \
+            labels between them. Use this after recall to explore associations and traverse the \
+            memory graph."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "integer", "description": "Memory ID whose neighbors to list" }
+            },
+            "required": ["id"]
+        }),
+    }
+}
+
+fn memory_embody_def() -> ToolDef {
+    ToolDef {
+        name: "memory_embody".into(),
+        description: "Get a contextual self-snapshot from Ferricula: identity (agent_id, name, \
+            archetype, hexagram), runtime status (memory counts, cognitive heat, thermodynamic \
+            state), and the latest dream report. Use this at the start of a session for grounding \
+            or before a complex task to orient yourself."
+            .into(),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {}
