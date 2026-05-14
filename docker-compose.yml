@@ -1,0 +1,25 @@
+services:
+  ferricula:
+    # Build from the sibling ferricula checkout. Once ferricula is published
+    # to a registry, swap `build:` for `image: deepbluedynamics/ferricula:0.9.7`.
+    build:
+      context: ../ferricula
+      dockerfile: Dockerfile
+    container_name: hyperia-ferricula
+    ports:
+      - "8765:8765" # REST API — what hyperia sidecar talks to
+      - "8766:8766" # MCP server — optional, for external agents
+    volumes:
+      - ferricula-data:/data
+    environment:
+      - PORT=8765
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8765/status"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  ferricula-data:
+    name: hyperia-ferricula-data

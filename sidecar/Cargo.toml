@@ -53,8 +53,9 @@ clap = { version = "4", features = ["derive"] }
 # Process tree (foreground process detection)
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 
-# Ferricula memory core (embedded)
-ferricula = { path = "../../ferricula" }
+# Ferricula memory: hyperia talks to ferricula over HTTP. Run ferricula
+# locally in Docker (`docker compose up ferricula`) or point at a remote URL.
+# No crate dependency — the sidecar builds anywhere without ferricula source.
 
 # Windows PE VERSIONINFO resource — populates the Authenticode-independent
 # "publisher" field that the Windows Defender Firewall dialog reads.
