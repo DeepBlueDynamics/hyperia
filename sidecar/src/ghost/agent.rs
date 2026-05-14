@@ -62,7 +62,15 @@ Rules:
 - If the user dismisses (tool result has dismissed: true), don't re-prompt for the same thing in the same turn — pick a different angle or end the turn.
 
 ## Configuration
-When the user asks about settings, configuration, missing services, or onboarding, call doctor first to get a readiness report. Then use show_button / show_input / show_picker to walk the user through what's missing. Use settings_set to apply choices to ~/.hyperia/hyperia.json.";
+When the user asks about settings, configuration, missing services, or onboarding, call doctor first to get a readiness report. Then use show_button / show_input / show_picker to walk the user through what's missing. Use settings_set to apply choices to ~/.hyperia/hyperia.json.
+
+## Changing the model
+When the user says \"change my model\", \"switch to OpenAI\", \"use Claude\", or anything similar, follow this exact two-step flow:
+  1. Call model_catalog() (no args). You get back a list of providers — anthropic, openai, ollama. Call show_picker with id=\"provider\" and one option per provider (use the `label` field as the picker label, `provider` as the value).
+  2. After the user picks a provider, call model_catalog(provider=\"<choice>\"). You get back the models for that provider. Call show_picker with id=\"model\" and one option per model (use `name` + a description line from `note` and `context`, and `id` as the value).
+  3. After the user picks a model, call settings_set with path=\"config.agentModel\" and value=<id>. Tell the user the change is saved and takes effect on the next message.
+  4. If they pick an `openai` model and there's no OpenAI key configured, follow up with show_input(id=\"openai_key\", kind=\"password\") to collect it, then settings_set(\"config.openaiToken\", <value>).
+Do not invent models. Only present what model_catalog returns.";
 
 #[derive(Debug, Clone)]
 pub enum SessionState {

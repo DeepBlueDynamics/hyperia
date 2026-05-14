@@ -114,6 +114,7 @@ impl ToolRegistry {
         defs.push(show_picker_def());
         // Readiness probe — used at session start by the config agent.
         defs.push(doctor_def());
+        defs.push(model_catalog_def());
         defs.push(maximus_explain_def());
         let dynamic = self.dynamic.lock().unwrap();
         for dt in dynamic.iter() {
@@ -150,6 +151,7 @@ impl ToolRegistry {
             "show_button" => return self.handle_show(input, "button").await,
             "show_picker" => return self.handle_show(input, "picker").await,
             "doctor" => return run_doctor().await.to_string(),
+            "model_catalog" => return model_catalog(input),
             "maximus_explain" => return self.compressor.explain_last().await,
             _ => {}
         }
@@ -1991,6 +1993,126 @@ async fn probe_ferricula() -> serde_json::Value {
         "url": url,
         "memory_count": memory_count,
     })
+}
+
+// -- Model catalog ----------------------------------------------------------
+
+struct ModelEntry {
+    id: &'static str,
+    name: &'static str,
+    provider: &'static str,
+    context: u32,
+    tier: &'static str,
+    note: &'static str,
+}
+
+// Curated table of models the agent can pick. Add/edit entries here when
+// providers ship new models. The agent uses this to drive a two-step
+// show_picker flow: pick provider → pick model.
+const MODEL_CATALOG: &[ModelEntry] = &[
+    // Anthropic
+    ModelEntry { id: "claude-opus-4-7",         name: "Claude Opus 4.7",        provider: "anthropic", context: 200_000, tier: "frontier", note: "Newest Opus — best reasoning, deepest tool use" },
+    ModelEntry { id: "claude-sonnet-4-6",       name: "Claude Sonnet 4.6",      provider: "anthropic", context: 200_000, tier: "balanced", note: "Strong daily driver — fast and capable" },
+    ModelEntry { id: "claude-haiku-4-5",        name: "Claude Haiku 4.5",       provider: "anthropic", context: 200_000, tier: "fast",     note: "Cheapest + fastest Claude — good for routine work" },
+    ModelEntry { id: "claude-3-7-sonnet",       name: "Claude 3.7 Sonnet",      provider: "anthropic", context: 200_000, tier: "balanced", note: "Previous-gen Sonnet — still capable" },
+    // OpenAI
+    ModelEntry { id: "gpt-4.1",                 name: "GPT-4.1",                provider: "openai",    context: 1_000_000, tier: "frontier", note: "Long-context flagship" },
+    ModelEntry { id: "gpt-4o",                  name: "GPT-4o",                 provider: "openai",    context: 128_000, tier: "balanced", note: "Multimodal default — vision + tools" },
+    ModelEntry { id: "gpt-4o-mini",             name: "GPT-4o mini",            provider: "openai",    context: 128_000, tier: "fast",     note: "Cheap and quick" },
+    ModelEntry { id: "o3-mini",                 name: "o3-mini",                provider: "openai",    context: 200_000, tier: "reasoning", note: "Smaller reasoning model" },
+    ModelEntry { id: "o1",                      name: "o1",                     provider: "openai",    context: 200_000, tier: "reasoning", note: "Deep reasoning, no streaming" },
+    // Local Ollama
+    ModelEntry { id: "ollama:llama3.2",         name: "Llama 3.2",              provider: "ollama",    context: 128_000, tier: "local",    note: "General-purpose local model" },
+    ModelEntry { id: "ollama:qwen2.5",          name: "Qwen 2.5",               provider: "ollama",    context: 128_000, tier: "local",    note: "Strong tool calling for a local model" },
+    ModelEntry { id: "ollama:gemma4:e2b",       name: "Gemma 4 e2b",            provider: "ollama",    context: 8_192,   tier: "tiny",     note: "Maximus's compression model — small + fast" },
+    ModelEntry { id: "ollama:mistral",          name: "Mistral 7B",             provider: "ollama",    context: 32_768,  tier: "local",    note: "Solid baseline local model" },
+];
+
+fn entry_to_json(e: &ModelEntry) -> serde_json::Value {
+    serde_json::json!({
+        "id": e.id,
+        "name": e.name,
+        "provider": e.provider,
+        "context": e.context,
+        "tier": e.tier,
+        "note": e.note,
+    })
+}
+
+fn model_catalog_def() -> ToolDef {
+    ToolDef {
+        name: "model_catalog".into(),
+        description: "List available LLM providers and models. Pass no arguments to get the list of \
+            providers (anthropic, openai, ollama, ...) for a first show_picker step. Pass \
+            provider=\"<name>\" to list the models for that provider for a second show_picker. \
+            Each model entry has id, name, provider, context window, tier, and a one-line note \
+            describing what it's good for. Use this to drive 'change my model' flows."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "provider": { "type": "string", "description": "Filter to one provider's models. Omit to get the list of providers." },
+                "query": { "type": "string", "description": "Optional fuzzy substring filter against id, name, or note." }
+            }
+        }),
+    }
+}
+
+/// Returns either a provider list (when no provider given) or the models
+/// for a specific provider. JSON shape:
+///   { providers: [{provider, model_count}], default_provider: ... }
+///   { models: [...], provider: "anthropic" }
+fn model_catalog(input: &serde_json::Value) -> String {
+    let provider = input["provider"].as_str().unwrap_or("").trim().to_lowercase();
+    let query = input["query"].as_str().unwrap_or("").trim().to_lowercase();
+
+    if provider.is_empty() {
+        // Aggregate by provider
+        let mut counts: std::collections::BTreeMap<&str, u32> =
+            std::collections::BTreeMap::new();
+        for e in MODEL_CATALOG.iter() {
+            *counts.entry(e.provider).or_insert(0) += 1;
+        }
+        let providers: Vec<serde_json::Value> = counts
+            .into_iter()
+            .map(|(p, c)| {
+                serde_json::json!({
+                    "provider": p,
+                    "model_count": c,
+                    "label": match p {
+                        "anthropic" => "Anthropic (Claude)",
+                        "openai" => "OpenAI (GPT, o-series)",
+                        "ollama" => "Ollama (local)",
+                        other => other,
+                    },
+                })
+            })
+            .collect();
+        return serde_json::json!({
+            "providers": providers,
+        })
+        .to_string();
+    }
+
+    let models: Vec<serde_json::Value> = MODEL_CATALOG
+        .iter()
+        .filter(|e| e.provider.eq_ignore_ascii_case(&provider))
+        .filter(|e| {
+            if query.is_empty() {
+                return true;
+            }
+            e.id.to_lowercase().contains(&query)
+                || e.name.to_lowercase().contains(&query)
+                || e.note.to_lowercase().contains(&query)
+        })
+        .map(entry_to_json)
+        .collect();
+
+    serde_json::json!({
+        "provider": provider,
+        "models": models,
+    })
+    .to_string()
 }
 
 async fn probe_ollama() -> serde_json::Value {
