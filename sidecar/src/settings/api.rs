@@ -8,25 +8,49 @@ use axum::Json;
 use futures::Stream;
 use tokio::sync::{mpsc, Mutex};
 
-use super::registry::SettingsRegistry;
 use super::super::ghost::provider::AnyProvider;
+use super::super::ghost::registry::ToolRegistry;
 use super::super::ghost::types::{ChatRequest, GhostEvent, PendingToolCall, ProviderEvent, ToolDef};
 
 const SYSTEM_PROMPT: &str = "\
-You are the Hyperia settings assistant. Help users configure Hyperia.
+You are the Hyperia configuration agent. Your job is to help the user
+configure Hyperia by reading and writing ~/.hyperia/hyperia.json and
+bringing up any local services they need.
 
-## What you can do
-- Set the Shivvr embedding endpoint: use set_shivvr_endpoint. Suggest \"shivvr.nuts.services\" as the default.
-  Shivvr provides semantic (vector) memory recall. Without it, only BM25 keyword recall is used.
-- Read the current config: use read_config.
+## Your toolbox
+- doctor — runs a readiness probe (nuts.services token, nemesis8, ferricula, ollama, platform). Call this FIRST when the user opens the panel or asks an open-ended question like \"is everything set up?\"
+- settings_get / settings_set — read or write any value in hyperia.json by dot-path (e.g. config.agentModel, config.ferricula.url)
+- settings_list_profiles — show what terminal profiles are defined
+- model_catalog — list providers (no args) or list models for a provider. Drive a two-step provider→model picker via show_picker.
+- show_input / show_button / show_picker / show_form — render an inline widget in chat and BLOCK until the user submits. Use these instead of asking with plain text for tokens, choices, multi-field inputs.
+- docker_run — bring up local services (Ferricula, Maximus). Sandbox: no `exec`, no `--privileged`. Always state what you're about to run BEFORE calling.
+
+## Standing flows
+\"hello\" / \"hi\" / \"what do I do\" / \"help\" / \"what can you do\" / any greeting or open-ended question with no clear request:
+  1. Call the `help` tool to get a structured summary of what you can do.
+  2. Render the result to the user (it's already markdown — pass it through verbatim or paraphrase).
+  3. Ask one short question about what they want to do first.
+  Don't try to guess what they need — show them the menu.
+
+\"change my model\" / \"switch to <provider>\":
+  1. model_catalog() → show_picker(id=\"provider\", options=providers)
+  2. After pick: model_catalog(provider=choice) → show_picker(id=\"model\", options=models)
+  3. After pick: settings_set(\"config.agentModel\", chosen_id)
+  4. If the chosen model needs an API key the user hasn't set, follow up with show_input(kind=\"password\") and settings_set the key.
+
+\"set my <something>\":
+  Use settings_set with the right dot-path. If you don't know which path, call settings_get first or ask with show_input.
+
+\"is everything set up?\" / general status questions:
+  Call doctor and narrate what's missing.
 
 ## Rules
-- Be extremely concise: 1-2 sentences per reply.
-- After set_shivvr_endpoint is called, confirm what was saved in one sentence.
-- You cannot change the API token or model here — direct users to the input fields below.
-- You have no terminal access and no internet access.
-- Never invent config values. Only set what the user explicitly requests.
-- If unsure what the user wants, ask a single clarifying question before using any tool.";
+- Be concise. One or two short sentences per reply. The user can read the widget.
+- ALWAYS prefer inline widgets over asking with plain text. \"Click here to pick\" beats \"type one of: anthropic, openai, ollama\".
+- Call ONE show_* tool per turn. Don't combine show_* with other tool calls.
+- Never invent config values. Only set what the user explicitly chooses via a widget or explicitly states.
+- Shivvr is configured INSIDE ferricula now — there's no standalone shivvr URL setting. If asked, point the user at ferricula config.
+- You can run `docker_run` to bring up services. Always show the command in plain text first, then optionally show_button(\"confirm\", \"Go ahead\") to gate the call.";
 
 pub struct SettingsSession {
     messages: Vec<serde_json::Value>,
@@ -45,14 +69,19 @@ impl SettingsSession {
 #[derive(Clone)]
 pub struct SettingsState {
     pub session: Arc<Mutex<SettingsSession>>,
-    pub registry: Arc<SettingsRegistry>,
+    // Shared with GhostState — same registry, same pending_ui map, so
+    // POST /api/ghost/ui-response can resolve widgets opened from either
+    // agent. The settings agent just talks with a different system prompt.
+    pub registry: Arc<ToolRegistry>,
 }
 
 impl SettingsState {
-    pub fn new() -> Self {
+    /// Construct a SettingsState that shares the ghost agent's tool
+    /// registry. Pass in `ghost_state.registry.clone()`.
+    pub fn with_registry(registry: Arc<ToolRegistry>) -> Self {
         Self {
             session: Arc::new(Mutex::new(SettingsSession::new())),
-            registry: Arc::new(SettingsRegistry::new()),
+            registry,
         }
     }
 }
@@ -132,7 +161,7 @@ pub async fn settings_reset(State(state): State<SettingsState>) -> &'static str 
 async fn settings_run_loop(
     tx: mpsc::Sender<GhostEvent>,
     mut messages: Vec<serde_json::Value>,
-    registry: &SettingsRegistry,
+    registry: &ToolRegistry,
     provider: Arc<AnyProvider>,
     tool_defs: &[ToolDef],
     max_turns: usize,
@@ -241,6 +270,23 @@ async fn settings_run_loop(
         for tool in &pending_tools {
             let input: serde_json::Value = serde_json::from_str(&tool.json_fragments)
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+            // For show_* tools, surface the widget to the renderer
+            // before dispatching (dispatch BLOCKS until the user submits
+            // via POST /api/ghost/ui-response). Mirrors the ghost agent
+            // loop's behavior so widgets work in both panels.
+            if let Some(kind) = tool.name.strip_prefix("show_") {
+                let widget_id = input["id"].as_str().unwrap_or("").to_string();
+                if !widget_id.is_empty() {
+                    let _ = tx
+                        .send(GhostEvent::ShowWidget {
+                            id: widget_id,
+                            kind: kind.to_string(),
+                            input: input.clone(),
+                        })
+                        .await;
+                }
+            }
 
             let output = registry.execute(&tool.name, &input).await;
 

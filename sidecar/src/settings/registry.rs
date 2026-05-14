@@ -12,17 +12,6 @@ impl SettingsRegistry {
     pub fn tool_defs(&self) -> Vec<ToolDef> {
         let defs: Vec<serde_json::Value> = serde_json::from_value(serde_json::json!([
             {
-                "name": "set_shivvr_endpoint",
-                "description": "Set the Shivvr embedding service URL in the Hyperia config. Shivvr provides semantic (vector) memory recall. Suggest 'shivvr.nuts.services' as the default. Pass empty string to disable Shivvr and fall back to BM25-only recall.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "url": { "type": "string", "description": "Shivvr service URL, e.g. shivvr.nuts.services. Pass empty string to disable." }
-                    },
-                    "required": ["url"]
-                }
-            },
-            {
                 "name": "read_config",
                 "description": "Read the current Hyperia configuration from disk. Returns the JSON contents of ~/.hyperia/hyperia.json, with the agentToken redacted for safety.",
                 "input_schema": {
@@ -39,15 +28,8 @@ impl SettingsRegistry {
     }
 
     pub async fn execute(&self, name: &str, input: &serde_json::Value) -> String {
+        let _ = input;
         match name {
-            "set_shivvr_endpoint" => {
-                let url = input["url"].as_str().unwrap_or("").trim().to_string();
-                if url.is_empty() {
-                    "ACTION:set_shivvr url=".into()
-                } else {
-                    format!("ACTION:set_shivvr url={}", url)
-                }
-            }
             "read_config" => self.read_config(),
             _ => format!("Unknown settings tool: {}", name),
         }

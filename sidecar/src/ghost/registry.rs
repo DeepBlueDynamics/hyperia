@@ -117,6 +117,7 @@ impl ToolRegistry {
         defs.push(doctor_def());
         defs.push(model_catalog_def());
         defs.push(docker_run_def());
+        defs.push(help_def());
         defs.push(maximus_explain_def());
         let dynamic = self.dynamic.lock().unwrap();
         for dt in dynamic.iter() {
@@ -156,6 +157,7 @@ impl ToolRegistry {
             "doctor" => return run_doctor().await.to_string(),
             "model_catalog" => return model_catalog(input),
             "docker_run" => return docker_run(input).await,
+            "help" => return help_text(),
             "maximus_explain" => return self.compressor.explain_last().await,
             _ => {}
         }
@@ -1848,6 +1850,38 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
     defs.into_iter()
         .map(|v| serde_json::from_value(v).unwrap())
         .collect()
+}
+
+fn help_def() -> ToolDef {
+    ToolDef {
+        name: "help".into(),
+        description: "Return a short markdown summary of what the configuration agent can do for the user. \
+            Call this when the user opens the settings panel and says something like 'hello', 'hi', \
+            'what do I do', 'help', 'what can you do', or anything else that signals they don't know \
+            where to start. After calling, narrate the highlights in your own words and ask what \
+            they want to do first."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {}
+        }),
+    }
+}
+
+fn help_text() -> String {
+    [
+        "## What I can do for you",
+        "",
+        "- **Change your model** — say *change my model* and I'll show you the providers (Anthropic, OpenAI, Ollama) and the models under each. Pick one and I'll save it.",
+        "- **Configure ferricula** — your memory backend. Tell me the URL (or that you want it local in Docker) and I'll set it.",
+        "- **Run doctor** — I'll probe whether your token is set, whether ferricula is reachable, whether Ollama is running, etc., and tell you what's missing.",
+        "- **Bring up local services in Docker** — I can run `docker run`/`docker compose` for you to spin up ferricula or other Hyperia services (tightly scoped — no general terminal access).",
+        "- **Read or set anything in your config** — `~/.hyperia/hyperia.json`. Just ask: *set my font size to 16*, *what's my agent model*, etc.",
+        "- **Set your default terminal profile** — *make WSL my default* and I'll persist it.",
+        "",
+        "Try one of these to start: *check my setup*, *change my model*, *what's my current config*.",
+    ]
+    .join("\n")
 }
 
 fn doctor_def() -> ToolDef {

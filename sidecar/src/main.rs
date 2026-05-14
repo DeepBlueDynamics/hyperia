@@ -924,6 +924,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Ghost agent routes — always mounted, config lazy-loaded per request
     let ghost_state = ghost::GhostState::new(args.port);
+    let shared_registry = ghost_state.registry.clone();
     let ghost_routes = axum::Router::new()
         .route("/api/ghost/chat", axum::routing::post(ghost::api::ghost_chat))
         .route("/api/ghost/status", axum::routing::get(ghost::api::ghost_status))
@@ -938,8 +939,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ghost/window-closed", axum::routing::post(ghost::api::ghost_window_closed))
         .with_state(ghost_state);
 
-    // Settings agent routes — separate session, limited tool set
-    let settings_state = settings::SettingsState::new();
+    // Settings agent routes — separate session, SHARED tool registry so
+    // the configuration agent has full access to doctor / show_* / settings_set /
+    // model_catalog / docker_run / etc. Widgets opened from either panel
+    // resolve through the same pending_ui map via /api/ghost/ui-response.
+    let settings_state = settings::SettingsState::with_registry(shared_registry);
     let settings_routes = axum::Router::new()
         .route("/api/settings/chat", axum::routing::post(settings::api::settings_chat))
         .route("/api/settings/reset", axum::routing::post(settings::api::settings_reset))
