@@ -753,6 +753,18 @@ export function initSettings() {
     openSettings();
   });
 
+  ipcMain.on('set-default-profile', (event, name: string) => {
+    try {
+      const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+      if (!cfg.config) cfg.config = {};
+      cfg.config.defaultProfile = String(name || '');
+      writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+      event.sender.send('set-default-profile-done', {ok: true, name});
+    } catch (e) {
+      event.sender.send('set-default-profile-done', {ok: false, error: String(e)});
+    }
+  });
+
   ipcMain.on('edit-config-external', () => {
     // Try VS Code first, fall back to TextEdit on Mac or system default
     if (process.platform === 'darwin') {

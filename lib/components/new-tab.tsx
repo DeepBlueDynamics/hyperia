@@ -16,6 +16,10 @@ interface Props {
 
 const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
   const [open, setOpen] = useState(false);
+  // Optimistic override so right-click "set as default" updates the
+  // visual highlight immediately without waiting for a config reload.
+  const [localDefault, setLocalDefault] = useState<string | null>(null);
+  const effectiveDefault = localDefault || defaultProfile;
   const ref = useRef<HTMLDivElement>(null);
 
   // Close dropdown on outside click
@@ -42,7 +46,24 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
   });
 
   const handleClick = () => {
-    openNewTab(defaultProfile);
+    openNewTab(effectiveDefault);
+  };
+
+  const handleSetDefault = (e: React.MouseEvent, name: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setLocalDefault(name);
+    // Persist to ~/.hyperia/hyperia.json via main-process IPC.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const {ipcRenderer} = require('electron') as {ipcRenderer: {send: (ch: string, ...args: any[]) => void}};
+      ipcRenderer.send('set-default-profile', name);
+    } catch {
+      // Renderer might not have IPC available in some test contexts —
+      // optimistic update still wins for this session.
+    }
+    // Don't close the dropdown — the user might want to launch right
+    // after setting default. They can outside-click to dismiss.
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -104,15 +125,26 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
 
       {open && shellProfiles.length > 0 && (
         <div className="new_tab_dropdown">
-          {shellProfiles.map((p: any) => (
-            <div
-              key={p.name}
-              className={`new_tab_option ${p.name === defaultProfile ? 'new_tab_option_default' : ''}`}
-              onClick={() => handleSelect(p.name)}
-            >
-              {p.name}
-            </div>
-          ))}
+          <div className="new_tab_hint">left-click → launch · right-click → set default</div>
+          {shellProfiles.map((p: any) => {
+            const isDefault = p.name === effectiveDefault;
+            return (
+              <div
+                key={p.name}
+                className={`new_tab_option ${isDefault ? 'new_tab_option_default' : ''}`}
+                onClick={() => handleSelect(p.name)}
+                onContextMenu={(e) => handleSetDefault(e, p.name)}
+                title={
+                  isDefault
+                    ? 'Default profile · click to launch · right-click to keep as default'
+                    : 'click to launch · right-click to set as default'
+                }
+              >
+                {isDefault && <span className="new_tab_option_star">★</span>}
+                {p.name}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -187,6 +219,21 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
 
         .new_tab_option_default {
           color: #fff;
+        }
+
+        .new_tab_option_star {
+          color: #c839c5;
+          margin-right: 6px;
+          font-size: 11px;
+        }
+
+        .new_tab_hint {
+          padding: 4px 12px 6px;
+          font-size: 10px;
+          color: #666;
+          border-bottom: 1px solid #2a2a2a;
+          margin-bottom: 2px;
+          user-select: none;
         }
       `}</style>
     </div>
