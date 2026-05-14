@@ -238,6 +238,93 @@ function buildHyperiaHtml(): string {
     text-align: center;
   }
 
+  /* Inline UI widgets for show_input / show_button / show_picker */
+  .msg.widget {
+    background: #0a0a18;
+    border: 1px solid #c839c560;
+    align-self: stretch;
+    color: #ddd;
+    padding: 10px 12px;
+    border-radius: 6px;
+    max-width: 100%;
+  }
+  .msg.widget.submitted {
+    opacity: 0.55;
+    border-color: #5cc88c80;
+  }
+  .widget-prompt {
+    color: #c0c0d8;
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+  .widget-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .widget-input {
+    flex: 1;
+    background: #050510;
+    border: 1px solid #2a2a40;
+    border-radius: 4px;
+    color: #e0e0e0;
+    padding: 6px 8px;
+    font: inherit;
+    outline: none;
+  }
+  .widget-input:focus {
+    border-color: #c839c5;
+  }
+  .widget-submit, .widget-action, .widget-option {
+    background: #1a1a2e;
+    border: 1px solid #c839c580;
+    border-radius: 4px;
+    color: #e0e0e0;
+    padding: 6px 12px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .widget-submit:hover, .widget-action:hover, .widget-option:hover {
+    background: #2a2a3e;
+    border-color: #c839c5;
+  }
+  .widget-dismiss {
+    background: transparent;
+    border: 1px solid #333;
+    border-radius: 4px;
+    color: #888;
+    padding: 4px 8px;
+    cursor: pointer;
+  }
+  .widget-dismiss:hover {
+    color: #c51e14;
+    border-color: #c51e1480;
+  }
+  .widget-hint {
+    color: #888;
+    font-size: 11px;
+    margin-top: 6px;
+  }
+  .widget-options {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+  .widget-option {
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .picker-label {
+    color: #e0e0e0;
+  }
+  .picker-desc {
+    color: #888;
+    font-size: 11px;
+  }
+
   .thinking {
     display: flex;
     gap: 5px;
@@ -741,6 +828,96 @@ function buildHyperiaHtml(): string {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
+  // Render an inline UI widget for a pending show_* tool call. The agent
+  // is blocked on dispatch until the user submits (or dismisses), at
+  // which point we POST /api/ghost/ui-response and the agent's
+  // tool_result fires from the sidecar.
+  function renderWidget(kind, inputObj) {
+    const widgetId = (inputObj && inputObj.id) || '';
+    if (!widgetId) return;
+    const div = document.createElement('div');
+    div.className = 'msg widget';
+    div.id = 'widget-' + widgetId;
+
+    let body = '';
+    if (kind === 'input') {
+      const prompt = escapeHtml(inputObj.prompt || 'Enter a value');
+      const inputKind = inputObj.kind === 'password' ? 'password' :
+                        inputObj.kind === 'number' ? 'number' : 'text';
+      const defaultVal = escapeHtml(String(inputObj.default || ''));
+      body =
+        '<div class="widget-prompt">' + prompt + '</div>'
+        + '<div class="widget-row">'
+        + '<input type="' + inputKind + '" class="widget-input" value="' + defaultVal + '" />'
+        + '<button class="widget-submit">Submit</button>'
+        + '<button class="widget-dismiss" title="Dismiss">✕</button>'
+        + '</div>';
+    } else if (kind === 'button') {
+      const label = escapeHtml(inputObj.label || 'OK');
+      const hint = inputObj.hint ? '<div class="widget-hint">' + escapeHtml(inputObj.hint) + '</div>' : '';
+      body =
+        '<div class="widget-row">'
+        + '<button class="widget-action">' + label + '</button>'
+        + '<button class="widget-dismiss" title="Dismiss">✕</button>'
+        + '</div>' + hint;
+    } else if (kind === 'picker') {
+      const prompt = escapeHtml(inputObj.prompt || 'Pick one');
+      const opts = (inputObj.options || []).map((o) => {
+        const value = escapeHtml(String(o.value || ''));
+        const label = escapeHtml(String(o.label || o.value || ''));
+        const desc = o.description ? '<span class="picker-desc">' + escapeHtml(String(o.description)) + '</span>' : '';
+        return '<button class="widget-option" data-value="' + value + '">'
+          + '<span class="picker-label">' + label + '</span>' + desc
+          + '</button>';
+      }).join('');
+      body =
+        '<div class="widget-prompt">' + prompt + '</div>'
+        + '<div class="widget-options">' + opts + '</div>'
+        + '<div class="widget-row"><button class="widget-dismiss" title="Dismiss">✕</button></div>';
+    } else {
+      body = '<div class="widget-prompt">Unknown widget kind: ' + escapeHtml(kind) + '</div>';
+    }
+
+    div.innerHTML = body;
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+
+    const send = async (payload) => {
+      // Lock the widget so the user can't double-submit while we round-trip.
+      div.classList.add('submitted');
+      div.querySelectorAll('button, input').forEach((el) => { el.disabled = true; });
+      try {
+        await fetch(SIDECAR_URL + '/api/ghost/ui-response', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } catch (e) {
+        addMsg('Failed to submit widget response: ' + e, 'error');
+        div.classList.remove('submitted');
+        div.querySelectorAll('button, input').forEach((el) => { el.disabled = false; });
+      }
+    };
+
+    // Wire interaction handlers
+    if (kind === 'input') {
+      const inp = div.querySelector('.widget-input');
+      const submit = () => send({ id: widgetId, value: inp.value });
+      div.querySelector('.widget-submit').onclick = submit;
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+      setTimeout(() => inp.focus(), 0);
+    } else if (kind === 'button') {
+      div.querySelector('.widget-action').onclick = () =>
+        send({ id: widgetId, value: 'clicked' });
+    } else if (kind === 'picker') {
+      div.querySelectorAll('.widget-option').forEach((btn) => {
+        btn.onclick = () => send({ id: widgetId, value: btn.getAttribute('data-value') });
+      });
+    }
+    div.querySelector('.widget-dismiss').onclick = () =>
+      send({ id: widgetId, dismissed: true });
+  }
+
   function setStreaming(val) {
     streaming = val;
     input.disabled = val;
@@ -908,6 +1085,16 @@ function buildHyperiaHtml(): string {
                 setToolOutput(event.id, event.name, event.input, event.output);
                 hudStats.tools++;
                 updateHud(hudStats);
+                break;
+
+              case 'show_widget':
+                removeThinking();
+                if (assistantDiv) {
+                  assistantDiv.classList.remove('streaming');
+                  assistantDiv = null;
+                  assistantText = '';
+                }
+                renderWidget(event.kind, event.input);
                 break;
 
               case 'stats':

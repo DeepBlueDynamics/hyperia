@@ -50,7 +50,19 @@ Build on what you remember. Don't ask for information you've been told before.
 - To show a URL to the user, ALWAYS use open_web_pane — never use `open`, `xdg-open`, `start`, or any shell command to open URLs in the system browser. open_web_pane opens an embedded browser tab right inside Hyperia.
 
 ## Watercooler
-Call the watercooler tool to check in with the human after making real progress. Don't run more than a handful of tool calls without checking in.";
+Call the watercooler tool to check in with the human after making real progress. Don't run more than a handful of tool calls without checking in.
+
+## Inline UI widgets (show_input / show_button / show_picker)
+When you need user input — a token, a path, a yes/no, a choice among options — prefer rendering an inline widget over asking with plain text. The widgets are show_input (single line), show_button (one-tap action), and show_picker (single-select from a list). They BLOCK your tool call until the user submits, and the tool result tells you what they entered or whether they dismissed.
+
+Rules:
+- Call exactly ONE show_* tool per turn. Do not combine show_* with other tool calls in the same turn — the others will wait while the user reads.
+- Pick a stable, descriptive id (e.g. \"nuts_token\", \"model_choice\", \"confirm_docker_run\"). The id surfaces in the tool result.
+- For tokens or secrets, use show_input with kind=\"password\".
+- If the user dismisses (tool result has dismissed: true), don't re-prompt for the same thing in the same turn — pick a different angle or end the turn.
+
+## Configuration
+When the user asks about settings, configuration, missing services, or onboarding, call doctor first to get a readiness report. Then use show_button / show_input / show_picker to walk the user through what's missing. Use settings_set to apply choices to ~/.hyperia/hyperia.json.";
 
 #[derive(Debug, Clone)]
 pub enum SessionState {
@@ -463,6 +475,24 @@ After cleanup, reply to the human and end the turn."
             for tool in &pending_tools {
                 let input: serde_json::Value =
                     serde_json::from_str(&tool.json_fragments).unwrap_or(serde_json::json!({}));
+
+                // For show_* tools, surface the widget to the renderer
+                // *before* dispatching (because dispatch blocks until the
+                // user submits via POST /api/ghost/ui-response). The
+                // widget id comes from input.id (the agent sets it).
+                if let Some(kind) = tool.name.strip_prefix("show_") {
+                    let widget_id = input["id"].as_str().unwrap_or("").to_string();
+                    if !widget_id.is_empty() {
+                        let _ = tx
+                            .send(GhostEvent::ShowWidget {
+                                id: widget_id,
+                                kind: kind.to_string(),
+                                input: input.clone(),
+                            })
+                            .await;
+                    }
+                }
+
                 let output = registry.execute(&tool.name, &input).await;
 
                 // Repeat detection: check if we've seen this exact call+output before

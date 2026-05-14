@@ -10,6 +10,13 @@ pub enum GhostEvent {
     ToolStart { name: String, id: String },
     #[serde(rename = "tool_result")]
     ToolResult { id: String, name: String, input: serde_json::Value, output: String },
+    /// Fires for show_input / show_button / show_picker tools right before
+    /// the dispatch blocks on user input. The renderer uses this to render
+    /// the matching inline widget (passing `input` through). The agent's
+    /// `tool_result` arrives later when the user submits via
+    /// POST /api/ghost/ui-response.
+    #[serde(rename = "show_widget")]
+    ShowWidget { id: String, kind: String, input: serde_json::Value },
     #[serde(rename = "watercooler")]
     Watercooler { summary: String, tool_calls: usize },
     #[serde(rename = "retrying")]

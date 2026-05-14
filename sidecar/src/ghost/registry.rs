@@ -1,7 +1,20 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+
+use tokio::sync::oneshot;
 
 use super::ferricula::FerriculaBackend;
 use super::types::ToolDef;
+
+/// Response from the renderer to a pending show_* tool call.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiResponse {
+    /// User submitted a value (text, picked option, button clicked).
+    Value(serde_json::Value),
+    /// User dismissed the widget without submitting.
+    Dismissed,
+}
 
 /// How a dynamic tool is invoked.
 #[derive(Debug, Clone)]
@@ -26,6 +39,10 @@ pub struct ToolRegistry {
     http_port: u16,
     ferricula: Option<Arc<FerriculaBackend>>,
     compressor: crate::ghost::compressor::ContextCompressor,
+    /// Map from show_* tool widget id → oneshot sender. When the renderer
+    /// POSTs to /api/ghost/ui-response, the matching sender fires and the
+    /// tool dispatch's await returns.
+    pending_ui: Arc<tokio::sync::Mutex<HashMap<String, oneshot::Sender<UiResponse>>>>,
 }
 
 impl ToolRegistry {
@@ -37,6 +54,33 @@ impl ToolRegistry {
             http_port,
             ferricula: None,
             compressor: crate::ghost::compressor::ContextCompressor::from_env(),
+            pending_ui: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Called by the HTTP handler when the renderer submits a ui_response.
+    /// Returns true if the id matched a pending widget.
+    pub async fn resolve_ui_response(&self, id: &str, response: UiResponse) -> bool {
+        let mut map = self.pending_ui.lock().await;
+        match map.remove(id) {
+            Some(tx) => tx.send(response).is_ok(),
+            None => false,
+        }
+    }
+
+    /// Show a widget and block until the user responds. The tool_use the
+    /// agent emitted (with the widget id in its input) is what the renderer
+    /// sees via the SSE event stream; this just registers the awaiter.
+    async fn await_ui_response(&self, id: &str) -> UiResponse {
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut map = self.pending_ui.lock().await;
+            map.insert(id.to_string(), tx);
+        }
+        match rx.await {
+            Ok(r) => r,
+            // Sender dropped — treat as dismissed. Happens on shutdown.
+            Err(_) => UiResponse::Dismissed,
         }
     }
 
@@ -63,6 +107,13 @@ impl ToolRegistry {
         defs.push(memory_keystone_def());
         defs.push(memory_neighbors_def());
         defs.push(memory_embody_def());
+        // Inline-UI tools — show a widget in the chat and block until the
+        // user submits a value (or dismisses it).
+        defs.push(show_input_def());
+        defs.push(show_button_def());
+        defs.push(show_picker_def());
+        // Readiness probe — used at session start by the config agent.
+        defs.push(doctor_def());
         defs.push(maximus_explain_def());
         let dynamic = self.dynamic.lock().unwrap();
         for dt in dynamic.iter() {
@@ -95,6 +146,10 @@ impl ToolRegistry {
             "memory_keystone" => return self.handle_memory_keystone(input).await,
             "memory_neighbors" => return self.handle_memory_neighbors(input).await,
             "memory_embody" => return self.handle_memory_embody().await,
+            "show_input" => return self.handle_show(input, "input").await,
+            "show_button" => return self.handle_show(input, "button").await,
+            "show_picker" => return self.handle_show(input, "picker").await,
+            "doctor" => return run_doctor().await.to_string(),
             "maximus_explain" => return self.compressor.explain_last().await,
             _ => {}
         }
@@ -228,6 +283,34 @@ impl ToolRegistry {
         match &self.ferricula {
             Some(fc) => fc.embody().await,
             None => "Ferricula not configured.".into(),
+        }
+    }
+
+    /// Common handler for show_input / show_button / show_picker.
+    ///
+    /// The agent emits a tool_use with the widget id in `input.id`. We
+    /// register a oneshot keyed by that id, then await. The renderer renders
+    /// the widget (driven by the tool_use it sees via SSE) and POSTs the
+    /// user's response to /api/ghost/ui-response, which resolves the
+    /// oneshot. The returned string becomes the tool_result the agent sees.
+    async fn handle_show(&self, input: &serde_json::Value, kind: &str) -> String {
+        let id = input["id"].as_str().unwrap_or("").trim();
+        if id.is_empty() {
+            return serde_json::json!({
+                "error": format!("show_{} requires a non-empty 'id' field", kind)
+            })
+            .to_string();
+        }
+        let response = self.await_ui_response(id).await;
+        match response {
+            UiResponse::Value(v) => serde_json::json!({
+                "ui_response": { "id": id, "value": v }
+            })
+            .to_string(),
+            UiResponse::Dismissed => serde_json::json!({
+                "ui_response": { "id": id, "dismissed": true }
+            })
+            .to_string(),
         }
     }
 
@@ -1279,6 +1362,83 @@ fn memory_neighbors_def() -> ToolDef {
     }
 }
 
+fn show_input_def() -> ToolDef {
+    ToolDef {
+        name: "show_input".into(),
+        description: "Render a single-line text input widget inline in the chat and BLOCK \
+            until the user submits a value (or dismisses). The tool result is the value the \
+            user typed, wrapped as { ui_response: { id, value } } — or { ui_response: { id, \
+            dismissed: true } } if they closed the widget. Call exactly one show_* tool per \
+            turn and do not combine with other tool calls. Use 'kind=password' to hide the \
+            entered text (good for tokens)."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Unique widget id for this turn (e.g. 'nuts_token', 'project_path')" },
+                "prompt": { "type": "string", "description": "Short user-facing prompt above the input" },
+                "kind": { "type": "string", "enum": ["text", "password", "number"], "description": "Input kind (default text)" },
+                "default": { "type": "string", "description": "Optional default value" }
+            },
+            "required": ["id", "prompt"]
+        }),
+    }
+}
+
+fn show_button_def() -> ToolDef {
+    ToolDef {
+        name: "show_button".into(),
+        description: "Render a clickable button inline in the chat and BLOCK until the user \
+            clicks (or dismisses). The tool result is { ui_response: { id, value: 'clicked' } } \
+            on click, or { ui_response: { id, dismissed: true } } if they ignored it. Use this \
+            when you want a one-tap confirmation or to surface an action like 'Open config \
+            editor'. Call exactly one show_* tool per turn."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Unique widget id for this turn" },
+                "label": { "type": "string", "description": "Button text" },
+                "hint": { "type": "string", "description": "Optional secondary text shown under the button" }
+            },
+            "required": ["id", "label"]
+        }),
+    }
+}
+
+fn show_picker_def() -> ToolDef {
+    ToolDef {
+        name: "show_picker".into(),
+        description: "Render a single-select picker inline in the chat and BLOCK until the \
+            user picks an option (or dismisses). The tool result is { ui_response: { id, value: \
+            <chosen value> } } or { ui_response: { id, dismissed: true } }. Use this for model \
+            selection, profile selection, yes/no with custom labels, etc. Call exactly one \
+            show_* tool per turn."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Unique widget id for this turn" },
+                "prompt": { "type": "string", "description": "Short user-facing prompt above the picker" },
+                "options": {
+                    "type": "array",
+                    "description": "Options to choose from",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "value": { "type": "string", "description": "Returned as ui_response.value when picked" },
+                            "label": { "type": "string", "description": "Display label" },
+                            "description": { "type": "string", "description": "Optional secondary line under the label" }
+                        },
+                        "required": ["value", "label"]
+                    }
+                }
+            },
+            "required": ["id", "prompt", "options"]
+        }),
+    }
+}
+
 fn memory_embody_def() -> ToolDef {
     ToolDef {
         name: "memory_embody".into(),
@@ -1645,4 +1805,219 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
     defs.into_iter()
         .map(|v| serde_json::from_value(v).unwrap())
         .collect()
+}
+
+fn doctor_def() -> ToolDef {
+    ToolDef {
+        name: "doctor".into(),
+        description: "Run a readiness probe across Hyperia's prerequisites and return a \
+            structured JSON report. Checks: nuts.services token configured + best-effort auth \
+            verification; nemesis8 binary on disk; shivvr embedding service reachability; \
+            ferricula memory reachability + memory count; ollama running + installed models; \
+            host platform + arch. Call this at the start of a configuration conversation to \
+            decide what to ask the user next."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {}
+        }),
+    }
+}
+
+/// Probe Hyperia's prerequisites and return a JSON report. Each sub-probe
+/// has its own tight timeout; the function returns when the slowest probe
+/// finishes (or its timeout fires).
+pub async fn run_doctor() -> serde_json::Value {
+    let (nuts, nemesis, shivvr, ferricula, ollama) = tokio::join!(
+        probe_nuts_token(),
+        probe_nemesis(),
+        probe_shivvr(),
+        probe_ferricula(),
+        probe_ollama(),
+    );
+    serde_json::json!({
+        "nuts_token": nuts,
+        "nemesis": nemesis,
+        "shivvr": shivvr,
+        "ferricula": ferricula,
+        "ollama": ollama,
+        "platform": {
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+        },
+    })
+}
+
+fn hyperia_config_path() -> std::path::PathBuf {
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").unwrap_or_default()
+    } else {
+        std::env::var("HOME").unwrap_or_default()
+    };
+    std::path::PathBuf::from(home).join(".hyperia").join("hyperia.json")
+}
+
+fn read_hyperia_config() -> Option<serde_json::Value> {
+    let path = hyperia_config_path();
+    let data = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&data).ok()
+}
+
+async fn probe_nuts_token() -> serde_json::Value {
+    let cfg = read_hyperia_config();
+    let token = cfg
+        .as_ref()
+        .and_then(|c| c["config"]["nuts"]["token"].as_str())
+        .map(|s| s.to_string());
+    let configured = token.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
+    if !configured {
+        return serde_json::json!({ "configured": false, "authenticated": false });
+    }
+    // Best-effort auth check. Endpoint may not exist yet; treat any network
+    // failure as "unknown" rather than "unauthenticated".
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap_or_default();
+    let token_str = token.unwrap_or_default();
+    let resp = client
+        .get("https://api.nuts.services/auth/verify")
+        .bearer_auth(&token_str)
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await.unwrap_or(serde_json::Value::Null);
+            serde_json::json!({
+                "configured": true,
+                "authenticated": true,
+                "email": body["email"].as_str(),
+            })
+        }
+        Ok(_) => serde_json::json!({ "configured": true, "authenticated": false }),
+        Err(_) => serde_json::json!({
+            "configured": true,
+            "authenticated": null,
+            "note": "auth endpoint unreachable — token may still be valid"
+        }),
+    }
+}
+
+async fn probe_nemesis() -> serde_json::Value {
+    // Look for the binary in PATH and a few common install locations.
+    let exe_name = if cfg!(windows) { "nemesis8.exe" } else { "nemesis8" };
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
+        candidates.push(std::path::PathBuf::from(&home).join(".nemesis8").join(exe_name));
+        candidates.push(std::path::PathBuf::from(&home).join("bin").join(exe_name));
+    }
+    if cfg!(windows) {
+        candidates.push(std::path::PathBuf::from("C:\\Program Files\\Nemesis8").join(exe_name));
+    } else {
+        candidates.push(std::path::PathBuf::from("/usr/local/bin").join(exe_name));
+        candidates.push(std::path::PathBuf::from("/opt/homebrew/bin").join(exe_name));
+    }
+    // PATH lookup
+    if let Ok(path_env) = std::env::var("PATH") {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        for dir in path_env.split(sep) {
+            candidates.push(std::path::PathBuf::from(dir).join(exe_name));
+        }
+    }
+    for p in &candidates {
+        if p.exists() {
+            return serde_json::json!({
+                "installed": true,
+                "path": p.to_string_lossy(),
+            });
+        }
+    }
+    serde_json::json!({ "installed": false })
+}
+
+async fn probe_shivvr() -> serde_json::Value {
+    // URL resolution: SHIVVR_URL env > hyperia.json config.shivvr.url > default.
+    let url = std::env::var("SHIVVR_URL").ok()
+        .or_else(|| {
+            read_hyperia_config()
+                .and_then(|c| c["config"]["shivvr"]["url"].as_str().map(|s| s.to_string()))
+        })
+        .unwrap_or_else(|| "https://shivvr.nuts.services".to_string());
+    let local = url.contains("localhost") || url.contains("127.0.0.1");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap_or_default();
+    let reachable = client
+        .get(format!("{}/health", url.trim_end_matches('/')))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+    serde_json::json!({
+        "reachable": reachable,
+        "url": url,
+        "local": local,
+    })
+}
+
+async fn probe_ferricula() -> serde_json::Value {
+    let url = std::env::var("FERRICULA_URL").ok()
+        .or_else(|| {
+            read_hyperia_config()
+                .and_then(|c| c["config"]["ferricula"]["url"].as_str().map(|s| s.to_string()))
+        })
+        .unwrap_or_else(|| "http://localhost:8765".to_string());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap_or_default();
+    let status_resp = client.get(format!("{}/status", url.trim_end_matches('/'))).send().await;
+    let (reachable, memory_count) = match status_resp {
+        Ok(r) if r.status().is_success() => {
+            let text = r.text().await.unwrap_or_default();
+            // Status is typically a formatted string with "rows=N"; extract.
+            let count = text
+                .lines()
+                .find_map(|l| l.trim().strip_prefix("rows="))
+                .and_then(|s| s.split_whitespace().next())
+                .and_then(|s| s.parse::<u64>().ok());
+            (true, count)
+        }
+        _ => (false, None),
+    };
+    serde_json::json!({
+        "reachable": reachable,
+        "url": url,
+        "memory_count": memory_count,
+    })
+}
+
+async fn probe_ollama() -> serde_json::Value {
+    let url = std::env::var("OLLAMA_HOST")
+        .unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap_or_default();
+    let resp = client.get(format!("{}/api/tags", url.trim_end_matches('/'))).send().await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await.unwrap_or(serde_json::Value::Null);
+            let models: Vec<String> = body["models"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m["name"].as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            serde_json::json!({
+                "running": true,
+                "url": url,
+                "models": models,
+            })
+        }
+        _ => serde_json::json!({ "running": false, "url": url, "models": [] }),
+    }
 }

@@ -124,6 +124,29 @@ pub async fn ghost_memory(State(state): State<GhostState>) -> Json<serde_json::V
     }))
 }
 
+/// POST /api/ghost/ui-response — renderer reports a user response to a
+/// pending show_* widget. Body: { id, value? } or { id, dismissed: true }.
+pub async fn ghost_ui_response(
+    State(state): State<GhostState>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let id = body["id"].as_str().unwrap_or("").trim().to_string();
+    if id.is_empty() {
+        return Json(serde_json::json!({
+            "ok": false,
+            "error": "id is required"
+        }));
+    }
+    let response = if body["dismissed"].as_bool().unwrap_or(false) {
+        super::registry::UiResponse::Dismissed
+    } else {
+        // Accept any JSON for value (string, number, array, object).
+        super::registry::UiResponse::Value(body["value"].clone())
+    };
+    let resolved = state.registry.resolve_ui_response(&id, response).await;
+    Json(serde_json::json!({ "ok": resolved, "id": id }))
+}
+
 /// POST /api/ghost/stop — request that the running agent wrap up and stop.
 pub async fn ghost_stop(State(state): State<GhostState>) -> &'static str {
     let session = state.session.lock().await;
