@@ -932,6 +932,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ghost/session", axum::routing::get(ghost::api::ghost_session_dump))
         .route("/api/ghost/stop", axum::routing::post(ghost::api::ghost_stop))
         .route("/api/ghost/ui-response", axum::routing::post(ghost::api::ghost_ui_response))
+        .route("/api/ghost/inject", axum::routing::post(ghost::api::ghost_inject))
         .route("/api/ghost/continue", axum::routing::post(ghost::api::ghost_continue))
         .route("/api/ghost/reset", axum::routing::post(ghost::api::ghost_reset))
         .route("/api/ghost/window-closed", axum::routing::post(ghost::api::ghost_window_closed))

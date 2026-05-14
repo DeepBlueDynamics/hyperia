@@ -83,6 +83,10 @@ pub struct GhostSession {
     recent_calls: Vec<(String, String)>,
     pub stop_requested: Arc<AtomicBool>,
     pub window_closed: Arc<AtomicBool>,
+    /// Messages the user typed while the agent was running. Drained by the
+    /// agent loop between Anthropic calls and spliced into the conversation
+    /// so the agent sees them on its next turn without a hard interrupt.
+    pub pending_injects: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl GhostSession {
@@ -96,6 +100,15 @@ impl GhostSession {
             recent_calls: Vec::new(),
             stop_requested: Arc::new(AtomicBool::new(false)),
             window_closed: Arc::new(AtomicBool::new(false)),
+            pending_injects: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Queue a user message to be picked up by the running agent loop on
+    /// its next iteration. Safe to call while the agent is mid-turn.
+    pub fn inject_user_message(&self, msg: String) {
+        if let Ok(mut v) = self.pending_injects.lock() {
+            v.push(msg);
         }
     }
 
@@ -153,6 +166,7 @@ impl GhostSession {
         self.window_closed.store(false, Ordering::Relaxed);
         let stop_requested = self.stop_requested.clone();
         let window_closed = self.window_closed.clone();
+        let pending_injects = self.pending_injects.clone();
 
         let user_msg = user_message.clone();
         // Add user message
@@ -179,6 +193,7 @@ impl GhostSession {
                 ferricula,
                 &stop_requested,
                 &window_closed,
+                pending_injects,
                 initial_tool_call_count,
                 initial_recent_calls,
             ).await;
@@ -239,6 +254,7 @@ async fn run_loop(
     ferricula: Arc<FerriculaBackend>,
     stop_requested: &AtomicBool,
     window_closed: &AtomicBool,
+    pending_injects: Arc<std::sync::Mutex<Vec<String>>>,
     initial_tool_call_count: usize,
     initial_recent_calls: Vec<(String, String)>,
 ) -> anyhow::Result<(Vec<serde_json::Value>, String, usize, Vec<(String, String)>)> {
@@ -579,6 +595,29 @@ After cleanup, reply to the human and end the turn."
                 tokio::time::sleep(tokio::time::Duration::from_secs(
                     (screen_poll_streak - 4).min(8) as u64
                 )).await;
+            }
+
+            // Soft preemption: drain any messages the user typed while the
+            // agent was working and append them as a text block in the same
+            // user message that carries the tool_results. The agent's next
+            // call sees both — tool outputs and the user's latest direction.
+            let injected: Vec<String> = {
+                let mut v = pending_injects.lock().unwrap();
+                std::mem::take(&mut *v)
+            };
+            if !injected.is_empty() {
+                let joined = injected
+                    .iter()
+                    .map(|m| format!("- {}", m))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                tool_results.push(serde_json::json!({
+                    "type": "text",
+                    "text": format!(
+                        "[Meanwhile the user said — read this before continuing]\n{}",
+                        joined
+                    ),
+                }));
             }
 
             messages.push(serde_json::json!({

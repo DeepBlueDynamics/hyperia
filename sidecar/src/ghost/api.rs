@@ -124,6 +124,26 @@ pub async fn ghost_memory(State(state): State<GhostState>) -> Json<serde_json::V
     }))
 }
 
+/// POST /api/ghost/inject — queue a user message while the agent is
+/// running. The agent drains the queue between API calls and splices the
+/// messages into its next user turn so they're read without a hard
+/// interrupt. Body: { message: string }.
+pub async fn ghost_inject(
+    State(state): State<GhostState>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let msg = body["message"].as_str().unwrap_or("").trim().to_string();
+    if msg.is_empty() {
+        return Json(serde_json::json!({
+            "ok": false,
+            "error": "message is required"
+        }));
+    }
+    let session = state.session.lock().await;
+    session.inject_user_message(msg);
+    Json(serde_json::json!({ "ok": true }))
+}
+
 /// POST /api/ghost/ui-response — renderer reports a user response to a
 /// pending show_* widget. Body: { id, value? } or { id, dismissed: true }.
 pub async fn ghost_ui_response(

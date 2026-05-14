@@ -155,6 +155,22 @@ function buildHyperiaHtml(): string {
     align-self: flex-end;
     color: #d0d8f0;
   }
+  /* Soft-preemption: message the user injected while the agent was
+     running. Styled so it's visually distinct from regular user turns
+     — they're queued, not initiating. */
+  .msg.user.injected {
+    background: #2a1a4a;
+    border: 1px solid #c839c560;
+    border-style: dashed;
+    align-self: flex-end;
+    color: #e0d0f0;
+  }
+  .msg.user.injected::before {
+    content: '⏳ queued (agent will read before its next step) — ';
+    color: #888;
+    font-size: 10px;
+    font-style: italic;
+  }
   .msg.assistant {
     background: #12121e;
     border: 1px solid #1a1a2e;
@@ -920,14 +936,20 @@ function buildHyperiaHtml(): string {
 
   function setStreaming(val) {
     streaming = val;
-    input.disabled = val;
-    sendBtn.style.display = val ? 'none' : '';
+    // Keep input enabled even while streaming — Enter while streaming
+    // queues a soft-preemption message via /api/ghost/inject instead of
+    // starting a new turn. See send() for the dual-mode behavior.
+    input.disabled = false;
+    // Show Send alongside Stop/Continue so the user can type and queue
+    // messages mid-stream. Send relabels itself when streaming.
+    sendBtn.textContent = val ? 'Queue' : 'Send';
+    sendBtn.title = val
+      ? 'Send to the running agent as a soft preemption — it will read your message before its next step'
+      : 'Send';
     stopBtn.style.display = val && !stopRequested ? '' : 'none';
     continueBtn.style.display = val && stopRequested ? '' : 'none';
     if (val) {
-      // Keep keyboard focus in the ghost window so Escape/keydown still fire
-      const visibleBtn = stopRequested ? continueBtn : stopBtn;
-      if (visibleBtn) visibleBtn.focus();
+      // Don't steal focus from input — user is likely about to type.
     } else {
       input.focus();
     }
@@ -1006,11 +1028,27 @@ function buildHyperiaHtml(): string {
   }
 
   async function send() {
-    if (streaming) return;
     const text = input.value.trim();
     if (!text) return;
-    input.value = '';
 
+    // Soft preemption: if the agent is mid-stream, queue the message to be
+    // spliced into its next turn rather than starting a new conversation.
+    if (streaming) {
+      input.value = '';
+      addMsg(text, 'user injected');
+      try {
+        await fetch(SIDECAR_URL + '/api/ghost/inject', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text }),
+        });
+      } catch (e) {
+        addMsg('Failed to inject message: ' + e, 'error');
+      }
+      return;
+    }
+
+    input.value = '';
     addMsg(text, 'user');
     stopRequested = false;
     setStreaming(true);
