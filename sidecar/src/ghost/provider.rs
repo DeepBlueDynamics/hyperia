@@ -50,6 +50,19 @@ impl AnthropicProvider {
         let model = match config.model.as_str() {
             // Legacy provider key — default to Haiku 4.5
             "anthropic" => "claude-haiku-4-5-20251001".to_string(),
+            // Bare provider names from the old static dropdown that we no
+            // longer fully support as agent models. Fall back to Claude so
+            // the agent can run and tell the user to pick a concrete model
+            // via the "change my model" flow. Without this fallback the
+            // very first message dies with a 404 "model: openai" and the
+            // user can't even reach the picker to fix it.
+            "openai" | "google" | "openrouter" | "" => {
+                tracing::warn!(
+                    "agentModel '{}' is not a concrete model id — falling back to claude-sonnet-4-6. Ask the settings agent: 'change my model'.",
+                    config.model
+                );
+                "claude-sonnet-4-6".to_string()
+            }
             // Full model IDs passed through directly
             other => other.to_string(),
         };

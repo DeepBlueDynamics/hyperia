@@ -1870,18 +1870,20 @@ fn doctor_def() -> ToolDef {
 /// Probe Hyperia's prerequisites and return a JSON report. Each sub-probe
 /// has its own tight timeout; the function returns when the slowest probe
 /// finishes (or its timeout fires).
+///
+/// Shivvr is intentionally NOT a separate probe — it's configured inside
+/// ferricula now, so the ferricula probe is the single source of truth for
+/// the embedding pipeline.
 pub async fn run_doctor() -> serde_json::Value {
-    let (nuts, nemesis, shivvr, ferricula, ollama) = tokio::join!(
+    let (nuts, nemesis, ferricula, ollama) = tokio::join!(
         probe_nuts_token(),
         probe_nemesis(),
-        probe_shivvr(),
         probe_ferricula(),
         probe_ollama(),
     );
     serde_json::json!({
         "nuts_token": nuts,
         "nemesis": nemesis,
-        "shivvr": shivvr,
         "ferricula": ferricula,
         "ollama": ollama,
         "platform": {
@@ -1978,31 +1980,8 @@ async fn probe_nemesis() -> serde_json::Value {
     serde_json::json!({ "installed": false })
 }
 
-async fn probe_shivvr() -> serde_json::Value {
-    // URL resolution: SHIVVR_URL env > hyperia.json config.shivvr.url > default.
-    let url = std::env::var("SHIVVR_URL").ok()
-        .or_else(|| {
-            read_hyperia_config()
-                .and_then(|c| c["config"]["shivvr"]["url"].as_str().map(|s| s.to_string()))
-        })
-        .unwrap_or_else(|| "https://shivvr.nuts.services".to_string());
-    let local = url.contains("localhost") || url.contains("127.0.0.1");
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .unwrap_or_default();
-    let reachable = client
-        .get(format!("{}/health", url.trim_end_matches('/')))
-        .send()
-        .await
-        .map(|r| r.status().is_success())
-        .unwrap_or(false);
-    serde_json::json!({
-        "reachable": reachable,
-        "url": url,
-        "local": local,
-    })
-}
+// probe_shivvr removed — shivvr is configured inside ferricula now, so the
+// ferricula probe is the single source of truth for the embedding pipeline.
 
 async fn probe_ferricula() -> serde_json::Value {
     let url = std::env::var("FERRICULA_URL").ok()
