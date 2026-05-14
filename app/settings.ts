@@ -325,23 +325,16 @@ function buildSettingsHtml(): string {
     <span class="titlebar-btn close-btn" id="closeBtn">&times;</span>
   </div>
 
-  <div class="actions">
-    <div class="action-btn" id="editConfigBtn">
-      <span>{}</span>
-      <span>Edit Config</span>
-    </div>
-    <div class="action-btn" id="installNemesisBtn">
-      <span>N</span>
-      <span>Install Nemesis8</span>
-    </div>
-    <div class="action-btn" id="openNemesisSiteBtn" style="flex:0;padding:10px;min-width:36px" title="nemesis8.nuts.services">
-      <span>&#x2197;</span>
-    </div>
-    <div class="action-btn" id="factoryResetBtn">
-      <span>!</span>
-      <span>Factory Reset</span>
-    </div>
-  </div>
+  <!--
+    The action button row that used to live here has been removed. The same
+    actions are reachable by typing the exact command in the chat input
+    below — case- and separator-insensitive ("edit config", "Edit_Config",
+    "editconfig" all match):
+       edit config          → opens hyperia.json in your system editor
+       factory reset        → wipes config + Ferricula memory
+       install nemesis8     → runs the official installer script
+    Type "help" to see the full list.
+  -->
 
   <div class="chat" id="chat">
     <div class="msg system">
@@ -404,6 +397,54 @@ function buildSettingsHtml(): string {
     div.innerHTML = text;
     chat.appendChild(div);
     chat.scrollTop = chat.scrollHeight;
+  }
+
+  // Tiny markdown → HTML converter. Escapes HTML first (safety), then
+  // applies the common patterns: fenced code, inline code, bold, italic,
+  // links, lists, headings. Good enough for chat-style content; not a
+  // full CommonMark implementation.
+  function renderMarkdown(src) {
+    if (src == null) return '';
+    let s = String(src);
+    // Escape HTML first so model output can't inject tags
+    s = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // Fenced code blocks \`\`\` ... \`\`\`
+    s = s.replace(/\`\`\`([\\s\\S]*?)\`\`\`/g, function(_, body) {
+      return '<pre><code>' + body.replace(/^\\n/, '') + '</code></pre>';
+    });
+    // Inline code \`...\`
+    s = s.replace(/\`([^\`\\n]+)\`/g, '<code>$1</code>');
+    // Bold **text**
+    s = s.replace(/\\*\\*([^*\\n]+)\\*\\*/g, '<strong>$1</strong>');
+    // Italic *text* or _text_  (single-star, not part of bold)
+    s = s.replace(/(^|[^*])\\*([^*\\n]+)\\*(?!\\*)/g, '$1<em>$2</em>');
+    s = s.replace(/(^|[^_])_([^_\\n]+)_(?!_)/g, '$1<em>$2</em>');
+    // Links [text](url) — url-encoded safely against quote injection
+    s = s.replace(/\\[([^\\]]+)\\]\\(([^)\\s]+)\\)/g, function(_, label, url) {
+      const safe = url.replace(/"/g, '&quot;');
+      return '<a href="' + safe + '" target="_blank" rel="noreferrer">' + label + '</a>';
+    });
+    // Headings (line-anchored)
+    s = s.replace(/^######\\s+(.+)$/gm, '<h6>$1</h6>');
+    s = s.replace(/^#####\\s+(.+)$/gm, '<h5>$1</h5>');
+    s = s.replace(/^####\\s+(.+)$/gm, '<h4>$1</h4>');
+    s = s.replace(/^###\\s+(.+)$/gm, '<h3>$1</h3>');
+    s = s.replace(/^##\\s+(.+)$/gm, '<h2>$1</h2>');
+    s = s.replace(/^#\\s+(.+)$/gm, '<h1>$1</h1>');
+    // Bulleted lists — group consecutive "- " lines into a <ul>
+    s = s.replace(/(?:^|\\n)((?:[-*]\\s+.+(?:\\n|$))+)/g, function(_, group) {
+      const items = group.trim().split(/\\n/).map(function(line) {
+        return '<li>' + line.replace(/^[-*]\\s+/, '') + '</li>';
+      }).join('');
+      return '<ul>' + items + '</ul>';
+    });
+    // Paragraph breaks on blank lines
+    s = s.split(/\\n{2,}/).map(function(p) {
+      // Don't wrap block-level elements in <p>
+      if (/^<(h[1-6]|ul|ol|pre|li)/.test(p.trim())) return p;
+      return '<p>' + p.replace(/\\n/g, '<br>') + '</p>';
+    }).join('');
+    return s;
   }
 
   // Surface JS errors in the chat area — must come after addMsg
@@ -597,13 +638,11 @@ function buildSettingsHtml(): string {
   // Wire all buttons and inputs — script is at bottom of body so DOM is already available
   (function wireHandlers() {
     document.getElementById('closeBtn')?.addEventListener('click', function() { window.close(); });
-    document.getElementById('editConfigBtn')?.addEventListener('click', editConfig);
-    document.getElementById('installNemesisBtn')?.addEventListener('click', installNemesis8);
-    document.getElementById('openNemesisSiteBtn')?.addEventListener('click', openNemesis8Site);
-    document.getElementById('factoryResetBtn')?.addEventListener('click', factoryReset);
     document.getElementById('setTokenBtn')?.addEventListener('click', setToken);
-    // The static "change model" and "set shivvr" buttons have been removed —
-    // those flows live in the settings-agent chat now.
+    // Edit Config / Install Nemesis8 / Factory Reset buttons removed —
+    // reachable via slash-style commands typed in the chat input (see
+    // tryCommandDispatch). The functions are still defined and wired
+    // through that dispatch.
     document.getElementById('settingsSendBtn')?.addEventListener('click', sendChat);
     document.getElementById('modelSelect')?.addEventListener('change', function() { onModelSelectChange(this); });
     document.getElementById('tokenInput')?.addEventListener('keydown', function(e) { if (e.key === 'Enter') setToken(); });
@@ -654,13 +693,58 @@ function buildSettingsHtml(): string {
 
     let settingsSending = false;
 
+  // Local "slash commands" — exact-match (case + separator insensitive)
+  // dispatch table. Keys are normalized (lowercase, no _ - or whitespace).
+  // Wins over the agent so users can run config actions even when the
+  // agent isn't reachable (no token, model broken, network down).
+  const COMMAND_TABLE = {
+    'editconfig': editConfig,
+    'editsettings': editConfig,
+    'config': editConfig,
+    'factoryreset': factoryReset,
+    'reset': factoryReset,
+    'installnemesis8': installNemesis8,
+    'installnemesis': installNemesis8,
+    'opennemesissite': openNemesis8Site,
+    'nemesissite': openNemesis8Site,
+    'help': function help() {
+      addMsg(
+        '<b>Available commands</b> (type exactly, case and separators don\\'t matter):'
+        + '<ul>'
+        + '<li><code>edit config</code> — opens hyperia.json in your system editor</li>'
+        + '<li><code>factory reset</code> — wipes config and Ferricula memory (preserves your token)</li>'
+        + '<li><code>install nemesis8</code> — runs the official Nemesis8 installer script</li>'
+        + '<li><code>nemesis site</code> — opens nemesis8.nuts.services in a browser</li>'
+        + '<li><code>help</code> — this list</li>'
+        + '</ul>'
+        + 'Anything else gets routed to the settings agent.',
+        'system'
+      );
+    },
+  };
+
+  function normalizeCommand(s) {
+    return String(s || '').toLowerCase().replace(/[\\s_\\-]+/g, '');
+  }
+
+  function tryCommandDispatch(text) {
+    const key = normalizeCommand(text);
+    const handler = COMMAND_TABLE[key];
+    if (handler) { handler(); return true; }
+    return false;
+  }
+
   async function sendChat() {
     if (settingsSending) return;
     const inputEl = document.getElementById('chatInput');
     const text = inputEl.value.trim();
     if (!text) return;
     inputEl.value = '';
-    addMsg(text, 'user');
+    addMsg(renderMarkdown(text), 'user');
+
+    // Local slash-command fast path. Runs the action immediately and
+    // never touches the agent — works even with no token configured.
+    if (tryCommandDispatch(text)) return;
 
     settingsSending = true;
     const sendBtn = document.getElementById('settingsSendBtn');
@@ -705,7 +789,11 @@ function buildSettingsHtml(): string {
                   assistantDiv = document.createElement('div');
                   assistantDiv.className = 'msg system'; chat.appendChild(assistantDiv);
                 }
-                assistantText += event.text; assistantDiv.textContent = assistantText;
+                assistantText += event.text;
+                // Re-render the accumulated text as markdown on every
+                // delta. Cheap for typical message sizes; keeps formatting
+                // live as the model streams.
+                assistantDiv.innerHTML = renderMarkdown(assistantText);
                 chat.scrollTop = chat.scrollHeight; break;
               case 'tool_start':
                 if (assistantDiv) { assistantDiv = null; assistantText = ''; }
