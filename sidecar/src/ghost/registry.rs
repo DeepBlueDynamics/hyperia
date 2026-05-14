@@ -115,6 +115,7 @@ impl ToolRegistry {
         // Readiness probe — used at session start by the config agent.
         defs.push(doctor_def());
         defs.push(model_catalog_def());
+        defs.push(docker_run_def());
         defs.push(maximus_explain_def());
         let dynamic = self.dynamic.lock().unwrap();
         for dt in dynamic.iter() {
@@ -152,6 +153,7 @@ impl ToolRegistry {
             "show_picker" => return self.handle_show(input, "picker").await,
             "doctor" => return run_doctor().await.to_string(),
             "model_catalog" => return model_catalog(input),
+            "docker_run" => return docker_run(input).await,
             "maximus_explain" => return self.compressor.explain_last().await,
             _ => {}
         }
@@ -1993,6 +1995,155 @@ async fn probe_ferricula() -> serde_json::Value {
         "url": url,
         "memory_count": memory_count,
     })
+}
+
+// -- docker_run -------------------------------------------------------------
+
+// First-positional subcommands the settings agent is allowed to invoke.
+// Anything outside this list is rejected. Notable exclusions:
+//   - exec  (would let the agent run arbitrary commands inside a container)
+//   - cp    (host filesystem write)
+//   - load  (importing arbitrary images)
+const DOCKER_ALLOWED_SUBCOMMANDS: &[&str] = &[
+    "run", "start", "stop", "restart", "rm", "kill", "pause", "unpause",
+    "ps", "logs", "inspect", "version", "info", "stats",
+    "pull", "tag", "images",
+    "volume", "network",
+    "compose",
+];
+
+// Args / flag substrings that we refuse regardless of subcommand. The agent
+// has no legitimate need for these on the settings path, and they're the
+// most common foot-guns.
+const DOCKER_DENY_SUBSTRINGS: &[&str] = &[
+    "--privileged",
+    "--cap-add",
+    "--security-opt=seccomp=unconfined",
+    "--pid=host",
+    "--ipc=host",
+    "--userns=host",
+    "--network=host",
+];
+
+fn docker_run_def() -> ToolDef {
+    ToolDef {
+        name: "docker_run".into(),
+        description: "Run a `docker` subcommand on the user's machine. This is the ONE exception \
+            to the rule that the settings agent doesn't operate the terminal — it exists so the \
+            agent can bring up local services (Shivvr, Ferricula, Maximus) and inspect their state. \
+            \n\nAllowed subcommands: run, start, stop, restart, rm, kill, ps, logs, inspect, version, \
+            info, stats, pull, tag, images, volume, network, compose. Notably forbidden: `exec` \
+            (would let arbitrary commands run inside a container), `cp` (host filesystem write), and \
+            flags like `--privileged`, `--cap-add`, `--network=host`, `--pid=host`. Wrap shells \
+            (`bash -c`, `sh -c`) are not supported — pass docker args directly.\
+            \n\nReturns exit code, stdout, and stderr as a structured JSON string. Be honest with \
+            the user about what you're about to run before calling this — they should see the \
+            command in chat first."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "args": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Argv to pass to `docker`. First element must be one of the allowed subcommands. Example: [\"run\", \"-d\", \"--name\", \"shivvr\", \"-p\", \"8771:8771\", \"deepbluedynamics/shivvr:latest\"]"
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "description": "How long to wait for the command to complete (default 60000)"
+                }
+            },
+            "required": ["args"]
+        }),
+    }
+}
+
+async fn docker_run(input: &serde_json::Value) -> String {
+    let args: Vec<String> = match input["args"].as_array() {
+        Some(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect(),
+        None => return error_json("args must be an array of strings"),
+    };
+    if args.is_empty() {
+        return error_json("args must be non-empty");
+    }
+
+    let timeout_ms = input["timeout_ms"].as_u64().unwrap_or(60_000);
+
+    // Validate subcommand.
+    let sub = args[0].to_lowercase();
+    if !DOCKER_ALLOWED_SUBCOMMANDS.contains(&sub.as_str()) {
+        return error_json(&format!(
+            "docker subcommand '{}' is not on the settings-agent allowlist. Allowed: {}",
+            sub,
+            DOCKER_ALLOWED_SUBCOMMANDS.join(", "),
+        ));
+    }
+
+    // Validate every arg against deny substrings.
+    for a in &args {
+        let lower = a.to_lowercase();
+        for deny in DOCKER_DENY_SUBSTRINGS.iter() {
+            if lower.contains(deny) {
+                return error_json(&format!(
+                    "docker arg '{}' contains forbidden substring '{}'",
+                    a, deny
+                ));
+            }
+        }
+    }
+
+    // Run with timeout.
+    let display_cmd = format!("docker {}", args.join(" "));
+    let cmd = tokio::process::Command::new("docker")
+        .args(&args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+
+    let mut child = match cmd {
+        Ok(c) => c,
+        Err(e) => {
+            return error_json(&format!(
+                "Failed to spawn docker (is Docker Desktop running and on PATH?): {}",
+                e
+            ));
+        }
+    };
+
+    let wait = tokio::time::timeout(
+        std::time::Duration::from_millis(timeout_ms),
+        child.wait_with_output(),
+    )
+    .await;
+
+    let output = match wait {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return error_json(&format!("docker process error: {}", e)),
+        Err(_) => {
+            return error_json(&format!(
+                "docker timed out after {}ms — command was: {}",
+                timeout_ms, display_cmd
+            ));
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    serde_json::json!({
+        "command": display_cmd,
+        "exit_code": output.status.code(),
+        "success": output.status.success(),
+        "stdout": stdout,
+        "stderr": stderr,
+    })
+    .to_string()
+}
+
+fn error_json(msg: &str) -> String {
+    serde_json::json!({ "error": msg }).to_string()
 }
 
 // -- Model catalog ----------------------------------------------------------
