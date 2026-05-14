@@ -228,7 +228,10 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         .tabs_scrollRight {
           border-right: none;
           border-left: 1px solid #333;
-          order: 99;
+          /* No flex order — appear immediately after the tab list. With
+             order: 99 the button ended up past the trailing drag space
+             (and behind the window controls on Windows), so users could
+             scroll left but never back right. */
         }
 
         .tabs_borderShim {
