@@ -7,35 +7,66 @@ import type {parsedConfig, rawConfig, configOptions} from '../../typings/config'
 import notify from '../notify';
 import mapKeys from '../utils/map-keys';
 
-// Probe candidate Windows shells in priority order. Returns the profile
-// definitions for whichever ones actually exist on this machine.
-// Skipped entirely on non-Windows platforms.
-function detectWindowsShells(): Array<{name: string; config: {shell: string; shellArgs: string[]}}> {
-  if (process.platform !== 'win32') return [];
-  const candidates: Array<{name: string; shell: string; shellArgs: string[]}> = [
-    // PowerShell 7+ (Microsoft Store + MSI install paths)
-    {name: 'PowerShell', shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', shellArgs: []},
-    // Windows PowerShell 5.1 (always present on modern Windows)
-    {
-      name: 'Windows PowerShell',
-      shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-      shellArgs: []
-    },
-    // Command Prompt (always present)
-    {name: 'CMD', shell: 'C:\\Windows\\System32\\cmd.exe', shellArgs: []},
-    // WSL — only present if the optional Windows feature is installed
-    {name: 'WSL', shell: 'C:\\Windows\\System32\\wsl.exe', shellArgs: []}
+// Per-platform shell candidates in priority order. Each entry is probed
+// against the filesystem; only those that actually exist are returned.
+// On Windows: pwsh 7 > powershell 5.1 > cmd > wsl.
+// On macOS: zsh > bash > fish (system paths first, then Homebrew on Apple
+//   Silicon, then Homebrew on Intel).
+// On Linux: zsh > bash > fish > sh.
+function shellCandidates(): Array<{name: string; shell: string; shellArgs: string[]}> {
+  if (process.platform === 'win32') {
+    return [
+      {name: 'PowerShell', shell: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe', shellArgs: []},
+      {
+        name: 'Windows PowerShell',
+        shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+        shellArgs: []
+      },
+      {name: 'CMD', shell: 'C:\\Windows\\System32\\cmd.exe', shellArgs: []},
+      // WSL — only present if the optional Windows feature is installed
+      {name: 'WSL', shell: 'C:\\Windows\\System32\\wsl.exe', shellArgs: []}
+    ];
+  }
+  if (process.platform === 'darwin') {
+    // First match wins per name. System paths beat Homebrew; Apple Silicon
+    // Homebrew (/opt/homebrew) beats Intel Homebrew (/usr/local).
+    return [
+      {name: 'zsh', shell: '/bin/zsh', shellArgs: ['--login']},
+      {name: 'bash', shell: '/bin/bash', shellArgs: ['--login']},
+      {name: 'zsh (brew)', shell: '/opt/homebrew/bin/zsh', shellArgs: ['--login']},
+      {name: 'fish', shell: '/opt/homebrew/bin/fish', shellArgs: ['--login']},
+      {name: 'zsh (brew x86)', shell: '/usr/local/bin/zsh', shellArgs: ['--login']},
+      {name: 'fish (x86)', shell: '/usr/local/bin/fish', shellArgs: ['--login']}
+    ];
+  }
+  // Linux (and anything else POSIX)
+  return [
+    {name: 'zsh', shell: '/bin/zsh', shellArgs: ['--login']},
+    {name: 'bash', shell: '/bin/bash', shellArgs: ['--login']},
+    {name: 'fish', shell: '/usr/bin/fish', shellArgs: ['--login']},
+    {name: 'sh', shell: '/bin/sh', shellArgs: ['--login']}
   ];
-  return candidates
+}
+
+// Probe the candidate list and return profile definitions for whichever
+// shells exist on this machine.
+function detectShells(): Array<{name: string; config: {shell: string; shellArgs: string[]}}> {
+  return shellCandidates()
     .filter((c) => existsSync(c.shell))
     .map((c) => ({name: c.name, config: {shell: c.shell, shellArgs: c.shellArgs}}));
 }
 
-// Decide a sensible default profile name from a list of profile names,
-// preferring shells in the order pwsh > powershell > cmd > wsl > first.
-function pickWindowsDefault(profileNames: string[]): string | null {
-  if (process.platform !== 'win32') return null;
-  const preference = ['PowerShell', 'Windows PowerShell', 'CMD', 'WSL'];
+// Decide a sensible default profile name from the available profiles,
+// preferring the platform's standard interactive shell.
+function pickDefault(profileNames: string[]): string | null {
+  let preference: string[];
+  if (process.platform === 'win32') {
+    preference = ['PowerShell', 'Windows PowerShell', 'CMD', 'WSL'];
+  } else if (process.platform === 'darwin') {
+    preference = ['zsh', 'bash', 'zsh (brew)', 'zsh (brew x86)', 'fish', 'fish (x86)'];
+  } else {
+    preference = ['zsh', 'bash', 'fish', 'sh'];
+  }
   for (const name of preference) {
     if (profileNames.includes(name)) return name;
   }
@@ -80,11 +111,12 @@ const _init = (userCfg: rawConfig, defaultCfg: rawConfig): parsedConfig => {
           config: p.config || {}
         }));
 
-        // Windows: probe for installed shells and merge in profiles for any
-        // we find that aren't already configured (PowerShell, Windows
-        // PowerShell, CMD, WSL). User's existing profiles win on name
-        // collision.
-        const detected = detectWindowsShells();
+        // Probe for installed shells on this platform (Windows: pwsh / cmd /
+        // wsl; macOS: zsh / bash / fish; Linux: zsh / bash / fish / sh) and
+        // merge profiles for any that exist. User's existing profiles win on
+        // name collision so a user-customized "zsh" or "PowerShell" entry
+        // keeps its overrides.
+        const detected = detectShells();
         if (detected.length > 0) {
           const existingNames = new Set(conf.profiles.map((p) => p.name));
           for (const d of detected) {
@@ -94,13 +126,14 @@ const _init = (userCfg: rawConfig, defaultCfg: rawConfig): parsedConfig => {
           }
         }
 
-        // Resolve defaultProfile. If user explicitly set one that resolves,
-        // honor it. Otherwise on Windows prefer pwsh > powershell > cmd > wsl;
-        // otherwise fall back to the first profile.
+        // Resolve defaultProfile. If the user explicitly set one that
+        // resolves, honor it. Otherwise pick the platform's standard
+        // interactive shell from whatever's actually installed, falling
+        // back to the first profile only if nothing matches.
         const profileNames = conf.profiles.map((p) => p.name);
         if (!profileNames.includes(conf.defaultProfile) || conf.defaultProfile === 'default') {
-          const winDefault = pickWindowsDefault(profileNames);
-          conf.defaultProfile = winDefault || conf.profiles[0].name;
+          const platformDefault = pickDefault(profileNames);
+          conf.defaultProfile = platformDefault || conf.profiles[0].name;
         }
         return merge({}, defaultCfg.config, conf);
       } else {
