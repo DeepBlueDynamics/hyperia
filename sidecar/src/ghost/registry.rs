@@ -112,6 +112,7 @@ impl ToolRegistry {
         defs.push(show_input_def());
         defs.push(show_button_def());
         defs.push(show_picker_def());
+        defs.push(show_form_def());
         // Readiness probe — used at session start by the config agent.
         defs.push(doctor_def());
         defs.push(model_catalog_def());
@@ -151,6 +152,7 @@ impl ToolRegistry {
             "show_input" => return self.handle_show(input, "input").await,
             "show_button" => return self.handle_show(input, "button").await,
             "show_picker" => return self.handle_show(input, "picker").await,
+            "show_form" => return self.handle_show(input, "form").await,
             "doctor" => return run_doctor().await.to_string(),
             "model_catalog" => return model_catalog(input),
             "docker_run" => return docker_run(input).await,
@@ -1406,6 +1408,43 @@ fn show_button_def() -> ToolDef {
                 "hint": { "type": "string", "description": "Optional secondary text shown under the button" }
             },
             "required": ["id", "label"]
+        }),
+    }
+}
+
+fn show_form_def() -> ToolDef {
+    ToolDef {
+        name: "show_form".into(),
+        description: "Render a multi-field form inline in the chat and BLOCK until the user \
+            submits or dismisses. Use this when you need several related fields together (e.g. \
+            an API token plus an org slug, or a service URL plus a credential pair). The tool \
+            result is { ui_response: { id, value: { <field_id>: <value>, ... } } } or \
+            { ui_response: { id, dismissed: true } }. Each field is rendered as a labeled input. \
+            Call exactly one show_* tool per turn."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Unique widget id for this turn" },
+                "prompt": { "type": "string", "description": "Short user-facing prompt shown above the form" },
+                "fields": {
+                    "type": "array",
+                    "description": "Form fields",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string", "description": "Field id — used as the key in the response value object" },
+                            "label": { "type": "string", "description": "Field label" },
+                            "kind": { "type": "string", "enum": ["text", "password", "number"], "description": "Input kind (default text)" },
+                            "default": { "type": "string", "description": "Optional default value" },
+                            "placeholder": { "type": "string", "description": "Optional placeholder text" }
+                        },
+                        "required": ["id", "label"]
+                    }
+                },
+                "submit_label": { "type": "string", "description": "Override the default 'Submit' button label" }
+            },
+            "required": ["id", "prompt", "fields"]
         }),
     }
 }

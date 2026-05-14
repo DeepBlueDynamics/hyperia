@@ -340,6 +340,21 @@ function buildHyperiaHtml(): string {
     color: #888;
     font-size: 11px;
   }
+  .widget-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .widget-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .widget-field-label {
+    color: #aaa;
+    font-size: 11px;
+  }
 
   .thinking {
     display: flex;
@@ -890,6 +905,27 @@ function buildHyperiaHtml(): string {
         '<div class="widget-prompt">' + prompt + '</div>'
         + '<div class="widget-options">' + opts + '</div>'
         + '<div class="widget-row"><button class="widget-dismiss" title="Dismiss">✕</button></div>';
+    } else if (kind === 'form') {
+      const prompt = escapeHtml(inputObj.prompt || 'Fill in the form');
+      const submitLabel = escapeHtml(inputObj.submit_label || 'Submit');
+      const fields = (inputObj.fields || []).map((f) => {
+        const fid = escapeHtml(String(f.id || ''));
+        const label = escapeHtml(String(f.label || f.id || ''));
+        const fkind = f.kind === 'password' ? 'password' : f.kind === 'number' ? 'number' : 'text';
+        const def = escapeHtml(String(f.default || ''));
+        const placeholder = f.placeholder ? ' placeholder="' + escapeHtml(String(f.placeholder)) + '"' : '';
+        return '<label class="widget-field">'
+          + '<span class="widget-field-label">' + label + '</span>'
+          + '<input class="widget-input" data-field="' + fid + '" type="' + fkind + '" value="' + def + '"' + placeholder + ' />'
+          + '</label>';
+      }).join('');
+      body =
+        '<div class="widget-prompt">' + prompt + '</div>'
+        + '<div class="widget-fields">' + fields + '</div>'
+        + '<div class="widget-row">'
+        + '<button class="widget-submit">' + submitLabel + '</button>'
+        + '<button class="widget-dismiss" title="Dismiss">✕</button>'
+        + '</div>';
     } else {
       body = '<div class="widget-prompt">Unknown widget kind: ' + escapeHtml(kind) + '</div>';
     }
@@ -929,6 +965,24 @@ function buildHyperiaHtml(): string {
       div.querySelectorAll('.widget-option').forEach((btn) => {
         btn.onclick = () => send({ id: widgetId, value: btn.getAttribute('data-value') });
       });
+    } else if (kind === 'form') {
+      const inputs = Array.from(div.querySelectorAll('input.widget-input'));
+      const submit = () => {
+        const value = {};
+        inputs.forEach((inp) => {
+          const key = inp.getAttribute('data-field');
+          if (key) value[key] = inp.value;
+        });
+        send({ id: widgetId, value });
+      };
+      div.querySelector('.widget-submit').onclick = submit;
+      inputs.forEach((inp) => {
+        inp.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submit();
+        });
+      });
+      const first = inputs[0];
+      if (first) setTimeout(() => first.focus(), 0);
     }
     div.querySelector('.widget-dismiss').onclick = () =>
       send({ id: widgetId, dismissed: true });

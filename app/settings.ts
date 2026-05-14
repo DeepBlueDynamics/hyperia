@@ -83,7 +83,6 @@ function buildSettingsHtml(): string {
   }
   const currentModel = String(cfg.config?.agentModel || '');
   const hasToken = !!cfg.config?.agentToken || currentModel.startsWith('ollama:');
-  const currentShivvr = cfg.config?.shivvr?.url || '';
 
   return `<!DOCTYPE html>
 <html>
@@ -376,31 +375,13 @@ function buildSettingsHtml(): string {
     <button class="set-btn" id="setTokenBtn">Set</button>
   </div>
 
-  <div class="input-area" id="modelChangeArea" style="${hasToken ? '' : 'display:none'}">
-    <select class="model-select" id="modelChangeSelect">
-      <optgroup label="Local (Ollama)">
-        <option value="ollama:gemma4:e2b" ${currentModel === 'ollama:gemma4:e2b' ? 'selected' : ''}>Gemma4 e2b — local, fast</option>
-        <option value="ollama:gemma4:31b-cloud" ${currentModel === 'ollama:gemma4:31b-cloud' ? 'selected' : ''}>Gemma4 31b — local proxy</option>
-      </optgroup>
-      <optgroup label="Anthropic">
-        <option value="claude-haiku-4-5-20251001" ${currentModel === 'claude-haiku-4-5-20251001' ? 'selected' : ''}>Claude Haiku 4.5 (fast)</option>
-        <option value="claude-sonnet-4-6" ${currentModel === 'claude-sonnet-4-6' ? 'selected' : ''}>Claude Sonnet 4.6</option>
-        <option value="claude-opus-4-6" ${currentModel === 'claude-opus-4-6' ? 'selected' : ''}>Claude Opus 4.6</option>
-      </optgroup>
-      <optgroup label="Other">
-        <option value="openai" ${currentModel === 'openai' ? 'selected' : ''}>OpenAI</option>
-        <option value="google" ${currentModel === 'google' ? 'selected' : ''}>Google</option>
-        <option value="openrouter" ${currentModel === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
-      </optgroup>
-    </select>
-    <button class="set-btn" id="changeModelBtn">Change Model</button>
-  </div>
-
-  <div class="input-area" id="shivvrArea" style="${hasToken ? '' : 'display:none'}">
-    <input type="text" id="shivvrInput" placeholder="Shivvr URL for embeddings..."
-           value="${currentShivvr}">
-    <button class="set-btn" id="setShivvrBtn">Set</button>
-  </div>
+  <!--
+    The static "change model" dropdown and shivvr URL inputs that used to live
+    here have been removed. Tell the settings agent in chat:
+      "change my model"   → provider picker + model picker via show_picker
+      "set shivvr to <url>"  → handled via settings_set
+    The agent walks you through it inline; no more divergent UI paths.
+  -->
 
   <div class="input-area" id="chatArea" style="${hasToken ? '' : 'display:none'}">
     <input type="text" id="chatInput" placeholder="Ask about settings...">
@@ -487,39 +468,10 @@ function buildSettingsHtml(): string {
     } else {
       addMsg('Token set for <code>' + model + '</code>. Settings agent ready.', 'success');
     }
-    // Swap to chat input
+    // Swap to chat input — the agent handles everything else from here.
     document.getElementById('tokenArea').style.display = 'none';
-    document.getElementById('modelChangeArea').style.display = '';
-    document.getElementById('shivvrArea').style.display = '';
     document.getElementById('chatArea').style.display = '';
     document.getElementById('chatInput').focus();
-  }
-
-  function changeModel() {
-    const model = document.getElementById('modelChangeSelect').value;
-    if (!model) { addMsg('Select a model first.', 'error'); return; }
-    const cfg = readConfig();
-    if (!cfg.config) cfg.config = {};
-    cfg.config.agentModel = model;
-    saveConfig(cfg);
-    const label = document.getElementById('modelChangeSelect').options[document.getElementById('modelChangeSelect').selectedIndex].text;
-    addMsg('Model changed to <code>' + label + '</code>. Takes effect on next message.', 'success');
-  }
-
-  function setShivvr() {
-    const url = document.getElementById('shivvrInput').value.trim();
-    const cfg = readConfig();
-    if (!cfg.config) cfg.config = {};
-    if (!cfg.config.shivvr) cfg.config.shivvr = {};
-    if (url) {
-      cfg.config.shivvr.url = url;
-      saveConfig(cfg);
-      addMsg('Shivvr set to <code>' + url + '</code>. Embeddings active on next message.', 'success');
-    } else {
-      delete cfg.config.shivvr;
-      saveConfig(cfg);
-      addMsg('Shivvr cleared. Falling back to BM25-only recall.', 'success');
-    }
   }
 
   function editConfig() {
@@ -650,12 +602,11 @@ function buildSettingsHtml(): string {
     document.getElementById('openNemesisSiteBtn')?.addEventListener('click', openNemesis8Site);
     document.getElementById('factoryResetBtn')?.addEventListener('click', factoryReset);
     document.getElementById('setTokenBtn')?.addEventListener('click', setToken);
-    document.getElementById('changeModelBtn')?.addEventListener('click', changeModel);
-    document.getElementById('setShivvrBtn')?.addEventListener('click', setShivvr);
+    // The static "change model" and "set shivvr" buttons have been removed —
+    // those flows live in the settings-agent chat now.
     document.getElementById('settingsSendBtn')?.addEventListener('click', sendChat);
     document.getElementById('modelSelect')?.addEventListener('change', function() { onModelSelectChange(this); });
     document.getElementById('tokenInput')?.addEventListener('keydown', function(e) { if (e.key === 'Enter') setToken(); });
-    document.getElementById('shivvrInput')?.addEventListener('keydown', function(e) { if (e.key === 'Enter') setShivvr(); });
     document.getElementById('chatInput')?.addEventListener('keydown', function(e) { if (e.key === 'Enter') sendChat(); });
   })();
 
@@ -697,8 +648,8 @@ function buildSettingsHtml(): string {
       widgetDiv.classList.add('confirmed');
       widgetDiv.innerHTML = '<span class="confirmed-text">\u2713 ' + escapeHtml(url || '(cleared)') + '</span>';
     }
-    const shivvrEl = document.getElementById('shivvrInput');
-    if (shivvrEl) shivvrEl.value = url;
+    // Old shivvrInput field was removed when the static config UI was
+    // dropped — no syncing needed any more.
   }
 
     let settingsSending = false;
