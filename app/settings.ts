@@ -360,7 +360,14 @@ function buildSettingsHtml(): string {
   .terminal-output {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
+    /* Old-terminal style character wrap. pre-wrap preserves whitespace
+       and wraps on width; word-break: break-all + overflow-wrap: anywhere
+       force the wrap at the exact column boundary even mid-word, instead
+       of pushing long tokens off the right edge and showing a scrollbar. */
     white-space: pre-wrap;
+    word-break: break-all;
+    overflow-wrap: anywhere;
     line-height: 1.55;
   }
   .terminal-output .line {
@@ -382,7 +389,8 @@ function buildSettingsHtml(): string {
   .terminal-output .line.banner {
     color: #c839c5;
     margin-bottom: 8px;
-    white-space: pre;
+    /* No white-space: pre here — banner lines should wrap with the
+       rest of the output. The parent .terminal-output handles wrapping. */
   }
   .terminal-prompt-row {
     display: flex;
