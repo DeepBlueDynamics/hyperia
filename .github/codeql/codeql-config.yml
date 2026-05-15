@@ -1,0 +1,35 @@
+name: "Hyperia CodeQL config"
+
+# Exclude vendored third-party bundles from analysis. These are minified
+# or rolled-up distributions of upstream packages (yarn, rimraf) that we
+# ship pre-built for offline / portable install. We do NOT maintain their
+# source; patching warnings in place would diverge from upstream and any
+# fix gets clobbered the next time the bundle is regenerated.
+#
+# Our own scripts in bin/ (cli.js, cp-sidecar.js, etc.) are still scanned.
+# Only files matching *-standalone.js are skipped.
+paths-ignore:
+  - bin/yarn-standalone.js
+  - bin/rimraf-standalone.js
+  # Future *-standalone.js bundles automatically pick up via the glob below.
+  - 'bin/*-standalone.js'
+  # Generated minified renderer output — not source we author.
+  - target/renderer/bundle.js
+  # Cached / installed dependencies.
+  - 'node_modules/**'
+  - 'target/node_modules/**'
+  - 'dist/**'
+
+# Same paths must not be skipped when they ARE our source — but the globs
+# above target only minified / vendored shapes, so nothing of ours is hit.
+paths:
+  - app
+  - lib
+  - cli
+  - bin/cli.js
+  - bin/cp-sidecar.js
+  - bin/cp-snapshot.js
+  - bin/mk-snapshot.js
+  - bin/notarize.js
+  - bin/sign-sidecar.js
+  - bin/snapshot-libs.js

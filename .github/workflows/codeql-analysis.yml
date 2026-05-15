@@ -30,6 +30,12 @@ jobs:
       uses: github/codeql-action/init@v4
       with:
         languages: ${{ matrix.language }}
+        # Reference the config file so vendored bundles like
+        # bin/yarn-standalone.js and bin/rimraf-standalone.js are excluded.
+        # They're third-party rolled-up distributions we don't maintain;
+        # warnings in them can't be cleanly patched without diverging from
+        # upstream. Our own scripts and source dirs are still scanned.
+        config-file: ./.github/codeql/codeql-config.yml
 
     - name: Autobuild
       uses: github/codeql-action/autobuild@v4
