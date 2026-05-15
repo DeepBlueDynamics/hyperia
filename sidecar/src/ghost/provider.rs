@@ -10,14 +10,23 @@ use super::types::{GhostConfig, ProviderEvent, ToolDef};
 pub enum AnyProvider {
     Anthropic(AnthropicProvider),
     Ollama(OllamaProvider),
+    /// Stub for not-yet-implemented providers (OpenAI, Gemini). Holds the
+    /// provider name so the error message can name it. Stream emits a
+    /// single Error event explaining what's missing and returns.
+    Unsupported(String),
 }
 
 impl AnyProvider {
+    /// Dispatch on the explicit `config.provider` field. No string-prefix
+    /// model magic — the routing decision lives in load_config so that
+    /// there's a single source of truth.
     pub fn from_config(config: &GhostConfig) -> Self {
-        if config.model.starts_with("ollama:") {
-            AnyProvider::Ollama(OllamaProvider::new(config))
-        } else {
-            AnyProvider::Anthropic(AnthropicProvider::new(config))
+        match config.provider.as_str() {
+            "anthropic" => AnyProvider::Anthropic(AnthropicProvider::new(config)),
+            "ollama" => AnyProvider::Ollama(OllamaProvider::new(config)),
+            "openai" => AnyProvider::Unsupported("openai".into()),
+            "gemini" => AnyProvider::Unsupported("gemini".into()),
+            other => AnyProvider::Unsupported(other.to_string()),
         }
     }
 
@@ -31,6 +40,15 @@ impl AnyProvider {
         match self {
             AnyProvider::Anthropic(p) => p.stream(system, messages, tools, max_tokens).await,
             AnyProvider::Ollama(p) => p.stream(system, messages, tools, max_tokens).await,
+            AnyProvider::Unsupported(name) => {
+                let (tx, rx) = mpsc::channel(8);
+                let msg = format!(
+                    "Provider '{}' is not yet implemented in the sidecar. Switch to Anthropic or Ollama via the settings agent: 'change my model'. Tokens for additional providers can be stored at config.providers.<name>.token — when the provider lands here it'll pick them up automatically.",
+                    name
+                );
+                let _ = tx.send(ProviderEvent::Error(msg)).await;
+                Ok(rx)
+            }
         }
     }
 }
@@ -43,33 +61,30 @@ pub struct AnthropicProvider {
     client: reqwest::Client,
     api_key: String,
     model: String,
+    endpoint: String,
 }
 
 impl AnthropicProvider {
     pub fn new(config: &GhostConfig) -> Self {
-        let model = match config.model.as_str() {
-            // Legacy provider key — default to Haiku 4.5
-            "anthropic" => "claude-haiku-4-5-20251001".to_string(),
-            // Bare provider names from the old static dropdown that we no
-            // longer fully support as agent models. Fall back to Claude so
-            // the agent can run and tell the user to pick a concrete model
-            // via the "change my model" flow. Without this fallback the
-            // very first message dies with a 404 "model: openai" and the
-            // user can't even reach the picker to fix it.
-            "openai" | "google" | "openrouter" | "" => {
-                tracing::warn!(
-                    "agentModel '{}' is not a concrete model id — falling back to claude-sonnet-4-6. Ask the settings agent: 'change my model'.",
-                    config.model
-                );
-                "claude-sonnet-4-6".to_string()
-            }
-            // Full model IDs passed through directly
-            other => other.to_string(),
+        // No more string-prefix magic — the model id comes straight from
+        // config.agent.model, which the settings agent writes via the
+        // model_catalog → show_picker → settings_set flow. If it's empty
+        // load_config has already defaulted it.
+        let model = if config.model.is_empty() {
+            "claude-sonnet-4-6".to_string()
+        } else {
+            config.model.clone()
+        };
+        let endpoint = if config.endpoint.is_empty() {
+            "https://api.anthropic.com".to_string()
+        } else {
+            config.endpoint.trim_end_matches('/').to_string()
         };
         Self {
             client: reqwest::Client::new(),
             api_key: config.api_key.clone(),
             model,
+            endpoint,
         }
     }
 
@@ -108,7 +123,7 @@ impl AnthropicProvider {
         let resp = loop {
             let resp = self
                 .client
-                .post("https://api.anthropic.com/v1/messages")
+                .post(format!("{}/v1/messages", self.endpoint))
                 .header("x-api-key", &self.api_key)
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
@@ -274,22 +289,34 @@ fn parse_sse_event(event_type: &str, data: &str) -> Option<ProviderEvent> {
 pub struct OllamaProvider {
     client: reqwest::Client,
     model: String,
+    endpoint: String,
+    /// Optional bearer token — only used for Ollama Cloud / custom proxies.
+    /// Empty for default local Ollama.
+    api_key: String,
 }
 
 impl OllamaProvider {
     pub fn new(config: &GhostConfig) -> Self {
-        // Strip the "ollama:" prefix to get the actual model tag
+        // Strip a legacy "ollama:" prefix in case an old config still has
+        // it. New configs store the bare model name in config.agent.model.
         let model = config
             .model
             .strip_prefix("ollama:")
             .unwrap_or(&config.model)
             .to_string();
+        let endpoint = if config.endpoint.is_empty() {
+            "http://localhost:11434".to_string()
+        } else {
+            config.endpoint.trim_end_matches('/').to_string()
+        };
         Self {
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(120))
                 .build()
                 .unwrap_or_default(),
             model,
+            endpoint,
+            api_key: config.api_key.clone(),
         }
     }
 
@@ -431,13 +458,16 @@ impl OllamaProvider {
             body["tools"] = serde_json::json!(ollama_tools);
         }
 
-        let resp = self
+        let mut req = self
             .client
-            .post("http://localhost:11434/api/chat")
+            .post(format!("{}/api/chat", self.endpoint))
             .header("content-type", "application/json")
-            .body(body.to_string())
-            .send()
-            .await;
+            .body(body.to_string());
+        if !self.api_key.is_empty() {
+            // Ollama Cloud and many proxies accept Bearer tokens.
+            req = req.bearer_auth(&self.api_key);
+        }
+        let resp = req.send().await;
 
         let resp = match resp {
             Ok(r) => r,

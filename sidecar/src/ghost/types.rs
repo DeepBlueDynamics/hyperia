@@ -59,10 +59,29 @@ pub enum ProviderEvent {
 }
 
 /// Ghost agent config, loaded from ~/.hyperia/hyperia.json.
+///
+/// Provider is explicit — no string-prefix detection. The renderer (or the
+/// settings agent via model_catalog/show_picker) writes both
+/// `config.agent.provider` and `config.agent.model` together so routing is
+/// unambiguous. Tokens and endpoints come from
+/// `config.providers.<provider>.{token, endpoint}` so users can keep multiple
+/// providers configured side-by-side and switch agent.model without
+/// re-pasting keys.
 #[derive(Debug, Clone)]
 pub struct GhostConfig {
-    pub api_key: String,
+    /// One of: "anthropic", "openai", "gemini", "ollama". Lower-case.
+    pub provider: String,
+    /// The full model id (e.g. "claude-sonnet-4-6", "gpt-4o", "llama3.2").
+    /// Pass through verbatim to the underlying provider.
     pub model: String,
+    /// API key for cloud providers. Empty string for ollama local.
+    pub api_key: String,
+    /// HTTP endpoint base. Falls back to a built-in default per provider:
+    ///   anthropic → https://api.anthropic.com
+    ///   openai    → https://api.openai.com
+    ///   gemini    → https://generativelanguage.googleapis.com
+    ///   ollama    → http://localhost:11434
+    pub endpoint: String,
     pub max_turns: usize,
 }
 

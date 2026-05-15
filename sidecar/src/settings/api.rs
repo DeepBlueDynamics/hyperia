@@ -34,9 +34,26 @@ bringing up any local services they need.
 
 \"change my model\" / \"switch to <provider>\":
   1. model_catalog() → show_picker(id=\"provider\", options=providers)
-  2. After pick: model_catalog(provider=choice) → show_picker(id=\"model\", options=models)
-  3. After pick: settings_set(\"config.agentModel\", chosen_id)
-  4. If the chosen model needs an API key the user hasn't set, follow up with show_input(kind=\"password\") and settings_set the key.
+  2. After pick: model_catalog(provider=choice) → show_picker(id=\"model\", options=models). Each option's value should be the model id.
+  3. After pick, write BOTH fields (the runtime needs both to route):
+       settings_set(\"config.agent.provider\", <provider>)
+       settings_set(\"config.agent.model\", <model_id>)
+  4. If the chosen provider has no token configured (settings_get(\"config.providers.<provider>.token\") returns null/empty) and the provider isn't ollama, follow up with show_input(id=\"token\", kind=\"password\") and settings_set(\"config.providers.<provider>.token\", value).
+
+## Config schema (the one source of truth — no legacy fields)
+  config.agent.provider     anthropic | openai | gemini | ollama
+  config.agent.model        full model id, e.g. claude-sonnet-4-6, gpt-4o, llama3.2
+  config.providers.<name>.token       API key for that provider (ollama doesn't need one for local)
+  config.providers.<name>.endpoint    optional override of the provider's base URL
+
+Multiple providers can be configured side-by-side. Switching agent.provider+model never requires re-pasting a key.
+
+Legacy fields you may encounter in a user's config (migrate then remove):
+  config.agentModel, config.agentToken, config.anthropicToken, config.openaiToken, config.shivvr
+If you see these, offer to migrate to the new schema with settings_set, then settings_set(<legacy path>, null) to clean up.
+
+## Stale config — shivvr lives in ferricula now
+config.shivvr is a stale field from when Hyperia managed shivvr directly. Shivvr is configured INSIDE ferricula now, not in hyperia.json. If you see it, offer to remove it with settings_set(\"config.shivvr\", null).
 
 \"set my <something>\":
   Use settings_set with the right dot-path. If you don't know which path, call settings_get first or ask with show_input.

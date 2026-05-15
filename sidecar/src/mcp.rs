@@ -670,6 +670,18 @@ impl HyperiaMcp {
         }
     }
 
+    #[tool(description = "Run a readiness probe across Hyperia's prerequisites and return a \
+        structured JSON report. Checks: nuts.services token (configured + best-effort auth); \
+        nemesis8 binary on disk; ferricula memory reachability + memory count; ollama running \
+        + installed models; host platform + arch. Shivvr lives inside ferricula now, not as a \
+        separate probe. Use this at session start to decide what to configure next.")]
+    async fn doctor(&self) -> Result<CallToolResult, ErrorData> {
+        let report = crate::ghost::registry::run_doctor().await;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&report).unwrap_or_default(),
+        )]))
+    }
+
     #[tool(description = "List all terminal profiles defined in the Hyperia config. Returns \
         each profile's name and shell path so the agent can choose a sensible default or \
         propose changes.")]
