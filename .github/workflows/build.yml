@@ -49,8 +49,17 @@ jobs:
         run: yarn install --frozen-lockfile
 
       # Build sidecar
-      - name: Build sidecar (release)
+      # On macOS we MUST use --target so the binary lands in the
+      # target/<triple>/release/ path that bin/cp-sidecar.js reads from.
+      # A bare `cargo build --release` puts it at target/release/ and the
+      # packaging step doesn't find it ("Sidecar binary not found …").
+      - name: Build sidecar (release, default target)
+        if: matrix.os != 'macos-latest'
         run: cargo build --release --manifest-path sidecar/Cargo.toml
+
+      - name: Build sidecar x86_64 (macOS)
+        if: matrix.os == 'macos-latest'
+        run: cargo build --release --manifest-path sidecar/Cargo.toml --target x86_64-apple-darwin
 
       - name: Build sidecar ARM64 (macOS)
         if: matrix.os == 'macos-latest'
@@ -74,9 +83,14 @@ jobs:
 
       - name: Build installer (macOS)
         if: matrix.os == 'macos-latest'
-        run: npx electron-builder --mac
+        # CSC_IDENTITY_AUTO_DISCOVERY=false: CI has no Developer ID cert,
+        # so don't try to sign. The unsigned .dmg is still useful as an
+        # artifact for testing — signed releases happen from a Mac with
+        # the cert set up. See certificate-next-steps-2026-05-13.md.
+        run: npx electron-builder --mac --config.mac.identity=null
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Build installer (Linux)
         if: matrix.os == 'ubuntu-latest'
