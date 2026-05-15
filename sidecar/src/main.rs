@@ -111,7 +111,14 @@ If the pane label is empty, use paneId.",
             addr.window, addr.tab, addr.pane, session_count
         ));
     };
-    (StatusCode::OK, state.bridge.get_screen_text_by_uid(&uid).await)
+    let screen = state.bridge.get_screen_text_by_uid(&uid).await;
+    if let Some((tab, pane, win)) = state.bridge.pane_address_for_log(&uid).await {
+        tracing::info!(
+            "screen win={} tab={:?} pane={} bytes={}",
+            win, tab, pane, screen.len()
+        );
+    }
+    (StatusCode::OK, screen)
 }
 
 async fn post_auto_describe(
@@ -223,6 +230,12 @@ If the pane label is empty, use paneId.",
             ));
         }
     };
+    if let Some((tab, pane, win)) = state.bridge.pane_address_for_log(&uid).await {
+        tracing::info!(
+            "type win={} tab={:?} pane={} bytes={} preview={:?}",
+            win, tab, pane, keys.len(), &keys[..keys.len().min(120)]
+        );
+    }
     let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys});
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
@@ -252,7 +265,20 @@ async fn post_type_and_collect(
         }
     };
     let quiet_ms = addr.quiet_ms.unwrap_or(400).clamp(100, 10_000);
+    let log_addr = state.bridge.pane_address_for_log(&uid).await;
+    if let Some((tab, pane, win)) = &log_addr {
+        tracing::info!(
+            "type-and-collect ▶ win={} tab={:?} pane={} quiet_ms={} bytes_in={} preview={:?}",
+            win, tab, pane, quiet_ms, body.len(), &body[..body.len().min(120)]
+        );
+    }
     let output = state.bridge.type_and_collect(&uid, &body, quiet_ms).await;
+    if let Some((tab, pane, win)) = &log_addr {
+        tracing::info!(
+            "type-and-collect ◀ win={} tab={:?} pane={} bytes_out={}",
+            win, tab, pane, output.len()
+        );
+    }
     (StatusCode::OK, output)
 }
 
@@ -857,18 +883,44 @@ async fn main() -> anyhow::Result<()> {
         return mcp::run_mcp_stdio(args.port).await;
     }
 
-    // Normal sidecar mode
+    // Normal sidecar mode.
+    //
+    // Two log sinks side-by-side:
+    //   1. In-memory ring buffer (1000 lines) — served by /api/logs for the
+    //      Settings panel and the sidecar_logs MCP tool. Lost on restart.
+    //   2. Daily-rotating file under ~/.hyperia/logs/sidecar.log.YYYY-MM-DD.
+    //      Survives restarts so anything that happened mid-session is
+    //      recoverable. Keeps ALL log lines, not just the latest 1000.
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").ok()
+    } else {
+        std::env::var("HOME").ok()
+    };
+    let log_dir = home
+        .map(|h| std::path::PathBuf::from(h).join(".hyperia").join("logs"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".hyperia-logs"));
+    let _ = std::fs::create_dir_all(&log_dir);
+
     let log_buffer = logs::new_log_buffer();
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "sidecar.log");
+    let (file_writer, _file_guard) = tracing_appender::non_blocking(file_appender);
+    // Leak the guard so the non-blocking writer keeps draining for the
+    // process lifetime. Dropping it would close the file early.
+    Box::leak(Box::new(_file_guard));
+
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+    let writer = logs::LogBufferMakeWriter::new(log_buffer.clone()).and(file_writer);
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()),
         )
-        .with_writer(logs::LogBufferMakeWriter::new(log_buffer.clone()))
+        .with_writer(writer)
         .with_ansi(false)
         .init();
 
     tracing::info!("hyperia-sidecar v{}", env!("CARGO_PKG_VERSION"));
     tracing::info!("API :{}", args.port);
+    tracing::info!("log dir: {} (daily rotation)", log_dir.display());
 
     // Ferricula no longer embedded. The ghost agent talks to ferricula over
     // HTTP via FerriculaBackend (FERRICULA_URL env var or

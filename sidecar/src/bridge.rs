@@ -125,6 +125,23 @@ impl Bridge {
 
     /// Read the vt100 screen buffer for a session uid.
     /// No round-trip to Electron — reads from the local ScreenBuffer fed by SessionData.
+    /// Return (tab_name, pane_label, window_id) for a session uid, or None.
+    /// Used by the HTTP handlers to add per-pane context to log lines so
+    /// every PTY write/read is attributable to a specific tab and pane.
+    pub async fn pane_address_for_log(&self, uid: &str) -> Option<(String, String, u32)> {
+        let sessions = self.inner.sessions.lock().await;
+        sessions.get(uid).map(|info| {
+            let label = if info.split_label.is_empty() {
+                // No split label = single-pane tab. Use a short paneId prefix
+                // so the line is still parseable even when there's no letter.
+                format!("[{}]", &uid[..uid.len().min(8)])
+            } else {
+                info.split_label.clone()
+            };
+            (info.tab_name.clone(), label, info.window_id)
+        })
+    }
+
     pub async fn get_screen_text_by_uid(&self, uid: &str) -> String {
         let sessions = self.inner.sessions.lock().await;
         if let Some(info) = sessions.get(uid) {
