@@ -1,5 +1,28 @@
 # Release Build Runbook
 
+## Quick reference: where does the release come from?
+
+Hyperia has **two parallel release paths**. Know which one you're using before you ship.
+
+| Path | Trigger | What it produces | Signing | Used for |
+|---|---|---|---|---|
+| **Local Windows build** (this runbook) | Manual on Kord's Windows box | `dist/Hyperia-X.Y.Z-x64.exe` | **Authenticode-signed** via Azure Trusted Signing | The signed Windows binary uploaded to the GitHub release |
+| **GitHub Actions CI** (`.github/workflows/build.yml`) | `git push` of a `v*` tag | Windows `.exe` + Mac `.dmg`/`.zip` + Linux `.deb`/`.AppImage` + `latest*.yml` update metadata | **All unsigned** until secrets land in repo (see "CI signing status" below) | Cross-platform draft GitHub release; auto-update channel |
+
+The standard release flow is: **tag → CI builds everything → publish CI artifacts as draft → replace the CI Windows .exe with the locally-signed one → publish as pre-release (until all platforms are signed) or release**.
+
+If you don't need cross-platform binaries and only ship Windows, you can skip CI and `yarn dist` locally — but most of the time you want the full flow.
+
+## CI signing status (as of v0.10.7)
+
+| Platform | CI artifact | Signing | Why |
+|---|---|---|---|
+| Windows `.exe` | Unsigned | The Azure Trusted Signing secret (`AZURE_CLIENT_SECRET` + hardcoded tenant/client/account in `build/win/sign.js`) is set in Kord's local environment, not in GitHub repo secrets. To fix: add the secret to repo `Settings → Secrets → Actions` and expose it as an env var in the Windows build step. |
+| macOS `.dmg`/`.zip` (x64 + arm64) | Unsigned | The Developer ID Application cert was created (see `docs/signing-apple.md`) but the `.p12` export + CSC_* secrets are not in repo. Additionally `.github/workflows/build.yml` explicitly disables signing on macOS via `CSC_IDENTITY_AUTO_DISCOVERY=false` and `--config.mac.identity=null` to keep the build green. Removing those flags before secrets are wired will re-break CI. |
+| Linux `.deb`/`.AppImage` | Unsigned | Linux package signing is typically maintainer-keyring, not Authenticode-style; we don't sign at this layer. |
+
+**Don't mark a release as "Latest" / non-prerelease until all three platforms ship signed from a single source.** Local Windows + unsigned CI binaries means the release should stay as `--prerelease`.
+
 ## CRITICAL: Order matters. Wrong order = wrong sidecar in the installer.
 
 ### Step 1 — Bump version (ALL THREE files, same version)
@@ -78,14 +101,47 @@ Confirm the file timestamp is fresh and the version in the filename matches.
 Check the build output for `Signed: Hyperia.exe` lines — if signing worked you'll see
 them. `AZURE_CLIENT_SECRET not set — skipping signing` means the secret wasn't loaded.
 
-### Step 7 — Push release to GitHub
+### Step 7 — Tag and push to trigger CI
 
 ```bash
-gh release create vX.Y.Z dist/Hyperia-X.Y.Z-x64.exe dist/Hyperia-X.Y.Z-x64.exe.blockmap \
-  --title "vX.Y.Z" \
-  --notes "release notes here" \
-  --target canary
+git add app/package.json package.json sidecar/Cargo.toml sidecar/Cargo.lock
+git commit -m "vX.Y.Z — <one-line summary>"
+git push origin canary
+git tag vX.Y.Z
+git push origin vX.Y.Z      # ← this triggers .github/workflows/build.yml
 ```
+
+The tag push fires the `Build & Release` workflow. Watch it:
+
+```bash
+gh run watch $(gh run list --limit 1 --workflow=build.yml --json databaseId --jq '.[0].databaseId') --exit-status
+```
+
+When all four jobs are green (build × 3 + release), CI will have created a draft release with cross-platform artifacts. **Do not publish it yet** — the CI Windows .exe is unsigned.
+
+### Step 7b — Swap in the locally-signed Windows .exe
+
+The CI-built Windows binary is unsigned (see "CI signing status"). Replace it with your locally-signed copy before publishing:
+
+```bash
+gh release upload vX.Y.Z dist/Hyperia-X.Y.Z-x64.exe --clobber
+```
+
+### Step 7c — Write real release notes
+
+Auto-generated commit lists are not release notes. Write a `release-notes.md` (gitignored) with:
+
+1. **Signing status header** — per-platform breakdown of what's signed. Users need to know this BEFORE they download.
+2. **Highlights since the previous tag** grouped by area (features, fixes, security, CI). Run `git log vPREV..vX.Y.Z --pretty="- %s" --no-merges` for raw input, then group it.
+3. **Known issues** — anything that didn't make it but shipped anyway.
+
+Then push the notes:
+
+```bash
+gh release edit vX.Y.Z --notes-file release-notes.md --prerelease --draft=false
+```
+
+**Mark it `--prerelease`, not `--latest`, while signing is incomplete on any platform.** Promote to latest only when all artifacts are signed from a single source.
 
 ### Step 8 — Deploy install scripts to hyperia-web
 
@@ -151,3 +207,69 @@ gh api repos/DeepBlueDynamics/.github/contents/.github/profile/README.md
 | Forgot to update DeepBlueDynamics profile | GitHub org page shows stale version |
 | Forgot to deploy install scripts to hyperia-web | `install.ps1` / `install.sh` download old version |
 | Used `HttpClient` in install.ps1 | `Unable to find type [System.Net.Http.HttpClient]` via `irm \| iex` — use `HttpWebRequest` |
+| Published GH release without swapping CI Windows .exe for the local signed one | Users download an unsigned `.exe` even though signing is configured |
+| Marked release as `--latest` while macOS / Linux artifacts are unsigned | Misleading signal — users assume all artifacts are production-trusted |
+
+---
+
+## CI-specific build pitfalls (workflows/build.yml)
+
+These bit us in v0.10.2 – v0.10.6. All resolved by v0.10.7; documenting so they don't return.
+
+| Symptom on CI | Cause | Where it's fixed |
+|---|---|---|
+| `error rcedit@5.0.2: The engine "node" is incompatible — Expected ">= 22.12.0". Got "20.20.2"` during `yarn install` | rcedit (transitive via electron-builder) requires Node ≥22.12. CI defaulted to Node 20. | `.github/workflows/build.yml` sets `node-version: 22` in the `actions/setup-node@v4` step. |
+| `An interface can only extend an object type` from `@types/async-retry` then `Error: No output definition` | `postinstall` ran `yarn run generate-schema` which invokes `typescript-json-schema` against `typings/config.d.ts`. Upstream type drift in `@types/async-retry` made it crash on a clean install. | Removed `&& yarn run generate-schema` from the `postinstall` chain in `package.json`. `app/config/schema.json` is committed; run `yarn run generate-schema` manually when `typings/config.d.ts` changes. |
+| `Sidecar binary not found at sidecar/target/x86_64-apple-darwin/release/hyperia-sidecar — skipping` on macOS | `bin/cp-sidecar.js` looks at `sidecar/target/<rust-target>/release/hyperia-sidecar`. A bare `cargo build --release` puts the binary at `sidecar/target/release/` with no triple in the path. | macOS sidecar build steps use explicit `--target x86_64-apple-darwin` and `--target aarch64-apple-darwin`. |
+| `⨯ Please remove prefix "Developer ID Application:" from the specified name` on macOS | `electron-builder.json` hardcodes `mac.identity: "Developer ID Application: DeepBlue Dynamics LLC"`. electron-builder rejects this prefix when no cert is present. | macOS build step on CI passes `--config.mac.identity=null` and sets `CSC_IDENTITY_AUTO_DISCOVERY=false` to skip signing entirely. **This is a workaround** — remove it once the Apple cert + secrets are wired into repo (see `docs/signing-apple.md`). |
+
+---
+
+## Wiring CI signing (the remaining work to retire the pre-release flag)
+
+To get to a real "Latest" release where every artifact is signed from CI:
+
+### Windows on CI
+1. Add `AZURE_CLIENT_SECRET` to repo secrets (`Settings → Secrets and variables → Actions`). The value is the same one in `.signing.env` on Kord's local box.
+2. Update `build.yml`'s Windows installer step to expose it:
+   ```yaml
+   - name: Build installer (Windows)
+     if: matrix.os == 'windows-latest'
+     run: npx electron-builder --win
+     env:
+       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+   ```
+3. `build/win/sign.js` already loads `AZURE_CLIENT_SECRET` from `process.env`; no other code change needed.
+
+### macOS on CI
+Prerequisite: complete `docs/signing-apple.md` Steps 1–4 (D-U-N-S, enrollment, Developer ID cert, app-specific password). Then:
+
+1. Export the Developer ID cert as a `.p12` (Keychain Access → My Certificates → cert → right-click → Export, choose `.p12`, set a password).
+2. Base64-encode the `.p12`:
+   ```bash
+   base64 -i developer-id.p12 -o developer-id.p12.base64
+   ```
+3. Add to repo secrets:
+   - `CSC_LINK` — contents of `developer-id.p12.base64`
+   - `CSC_KEY_PASSWORD` — the `.p12` password
+   - `APPLE_ID` — Apple Developer account email
+   - `APPLE_APP_SPECIFIC_PASSWORD` — generated at `appleid.apple.com`
+   - `APPLE_TEAM_ID` — 10-character team ID
+4. Update `build.yml`'s macOS installer step to consume them and remove the disable flags:
+   ```yaml
+   - name: Build installer (macOS)
+     if: matrix.os == 'macos-latest'
+     run: npx electron-builder --mac
+     env:
+       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+       CSC_LINK: ${{ secrets.CSC_LINK }}
+       CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+       APPLE_ID: ${{ secrets.APPLE_ID }}
+       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+   ```
+5. Drop `CSC_IDENTITY_AUTO_DISCOVERY=false` and `--config.mac.identity=null` from that step.
+6. Restore the `electron-builder.json` `mac.identity` to a value electron-builder accepts (either omit the `"Developer ID Application: "` prefix or leave the field unset and let `CSC_LINK` + `APPLE_TEAM_ID` drive selection).
+
+Once both are wired and the first CI release ships fully signed end-to-end, the local-Windows-build-then-swap dance in Step 7b becomes unnecessary, and releases can be marked `--latest` directly.

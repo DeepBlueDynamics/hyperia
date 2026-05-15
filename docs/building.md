@@ -1,5 +1,7 @@
 # Building Hyperia for Release
 
+For the end-to-end release flow (CI + signing + GitHub release + auto-update channel + install-script deploy), use **`deploy/operations/release-build.md`** — that's the operations runbook. This file covers the per-platform local-build mechanics only.
+
 ## Prerequisites
 
 - **Node.js** + **Yarn**
@@ -124,3 +126,29 @@ yarn dist
 cd sidecar && cargo build --release --target aarch64-apple-darwin && cd ..
 yarn dist
 ```
+
+### macOS signing & notarization
+
+`yarn dist` on a Mac will attempt to sign with the Developer ID cert and
+notarize via Apple's service IF the right env vars are set. The full
+walkthrough — D-U-N-S, enrollment, cert creation, CSR, app-specific
+password, and the env vars electron-builder reads — is in
+**`docs/signing-apple.md`**. Do that setup once per developer machine
+or cert cycle, then `yarn dist` produces a signed and stapled `.dmg`.
+
+### Building on macOS — known gotchas
+
+- `bin/cp-sidecar.js` reads from `sidecar/target/<rust-target>/release/`. A bare `cargo build --release` puts the binary at `sidecar/target/release/` (no triple) — the script won't find it and the `.app` ships without a sidecar (silently — only a `Sidecar binary not found … — skipping` line in the build log). Always use `--target`.
+- `electron-builder.json` hardcodes `mac.identity: "Developer ID Application: DeepBlue Dynamics LLC"`. With no cert present, electron-builder rejects that prefix. Either: install the cert per `signing-apple.md`, OR pass `--config.mac.identity=null` + set `CSC_IDENTITY_AUTO_DISCOVERY=false` to skip signing.
+
+### CI builds (GitHub Actions)
+
+`.github/workflows/build.yml` runs the cross-platform release build on
+`v*` tag push. As of v0.10.7 the workflow:
+
+- Uses **Node 22** (`rcedit@5.0.2` from electron-builder requires ≥22.12)
+- Does **not** run `generate-schema` in `postinstall` — the committed `app/config/schema.json` is the source of truth; regenerate manually with `yarn run generate-schema` after editing `typings/config.d.ts`
+- Builds the sidecar with explicit `--target x86_64-apple-darwin` on the macOS runner (see gotcha above)
+- **Disables macOS signing on CI** via `CSC_IDENTITY_AUTO_DISCOVERY=false` and `--config.mac.identity=null` because the Apple cert + secrets aren't wired into repo yet. This is a workaround — see `deploy/operations/release-build.md` for the path to retire it.
+
+Releases are uploaded as a **draft**. Real release notes + signing-status flag are added in `release-build.md` Step 7c before the draft is flipped to a (pre-)release.
