@@ -615,7 +615,12 @@ function buildSettingsHtml(): string {
 
   function factoryReset() {
     if (!confirm('This will wipe all Hyperia settings AND Ferricula memory (tool history, remembered facts, parrot colors — all of it). Your agent API token will be preserved. Restart Hyperia after. Continue?')) return;
-    addMsg('Factory Reset', 'user');
+    // No self-echo here — the slash-dispatcher in sendChat() already
+    // adds the user's typed line, and the terminal-mode dispatcher prints
+    // its own `> install nemesis8` echo before calling us. Re-adding it
+    // would produce duplicated chat lines like:
+    //   "factory reset"           ← from sendChat
+    //   "Factory Reset"           ← from here (duplicate)
     try {
       const {ipcRenderer} = require('electron');
       ipcRenderer.send('factory-reset-config');
@@ -632,7 +637,8 @@ function buildSettingsHtml(): string {
   }
 
   function installNemesis8() {
-    addMsg('Install Nemesis8', 'user');
+    // No self-echo — callers (slash-dispatch in sendChat, terminal-mode
+    // dispatch in termDispatch) already echoed the user's input.
     addMsg('Running official Nemesis8 installer...');
 
     let exec;
