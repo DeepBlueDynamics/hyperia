@@ -557,7 +557,11 @@ function expand$1(str, isTop) {
   var isNumericSequence = /^-?\d+\.\.-?\d+(?:\.\.-?\d+)?$/.test(m.body);
   var isAlphaSequence = /^[a-zA-Z]\.\.[a-zA-Z](?:\.\.-?\d+)?$/.test(m.body);
   var isSequence = isNumericSequence || isAlphaSequence;
-  var isOptions = /^(.*,)+(.+)?$/.test(m.body);
+  // Original: /^(.*,)+(.+)?$/.test(m.body) — ReDoS via nested quantifier.
+  // The pattern just asks "does m.body contain a comma" (the .* prefix and
+  // optional .+ suffix accept anything around it). String.indexOf is the
+  // linear equivalent. Tracked: CodeQL js/redos on this file.
+  var isOptions = m.body.indexOf(',') !== -1;
   if (!isSequence && !isOptions) {
     // {a},b}
     if (m.post.match(/,.*\}/)) {

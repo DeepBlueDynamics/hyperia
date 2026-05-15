@@ -132541,7 +132541,10 @@ exports.calculateMac = function (credentials, opts) {
     (opts.hash || '') + '\n'
 
   if (opts.ext) {
-    normalized = normalized + opts.ext.replace('\\', '\\\\').replace('\n', '\\n')
+    // CodeQL js/incomplete-sanitization: string-form replace only swaps the
+    // first occurrence. Use /g regex so every \ and every newline in the
+    // extension gets escaped, not just the first one.
+    normalized = normalized + opts.ext.replace(/\\/g, '\\\\').replace(/\n/g, '\\n')
   }
 
   normalized = normalized + '\n'
