@@ -12,7 +12,7 @@
     "test:unit": "ava",
     "test:unit:watch": "yarn run test:unit -- --watch",
     "test:e2e": "ava --config ava-e2e.config.js",
-    "postinstall": "webpack --config-name hyper-app && electron-builder install-app-deps && cpy --cwd=target node_modules \"../../app/\" && husky install && yarn run generate-schema",
+    "postinstall": "webpack --config-name hyper-app && electron-builder install-app-deps && cpy --cwd=target node_modules \"../../app/\" && husky install",
     "rebuild-node-pty": "electron-rebuild -f -o node-pty -m target",
     "dist": "yarn run build && electron-builder",
     "clean": "node ./bin/rimraf-standalone.js node_modules && node ./bin/rimraf-standalone.js ./app/node_modules && node ./bin/rimraf-standalone.js ./app/renderer",
