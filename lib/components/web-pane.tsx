@@ -9,6 +9,28 @@ import rpc from '../rpc';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {ipcMain} = require('electron');
 
+// Hide "Ask Hyperia" menu items when no AI is configured.
+/* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
+function hasAgentConfigured(): boolean {
+  try {
+    const fs = require('fs') as {readFileSync: (p: string, e: string) => string};
+    const os = require('os') as {homedir: () => string};
+    const path = require('path') as {join: (...p: string[]) => string};
+    const raw = fs.readFileSync(path.join(os.homedir(), '.hyperia', 'hyperia.json'), 'utf8');
+    const cfg = JSON.parse(raw) as {config?: any};
+    const c = cfg.config ?? {};
+    const newProvider: string | undefined = c.agent?.provider;
+    if (newProvider === 'ollama') return true;
+    if (newProvider && c.providers?.[newProvider]?.token) return true;
+    if (c.agentToken) return true;
+    if (typeof c.agentModel === 'string' && c.agentModel.startsWith('ollama:')) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+/* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
+
 // Match a real Chrome UA so sites don't block the request
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -93,7 +115,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     );
     menu.append(new MenuItem({type: 'separator'}));
     menu.append(new MenuItem({label: 'New Note', click: () => void ipcMain.emit('new-sticky', {})}));
-    menu.append(new MenuItem({label: 'Ask Hyperia', click: () => void ipcMain.emit('open-ghost')}));
+    if (hasAgentConfigured()) {
+      menu.append(new MenuItem({label: 'Ask Hyperia', click: () => void ipcMain.emit('open-ghost')}));
+    }
     menu.append(new MenuItem({type: 'separator'}));
     menu.append(new MenuItem({label: 'Close Tab', click: () => this.props.onClose?.()}));
     menu.popup();

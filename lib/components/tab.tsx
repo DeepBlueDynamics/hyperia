@@ -3,6 +3,30 @@ import React, {forwardRef, useState, useRef, useEffect} from 'react';
 import type {TabProps} from '../../typings/hyper';
 import rpc from '../rpc';
 
+// Hide "Ask Hyperia" menu items when no AI is configured — clicking it
+// would just open an unusable agent panel. Reads ~/.hyperia/hyperia.json
+// fresh each time so the menu reflects the user's current state.
+/* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
+function hasAgentConfigured(): boolean {
+  try {
+    const fs = require('fs') as {readFileSync: (p: string, e: string) => string};
+    const os = require('os') as {homedir: () => string};
+    const path = require('path') as {join: (...p: string[]) => string};
+    const raw = fs.readFileSync(path.join(os.homedir(), '.hyperia', 'hyperia.json'), 'utf8');
+    const cfg = JSON.parse(raw) as {config?: any};
+    const c = cfg.config ?? {};
+    const newProvider: string | undefined = c.agent?.provider;
+    if (newProvider === 'ollama') return true;
+    if (newProvider && c.providers?.[newProvider]?.token) return true;
+    if (c.agentToken) return true;
+    if (typeof c.agentModel === 'string' && c.agentModel.startsWith('ollama:')) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+/* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
+
 const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
@@ -100,7 +124,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
       }
       menu.append(new MenuItem({type: 'separator'}));
       menu.append(new MenuItem({label: 'New Note', click: () => void ipcMain.emit('new-sticky', {})}));
-      menu.append(new MenuItem({label: 'Ask Hyperia', click: () => void ipcMain.emit('open-ghost')}));
+      if (hasAgentConfigured()) {
+        menu.append(new MenuItem({label: 'Ask Hyperia', click: () => void ipcMain.emit('open-ghost')}));
+      }
       menu.append(new MenuItem({type: 'separator'}));
       menu.append(new MenuItem({label: 'Close', click: () => props.onClose()}));
     } else {

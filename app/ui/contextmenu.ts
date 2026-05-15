@@ -1,3 +1,7 @@
+import {readFileSync} from 'fs';
+import {homedir} from 'os';
+import {join} from 'path';
+
 import {ipcMain} from 'electron';
 import type {BrowserWindow, MenuItemConstructorOptions} from 'electron';
 
@@ -5,6 +9,26 @@ import {execCommand} from '../commands';
 import {getDecoratedKeymaps} from '../plugins';
 
 const separator: MenuItemConstructorOptions = {type: 'separator'};
+
+// Check whether the user has a usable agent setup. Used to hide the
+// "Ask Hyperia" menu item when there's no AI connection — pointing at it
+// from a context menu would just dead-end. Read the config fresh each time
+// (cheap, ~kb file) so the menu reflects the user's current state.
+function hasAgentConfigured(): boolean {
+  try {
+    const raw = readFileSync(join(homedir(), '.hyperia', 'hyperia.json'), 'utf8');
+    const cfg = JSON.parse(raw) as {config?: any};
+    const c = cfg.config ?? {};
+    const newProvider: string | undefined = c.agent?.provider;
+    if (newProvider === 'ollama') return true;
+    if (newProvider && c.providers?.[newProvider]?.token) return true;
+    if (c.agentToken) return true;
+    if (typeof c.agentModel === 'string' && (c.agentModel as string).startsWith('ollama:')) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 const getCommandKeys = (keymaps: Record<string, string[]>): Record<string, string> =>
   Object.keys(keymaps).reduce((commandKeys: Record<string, string>, command) => {
@@ -46,7 +70,9 @@ const contextMenuTemplate = (
 
   menu.push(separator);
   menu.push({label: 'New Note', click: () => ipcMain.emit('new-sticky', {})});
-  menu.push({label: 'Ask Hyperia', click: () => ipcMain.emit('open-ghost')});
+  if (hasAgentConfigured()) {
+    menu.push({label: 'Ask Hyperia', click: () => ipcMain.emit('open-ghost')});
+  }
 
   menu.push(separator);
   menu.push({label: 'Clear Buffer', accelerator: commandKeys['editor:clearBuffer'], click: cmd('editor:clearBuffer')});

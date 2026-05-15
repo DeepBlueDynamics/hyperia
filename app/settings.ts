@@ -81,8 +81,35 @@ function buildSettingsHtml(): string {
   } catch {
     cfg = {};
   }
-  const currentModel = String(cfg.config?.agentModel || '');
-  const hasToken = !!cfg.config?.agentToken || currentModel.startsWith('ollama:');
+  // Resolve provider + token honoring both the new schema and the legacy
+  // single-field shape. The terminal-mode banner shows when neither has
+  // produced a usable agent setup.
+  const agentSection = cfg.config?.agent ?? {};
+  const providersSection = cfg.config?.providers ?? {};
+  const newProvider = String(agentSection.provider ?? '');
+  const newProviderToken =
+    newProvider && providersSection[newProvider] ? String(providersSection[newProvider].token ?? '') : '';
+  const legacyModel = String(cfg.config?.agentModel ?? '');
+  const legacyToken = String(cfg.config?.agentToken ?? '');
+  // hasToken: a usable agent setup exists. Either the new schema has a
+  // provider with a token (or is ollama which doesn't need one), or the
+  // legacy fields are populated.
+  const hasToken =
+    newProvider === 'ollama' ||
+    (!!newProvider && !!newProviderToken) ||
+    !!legacyToken ||
+    legacyModel.startsWith('ollama:');
+
+  // Hyperia version string for the terminal banner.
+  let version = 'dev';
+  try {
+    /* eslint-disable @typescript-eslint/no-var-requires */
+    const {app} = require('electron') as {app: {getVersion: () => string}};
+    version = app.getVersion();
+    /* eslint-enable @typescript-eslint/no-var-requires */
+  } catch {
+    /* not in main process or no electron */
+  }
 
   return `<!DOCTYPE html>
 <html>
@@ -317,6 +344,68 @@ function buildSettingsHtml(): string {
   .shivvr-widget .widget-btn:hover { background:#468cff40; }
   .shivvr-widget.confirmed { border-color:#1dc12140; background:#0a1a0a; }
   .shivvr-widget .confirmed-text { color:#80c080; font-size:12px; }
+
+  /* --- Terminal mode (shown when no agent is configured) -------------- */
+  .terminal {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #0a0a0f;
+    font-family: Menlo, "DejaVu Sans Mono", Consolas, monospace;
+    font-size: 12px;
+    color: #c8c8d0;
+    padding: 14px;
+    overflow: hidden;
+  }
+  .terminal-output {
+    flex: 1;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    line-height: 1.55;
+  }
+  .terminal-output .line {
+    margin-bottom: 2px;
+  }
+  .terminal-output .line.echo {
+    color: #888;
+  }
+  .terminal-output .line.echo::before {
+    content: '> ';
+    color: #c839c5;
+  }
+  .terminal-output .line.err {
+    color: #e08080;
+  }
+  .terminal-output .line.ok {
+    color: #5cc88c;
+  }
+  .terminal-output .line.banner {
+    color: #c839c5;
+    margin-bottom: 8px;
+    white-space: pre;
+  }
+  .terminal-prompt-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-top: 1px solid #1a1a2a;
+    margin-top: 8px;
+    padding-top: 8px;
+  }
+  .terminal-prompt-char {
+    color: #c839c5;
+    flex: 0 0 auto;
+    font-weight: bold;
+  }
+  .terminal-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #e0e0e0;
+    font: inherit;
+    padding: 0;
+  }
 </style>
 </head>
 <body>
@@ -336,36 +425,27 @@ function buildSettingsHtml(): string {
     Type "help" to see the full list.
   -->
 
-  <div class="chat" id="chat">
-    <div class="msg system">
-      ${
-        hasToken
-          ? 'Settings agent ready. Type below to configure Hyperia.'
-          : 'Set a model token so the agent can help you with configuration. Pick a model and enter your API key below.'
-      }
+  <!--
+    Two display modes:
+      - terminal-mode  (no agent token / no AI): shell-style fallback for
+        booting the system. User types simple verb-noun commands like
+        "edit config", "doctor", "set anthropic token sk-…". No agent call.
+      - chat (has agent): normal settings-agent conversation.
+    Only one is visible at a time; flipped by setMode() at the bottom.
+  -->
+
+  <div class="terminal" id="terminal" style="${hasToken ? 'display:none' : ''}">
+    <div class="terminal-output" id="terminalOutput"></div>
+    <div class="terminal-prompt-row">
+      <span class="terminal-prompt-char">&gt;</span>
+      <input type="text" class="terminal-input" id="terminalInput" autocomplete="off" spellcheck="false" />
     </div>
   </div>
 
-  <div class="input-area" id="tokenArea" style="${hasToken ? 'display:none' : ''}">
-    <select class="model-select" id="modelSelect">
-      <option value="" disabled ${!currentModel ? 'selected' : ''}>Select model...</option>
-      <optgroup label="Local (Ollama)">
-        <option value="ollama:gemma4:e2b" ${currentModel === 'ollama:gemma4:e2b' ? 'selected' : ''}>Gemma4 e2b — local, fast (default)</option>
-        <option value="ollama:gemma4:31b-cloud" ${currentModel === 'ollama:gemma4:31b-cloud' ? 'selected' : ''}>Gemma4 31b — local proxy</option>
-      </optgroup>
-      <optgroup label="Anthropic">
-        <option value="claude-haiku-4-5-20251001" ${currentModel === 'claude-haiku-4-5-20251001' ? 'selected' : ''}>Claude Haiku 4.5 (fast)</option>
-        <option value="claude-sonnet-4-6" ${currentModel === 'claude-sonnet-4-6' ? 'selected' : ''}>Claude Sonnet 4.6</option>
-        <option value="claude-opus-4-6" ${currentModel === 'claude-opus-4-6' ? 'selected' : ''}>Claude Opus 4.6</option>
-      </optgroup>
-      <optgroup label="Other">
-        <option value="openai" ${currentModel === 'openai' ? 'selected' : ''}>OpenAI</option>
-        <option value="google" ${currentModel === 'google' ? 'selected' : ''}>Google</option>
-        <option value="openrouter" ${currentModel === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
-      </optgroup>
-    </select>
-    <input type="password" id="tokenInput" placeholder="Enter token...">
-    <button class="set-btn" id="setTokenBtn">Set</button>
+  <div class="chat" id="chat" style="${hasToken ? '' : 'display:none'}">
+    <div class="msg system">
+      Settings agent ready. Type below to configure Hyperia.
+    </div>
   </div>
 
   <!--
@@ -377,7 +457,7 @@ function buildSettingsHtml(): string {
   -->
 
   <div class="input-area" id="chatArea" style="${hasToken ? '' : 'display:none'}">
-    <input type="text" id="chatInput" placeholder="Ask about settings...">
+    <input type="text" id="chatInput" placeholder="Ask about settings..." ${hasToken ? '' : 'disabled'}>
     <button id="settingsSendBtn" class="set-btn">Send</button>
   </div>
 
@@ -692,6 +772,199 @@ function buildSettingsHtml(): string {
   }
 
     let settingsSending = false;
+
+  // -------- Terminal mode --------------------------------------------------
+  // Shell-like fallback shown when there's no agent token. The user types
+  // simple verb-noun commands; we dispatch locally — no agent call. Purpose
+  // is to bootstrap the system before any AI is configured.
+  const HYPERIA_VERSION = '${version}';
+  const terminalHistory = [];
+  let terminalHistoryIdx = 0;
+
+  function termPrint(text, kind) {
+    const out = document.getElementById('terminalOutput');
+    if (!out) return;
+    const div = document.createElement('div');
+    div.className = 'line' + (kind ? ' ' + kind : '');
+    div.textContent = text;
+    out.appendChild(div);
+    out.scrollTop = out.scrollHeight;
+  }
+
+  function termBanner() {
+    termPrint('Hyperia Terminal ' + HYPERIA_VERSION, 'banner');
+    termPrint('No AI configured. This is a local shell — type "help" to see commands, or set a token to bring up the agent.', 'banner');
+    termPrint('');
+  }
+
+  function termHelp() {
+    termPrint('Commands:');
+    termPrint('  help                              show this list');
+    termPrint('  version                           print Hyperia version');
+    termPrint('  doctor                            run a readiness probe (no AI needed)');
+    termPrint('  edit config                       open ~/.hyperia/hyperia.json in your editor');
+    termPrint('  factory reset                     wipe config + memory (preserves token)');
+    termPrint('  install nemesis8                  run the Nemesis8 install script');
+    termPrint('  nemesis site                      open nemesis8.nuts.services');
+    termPrint('  get <path>                        read a config value, e.g. get agent.provider');
+    termPrint('  set <path> <value>                write a config value');
+    termPrint('  set <provider> token <key>        shorthand for set providers.<provider>.token');
+    termPrint('  clear                             clear the screen');
+    termPrint('  exit                              close this window');
+  }
+
+  function termWalk(obj, path) {
+    return path.split('.').reduce(function(o, k) { return o == null ? undefined : o[k]; }, obj);
+  }
+
+  function termSetPath(obj, path, value) {
+    const keys = path.split('.');
+    const last = keys.pop();
+    let cur = obj;
+    for (const k of keys) {
+      if (cur[k] == null || typeof cur[k] !== 'object') cur[k] = {};
+      cur = cur[k];
+    }
+    if (value === null || value === undefined) delete cur[last];
+    else cur[last] = value;
+  }
+
+  function termRedactedDisplay(path, value) {
+    if (typeof value !== 'string') return String(value);
+    if (/token|key|secret|password/i.test(path) && value.length > 8) {
+      return value.slice(0, 6) + '…' + value.slice(-3);
+    }
+    return value;
+  }
+
+  async function termRunDoctor() {
+    termPrint('running readiness probe…');
+    const probes = [
+      {name: 'ferricula', url: 'http://localhost:8765/status'},
+      {name: 'ollama',    url: 'http://localhost:11434/api/version'},
+    ];
+    for (const p of probes) {
+      try {
+        const r = await fetch(p.url, {signal: AbortSignal.timeout(2000)});
+        termPrint(p.name + ': ' + (r.ok ? 'reachable' : 'unreachable (' + r.status + ')'), r.ok ? 'ok' : 'err');
+      } catch (_e) {
+        termPrint(p.name + ': unreachable', 'err');
+      }
+    }
+    const cfg = readConfig();
+    const provider = (cfg && cfg.config && cfg.config.agent && cfg.config.agent.provider) || '';
+    const token = provider && cfg.config.providers && cfg.config.providers[provider] && cfg.config.providers[provider].token;
+    if (!provider) {
+      termPrint('agent.provider: (not set) — pick one with: set agent.provider <name>', 'err');
+    } else {
+      termPrint('agent.provider: ' + provider, 'ok');
+      if (provider !== 'ollama' && !token) {
+        termPrint('  no token at providers.' + provider + '.token — set with: set ' + provider + ' token <key>', 'err');
+      }
+    }
+  }
+
+  function termClear() {
+    const out = document.getElementById('terminalOutput');
+    if (out) out.innerHTML = '';
+    termBanner();
+  }
+
+  function termDispatch(rawLine) {
+    const line = (rawLine || '').trim();
+    if (!line) return;
+    termPrint(line, 'echo');
+
+    const lower = line.toLowerCase();
+    if (lower === 'help') return termHelp();
+    if (lower === 'version') return termPrint('Hyperia ' + HYPERIA_VERSION);
+    if (lower === 'doctor') return termRunDoctor();
+    if (lower === 'clear') return termClear();
+    if (lower === 'exit' || lower === 'quit') return window.close();
+    if (lower === 'edit config' || lower === 'editconfig' || lower === 'config' || lower === 'edit settings') return editConfig();
+    if (lower === 'factory reset' || lower === 'factoryreset' || lower === 'reset') return factoryReset();
+    if (lower === 'install nemesis8' || lower === 'install nemesis' || lower === 'installnemesis8' || lower === 'installnemesis') return installNemesis8();
+    if (lower === 'nemesis site' || lower === 'open nemesis site' || lower === 'nemesissite') return openNemesis8Site();
+
+    const parts = line.split(/\\s+/);
+    const verb = parts[0].toLowerCase();
+    const args = parts.slice(1);
+
+    if (verb === 'get') {
+      if (args.length === 0) return termPrint('Usage: get <path>   e.g. get agent.provider', 'err');
+      const cfg = readConfig();
+      const path = args[0].replace(/^config\\./, '');
+      const value = termWalk(cfg && cfg.config, path);
+      if (value === undefined) return termPrint(path + ': (not set)');
+      const displayValue = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+      return termPrint(path + ' = ' + termRedactedDisplay(path, typeof value === 'string' ? value : displayValue));
+    }
+
+    if (verb === 'set') {
+      if (args.length < 2) return termPrint('Usage: set <path> <value>   or   set <provider> token <key>', 'err');
+      const providerNames = ['anthropic', 'openai', 'gemini', 'ollama'];
+      let path, value;
+      if (args.length >= 3 && providerNames.indexOf(args[0].toLowerCase()) >= 0 && ['token','endpoint'].indexOf(args[1].toLowerCase()) >= 0) {
+        path = 'providers.' + args[0].toLowerCase() + '.' + args[1].toLowerCase();
+        value = args.slice(2).join(' ');
+      } else {
+        path = args[0].replace(/^config\\./, '');
+        value = args.slice(1).join(' ');
+      }
+      const cfg = readConfig() || {};
+      if (!cfg.config) cfg.config = {};
+      termSetPath(cfg.config, path, value);
+      saveConfig(cfg);
+      termPrint('set config.' + path + ' = ' + termRedactedDisplay(path, value), 'ok');
+      if (path.endsWith('.token')) {
+        const provider = path.split('.')[1];
+        termPrint('  next: set agent.provider ' + provider + '   then  set agent.model <model-id>   then close + reopen this window');
+      }
+      return;
+    }
+
+    termPrint('unknown command: ' + verb + '. Type "help" to see what works.', 'err');
+  }
+
+  function termInit() {
+    termBanner();
+    const inp = document.getElementById('terminalInput');
+    if (!inp) return;
+    inp.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        const value = inp.value;
+        inp.value = '';
+        if (value.trim()) {
+          terminalHistory.push(value);
+          terminalHistoryIdx = terminalHistory.length;
+        }
+        termDispatch(value);
+      } else if (e.key === 'ArrowUp') {
+        if (terminalHistoryIdx > 0) {
+          terminalHistoryIdx--;
+          inp.value = terminalHistory[terminalHistoryIdx] || '';
+        }
+        e.preventDefault();
+      } else if (e.key === 'ArrowDown') {
+        if (terminalHistoryIdx < terminalHistory.length - 1) {
+          terminalHistoryIdx++;
+          inp.value = terminalHistory[terminalHistoryIdx] || '';
+        } else {
+          terminalHistoryIdx = terminalHistory.length;
+          inp.value = '';
+        }
+        e.preventDefault();
+      } else if (e.key === 'l' && e.ctrlKey) {
+        termClear();
+        e.preventDefault();
+      }
+    });
+    setTimeout(function() { inp.focus(); }, 0);
+  }
+
+  if (!${hasToken ? 'true' : 'false'}) {
+    termInit();
+  }
 
   // Local "slash commands" — exact-match (case + separator insensitive)
   // dispatch table. Keys are normalized (lowercase, no _ - or whitespace).
