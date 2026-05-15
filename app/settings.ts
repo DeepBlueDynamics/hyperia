@@ -428,8 +428,8 @@ function buildSettingsHtml(): string {
     below — case- and separator-insensitive ("edit config", "Edit_Config",
     "editconfig" all match):
        edit config          → opens hyperia.json in your system editor
-       factory reset        → wipes config + Ferricula memory
-       install nemesis8     → runs the official installer script
+       reset factory        → wipes config + Ferricula memory
+       install nemesis8     → runs the official installer (aliases: n8, nemesis)
     Type "help" to see the full list.
   -->
 
@@ -614,13 +614,7 @@ function buildSettingsHtml(): string {
   }
 
   function factoryReset() {
-    if (!confirm('This will wipe all Hyperia settings AND Ferricula memory (tool history, remembered facts, parrot colors — all of it). Your agent API token will be preserved. Restart Hyperia after. Continue?')) return;
-    // No self-echo here — the slash-dispatcher in sendChat() already
-    // adds the user's typed line, and the terminal-mode dispatcher prints
-    // its own `> install nemesis8` echo before calling us. Re-adding it
-    // would produce duplicated chat lines like:
-    //   "factory reset"           ← from sendChat
-    //   "Factory Reset"           ← from here (duplicate)
+    if (!confirm('This will wipe all Hyperia settings AND Ferricula memory (tool history, remembered facts, parrot colors). Your agent API token will be preserved. Restart Hyperia after. Continue?')) return;
     try {
       const {ipcRenderer} = require('electron');
       ipcRenderer.send('factory-reset-config');
@@ -637,10 +631,6 @@ function buildSettingsHtml(): string {
   }
 
   function installNemesis8() {
-    // No self-echo — callers (slash-dispatch in sendChat, terminal-mode
-    // dispatch in termDispatch) already echoed the user's input.
-    addMsg('Running official Nemesis8 installer...');
-
     let exec;
     try {
       exec = require('child_process').exec;
@@ -715,18 +705,10 @@ function buildSettingsHtml(): string {
         const versionCmd = isWin ? 'nemesis8 -V' : '\${resolvedBinary} -V';
         exec(versionCmd, {timeout: 5000}, (err3, stdout3) => {
           const version = err3 ? 'unknown' : stdout3.trim();
-          addMsg('Nemesis8 <code>' + version + '</code> installed and added as a profile. Restart Hyperia to use it.', 'success');
+          addMsg('<code>' + version + '</code> installed and added as a profile. Restart Hyperia to use it.', 'success');
         });
       });
     });
-  }
-
-  function openNemesis8Site() {
-    try {
-      require('electron').shell.openExternal('https://nemesis8.nuts.services');
-    } catch (e) {
-      addMsg('Could not open browser: ' + e.message, 'error');
-    }
   }
 
   // Wire all buttons and inputs — script is at bottom of body so DOM is already available
@@ -812,19 +794,18 @@ function buildSettingsHtml(): string {
   }
 
   function termHelp() {
-    termPrint('Commands:');
-    termPrint('  help                              show this list');
-    termPrint('  version                           print Hyperia version');
-    termPrint('  doctor                            run a readiness probe (no AI needed)');
-    termPrint('  edit config                       open ~/.hyperia/hyperia.json in your editor');
-    termPrint('  factory reset                     wipe config + memory (preserves token)');
-    termPrint('  install nemesis8                  run the Nemesis8 install script');
-    termPrint('  nemesis site                      open nemesis8.nuts.services');
-    termPrint('  get <path>                        read a config value, e.g. get agent.provider');
-    termPrint('  set <path> <value>                write a config value');
-    termPrint('  set <provider> token <key>        shorthand for set providers.<provider>.token');
-    termPrint('  clear                             clear the screen');
-    termPrint('  exit                              close this window');
+    termPrint('Commands (verb-noun; type "help <verb>" for noun list):');
+    termPrint('  edit    <thing>                   edit something    (e.g. edit config)');
+    termPrint('  reset   <thing>                   reset something   (e.g. reset factory)');
+    termPrint('  install <thing>                   install something (e.g. install nemesis8)');
+    termPrint('  get     <path>                    read a config value, e.g. get agent.provider');
+    termPrint('  set     <path> <value>            write a config value');
+    termPrint('  set     <provider> token <key>    shorthand for set providers.<provider>.token');
+    termPrint('');
+    termPrint('Built-ins:');
+    termPrint('  help     show this list           version  print Hyperia version');
+    termPrint('  doctor   run a readiness probe    clear    clear the screen');
+    termPrint('  exit     close this window');
   }
 
   function termWalk(obj, path) {
@@ -895,14 +876,26 @@ function buildSettingsHtml(): string {
     if (lower === 'doctor') return termRunDoctor();
     if (lower === 'clear') return termClear();
     if (lower === 'exit' || lower === 'quit') return window.close();
-    if (lower === 'edit config' || lower === 'editconfig' || lower === 'config' || lower === 'edit settings') return editConfig();
-    if (lower === 'factory reset' || lower === 'factoryreset' || lower === 'reset') return factoryReset();
-    if (lower === 'install nemesis8' || lower === 'install nemesis' || lower === 'installnemesis8' || lower === 'installnemesis') return installNemesis8();
-    if (lower === 'nemesis site' || lower === 'open nemesis site' || lower === 'nemesissite') return openNemesis8Site();
 
     const parts = line.split(/\\s+/);
     const verb = parts[0].toLowerCase();
     const args = parts.slice(1);
+    const noun = (args[0] || '').toLowerCase();
+
+    if (verb === 'edit') {
+      if (noun === 'config' || noun === 'settings' || noun === '') return editConfig();
+      return termPrint('edit: unknown target "' + noun + '" — try: edit config', 'err');
+    }
+
+    if (verb === 'reset') {
+      if (noun === 'factory' || noun === '') return factoryReset();
+      return termPrint('reset: unknown target "' + noun + '" — try: reset factory', 'err');
+    }
+
+    if (verb === 'install') {
+      if (noun === 'nemesis8' || noun === 'n8' || noun === 'nemesis') return installNemesis8();
+      return termPrint('install: unknown target "' + noun + '" — try: install nemesis8', 'err');
+    }
 
     if (verb === 'get') {
       if (args.length === 0) return termPrint('Usage: get <path>   e.g. get agent.provider', 'err');
@@ -987,21 +980,17 @@ function buildSettingsHtml(): string {
   const COMMAND_TABLE = {
     'editconfig': editConfig,
     'editsettings': editConfig,
-    'config': editConfig,
-    'factoryreset': factoryReset,
-    'reset': factoryReset,
+    'resetfactory': factoryReset,
     'installnemesis8': installNemesis8,
+    'installn8': installNemesis8,
     'installnemesis': installNemesis8,
-    'opennemesissite': openNemesis8Site,
-    'nemesissite': openNemesis8Site,
     'help': function help() {
       addMsg(
-        '<b>Available commands</b> (type exactly, case and separators don\\'t matter):'
+        '<b>Commands</b> (verb-noun; case + separators don\\'t matter):'
         + '<ul>'
         + '<li><code>edit config</code> — opens hyperia.json in your system editor</li>'
-        + '<li><code>factory reset</code> — wipes config and Ferricula memory (preserves your token)</li>'
-        + '<li><code>install nemesis8</code> — runs the official Nemesis8 installer script</li>'
-        + '<li><code>nemesis site</code> — opens nemesis8.nuts.services in a browser</li>'
+        + '<li><code>reset factory</code> — wipes config + Ferricula memory (preserves your token)</li>'
+        + '<li><code>install nemesis8</code> — runs the official Nemesis8 installer (aliases: <code>n8</code>, <code>nemesis</code>)</li>'
         + '<li><code>help</code> — this list</li>'
         + '</ul>'
         + 'Anything else gets routed to the settings agent.',
