@@ -1,10 +1,9 @@
 // This is a CLI tool, using console is OK
 /* eslint no-console: 0 */
-import {spawn, exec} from 'child_process';
+import {spawn} from 'child_process';
 import type {SpawnOptions} from 'child_process';
 import {existsSync} from 'fs';
 import {isAbsolute, resolve} from 'path';
-import {promisify} from 'util';
 
 import args from 'args';
 import chalk from 'chalk';
@@ -233,12 +232,17 @@ const main = (argv: string[]) => {
   if (!flags.verbose) {
     options['stdio'] = 'ignore';
     if (process.platform === 'darwin') {
-      //Use `open` to prevent multiple Hyper process
-      const cmd = `open -b co.zeit.hyper ${args_}`;
-      const opts = {
-        env
-      };
-      return promisify(exec)(cmd, opts);
+      // Use `open` to prevent multiple Hyper processes. spawn with an
+      // argv array — never interpolate user-controlled args_ into a
+      // shell string (CodeQL js/shell-command-injection-from-environment).
+      return new Promise<void>((resolveOpen, rejectOpen) => {
+        const child = spawn('open', ['-b', 'co.zeit.hyper', ...args_], {env});
+        child.on('error', rejectOpen);
+        child.on('exit', (code) => {
+          if (code === 0) resolveOpen();
+          else rejectOpen(new Error(`open exited with code ${code}`));
+        });
+      });
     }
   }
 

@@ -1,15 +1,22 @@
-import {exec} from 'child_process';
+import {spawn} from 'child_process';
 
 import {shell} from 'electron';
 
 import {cfgPath} from './paths';
 
-// This mimics shell.openItem, true if it worked, false if not.
+// Fallback opener for Windows when no default .json handler is registered.
+// Uses spawn with the path passed as a separate argv entry so the file path
+// is never interpreted by a shell — CodeQL js/shell-command-injection-from-environment.
 const openNotepad = (file: string) =>
   new Promise<boolean>((resolve) => {
-    exec(`start notepad.exe ${file}`, (error) => {
-      resolve(!error);
-    });
+    try {
+      const child = spawn('notepad.exe', [file], {detached: true, stdio: 'ignore'});
+      child.on('error', () => resolve(false));
+      child.on('spawn', () => resolve(true));
+      child.unref();
+    } catch {
+      resolve(false);
+    }
   });
 
 const openConfig = () => {

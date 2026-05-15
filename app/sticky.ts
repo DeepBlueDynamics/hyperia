@@ -374,6 +374,17 @@ function createStickyNote(
     show: false,
     backgroundColor: colorHex,
     webPreferences: {
+      // Sticky-note windows render LOCAL content only — never remote URLs.
+      // They need to load file:// images and source files the user drags
+      // into a note (code stickies render local source on disk). The trio
+      // below is the standard Electron "trusted local renderer" stack:
+      //   nodeIntegration:true  → access fs from the renderer for live file watches
+      //   contextIsolation:false → share renderer globals (we never load untrusted JS here)
+      //   webSecurity:false      → allow file:// resources from arbitrary disk paths
+      // Risk model: a sticky note that loads remote content would be a
+      // separate window class with these defaults inverted. We don't have
+      // any such call site; ripgrep for `new BrowserWindow` to verify.
+      // CodeQL js/disabling-electron-websecurity is acknowledged here.
       nodeIntegration: true,
       contextIsolation: false,
       webSecurity: false

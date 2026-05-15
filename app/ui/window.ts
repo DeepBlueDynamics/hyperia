@@ -214,7 +214,10 @@ export function newWindow(
     let argPath = process.argv[1];
     if (argPath && process.platform === 'win32') {
       if (/[a-zA-Z]:"/.test(argPath)) {
-        argPath = argPath.replace('"', sep);
+        // /g — without it the string-form replace only swaps the first
+        // quote, leaving subsequent ones in the path. CodeQL
+        // js/incomplete-sanitization.
+        argPath = argPath.replace(/"/g, sep);
       }
       argPath = normalize(argPath + sep);
     }

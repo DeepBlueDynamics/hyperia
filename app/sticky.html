@@ -18,7 +18,17 @@
   .ai-spinner { display: inline-block; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<!-- highlight.js for code-note syntax highlighting. Pinned version +
+     Subresource Integrity hash + crossorigin so the browser refuses to
+     execute the script if the bytes don't match — that bounds the
+     CodeQL js/functionality-from-untrusted-source risk to "the file was
+     compromised at our build time" rather than "any future server
+     compromise". TODO: vendor locally to fully close this. -->
+<script
+  src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"
+  integrity="sha384-OQ8WUq1L6F+1nrkgmkQQwbnNwxTHC1WtRdhBoP+sZ8RaMl3xMmkrcUVN+pYL6tDP"
+  crossorigin="anonymous"
+  referrerpolicy="no-referrer"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; }
