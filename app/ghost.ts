@@ -1260,7 +1260,26 @@ function buildHyperiaHtml(): string {
 }
 
 export function initHyperia() {
+  // Migrated to the shell pane (the agentic chat surface served by the
+  // sidecar at /shell, rendered inside a Hyperia `webUrl` pane). Routes
+  // the existing `open-ghost` IPC to the shell pane in the focused
+  // Hyperia window. Falls back to the legacy BrowserWindow chat only
+  // when no Hyperia window is focused (e.g., invoked from a system tray
+  // or external IPC sender). The legacy buildHyperiaHtml() + openHyperia()
+  // path stays in this file as dead code for the moment; it's removed
+  // in a follow-up commit once the shell pane has been validated in
+  // real use across all four boot levels.
   ipcMain.on('open-ghost', () => {
+    const win = BrowserWindow.getFocusedWindow();
+    const rpc = (win as any)?.rpc;
+    if (win && rpc) {
+      const port = process.env.HYPERIA_PORT || '9800';
+      rpc.emit('open web pane req', {url: `http://localhost:${port}/shell`});
+      return;
+    }
+    // Fallback: no Hyperia window currently focused — open the legacy
+    // standalone chat window. Once the shell pane is the default UX
+    // everywhere, this branch goes away with the rest of openHyperia().
     openHyperia();
   });
 }

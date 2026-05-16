@@ -63,6 +63,7 @@ const contextMenuTemplate = (
   menu.push({label: 'Split Right', accelerator: commandKeys['pane:splitRight'], click: cmd('pane:splitRight')});
   menu.push({label: 'Close Pane', accelerator: commandKeys['pane:close'], click: cmd('pane:close')});
   menu.push({label: 'New Web Pane…', click: cmd('pane:openWebPane')});
+  menu.push({label: 'Hyperia Shell', click: cmd('pane:openShellPane')});
 
   menu.push(separator);
   menu.push({label: 'New Tab', accelerator: commandKeys['tab:new'], click: cmd('tab:new')});
@@ -70,9 +71,10 @@ const contextMenuTemplate = (
 
   menu.push(separator);
   menu.push({label: 'New Note', click: () => ipcMain.emit('new-sticky', {})});
-  if (hasAgentConfigured()) {
-    menu.push({label: 'Ask Hyperia', click: () => ipcMain.emit('open-ghost')});
-  }
+  // Always show — the shell pane handles the no-token case via the
+  // bootstub micro-agent, so hiding the entry when there's no agent
+  // would actually keep users from the place that helps them wire one.
+  menu.push({label: 'Ask Hyperia', click: () => ipcMain.emit('open-ghost')});
 
   menu.push(separator);
   menu.push({label: 'Clear Buffer', accelerator: commandKeys['editor:clearBuffer'], click: cmd('editor:clearBuffer')});

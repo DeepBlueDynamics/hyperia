@@ -115,9 +115,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     );
     menu.append(new MenuItem({type: 'separator'}));
     menu.append(new MenuItem({label: 'New Note', click: () => void ipcMain.emit('new-sticky', {})}));
-    if (hasAgentConfigured()) {
-      menu.append(new MenuItem({label: 'Ask Hyperia', click: () => void ipcMain.emit('open-ghost')}));
-    }
+    // Always show — shell pane handles the no-token case via bootstub.
+    menu.append(new MenuItem({label: 'Ask Hyperia', click: () => void ipcMain.emit('open-ghost')}));
     menu.append(new MenuItem({type: 'separator'}));
     menu.append(new MenuItem({label: 'Close Tab', click: () => this.props.onClose?.()}));
     menu.popup();

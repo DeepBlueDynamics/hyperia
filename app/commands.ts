@@ -22,6 +22,13 @@ const commands: Record<string, (focusedWindow?: BrowserWindow) => void> = {
   'pane:openWebPane': (focusedWindow) => {
     focusedWindow?.rpc?.emit('open web pane req', {});
   },
+  // Open the Hyperia shell pane — the agentic chat surface served by the
+  // sidecar at /shell. Reuses the existing webUrl pane infrastructure;
+  // the pane is a `webUrl` group rendering <WebPane> with the shell's URL.
+  'pane:openShellPane': (focusedWindow) => {
+    const port = process.env.HYPERIA_PORT || '9800';
+    focusedWindow?.rpc?.emit('open web pane req', {url: `http://localhost:${port}/shell`});
+  },
   'pane:splitRight': (focusedWindow) => {
     focusedWindow?.rpc?.emit('split request vertical', {});
   },
