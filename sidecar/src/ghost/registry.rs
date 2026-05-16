@@ -5,6 +5,7 @@ use tokio::sync::oneshot;
 
 use super::ferricula::FerriculaBackend;
 use super::types::ToolDef;
+use super::widget::WidgetStore;
 
 /// Response from the renderer to a pending show_* tool call.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -43,6 +44,13 @@ pub struct ToolRegistry {
     /// POSTs to /api/ghost/ui-response, the matching sender fires and the
     /// tool dispatch's await returns.
     pending_ui: Arc<tokio::sync::Mutex<HashMap<String, oneshot::Sender<UiResponse>>>>,
+    /// Per-mount data + action queues for the `tool_mount` event. Unlike
+    /// `pending_ui` (which blocks on a single oneshot per widget), this is
+    /// a non-blocking store: agent stashes data, widget fetches via
+    /// /api/ghost/widget/:id/data, widget queues actions via
+    /// /api/ghost/widget/:id/action, and the agent drains the queue at the
+    /// top of its next loop iteration.
+    widget_store: Arc<WidgetStore>,
 }
 
 impl ToolRegistry {
@@ -55,7 +63,15 @@ impl ToolRegistry {
             ferricula: None,
             compressor: crate::ghost::compressor::ContextCompressor::from_env(),
             pending_ui: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            widget_store: Arc::new(WidgetStore::new()),
         }
+    }
+
+    /// Shared WidgetStore — used by the HTTP handlers for widget data/action
+    /// endpoints, and by agent.rs's tool_mount intercept to stash payloads
+    /// before emitting the SSE event.
+    pub fn widget_store(&self) -> Arc<WidgetStore> {
+        self.widget_store.clone()
     }
 
     /// Called by the HTTP handler when the renderer submits a ui_response.
@@ -119,6 +135,7 @@ impl ToolRegistry {
         defs.push(docker_run_def());
         defs.push(help_def());
         defs.push(maximus_explain_def());
+        defs.push(tool_mount_def());
         let dynamic = self.dynamic.lock().unwrap();
         for dt in dynamic.iter() {
             defs.push(dt.def.clone());
@@ -1495,6 +1512,39 @@ fn memory_embody_def() -> ToolDef {
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {}
+        }),
+    }
+}
+
+fn tool_mount_def() -> ToolDef {
+    ToolDef {
+        name: "tool_mount".into(),
+        description: "Mount a self-contained dynamic UI widget into the chat scrollback. \
+            Pass a complete HTML document (`srcdoc`) with inline CSS and JS — no external \
+            scripts or stylesheets. The widget runs in the shell pane and can fetch its data \
+            via GET /api/ghost/widget/<mount_id>/data?key=<exposed-key>, and queue actions \
+            back to you via POST /api/ghost/widget/<mount_id>/action. \n\n\
+            `exposes` is the allowlist of `data` keys the widget may read (other keys are \
+            rejected with 403). `permits` is the allowlist of action names the widget may \
+            request — these get spliced into your next turn as a [Meanwhile a widget \
+            requested:] marker, you decide whether to honor them. Both default to empty \
+            (display-only). \n\n\
+            Non-blocking — control returns to you immediately after mounting; you do NOT \
+            wait for the widget. The user can dismiss the widget at any time. \n\n\
+            The widget's mount_id is injected into the page as `window.__mount_id__` before \
+            any inline scripts run, so the widget JS can build its fetch URLs."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name":   { "type": "string", "description": "Short friendly name for the widget, e.g. 'dom_inspector'. Used in the audit log and as a row label." },
+                "srcdoc": { "type": "string", "description": "Complete self-contained HTML document with inline <style> and <script>. No external <script src> or <link href> — those won't load. window.__mount_id__ is injected before scripts run." },
+                "data":   { "type": "object", "description": "Map of key → JSON value the widget may fetch via /widget/<id>/data?key=<key>. Optional; defaults to empty.", "additionalProperties": true },
+                "exposes": { "type": "array", "items": { "type": "string" }, "description": "Allowlist of `data` keys the widget may fetch. Defaults to empty (no data access)." },
+                "permits": { "type": "array", "items": { "type": "string" }, "description": "Allowlist of action names the widget may queue back to you. Defaults to empty (display-only)." },
+                "height":  { "type": "integer", "description": "Initial pixel height of the widget container in the scrollback. Default 320." }
+            },
+            "required": ["name", "srcdoc"]
         }),
     }
 }

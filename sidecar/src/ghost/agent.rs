@@ -509,24 +509,96 @@ After cleanup, reply to the human and end the turn."
                 let input: serde_json::Value =
                     serde_json::from_str(&tool.json_fragments).unwrap_or(serde_json::json!({}));
 
-                // For show_* tools, surface the widget to the renderer
-                // *before* dispatching (because dispatch blocks until the
-                // user submits via POST /api/ghost/ui-response). The
-                // widget id comes from input.id (the agent sets it).
-                if let Some(kind) = tool.name.strip_prefix("show_") {
-                    let widget_id = input["id"].as_str().unwrap_or("").to_string();
-                    if !widget_id.is_empty() {
+                // tool_mount: non-blocking dynamic-widget mount. Stash the
+                // payload server-side keyed by a generated mount_id, emit
+                // the SSE event so the renderer can render it inline, and
+                // synthesize a confirmation string for the agent's history.
+                // Skip registry.execute() entirely — there's no blocking
+                // dispatch to run.
+                let output;
+                if tool.name == "tool_mount" {
+                    let widget_name = input["name"].as_str().unwrap_or("widget").to_string();
+                    let srcdoc = input["srcdoc"].as_str().unwrap_or("").to_string();
+                    if srcdoc.is_empty() {
+                        output = "Error: tool_mount requires a non-empty 'srcdoc'.".to_string();
+                    } else {
+                        let data: std::collections::HashMap<String, serde_json::Value> = input["data"]
+                            .as_object()
+                            .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                            .unwrap_or_default();
+                        let exposes: Vec<String> = input["exposes"]
+                            .as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .unwrap_or_default();
+                        let permits: Vec<String> = input["permits"]
+                            .as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .unwrap_or_default();
+                        let height = input["height"].as_u64().unwrap_or(320) as u32;
+
+                        let store = registry.widget_store();
+                        let srcdoc_bytes = srcdoc.len();
+                        let mount_id = store.mount(
+                            widget_name.clone(),
+                            &srcdoc,
+                            data,
+                            exposes.clone(),
+                            permits.clone(),
+                        );
+
+                        if let Some(meta) = store.meta(&mount_id) {
+                            tracing::info!(
+                                target: "widget_mount",
+                                mount_id = %mount_id,
+                                name = %meta.name,
+                                srcdoc_hash = %meta.srcdoc_hash,
+                                srcdoc_bytes = srcdoc_bytes,
+                                exposes = ?meta.exposes,
+                                permits = ?meta.permits,
+                                "tool_mount emitted"
+                            );
+                        }
+
                         let _ = tx
-                            .send(GhostEvent::ShowWidget {
-                                id: widget_id,
-                                kind: kind.to_string(),
-                                input: input.clone(),
+                            .send(GhostEvent::ToolMount {
+                                id: mount_id.clone(),
+                                name: widget_name,
+                                srcdoc,
+                                exposes,
+                                permits,
+                                height,
                             })
                             .await;
-                    }
-                }
 
-                let output = registry.execute(&tool.name, &input).await;
+                        output = format!(
+                            "mounted widget {0} (display-only; agent continues immediately). \
+                             Widget fetches data via GET /api/ghost/widget/{0}/data?key=<key> and \
+                             may queue actions via POST /api/ghost/widget/{0}/action — you'll \
+                             see queued actions in your next turn as a [Meanwhile a widget \
+                             requested:] marker.",
+                            mount_id
+                        );
+                    }
+                } else {
+                    // For show_* tools, surface the widget to the renderer
+                    // *before* dispatching (because dispatch blocks until the
+                    // user submits via POST /api/ghost/ui-response). The
+                    // widget id comes from input.id (the agent sets it).
+                    if let Some(kind) = tool.name.strip_prefix("show_") {
+                        let widget_id = input["id"].as_str().unwrap_or("").to_string();
+                        if !widget_id.is_empty() {
+                            let _ = tx
+                                .send(GhostEvent::ShowWidget {
+                                    id: widget_id,
+                                    kind: kind.to_string(),
+                                    input: input.clone(),
+                                })
+                                .await;
+                        }
+                    }
+
+                    output = registry.execute(&tool.name, &input).await;
+                }
 
                 // Repeat detection: check if we've seen this exact call+output before
                 let call_sig = format!("{}:{}", tool.name, input.to_string());
@@ -633,6 +705,28 @@ After cleanup, reply to the human and end the turn."
                     "text": format!(
                         "[Meanwhile the user said — read this before continuing]\n{}",
                         joined
+                    ),
+                }));
+            }
+
+            // Widget action drain: any actions queued by mounted widgets via
+            // POST /api/ghost/widget/:id/action since the last turn. The
+            // agent reads them in its next turn and decides whether to
+            // honor each. Permission enforcement (permits allowlist) already
+            // happened at queue time in the HTTP handler.
+            let widget_actions = registry.widget_store().drain_actions();
+            if !widget_actions.is_empty() {
+                let lines: Vec<String> = widget_actions
+                    .iter()
+                    .map(|(mount_id, a)| {
+                        format!("- widget {} requested action '{}' args={}", mount_id, a.action, a.args)
+                    })
+                    .collect();
+                tool_results.push(serde_json::json!({
+                    "type": "text",
+                    "text": format!(
+                        "[Meanwhile a widget requested — review and honor or decline]\n{}",
+                        lines.join("\n")
                     ),
                 }));
             }

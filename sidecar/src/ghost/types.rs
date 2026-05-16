@@ -17,6 +17,22 @@ pub enum GhostEvent {
     /// POST /api/ghost/ui-response.
     #[serde(rename = "show_widget")]
     ShowWidget { id: String, kind: String, input: serde_json::Value },
+    /// Mounts a self-contained dynamic UI widget (HTML+CSS+JS in one srcdoc
+    /// string) into the chat scrollback. Non-blocking — agent continues
+    /// immediately. The widget fetches its data via
+    /// GET /api/ghost/widget/:id/data?key=<exposed-key> and can queue
+    /// actions back to the agent via POST /api/ghost/widget/:id/action.
+    /// `exposes` allowlists the data keys the widget may fetch; `permits`
+    /// allowlists the action names it may request.
+    #[serde(rename = "tool_mount")]
+    ToolMount {
+        id: String,
+        name: String,
+        srcdoc: String,
+        exposes: Vec<String>,
+        permits: Vec<String>,
+        height: u32,
+    },
     #[serde(rename = "watercooler")]
     Watercooler { summary: String, tool_calls: usize },
     #[serde(rename = "retrying")]

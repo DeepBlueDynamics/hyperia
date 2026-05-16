@@ -989,6 +989,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ghost/continue", axum::routing::post(ghost::api::ghost_continue))
         .route("/api/ghost/reset", axum::routing::post(ghost::api::ghost_reset))
         .route("/api/ghost/window-closed", axum::routing::post(ghost::api::ghost_window_closed))
+        // Widget data + action endpoints back the tool_mount SSE event.
+        .route("/api/ghost/widget/{id}/data", axum::routing::get(ghost::api::ghost_widget_data))
+        .route("/api/ghost/widget/{id}/action", axum::routing::post(ghost::api::ghost_widget_action))
+        // Capabilities probe — boot-level decision for the shell page.
+        .route("/api/ghost/capabilities", axum::routing::get(ghost::api::ghost_capabilities))
+        // Static page: the agentic shell pane's HTML.
+        .route("/shell", axum::routing::get(ghost::api::ghost_shell_page))
         .with_state(ghost_state);
 
     // Settings agent routes — separate session, SHARED tool registry so
