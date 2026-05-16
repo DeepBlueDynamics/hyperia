@@ -994,6 +994,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ghost/widget/{id}/action", axum::routing::post(ghost::api::ghost_widget_action))
         // Capabilities probe — boot-level decision for the shell page.
         .route("/api/ghost/capabilities", axum::routing::get(ghost::api::ghost_capabilities))
+        // Bootstub — Level-0 micro-agent for the no-model-wired case.
+        .route("/api/ghost/bootchat", axum::routing::post(ghost::api::ghost_bootchat))
         // Static page: the agentic shell pane's HTML.
         .route("/shell", axum::routing::get(ghost::api::ghost_shell_page))
         .with_state(ghost_state);

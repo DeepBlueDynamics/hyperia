@@ -1,21 +1,1183 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>hyperia · shell</title>
 <style>
-  html, body { margin:0; padding:0; height:100%; background:#08080f; color:#c8d0e0;
-    font-family:'JetBrains Mono','Cascadia Code',Consolas,monospace; font-size:13px; }
-  body { display:flex; align-items:center; justify-content:center; }
-  .pre { color:#666; }
-  .accent { color:#c839c5; }
+  :root {
+    --bg:        #08080f;
+    --bg-dim:    #0a0a14;
+    --bg-soft:   #12121e;
+    --line:      #1a1a2e;
+    --line-soft: #14141d;
+    --text:      #c8d0e0;
+    --text-dim:  #777;
+    --text-faint:#555;
+    --accent:    #c839c5;
+    --user:      #36c93c;
+    --system:    #96c9ff;
+    --tool:      #c98536;
+    --error:     #e08080;
+    --ok:        #5cc88c;
+    --font:      'JetBrains Mono', 'Cascadia Code', 'Consolas', 'Menlo', monospace;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; overflow:hidden; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    line-height: 1.55;
+    display: flex;
+    flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ─── titlebar (slim, cross-platform — single close × on the right) ─── */
+  .titlebar {
+    flex: 0 0 auto;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    background: var(--bg-dim);
+    border-bottom: 1px solid var(--line);
+    user-select: none;
+  }
+  .titlebar .name {
+    flex: 1;
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .titlebar .hud {
+    display: flex;
+    gap: 12px;
+    font-size: 10px;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .titlebar .hud .stat {
+    display: flex;
+    gap: 5px;
+    align-items: baseline;
+  }
+  .titlebar .hud .v {
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ─── status strip ─── */
+  .status {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 16px;
+    padding: 4px 12px;
+    font-size: 10px;
+    color: var(--text-faint);
+    border-bottom: 1px solid var(--line-soft);
+    background: #06060a;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .status .item { display: flex; gap: 5px; }
+  .status .item .v { color: var(--text-dim); }
+  .status .item.live .v::before {
+    content: "●";
+    color: var(--ok);
+    margin-right: 4px;
+    animation: blink-soft 2.4s ease-in-out infinite;
+  }
+  .status .item.dead .v::before {
+    content: "●";
+    color: var(--error);
+    margin-right: 4px;
+  }
+  @keyframes blink-soft {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.3; }
+  }
+
+  /* ─── scrollback screen ─── */
+  .screen {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 12px 14px 18px;
+    scroll-behavior: smooth;
+  }
+  .screen::-webkit-scrollbar { width: 8px; }
+  .screen::-webkit-scrollbar-track { background: transparent; }
+  .screen::-webkit-scrollbar-thumb { background: var(--line); border-radius: 0; }
+  .screen::-webkit-scrollbar-thumb:hover { background: #2a2a3c; }
+
+  .row {
+    display: flex;
+    gap: 10px;
+    padding: 1px 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    animation: fade 0.15s ease;
+  }
+  @keyframes fade {
+    from { opacity: 0; transform: translateY(2px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .row .label {
+    flex: 0 0 auto;
+    font-weight: 500;
+    user-select: none;
+  }
+  .row .body {
+    flex: 1;
+    min-width: 0;
+  }
+  .row.user   .label { color: var(--user); }
+  .row.agent  .label { color: var(--accent); }
+  .row.system .label { color: var(--system); }
+  .row.error  .label { color: var(--error); }
+  .row.user   .body  { color: #e8edf4; }
+  .row.agent  .body  { color: var(--text); }
+  .row.system .body  { color: var(--text-dim); }
+  .row.error  .body  { color: var(--error); }
+  .row.agent.streaming .body::after {
+    content: "▍";
+    color: var(--accent);
+    margin-left: 1px;
+    animation: cursor-blink 1s steps(1) infinite;
+  }
+  @keyframes cursor-blink {
+    0%, 49%  { opacity: 1; }
+    50%, 100%{ opacity: 0; }
+  }
+  .row.user.injected .label::before {
+    content: "[queued] ";
+    color: var(--text-faint);
+    font-style: italic;
+  }
+  .row.watercooler {
+    color: var(--text-faint);
+    font-size: 11px;
+    padding: 6px 0;
+    border-top: 1px dashed var(--line);
+    border-bottom: 1px dashed var(--line);
+    margin: 6px 0;
+    justify-content: center;
+    font-style: italic;
+  }
+
+  /* inline marks */
+  .row .body code {
+    color: var(--accent);
+    background: rgba(200,57,197,0.08);
+    padding: 0 4px;
+    font-family: inherit;
+    font-size: 12px;
+    border-radius: 2px;
+  }
+  .row .body em.path  { color: var(--system); font-style: normal; }
+  .row .body em.ok    { color: var(--ok);     font-style: normal; }
+  .row .body em.fail  { color: var(--error);  font-style: normal; }
+
+  /* ─── tool rows ─── */
+  .row.tool {
+    color: var(--text-faint);
+    font-size: 12px;
+    cursor: pointer;
+    border-left: 2px solid var(--line);
+    padding-left: 6px;
+    margin-left: -2px;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .row.tool:hover {
+    background: var(--bg-soft);
+    border-left-color: var(--accent);
+  }
+  .row.tool .label {
+    color: var(--tool);
+    width: 16px;
+    text-align: center;
+  }
+  .row.tool .label.running {
+    animation: pulse-emoji 0.85s ease-in-out infinite;
+  }
+  @keyframes pulse-emoji {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.55; transform: scale(1.15); filter: brightness(1.5); }
+  }
+  .row.tool .summary {
+    flex: 1;
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    min-width: 0;
+  }
+  .row.tool .name {
+    color: var(--text-dim);
+    font-weight: 500;
+  }
+  .row.tool .arg {
+    color: var(--text-faint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+  }
+  .row.tool .meta {
+    color: var(--text-faint);
+    font-size: 10px;
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+  .row.tool .meta .ok   { color: var(--ok); }
+  .row.tool .meta .fail { color: var(--error); }
+  .row.tool .output {
+    grid-column: 1 / -1;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+    color: var(--text-faint);
+    font-family: var(--font);
+    font-size: 11px;
+    border-left: 1px solid var(--line);
+    padding-left: 8px;
+    margin-top: 0;
+  }
+  .row.tool.expanded {
+    flex-wrap: wrap;
+  }
+  .row.tool.expanded .output {
+    max-height: 320px;
+    overflow-y: auto;
+    margin-top: 4px;
+    flex-basis: 100%;
+    padding-bottom: 4px;
+  }
+
+  /* ─── inline show_widget (input/picker/button/form) — terminal style ─── */
+  .row.widget {
+    display: block;
+    border-left: 2px solid var(--accent);
+    padding: 4px 0 4px 8px;
+    margin-left: -2px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+    background: rgba(200,57,197,0.04);
+  }
+  .row.widget .prompt {
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+  .row.widget .field {
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    padding: 1px 0;
+  }
+  .row.widget .field-label {
+    color: var(--text-dim);
+    flex: 0 0 auto;
+    min-width: 80px;
+  }
+  .row.widget input {
+    flex: 1;
+    background: var(--bg-soft);
+    color: var(--text);
+    border: 1px solid var(--line);
+    font: inherit;
+    font-size: 12px;
+    padding: 2px 6px;
+    outline: 0;
+  }
+  .row.widget input:focus { border-color: var(--accent); }
+  .row.widget .option {
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 1px 0;
+  }
+  .row.widget .option .key {
+    color: var(--accent);
+    margin-right: 6px;
+  }
+  .row.widget .option:hover { color: var(--text); }
+  .row.widget .option:hover .key { color: var(--user); }
+  .row.widget .actions {
+    margin-top: 4px;
+    display: flex;
+    gap: 8px;
+  }
+  .row.widget button {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    font: inherit;
+    font-size: 11px;
+    padding: 2px 10px;
+    cursor: pointer;
+  }
+  .row.widget button:hover { background: rgba(200,57,197,0.1); }
+  .row.widget button.dismiss { color: var(--text-faint); border-color: var(--line); }
+  .row.widget.submitted {
+    opacity: 0.6;
+    border-left-color: var(--ok);
+  }
+  .row.widget.submitted .response {
+    color: var(--ok);
+    margin-top: 2px;
+    font-size: 11px;
+  }
+
+  /* ─── mounted widget (iframe-hosted dynamic UI from tool_mount) ─── */
+  .row.widget-host {
+    display: block;
+    border-left: 2px solid var(--tool);
+    padding: 4px 0 4px 8px;
+    margin: 6px 0;
+    background: rgba(201,133,54,0.04);
+  }
+  .row.widget-host .label-line {
+    display: flex;
+    gap: 8px;
+    color: var(--text-faint);
+    font-size: 11px;
+    margin-bottom: 4px;
+    align-items: baseline;
+  }
+  .row.widget-host .label-line .name { color: var(--tool); }
+  .row.widget-host .label-line .id   { color: var(--text-faint); opacity: 0.6; font-size: 10px; }
+  .row.widget-host .label-line .dismiss {
+    margin-left: auto;
+    cursor: pointer;
+    color: var(--text-faint);
+    padding: 0 4px;
+  }
+  .row.widget-host .label-line .dismiss:hover { color: var(--error); }
+  .row.widget-host iframe {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    display: block;
+  }
+
+  /* ─── input prompt (pinned bottom) ─── */
+  .promptline {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    padding: 8px 14px 10px;
+    border-top: 1px solid var(--line);
+    background: var(--bg-dim);
+    position: relative;
+  }
+  .promptline::before {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; top: -1px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0.3;
+  }
+  .promptline .label {
+    color: var(--user);
+    flex: 0 0 auto;
+    font-weight: 500;
+    padding-top: 2px;
+  }
+  .promptline textarea {
+    flex: 1;
+    background: transparent;
+    color: var(--text);
+    border: 0;
+    outline: 0;
+    resize: none;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.55;
+    max-height: 140px;
+    caret-color: var(--accent);
+    padding: 1px 0;
+  }
+  .promptline textarea::placeholder { color: var(--text-faint); }
+  .promptline .hint {
+    color: var(--text-faint);
+    font-size: 10px;
+    padding-top: 4px;
+    white-space: nowrap;
+    letter-spacing: 0.5px;
+    flex: 0 0 auto;
+  }
+  .promptline .hint kbd {
+    background: var(--bg-soft);
+    color: var(--text-dim);
+    border: 1px solid var(--line);
+    padding: 1px 5px;
+    font-family: var(--font);
+    font-size: 10px;
+  }
+  .promptline.busy .label { color: var(--text-faint); }
+  .promptline.busy .hint b { color: var(--accent); }
 </style>
 </head>
 <body>
-  <div>
-    <span class="pre">system=&gt;</span>
-    hyperia shell · placeholder · full renderer ships in
-    <span class="accent">task #35</span>
+
+<div class="titlebar">
+  <div class="name">hyperia · shell</div>
+  <div class="hud">
+    <div class="stat"><span>in</span><span class="v" id="hud-in">0</span></div>
+    <div class="stat"><span>out</span><span class="v" id="hud-out">0</span></div>
+    <div class="stat"><span>tools</span><span class="v" id="hud-tools">0</span></div>
+    <div class="stat"><span>turns</span><span class="v" id="hud-turns">0</span></div>
   </div>
+</div>
+
+<div class="status" id="status">
+  <div class="item"><span>sidecar</span><span class="v" id="s-sidecar">…</span></div>
+  <div class="item"><span>level</span><span class="v" id="s-level">…</span></div>
+  <div class="item"><span>model</span><span class="v" id="s-model">…</span></div>
+  <div class="item"><span>ferricula</span><span class="v" id="s-ferricula">…</span></div>
+</div>
+
+<div class="screen" id="screen"></div>
+
+<div class="promptline" id="promptline">
+  <span class="label" id="prompt-label">you~&gt;</span>
+  <textarea id="input" rows="1" autofocus spellcheck="false"
+    placeholder="ask anything"></textarea>
+  <span class="hint" id="hint">
+    <kbd>↵</kbd> send · <kbd>⇧↵</kbd> newline · <kbd>esc</kbd> stop
+  </span>
+</div>
+
+<script>
+'use strict';
+
+// ───────────────────────────────────────────────────────────────────────
+// DOM refs + small helpers
+// ───────────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const screen     = $('screen');
+const input      = $('input');
+const promptline = $('promptline');
+const hint       = $('hint');
+const promptLbl  = $('prompt-label');
+
+const STATS = { in: 0, out: 0, tools: 0, turns: 0 };
+function updateHud() {
+  $('hud-in').textContent    = STATS.in.toLocaleString();
+  $('hud-out').textContent   = STATS.out.toLocaleString();
+  $('hud-tools').textContent = STATS.tools;
+  $('hud-turns').textContent = STATS.turns;
+}
+
+const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+}[c]));
+
+function autoscroll() { screen.scrollTop = screen.scrollHeight; }
+
+// ───────────────────────────────────────────────────────────────────────
+// Tool emoji registry — purely cosmetic; falls back to 🔧 if unknown
+// ───────────────────────────────────────────────────────────────────────
+const TOOL_EMOJI = {
+  terminal_run: '🖥️', terminal_keys: '⌨️', terminal_screen: '📺',
+  terminal_status: '📋', terminal_split: '⬛', terminal_focus: '🎯',
+  terminal_new_tab: '➕', terminal_new_window: '🪟', terminal_close: '✖️',
+  tab_snapshot: '📸', shell_state: '🐚', open_web_pane: '🌐',
+  file_read: '📖', file_write: '✏️', file_edit: '🩹', list_files: '📁',
+  grep: '🔍', web_fetch: '🌐', web_search: '🔭',
+  doctor: '🩺', model_catalog: '📚', docker_run: '🐳', help: '❓',
+  memory_recall: '🧠', memory_remember: '💾', memory_dream: '💤',
+  memory_status: '📊', memory_connect: '🔗', memory_sql: '🗃️',
+  memory_inspect: '🔎', memory_keystone: '⭐', memory_neighbors: '🕸️',
+  memory_embody: '🪞',
+  watercooler: '☕', maximus_explain: '🔬',
+  show_input: '⌨️', show_picker: '☰', show_button: '⬢', show_form: '📝',
+  tool_search: '🔎', tool_create: '🔧',
+  settings_get: '⚙️', settings_set: '⚙️', settings_list_profiles: '⚙️',
+  sticky_note_create: '🗒️', sticky_note_update: '🗒️', sticky_note_delete: '🗒️',
+};
+const getEmoji = (n) => TOOL_EMOJI[n] || '🔧';
+
+// One-line label for a finished tool — "<verb> · <key arg>"
+function buildLabel(name, input) {
+  if (!input) return name;
+  switch (name) {
+    case 'terminal_run':    return `run · ${input.command || ''}`;
+    case 'terminal_keys':   return `keys · ${(input.keys || '').slice(0, 40)}`;
+    case 'terminal_screen': return `screen${input.pane ? ' · pane ' + input.pane : ''}`;
+    case 'terminal_split':  return `split · ${input.direction || ''}`;
+    case 'terminal_focus':  return `focus${input.tab ? ' · ' + input.tab : ''}`;
+    case 'terminal_new_tab':return `new tab${input.profile ? ' · ' + input.profile : ''}`;
+    case 'file_read':       return `read · ${input.path || ''}`;
+    case 'file_write':      return `write · ${input.path || ''}`;
+    case 'file_edit':       return `edit · ${input.path || ''}`;
+    case 'grep':            return `grep · "${input.pattern || ''}"`;
+    case 'web_fetch':       return `fetch · ${input.url || ''}`;
+    case 'web_search':      return `search · "${input.query || ''}"`;
+    case 'open_web_pane':   return `pane · ${input.url || ''}`;
+    case 'tab_snapshot':    return `snapshot${input.tab ? ' · ' + input.tab : ''}`;
+    case 'memory_recall':   return `recall · "${input.query || ''}"`;
+    case 'memory_remember': return `remember · ${(input.text || '').slice(0, 60)}`;
+    case 'memory_sql':      return `sql · ${(input.sql || '').slice(0, 60)}`;
+    case 'settings_get':    return `get · ${input.path || ''}`;
+    case 'settings_set':    return `set · ${input.path || ''}`;
+    default:                return name;
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Row builders
+// ───────────────────────────────────────────────────────────────────────
+function addRow(role, label, bodyHtml, opts = {}) {
+  const r = document.createElement('div');
+  let cls = `row ${role}`;
+  if (opts.streaming) cls += ' streaming';
+  if (opts.injected)  cls += ' injected';
+  r.className = cls;
+  r.innerHTML = `<span class="label">${label}</span><div class="body"></div>`;
+  if (bodyHtml != null) r.querySelector('.body').innerHTML = bodyHtml;
+  screen.appendChild(r);
+  autoscroll();
+  return r;
+}
+
+function addWatercooler(text) {
+  const r = document.createElement('div');
+  r.className = 'row watercooler';
+  r.innerHTML = `<div class="body">— ${escapeHtml(text)} —</div>`;
+  screen.appendChild(r);
+  autoscroll();
+}
+
+function addToolRow(name, id) {
+  const r = document.createElement('div');
+  r.className = 'row tool';
+  r.id = 'tool-' + id;
+  r.innerHTML = `
+    <span class="label running">${getEmoji(name)}</span>
+    <div class="summary">
+      <span class="name">${escapeHtml(name)}</span>
+      <span class="arg">running…</span>
+      <span class="meta"></span>
+    </div>
+    <div class="output"></div>
+  `;
+  r.addEventListener('click', () => r.classList.toggle('expanded'));
+  screen.appendChild(r);
+  STATS.tools++; updateHud();
+  autoscroll();
+}
+
+function finishToolRow(id, name, input, output) {
+  const r = document.getElementById('tool-' + id);
+  if (!r) return;
+  r.querySelector('.label').classList.remove('running');
+  r.querySelector('.arg').textContent = buildLabel(name, input);
+  const meta = r.querySelector('.meta');
+  const isErr = /error|failed|blocked|unknown tool/i.test(output || '');
+  meta.innerHTML = isErr
+    ? '<span class="fail">✗</span>'
+    : '<span class="ok">✓</span>';
+  r.querySelector('.output').textContent = output || '(no output)';
+}
+
+let streamingRow = null;
+function startAgentStream() {
+  endAgentStream();
+  streamingRow = addRow('agent', 'hyperia~&gt;', '', { streaming: true });
+}
+function streamText(chunk) {
+  if (!streamingRow) startAgentStream();
+  const body = streamingRow.querySelector('.body');
+  body.innerHTML += escapeHtml(chunk).replace(/\n/g, '<br>');
+  STATS.out += Math.max(1, (chunk.length / 4) | 0);
+  updateHud();
+  autoscroll();
+}
+function endAgentStream() {
+  if (streamingRow) {
+    streamingRow.classList.remove('streaming');
+    streamingRow = null;
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// show_widget (input/picker/button/form) — terminal-styled, NOT bubbles
+// ───────────────────────────────────────────────────────────────────────
+function addShowWidget(kind, inputObj) {
+  endAgentStream();
+  const id = inputObj.id;
+  if (!id) return;
+  const r = document.createElement('div');
+  r.className = 'row widget';
+  r.id = 'show-' + id;
+
+  let body = '';
+  if (kind === 'input') {
+    const prompt = escapeHtml(inputObj.prompt || 'enter a value');
+    const inputKind = inputObj.kind === 'password' ? 'password' :
+                      inputObj.kind === 'number'   ? 'number'   : 'text';
+    const def = escapeHtml(String(inputObj.default ?? ''));
+    body = `
+      <div class="prompt">? ${prompt}</div>
+      <div class="field">
+        <input type="${inputKind}" value="${def}" class="show-input-value" autofocus />
+      </div>
+      <div class="actions">
+        <button class="submit">submit</button>
+        <button class="dismiss">dismiss</button>
+      </div>
+    `;
+  } else if (kind === 'button') {
+    const label = escapeHtml(inputObj.label || 'ok');
+    const hintTxt = inputObj.hint ? `<div class="prompt" style="color:var(--text-faint);font-size:11px">${escapeHtml(inputObj.hint)}</div>` : '';
+    body = `
+      ${hintTxt}
+      <div class="actions">
+        <button class="submit">${label}</button>
+        <button class="dismiss">dismiss</button>
+      </div>
+    `;
+  } else if (kind === 'picker') {
+    const prompt = escapeHtml(inputObj.prompt || 'pick one');
+    const opts = (inputObj.options || []).map((o, i) => {
+      const label = escapeHtml(String(o.label || o.value || ''));
+      const desc  = o.description ? ` <span style="color:var(--text-faint)">— ${escapeHtml(o.description)}</span>` : '';
+      return `<div class="option" data-value="${escapeHtml(o.value)}">
+                <span class="key">[${i + 1}]</span>${label}${desc}
+              </div>`;
+    }).join('');
+    body = `
+      <div class="prompt">? ${prompt}</div>
+      ${opts}
+      <div class="actions">
+        <button class="dismiss">dismiss</button>
+      </div>
+    `;
+  } else if (kind === 'form') {
+    const prompt = escapeHtml(inputObj.prompt || 'fill in');
+    const fields = (inputObj.fields || []).map(f => {
+      const fid = escapeHtml(f.id);
+      const flbl = escapeHtml(f.label || f.id);
+      const fkind = f.kind === 'password' ? 'password' : f.kind === 'number' ? 'number' : 'text';
+      const def = escapeHtml(String(f.default ?? ''));
+      const ph = f.placeholder ? ` placeholder="${escapeHtml(f.placeholder)}"` : '';
+      return `<div class="field">
+                <span class="field-label">${flbl}</span>
+                <input data-field="${fid}" type="${fkind}" value="${def}"${ph} />
+              </div>`;
+    }).join('');
+    const submitLbl = escapeHtml(inputObj.submit_label || 'submit');
+    body = `
+      <div class="prompt">? ${prompt}</div>
+      ${fields}
+      <div class="actions">
+        <button class="submit">${submitLbl}</button>
+        <button class="dismiss">dismiss</button>
+      </div>
+    `;
+  } else {
+    body = `<div class="prompt">unknown widget kind: ${escapeHtml(kind)}</div>`;
+  }
+  r.innerHTML = body;
+  screen.appendChild(r);
+  autoscroll();
+
+  const collect = () => {
+    if (kind === 'input') {
+      return r.querySelector('input').value;
+    } else if (kind === 'button') {
+      return 'clicked';
+    } else if (kind === 'form') {
+      const out = {};
+      r.querySelectorAll('input[data-field]').forEach(el => {
+        out[el.dataset.field] = el.type === 'number' ? Number(el.value) : el.value;
+      });
+      return out;
+    }
+    return null;
+  };
+
+  const submitWith = (value, label) => submitShowWidget(r, id, value, label);
+  const dismiss    = ()              => dismissShowWidget(r, id);
+
+  if (kind === 'picker') {
+    r.querySelectorAll('.option').forEach(el => {
+      el.addEventListener('click', () => submitWith(el.dataset.value, el.textContent.trim()));
+    });
+  }
+  const submitBtn = r.querySelector('button.submit');
+  if (submitBtn) submitBtn.addEventListener('click', () => submitWith(collect(), null));
+  r.querySelectorAll('input').forEach(el => {
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        submitWith(collect(), null);
+      }
+    });
+  });
+  r.querySelector('button.dismiss').addEventListener('click', dismiss);
+  const firstInput = r.querySelector('input');
+  if (firstInput) setTimeout(() => firstInput.focus(), 0);
+}
+
+function submitShowWidget(rowEl, id, value, displayLabel) {
+  rowEl.classList.add('submitted');
+  const resp = document.createElement('div');
+  resp.className = 'response';
+  const shown = displayLabel || (typeof value === 'object' ? JSON.stringify(value) : String(value));
+  resp.textContent = '✓ ' + (shown && shown.length > 80 ? shown.slice(0, 77) + '...' : shown);
+  rowEl.appendChild(resp);
+  rowEl.querySelectorAll('button, input, .option').forEach(el => el.disabled = true);
+  fetch('/api/ghost/ui-response', {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({ id, value }),
+  }).catch(() => {});
+}
+function dismissShowWidget(rowEl, id) {
+  rowEl.classList.add('submitted');
+  const resp = document.createElement('div');
+  resp.className = 'response';
+  resp.style.color = 'var(--text-faint)';
+  resp.textContent = '× dismissed';
+  rowEl.appendChild(resp);
+  rowEl.querySelectorAll('button, input, .option').forEach(el => el.disabled = true);
+  fetch('/api/ghost/ui-response', {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({ id, dismissed: true }),
+  }).catch(() => {});
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// tool_mount — iframe-hosted dynamic widget. Init script injects
+// window.__mount_id__ + window.__data__(key) + window.__action__(name, args)
+// into the widget's realm; both helpers proxy through postMessage to the
+// parent (avoids CORS for the srcdoc-iframe's opaque origin).
+// ───────────────────────────────────────────────────────────────────────
+const WIDGET_INIT_SCRIPT = `<script>
+(function(){
+  function rpc(payload){
+    return new Promise(function(resolve, reject){
+      var rid = 'r' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      function onMsg(e){
+        if (!e.data || e.data.__widget_rid !== rid) return;
+        window.removeEventListener('message', onMsg);
+        if (e.data.error) reject(new Error(e.data.error));
+        else resolve(e.data.value);
+      }
+      window.addEventListener('message', onMsg);
+      payload.__widget = true;
+      payload.__rid = rid;
+      parent.postMessage(payload, '*');
+    });
+  }
+  window.__mount_id__ = __MOUNT_ID__;
+  window.__data__   = function(key){ return rpc({ kind: 'data',   key: key }); };
+  window.__action__ = function(action, args){ return rpc({ kind: 'action', action: action, args: args == null ? null : args }); };
+})();
+<\/script>`;
+
+function addMountedWidget(mountId, name, srcdoc, height) {
+  endAgentStream();
+  const r = document.createElement('div');
+  r.className = 'row widget-host';
+  r.dataset.mountId = mountId;
+  r.innerHTML = `
+    <div class="label-line">
+      <span class="name">${escapeHtml(name)}</span>
+      <span class="id">${escapeHtml(mountId)}</span>
+      <span class="dismiss" title="dismiss widget">✕</span>
+    </div>
+  `;
+  const iframe = document.createElement('iframe');
+  iframe.dataset.mountId = mountId;
+  iframe.title = name + ' [' + mountId + ']';
+  iframe.style.height = (Number(height) || 320) + 'px';
+  // Note: no sandbox attribute by design (per plan — trust model is the
+  // same as the agent's other tools). Adding sandbox="allow-scripts"
+  // later is a one-line change that doesn't break the postMessage wire.
+  const init = WIDGET_INIT_SCRIPT.replace('__MOUNT_ID__', JSON.stringify(String(mountId)));
+  iframe.srcdoc = init + (srcdoc || '');
+  r.appendChild(iframe);
+  r.querySelector('.dismiss').addEventListener('click', () => {
+    r.remove();
+    // No server-side dismiss endpoint yet — widget state will linger in
+    // the store until the agent's mount expires. Sidecar logs the orphan.
+  });
+  screen.appendChild(r);
+  autoscroll();
+}
+
+// Parent-side proxy for widget postMessage RPC.
+window.addEventListener('message', async (e) => {
+  const d = e.data;
+  if (!d || !d.__widget) return;
+  let mountId = null;
+  try { mountId = e.source.frameElement && e.source.frameElement.dataset.mountId; } catch (_) {}
+  if (!mountId) {
+    return;
+  }
+  try {
+    if (d.kind === 'data') {
+      const r = await fetch(`/api/ghost/widget/${encodeURIComponent(mountId)}/data?key=${encodeURIComponent(d.key)}`);
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        e.source.postMessage({ __widget_rid: d.__rid, error: j.error || ('HTTP ' + r.status) }, '*');
+        return;
+      }
+      const j = await r.json();
+      e.source.postMessage({ __widget_rid: d.__rid, value: j.value }, '*');
+    } else if (d.kind === 'action') {
+      const r = await fetch(`/api/ghost/widget/${encodeURIComponent(mountId)}/action`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({ action: d.action, args: d.args }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        e.source.postMessage({ __widget_rid: d.__rid, error: j.error || ('HTTP ' + r.status) }, '*');
+        return;
+      }
+      e.source.postMessage({ __widget_rid: d.__rid, value: { ok: true } }, '*');
+    }
+  } catch (err) {
+    e.source.postMessage({ __widget_rid: d.__rid, error: String(err && err.message || err) }, '*');
+  }
+});
+
+// ───────────────────────────────────────────────────────────────────────
+// Bootstub chat — one-shot non-SSE round-trip for level=none. Lets the
+// user wire a token / install ollama before any LLM gets involved.
+// ───────────────────────────────────────────────────────────────────────
+let currentLevel = 'none';
+
+async function runBootstub(message) {
+  setBusy(true);
+  STATS.turns++; updateHud();
+  let reply = null;
+  try {
+    const r = await fetch('/api/ghost/bootchat', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({ message }),
+    });
+    if (!r.ok) {
+      addRow('error', 'err!', 'bootstub HTTP ' + r.status);
+      setBusy(false);
+      return;
+    }
+    reply = await r.json();
+  } catch (e) {
+    addRow('error', 'err!', 'bootstub unreachable: ' + escapeHtml(e.message));
+    setBusy(false);
+    return;
+  }
+  for (const line of (reply.system || [])) {
+    addRow('system', 'system=&gt;', escapeHtml(line));
+  }
+  const body = escapeHtml(reply.text || '').replace(/\n/g, '<br>');
+  addRow('agent', 'hyperia~&gt;', body);
+  setBusy(false);
+
+  if (reply.config_changed) {
+    // Re-probe capabilities to flip levels. The next message will route
+    // to /chat (real agent) instead of /bootchat.
+    addRow('system', 'system=&gt;', 're-probing capabilities…');
+    const caps = await bootCapabilities();
+    if (caps && caps.level !== 'none') {
+      addRow('agent', 'hyperia~&gt;', `bootstub stepping aside — i'm now on the <em class="ok">${escapeHtml(caps.level)}</em> path. say anything to start.`);
+    }
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// SSE chat loop
+// ───────────────────────────────────────────────────────────────────────
+let abortCtrl = null;
+
+async function runChat(message) {
+  setBusy(true);
+  STATS.turns++; updateHud();
+  abortCtrl = new AbortController();
+
+  let response;
+  try {
+    response = await fetch('/api/ghost/chat', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({ message }),
+      signal: abortCtrl.signal,
+    });
+  } catch (e) {
+    addRow('error', 'err!', 'failed to reach sidecar: ' + escapeHtml(e.message));
+    setBusy(false);
+    return;
+  }
+  if (!response.ok) {
+    addRow('error', 'err!', 'sidecar returned HTTP ' + response.status);
+    setBusy(false);
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (!data) continue;
+        try {
+          handleEvent(JSON.parse(data));
+        } catch (_) { /* swallow malformed */ }
+      }
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      addRow('error', 'err!', 'stream broken: ' + escapeHtml(e.message));
+    }
+  } finally {
+    endAgentStream();
+    setBusy(false);
+    abortCtrl = null;
+  }
+}
+
+function handleEvent(ev) {
+  switch (ev.type) {
+    case 'text_delta':
+      streamText(ev.text || '');
+      break;
+    case 'tool_start':
+      endAgentStream();
+      addToolRow(ev.name, ev.id);
+      break;
+    case 'tool_result':
+      finishToolRow(ev.id, ev.name, ev.input, ev.output);
+      break;
+    case 'show_widget':
+      addShowWidget(ev.kind, ev.input || {});
+      break;
+    case 'tool_mount':
+      addMountedWidget(ev.id, ev.name, ev.srcdoc, ev.height);
+      break;
+    case 'watercooler':
+      addWatercooler(ev.summary || 'paused');
+      break;
+    case 'retrying':
+      addRow('system', 'system=&gt;',
+        `retrying (attempt ${ev.attempt}, waiting ${ev.wait_secs}s)`);
+      break;
+    case 'stats':
+      STATS.in     = ev.input_tokens  || STATS.in;
+      STATS.out    = ev.output_tokens || STATS.out;
+      STATS.tools  = ev.tool_calls    != null ? ev.tool_calls : STATS.tools;
+      STATS.turns  = ev.turns         || STATS.turns;
+      updateHud();
+      break;
+    case 'done':
+      endAgentStream();
+      break;
+    case 'error':
+      addRow('error', 'err!', escapeHtml(ev.message || 'unknown error'));
+      break;
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Input handling (history + send + inject + stop)
+// ───────────────────────────────────────────────────────────────────────
+const history = [];
+let histIdx = -1;
+
+function autoresize() {
+  input.style.height = 'auto';
+  input.style.height = Math.min(140, input.scrollHeight) + 'px';
+}
+input.addEventListener('input', autoresize);
+
+input.addEventListener('keydown', async (e) => {
+  // Submit (Enter without Shift)
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    await submit();
+    return;
+  }
+  // History nav (only single-line, no \n)
+  if (e.key === 'ArrowUp' && !input.value.includes('\n') && history.length) {
+    if (histIdx < history.length - 1) {
+      histIdx++;
+      input.value = history[history.length - 1 - histIdx];
+      autoresize();
+      e.preventDefault();
+    }
+  } else if (e.key === 'ArrowDown' && !input.value.includes('\n')) {
+    if (histIdx > 0) { histIdx--; input.value = history[history.length - 1 - histIdx]; }
+    else if (histIdx === 0) { histIdx = -1; input.value = ''; }
+    autoresize();
+    e.preventDefault();
+  }
+  // Esc cancels current agent turn
+  if (e.key === 'Escape') {
+    if (promptline.classList.contains('busy')) {
+      e.preventDefault();
+      fetch('/api/ghost/stop', { method: 'POST' }).catch(() => {});
+      addRow('system', 'system=&gt;', 'stop requested — agent will wrap up.');
+    }
+  }
+  // Ctrl/Cmd + L clears screen
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
+    e.preventDefault();
+    clearScreen();
+  }
+});
+
+async function submit() {
+  const line = input.value.trim();
+  if (!line) return;
+  history.push(line); histIdx = -1;
+  input.value = '';
+  autoresize();
+
+  if (promptline.classList.contains('busy')) {
+    // Inject mid-stream — soft preemption via POST /api/ghost/inject.
+    addRow('user', 'you~&gt;', escapeHtml(line), { injected: true });
+    try {
+      await fetch('/api/ghost/inject', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({ message: line }),
+      });
+    } catch (_) {}
+    return;
+  }
+
+  addRow('user', 'you~&gt;', escapeHtml(line));
+  if (currentLevel === 'none') {
+    await runBootstub(line);
+  } else {
+    await runChat(line);
+  }
+}
+
+function setBusy(b) {
+  promptline.classList.toggle('busy', b);
+  hint.innerHTML = b
+    ? '<b>▶ thinking…</b>  <kbd>esc</kbd> stop  · type to queue'
+    : '<kbd>↵</kbd> send · <kbd>⇧↵</kbd> newline · <kbd>esc</kbd> stop';
+  if (!b) setTimeout(() => input.focus(), 0);
+}
+
+function clearScreen() {
+  screen.innerHTML = '';
+  addWatercooler('screen cleared');
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// History seed + capabilities probe + boot
+// ───────────────────────────────────────────────────────────────────────
+async function seedHistory() {
+  try {
+    const r = await fetch('/api/ghost/history');
+    if (!r.ok) return;
+    const j = await r.json();
+    const msgs = (j.messages || []).slice(-50);
+    for (const m of msgs) {
+      const role = m.role === 'assistant' ? 'agent' : 'user';
+      const label = role === 'agent' ? 'hyperia~&gt;' : 'you~&gt;';
+      addRow(role, label, escapeHtml(m.content || '').replace(/\n/g, '<br>'));
+    }
+  } catch (_) { /* no history is fine */ }
+}
+
+async function bootCapabilities() {
+  let caps = null;
+  try {
+    const r = await fetch('/api/ghost/capabilities');
+    if (r.ok) caps = await r.json();
+  } catch (_) {}
+
+  // Status strip + cached level for dispatch
+  $('s-sidecar').textContent  = (caps && caps.sidecar)  ? 'v' + caps.sidecar : '?';
+  $('s-level').textContent    = (caps && caps.level)    ? caps.level         : '?';
+  $('s-model').textContent    = (caps && caps.agent && caps.agent.model)    ? caps.agent.model    : '(none)';
+  if (caps && caps.level) currentLevel = caps.level;
+  const fcItem = $('s-ferricula').parentElement;
+  fcItem.classList.remove('live', 'dead');
+  if (caps && caps.ferricula) {
+    fcItem.classList.add(caps.ferricula.reachable ? 'live' : 'dead');
+    $('s-ferricula').textContent = caps.ferricula.reachable ? 'live' : 'unreachable';
+  } else {
+    $('s-ferricula').textContent = '?';
+  }
+
+  if (!caps) {
+    addRow('error', 'err!', 'could not reach sidecar at /api/ghost/capabilities');
+    return null;
+  }
+
+  // Boot lines
+  addRow('system', 'system=&gt;', `hyperia sidecar <code>v${escapeHtml(caps.sidecar)}</code>`);
+  const provider = caps.agent && caps.agent.provider ? caps.agent.provider : '(none)';
+  const model    = caps.agent && caps.agent.model    ? caps.agent.model    : '(none)';
+  const ollama = caps.providers && caps.providers.ollama;
+  if (ollama && ollama.reachable) {
+    addRow('system', 'system=&gt;', `ollama: <em class="ok">reachable</em> at <code>${escapeHtml(ollama.endpoint || '')}</code>`);
+  } else {
+    addRow('system', 'system=&gt;', `ollama: <em class="fail">unreachable</em>`);
+  }
+  if (caps.ferricula && caps.ferricula.reachable) {
+    addRow('system', 'system=&gt;', `ferricula: <em class="ok">reachable</em>`);
+  } else {
+    addRow('system', 'system=&gt;', `ferricula: <em class="fail">unreachable</em>`);
+  }
+  addRow('system', 'system=&gt;', `agent: provider=<code>${escapeHtml(provider)}</code> model=<code>${escapeHtml(model)}</code>`);
+  addRow('system', 'system=&gt;', `level: <em class="ok">${escapeHtml(caps.level)}</em>`);
+  return caps;
+}
+
+async function boot() {
+  const caps = await bootCapabilities();
+  await seedHistory();
+  const greeting = (() => {
+    if (!caps) return "no sidecar capabilities — i'll wait here.";
+    switch (caps.level) {
+      case 'hybrid':
+        return "ready. frontier + local both online. ask anything.";
+      case 'frontier':
+        return "ready on frontier. install ollama for a local compressor.";
+      case 'local':
+        return "ready on local model. planning will feel slower than frontier; paste an anthropic / openai / gemini token to upgrade.";
+      case 'none':
+      default:
+        return "i don't have a brain wired yet. try <code>install ollama</code> for a local model, or <code>paste anthropic token sk-ant-…</code> for a frontier one. typing <code>what's possible</code> walks through options.";
+    }
+  })();
+  addRow('agent', 'hyperia~&gt;', greeting);
+  setBusy(false);
+  setTimeout(() => input.focus(), 0);
+}
+
+updateHud();
+autoresize();
+boot();
+</script>
 </body>
 </html>

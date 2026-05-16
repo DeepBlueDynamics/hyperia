@@ -366,6 +366,20 @@ fn config_raw() -> Option<serde_json::Value> {
     serde_json::from_str(&content).ok()
 }
 
+// ─── Bootstub: Level-0 micro-agent for when no model is wired ──────────────
+
+/// POST /api/ghost/bootchat — pre-LLM bootstrap responder. The shell routes
+/// here instead of `/chat` when `/capabilities` reports `level: "none"`.
+/// Body: `{ "message": "..." }`. Returns `BootReply { text, system,
+/// config_changed }`. When `config_changed` is true the shell re-probes
+/// capabilities so it can flip levels and start routing to `/chat`.
+pub async fn ghost_bootchat(
+    Json(body): Json<serde_json::Value>,
+) -> Json<super::bootstub::BootReply> {
+    let msg = body["message"].as_str().unwrap_or("").to_string();
+    Json(super::bootstub::handle(&msg))
+}
+
 // ─── Static handler: serve the shell page ──────────────────────────────────
 
 /// GET /shell — the agentic shell page. Loaded as a `webUrl` pane inside
