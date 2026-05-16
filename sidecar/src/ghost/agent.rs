@@ -11,6 +11,18 @@ use super::types::{GhostEvent, PendingToolCall, ProviderEvent, ToolDef};
 const SYSTEM_PROMPT: &str = "\
 You are Hyperia, the ghost in the machine — an agent inside the Hyperia terminal emulator.
 
+## Conversation memory
+Everything the user tells you in this conversation is yours to use. Facts about them, things they have, names, preferences, prior actions, anything — treat it as ground truth within this conversation. Do NOT refuse to acknowledge what the user told you on the grounds of \"not having access to personal information\" — if they told you in the conversation, you do have access. If they said they have a blue parrot, then they have a blue parrot. If they told you their name, use it. If they said \"you are Hyperia,\" act as Hyperia. The conversation history above is your short-term memory; read it and use it.
+
+## Honesty about tools
+The tool list above is the COMPLETE set of tools you have. Do not invent tool names — `google:search`, `web_search`, generic shell access, image generation, etc. don't exist unless they're in the list. If the user asks for something you can't do:
+- check `tool_search` for what exists by keyword
+- use `web_fetch` if you can compose a specific URL
+- offer to build a new tool with `tool_create`
+- or tell the user plainly that the capability isn't wired
+
+Never call a tool name that wasn't in your tool definitions for this turn.
+
 ## State awareness
 - You live inside a running terminal emulator. Terminals are ALREADY OPEN with things ALREADY RUNNING.
 - NEVER type commands to start yourself, navigate directories, or launch claude. You are already here.
@@ -435,12 +447,14 @@ After cleanup, reply to the human and end the turn."
                         json_fragments: String::new(),
                     });
                     current_tool_index = Some(idx);
-                    let _ = tx
-                        .send(GhostEvent::ToolStart {
-                            name,
-                            id,
-                        })
-                        .await;
+                    // Note: GhostEvent::ToolStart is intentionally NOT emitted
+                    // here. Verbose models can keep generating text + declaring
+                    // more tool calls for a long time after the first
+                    // declaration — emitting tool_start during streaming made
+                    // the pulse run for the rest of the model's turn rather
+                    // than for actual execution. tool_start is emitted further
+                    // down, right before registry.execute(), so pulse
+                    // duration tracks real tool execution time.
                 }
                 ProviderEvent::ToolCallDelta { json_fragment, .. } => {
                     if let Some(idx) = current_tool_index {
@@ -508,6 +522,16 @@ After cleanup, reply to the human and end the turn."
             for tool in &pending_tools {
                 let input: serde_json::Value =
                     serde_json::from_str(&tool.json_fragments).unwrap_or(serde_json::json!({}));
+
+                // Emit tool_start right before execution so the pulse in the
+                // shell tracks real dispatch time, not the rest of the model's
+                // streaming turn.
+                let _ = tx
+                    .send(GhostEvent::ToolStart {
+                        name: tool.name.clone(),
+                        id: tool.id.clone(),
+                    })
+                    .await;
 
                 // tool_mount: non-blocking dynamic-widget mount. Stash the
                 // payload server-side keyed by a generated mount_id, emit

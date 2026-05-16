@@ -12,6 +12,7 @@ use futures::Stream;
 use tokio::sync::Mutex;
 
 use super::agent::{GhostSession, SessionState};
+use super::asset::AssetStore;
 use super::ferricula::{FerriculaBackend, load_ferricula_config};
 use super::provider::AnyProvider;
 use super::registry::ToolRegistry;
@@ -25,6 +26,7 @@ pub struct GhostState {
     pub session: Arc<Mutex<GhostSession>>,
     pub registry: Arc<ToolRegistry>,
     pub ferricula: Arc<FerriculaBackend>,
+    pub assets: Arc<AssetStore>,
     pub http_port: u16,
 }
 
@@ -34,10 +36,12 @@ impl GhostState {
         let fc_config = load_ferricula_config();
         let ferricula = Arc::new(FerriculaBackend::new(&fc_config));
         let registry = Arc::new(ToolRegistry::new(http_port).with_ferricula(ferricula.clone()));
+        let assets = Arc::new(AssetStore::new());
         Self {
             session,
             registry,
             ferricula,
+            assets,
             http_port,
         }
     }
@@ -511,6 +515,104 @@ fn config_raw_path() -> Option<std::path::PathBuf> {
         std::env::var("HOME").ok()?
     };
     Some(std::path::PathBuf::from(home).join(".hyperia").join("hyperia.json"))
+}
+
+// ─── Assets: paste / drop / upload — appear inline in the shell ──────────
+
+/// POST /api/ghost/asset — raw-bytes upload. Body: file bytes.
+/// Headers:
+///   content-type: image/png | image/jpeg | application/pdf | text/plain | …
+///   x-filename:   original filename if known (else any short label)
+/// Returns AssetMeta JSON. 25 MB cap (route-layer DefaultBodyLimit).
+pub async fn ghost_asset_upload(
+    State(state): State<GhostState>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let filename = headers
+        .get("x-filename")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            // Synthesize from content-type if the client didn't supply one
+            // (clipboard pastes don't carry filenames).
+            let ext = content_type
+                .split('/')
+                .nth(1)
+                .unwrap_or("bin")
+                .split(';')
+                .next()
+                .unwrap_or("bin");
+            format!("pasted.{}", ext)
+        });
+    if body.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "error": "empty body" })),
+        ));
+    }
+    match state.assets.store(content_type.clone(), filename.clone(), &body) {
+        Ok(meta) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "id": meta.id,
+            "url": format!("/api/ghost/asset/{}", meta.id),
+            "content_type": meta.content_type,
+            "filename": meta.filename,
+            "size": meta.size,
+            "created_ts": meta.created_ts,
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        )),
+    }
+}
+
+/// GET /api/ghost/asset/:id — serve the asset's raw bytes with its
+/// original content-type. 404 if unknown.
+pub async fn ghost_asset_get(
+    State(state): State<GhostState>,
+    Path(id): Path<String>,
+) -> Result<axum::response::Response, StatusCode> {
+    let (path, ct, _filename) = state.assets.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let bytes = std::fs::read(&path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut response = (
+        [(axum::http::header::CONTENT_TYPE, ct)],
+        bytes,
+    )
+        .into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        "public, max-age=86400".parse().unwrap(),
+    );
+    Ok(response)
+}
+
+/// GET /api/ghost/assets — list all stored assets. Used by the shell on
+/// load to restore the asset row state after a refresh.
+pub async fn ghost_asset_list(
+    State(state): State<GhostState>,
+) -> Json<serde_json::Value> {
+    let items = state.assets.list();
+    let mapped: Vec<serde_json::Value> = items
+        .into_iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "url": format!("/api/ghost/asset/{}", m.id),
+                "content_type": m.content_type,
+                "filename": m.filename,
+                "size": m.size,
+                "created_ts": m.created_ts,
+            })
+        })
+        .collect();
+    Json(serde_json::json!({ "assets": mapped }))
 }
 
 // ─── Bootstub: Level-0 micro-agent for when no model is wired ──────────────

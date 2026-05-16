@@ -998,6 +998,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ghost/bootchat", axum::routing::post(ghost::api::ghost_bootchat))
         // Model picker — writes config.agent.{provider,model} from the shell.
         .route("/api/ghost/set-model", axum::routing::post(ghost::api::ghost_set_model))
+        // Assets: paste/drop targets land here, then appear as rows in the shell.
+        .route(
+            "/api/ghost/asset",
+            axum::routing::post(ghost::api::ghost_asset_upload)
+                .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024)),
+        )
+        .route("/api/ghost/asset/{id}", axum::routing::get(ghost::api::ghost_asset_get))
+        .route("/api/ghost/assets", axum::routing::get(ghost::api::ghost_asset_list))
         // Static page: the agentic shell pane's HTML.
         .route("/shell", axum::routing::get(ghost::api::ghost_shell_page))
         .with_state(ghost_state);

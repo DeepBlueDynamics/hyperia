@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod api;
+pub mod asset;
 pub mod bootstub;
 pub mod compressor;
 pub mod ferricula;

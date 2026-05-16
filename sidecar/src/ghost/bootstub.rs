@@ -237,7 +237,7 @@ fn reply_install_ollama() -> BootReply {
     };
     BootReply {
         text: format!(
-            "ollama install for your platform:\n\n  {}\n\nafter install: `ollama pull llama3.2` (smallest useful chat model) or `ollama pull qwen2.5-coder:7b` (better at tool use). once `ollama serve` is up, refresh this page and i'll see it.",
+            "ollama install for your platform:\n\n  {}\n\nafter install, pull a model that handles tool calls well. recommended:\n  `ollama pull gemma4:e2b`   — ~5GB, fast, reliable tool dispatch (this is the one verified inside hyperia)\n  `ollama pull qwen2.5-coder:7b` — slightly larger, also tool-capable, leans coding\n\nonce `ollama serve` is running (the installer usually starts it), refresh this page and i'll see it. avoid `llama3.2` for chat in hyperia — it tends to fall out of the tool-call format.",
             cmd
         ),
         system: vec![],

@@ -159,9 +159,10 @@
   .row.system .body  { color: var(--text-dim); }
   .row.error  .body  { color: var(--error); }
   .row.agent.streaming .body::after {
-    content: "▍";
+    content: "_";
     color: var(--accent);
-    margin-left: 1px;
+    margin-left: 2px;
+    font-weight: 700;
     animation: cursor-blink 1s steps(1) infinite;
   }
   @keyframes cursor-blink {
@@ -198,12 +199,15 @@
   .row .body em.fail  { color: var(--error);  font-style: normal; }
 
   /* ─── tool rows ─── */
+  /* Override the base .row { display: flex } — tool rows are block so the
+     summary line stays inline and the output collapses cleanly onto its
+     own line below. */
   .row.tool {
+    display: block;
     color: var(--text-faint);
     font-size: 12px;
-    cursor: pointer;
     border-left: 2px solid var(--line);
-    padding-left: 6px;
+    padding: 0 0 0 6px;
     margin-left: -2px;
     transition: background 0.15s, border-color 0.15s;
   }
@@ -211,10 +215,19 @@
     background: var(--bg-soft);
     border-left-color: var(--accent);
   }
+  .row.tool .summary {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    min-width: 0;
+    cursor: pointer;
+    user-select: none;
+  }
   .row.tool .label {
     color: var(--tool);
     width: 16px;
     text-align: center;
+    flex: 0 0 auto;
   }
   .row.tool .label.running {
     animation: pulse-emoji 0.85s ease-in-out infinite;
@@ -223,16 +236,21 @@
     0%, 100% { opacity: 1; transform: scale(1); }
     50%      { opacity: 0.55; transform: scale(1.15); filter: brightness(1.5); }
   }
-  .row.tool .summary {
-    flex: 1;
-    display: flex;
-    gap: 8px;
-    align-items: baseline;
-    min-width: 0;
+  .row.tool .chev {
+    color: var(--text-faint);
+    font-size: 9px;
+    flex: 0 0 auto;
+    transition: transform 0.2s ease;
+    display: inline-block;
+  }
+  .row.tool.expanded .chev {
+    transform: rotate(90deg);
+    color: var(--accent);
   }
   .row.tool .name {
     color: var(--text-dim);
     font-weight: 500;
+    flex: 0 0 auto;
   }
   .row.tool .arg {
     color: var(--text-faint);
@@ -251,27 +269,97 @@
   .row.tool .meta .ok   { color: var(--ok); }
   .row.tool .meta .fail { color: var(--error); }
   .row.tool .output {
-    grid-column: 1 / -1;
-    max-height: 0;
-    overflow: hidden;
-    transition: max-height 0.3s ease;
+    display: none;          /* hard collapse — no measured height when closed */
     color: var(--text-faint);
     font-family: var(--font);
     font-size: 11px;
     border-left: 1px solid var(--line);
     padding-left: 8px;
-    margin-top: 0;
-  }
-  .row.tool.expanded {
-    flex-wrap: wrap;
-  }
-  .row.tool.expanded .output {
+    margin-top: 4px;
+    margin-left: 8px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
     max-height: 320px;
     overflow-y: auto;
-    margin-top: 4px;
-    flex-basis: 100%;
     padding-bottom: 4px;
   }
+  .row.tool.expanded .output {
+    display: block;
+  }
+
+  /* ─── pasted assets (image / pdf / text files) ─── */
+  .row.asset {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 6px 0 6px 8px;
+    border-left: 2px solid var(--tool);
+    margin-left: -2px;
+  }
+  .row.asset .label {
+    color: var(--tool);
+    flex: 0 0 auto;
+    width: 18px;
+    text-align: center;
+  }
+  .row.asset .info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .row.asset .info .name {
+    color: var(--text);
+    font-size: 12px;
+    word-break: break-all;
+  }
+  .row.asset .info .meta {
+    color: var(--text-faint);
+    font-size: 10px;
+  }
+  .row.asset .info .meta a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .row.asset .info .meta a:hover { text-decoration: underline; }
+  .row.asset .thumb {
+    max-height: 96px;
+    max-width: 200px;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    margin-top: 2px;
+    display: block;
+    background: var(--bg-soft);
+    object-fit: contain;
+  }
+  .row.asset .remove {
+    color: var(--text-faint);
+    cursor: pointer;
+    flex: 0 0 auto;
+    padding: 0 4px;
+    align-self: flex-start;
+  }
+  .row.asset .remove:hover { color: var(--error); }
+
+  /* drop overlay — full-pane prompt when the user drags a file in */
+  .drop-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(200, 57, 197, 0.08);
+    border: 2px dashed var(--accent);
+    pointer-events: none;
+    z-index: 50;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent);
+    font-size: 14px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  body.dragging .drop-overlay { display: flex; }
 
   /* ─── inline show_widget (input/picker/button/form) — terminal style ─── */
   .row.widget {
@@ -464,9 +552,11 @@
   <textarea id="input" rows="1" autofocus spellcheck="false"
     placeholder="ask anything"></textarea>
   <span class="hint" id="hint">
-    <kbd>↵</kbd> send · <kbd>⇧↵</kbd> newline · <kbd>esc</kbd> stop
+    <kbd>↵</kbd> send · <kbd>⇧↵</kbd> newline · <kbd>esc</kbd> stop · <kbd>⌘V</kbd> paste asset
   </span>
 </div>
+
+<div class="drop-overlay">drop to attach</div>
 
 <script>
 'use strict';
@@ -573,16 +663,19 @@ function addToolRow(name, id) {
   const r = document.createElement('div');
   r.className = 'row tool';
   r.id = 'tool-' + id;
+  // Summary line is the only click target — the output region below
+  // doesn't toggle when you click into it (so you can select text).
   r.innerHTML = `
-    <span class="label running">${getEmoji(name)}</span>
     <div class="summary">
+      <span class="chev">▸</span>
+      <span class="label running">${getEmoji(name)}</span>
       <span class="name">${escapeHtml(name)}</span>
       <span class="arg">running…</span>
       <span class="meta"></span>
     </div>
     <div class="output"></div>
   `;
-  r.addEventListener('click', () => r.classList.toggle('expanded'));
+  r.querySelector('.summary').addEventListener('click', () => r.classList.toggle('expanded'));
   screen.appendChild(r);
   STATS.tools++; updateHud();
   autoscroll();
@@ -590,24 +683,41 @@ function addToolRow(name, id) {
 
 function finishToolRow(id, name, input, output) {
   const r = document.getElementById('tool-' + id);
-  if (!r) return;
-  r.querySelector('.label').classList.remove('running');
-  r.querySelector('.arg').textContent = buildLabel(name, input);
+  if (!r) {
+    console.warn('[tool] finishToolRow: no row with id', 'tool-' + id, '(was tool_result delivered after tool_start? known ids:', Array.from(document.querySelectorAll('.row.tool')).map(el => el.id), ')');
+    return;
+  }
+  const labelEl = r.querySelector('.label');
+  if (labelEl) labelEl.classList.remove('running');
+  const argEl = r.querySelector('.arg');
+  if (argEl) argEl.textContent = buildLabel(name, input);
   const meta = r.querySelector('.meta');
   const isErr = /error|failed|blocked|unknown tool/i.test(output || '');
-  meta.innerHTML = isErr
+  if (meta) meta.innerHTML = isErr
     ? '<span class="fail">✗</span>'
     : '<span class="ok">✓</span>';
-  r.querySelector('.output').textContent = output || '(no output)';
+  const outEl = r.querySelector('.output');
+  if (outEl) outEl.textContent = output || '(no output)';
+  console.debug('[tool] finished', id, name, 'output bytes:', (output || '').length);
 }
 
 let streamingRow = null;
+let streamSeenContent = false;
 function startAgentStream() {
   endAgentStream();
   streamingRow = addRow('agent', 'hyperia~&gt;', '', { streaming: true });
+  streamSeenContent = false;
 }
 function streamText(chunk) {
   if (!streamingRow) startAgentStream();
+  // Strip leading whitespace from the very start of an agent turn. Some
+  // local models (gemma4:e2b in particular) emit several \n\n\n chunks
+  // before any real content — without this they paint as blank lines.
+  if (!streamSeenContent) {
+    chunk = chunk.replace(/^[\s\r\n]+/, '');
+    if (!chunk) return;
+    streamSeenContent = true;
+  }
   const body = streamingRow.querySelector('.body');
   body.innerHTML += escapeHtml(chunk).replace(/\n/g, '<br>');
   STATS.out += Math.max(1, (chunk.length / 4) | 0);
@@ -619,6 +729,7 @@ function endAgentStream() {
     streamingRow.classList.remove('streaming');
     streamingRow = null;
   }
+  streamSeenContent = false;
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -868,6 +979,155 @@ window.addEventListener('message', async (e) => {
 });
 
 // ───────────────────────────────────────────────────────────────────────
+// Assets — paste / drop / upload. Files land in the sidecar's
+// ~/.hyperia/assets/<id>.<ext> store and render inline in the
+// scrollback (thumbnail for images, filename + size for everything
+// else). Pending uploads are kept in `pendingAssets` so a follow-up
+// phase can attach them to the next chat message.
+// ───────────────────────────────────────────────────────────────────────
+const pendingAssets = [];
+
+function humanSize(b) {
+  if (b == null) return '';
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+  return (b / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+function assetIcon(ct) {
+  const t = (ct || '').toLowerCase();
+  if (t.startsWith('image/')) return '🖼';
+  if (t.startsWith('application/pdf')) return '📄';
+  if (t.startsWith('text/')) return '📃';
+  if (t.startsWith('application/json')) return '📋';
+  return '📎';
+}
+
+function renderAssetRow(asset) {
+  const r = document.createElement('div');
+  r.className = 'row asset';
+  r.dataset.assetId = asset.id;
+  const isImage = (asset.content_type || '').toLowerCase().startsWith('image/');
+  const thumb = isImage
+    ? `<img class="thumb" src="${escapeHtml(asset.url)}" alt="${escapeHtml(asset.filename)}" />`
+    : '';
+  r.innerHTML = `
+    <span class="label">${assetIcon(asset.content_type)}</span>
+    <div class="info">
+      <div class="name">${escapeHtml(asset.filename || asset.id)}</div>
+      <div class="meta">
+        ${escapeHtml(asset.content_type || 'unknown')} · ${humanSize(asset.size)} ·
+        <a href="${escapeHtml(asset.url)}" target="_blank">open</a>
+      </div>
+      ${thumb}
+    </div>
+    <span class="remove" title="remove from pending">✕</span>
+  `;
+  r.querySelector('.remove').addEventListener('click', () => {
+    const i = pendingAssets.findIndex(a => a.id === asset.id);
+    if (i >= 0) pendingAssets.splice(i, 1);
+    r.remove();
+  });
+  screen.appendChild(r);
+  autoscroll();
+}
+
+async function uploadAsset(file, sourceHint) {
+  if (!file) return;
+  const ct = file.type || 'application/octet-stream';
+  // Clipboard pastes don't carry filenames — synthesize a short one.
+  const name = file.name || (sourceHint || 'pasted') + (extFromContentType(ct) || '');
+  try {
+    const r = await fetch('/api/ghost/asset', {
+      method: 'POST',
+      headers: {
+        'content-type': ct,
+        'x-filename': name,
+      },
+      body: file,
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      addRow('error', 'err!', 'asset upload failed: ' + escapeHtml(j.error || ('HTTP ' + r.status)));
+      return;
+    }
+    const meta = await r.json();
+    pendingAssets.push(meta);
+    renderAssetRow(meta);
+  } catch (e) {
+    addRow('error', 'err!', 'asset upload error: ' + escapeHtml(e.message));
+  }
+}
+
+function extFromContentType(ct) {
+  const map = {
+    'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif',
+    'image/webp': '.webp', 'image/svg+xml': '.svg', 'image/bmp': '.bmp',
+    'application/pdf': '.pdf', 'text/plain': '.txt',
+    'text/markdown': '.md', 'text/csv': '.csv',
+    'application/json': '.json', 'text/html': '.html',
+  };
+  return map[(ct || '').split(';')[0].trim().toLowerCase()] || '';
+}
+
+// Paste handler — fires anywhere on the page. Files in the clipboard
+// (screenshots, images) get uploaded; plain-text pastes fall through
+// to the textarea natively.
+document.addEventListener('paste', async (e) => {
+  if (!e.clipboardData) return;
+  const items = Array.from(e.clipboardData.items || []);
+  const files = items.filter(it => it.kind === 'file').map(it => it.getAsFile()).filter(Boolean);
+  if (files.length === 0) return;          // text-only paste — let default handler take it
+  e.preventDefault();
+  for (const f of files) await uploadAsset(f, 'screenshot');
+});
+
+// Drag-and-drop — drop files anywhere on the body. Shows an overlay
+// while dragging.
+let dragDepth = 0;
+window.addEventListener('dragenter', (e) => {
+  if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+  dragDepth++;
+  document.body.classList.add('dragging');
+});
+window.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) document.body.classList.remove('dragging');
+});
+window.addEventListener('dragover', (e) => {
+  if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
+    e.preventDefault();
+  }
+});
+window.addEventListener('drop', async (e) => {
+  dragDepth = 0;
+  document.body.classList.remove('dragging');
+  if (!e.dataTransfer) return;
+  const files = Array.from(e.dataTransfer.files || []);
+  if (!files.length) return;
+  e.preventDefault();
+  for (const f of files) await uploadAsset(f, 'file');
+});
+
+// Restore previously-stored assets when the shell loads. (They live on
+// disk in ~/.hyperia/assets/; the in-memory map is rebuilt by the
+// sidecar at startup — see asset.rs. For now this is best-effort: if
+// the sidecar restarted between uploads, the meta might be empty.)
+async function seedAssets() {
+  try {
+    const r = await fetch('/api/ghost/assets');
+    if (!r.ok) return;
+    const j = await r.json();
+    const list = j.assets || [];
+    // Don't push to pendingAssets on restore — these are historical, not
+    // pending attachments for the next message.
+    for (const a of list) {
+      renderAssetRow(a);
+    }
+  } catch (_) {}
+}
+
+// ───────────────────────────────────────────────────────────────────────
 // Bootstub chat — one-shot non-SSE round-trip for level=none. Lets the
 // user wire a token / install ollama before any LLM gets involved.
 // ───────────────────────────────────────────────────────────────────────
@@ -957,8 +1217,12 @@ async function runChat(message) {
         const data = line.slice(5).trim();
         if (!data) continue;
         try {
-          handleEvent(JSON.parse(data));
-        } catch (_) { /* swallow malformed */ }
+          const ev = JSON.parse(data);
+          console.debug('[sse]', ev.type, ev);
+          handleEvent(ev);
+        } catch (err) {
+          console.warn('[sse] JSON parse failed:', err, 'on data:', data.slice(0, 200));
+        }
       }
     }
   } catch (e) {
@@ -1082,11 +1346,176 @@ async function submit() {
   }
 
   addRow('user', 'you~&gt;', escapeHtml(line));
+  // Hardwired intents fire first — same set works regardless of level
+  // (none/local/frontier/hybrid). If a typed phrase matches a UI we
+  // already have (model picker, capabilities readout, etc.), invoke it
+  // deterministically. Agent is the fallback for unstructured intent.
+  if (await handleHardwiredIntent(line)) return;
   if (currentLevel === 'none') {
     await runBootstub(line);
   } else {
     await runChat(line);
   }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Hardwired typed commands — bypass the agent entirely. These exist
+// because (a) small local models routinely fail to dispatch them
+// correctly and (b) when a UI widget already exists for an action, the
+// typed phrase should just fire it. No LLM round-trip, no hallucinated
+// tool names.
+// ───────────────────────────────────────────────────────────────────────
+async function handleHardwiredIntent(line) {
+  const m = line.trim().toLowerCase().replace(/\s+/g, ' ');
+  switch (m) {
+    case 'change model':
+    case 'switch model':
+    case 'pick model':
+    case 'select model':
+    case 'set model':
+      openModelPicker();
+      return true;
+
+    case 'list models':
+    case 'show models':
+    case 'models':
+    case 'what models do i have':
+    case 'what models':
+      await cmdListModels();
+      return true;
+
+    case 'show config':
+    case 'config':
+    case 'what config':
+    case 'current config':
+      await cmdShowConfig();
+      return true;
+
+    case 'doctor':
+    case 'check':
+    case 'status':
+    case 'check my setup':
+      await cmdDoctor();
+      return true;
+
+    case 'version':
+      await cmdVersion();
+      return true;
+
+    case 'commands':
+    case 'shortcuts':
+    case 'cmd':
+      cmdShowCommands();
+      return true;
+  }
+  return false;
+}
+
+async function freshCaps() {
+  try {
+    const r = await fetch('/api/ghost/capabilities');
+    if (!r.ok) return null;
+    const j = await r.json();
+    window.__caps__ = j;
+    return j;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function cmdListModels() {
+  const caps = await freshCaps();
+  const ollama = caps && caps.providers && caps.providers.ollama;
+  if (!ollama || !ollama.reachable) {
+    addRow('error', 'err!', 'ollama is not reachable at <code>' + escapeHtml(ollama && ollama.endpoint || 'localhost:11434') + '</code>. type <code>install ollama</code> for setup steps.');
+    return;
+  }
+  const models = Array.isArray(ollama.models) ? ollama.models : [];
+  if (!models.length) {
+    addRow('system', 'system=&gt;', 'ollama is up but has no models pulled. try <code>ollama pull gemma4:e2b</code>.');
+    return;
+  }
+  addRow('system', 'system=&gt;', `installed ollama models (${models.length}):`);
+  for (const name of models) {
+    const current = caps.agent && caps.agent.model === name ? ' <em class="ok">← active</em>' : '';
+    addRow('system', 'system=&gt;', `  • <code>${escapeHtml(name)}</code>${current}`);
+  }
+  addRow('system', 'system=&gt;', 'type <code>change model</code> to switch.');
+}
+
+async function cmdShowConfig() {
+  const caps = await freshCaps();
+  if (!caps) {
+    addRow('error', 'err!', 'capabilities probe failed');
+    return;
+  }
+  const agent = caps.agent || {};
+  addRow('system', 'system=&gt;', `sidecar <code>v${escapeHtml(caps.sidecar || '?')}</code> · level <em class="ok">${escapeHtml(caps.level || '?')}</em>`);
+  addRow('system', 'system=&gt;', `agent: provider=<code>${escapeHtml(agent.provider || '(none)')}</code> model=<code>${escapeHtml(agent.model || '(none)')}</code>`);
+  const providers = caps.providers || {};
+  const ollama = providers.ollama || {};
+  if (ollama.reachable) {
+    const n = Array.isArray(ollama.models) ? ollama.models.length : 0;
+    addRow('system', 'system=&gt;', `ollama: <em class="ok">reachable</em> at <code>${escapeHtml(ollama.endpoint || '?')}</code> · ${n} model${n === 1 ? '' : 's'} pulled`);
+  } else {
+    addRow('system', 'system=&gt;', `ollama: <em class="fail">unreachable</em>`);
+  }
+  for (const p of ['anthropic', 'openai', 'gemini']) {
+    const info = providers[p];
+    if (info && info.token) {
+      addRow('system', 'system=&gt;', `${p}: <em class="ok">token configured</em>`);
+    }
+  }
+  if (caps.ferricula && caps.ferricula.reachable) {
+    addRow('system', 'system=&gt;', `ferricula: <em class="ok">reachable</em>`);
+  } else {
+    addRow('system', 'system=&gt;', `ferricula: <em class="fail">unreachable</em>`);
+  }
+}
+
+async function cmdDoctor() {
+  // Same data as show-config but framed as a readiness probe with
+  // pass/fail icons per check. Local — does not run any tool calls.
+  const caps = await freshCaps();
+  if (!caps) {
+    addRow('error', 'err!', 'doctor: capabilities probe failed');
+    return;
+  }
+  const agent = caps.agent || {};
+  const ollama = (caps.providers && caps.providers.ollama) || {};
+  const providers = caps.providers || {};
+  const hasAnyToken = ['anthropic', 'openai', 'gemini'].some(p => providers[p] && providers[p].token);
+  const modelInstalled = agent.provider === 'ollama'
+    ? (Array.isArray(ollama.models) && ollama.models.includes(agent.model))
+    : !!agent.model;
+
+  addRow('system', 'system=&gt;', '— readiness probe —');
+  addRow('system', 'system=&gt;', `  ${ollama.reachable ? '<em class="ok">✓</em>' : '<em class="fail">✗</em>'} ollama reachable`);
+  addRow('system', 'system=&gt;', `  ${hasAnyToken ? '<em class="ok">✓</em>' : '<em class="fail">✗</em>'} frontier token (any of anthropic / openai / gemini)`);
+  addRow('system', 'system=&gt;', `  ${modelInstalled ? '<em class="ok">✓</em>' : '<em class="fail">✗</em>'} configured model is reachable: <code>${escapeHtml(agent.provider || '?')}/${escapeHtml(agent.model || '?')}</code>`);
+  addRow('system', 'system=&gt;', `  ${(caps.ferricula && caps.ferricula.reachable) ? '<em class="ok">✓</em>' : '<em class="fail">✗</em>'} ferricula reachable`);
+  addRow('system', 'system=&gt;', `boot level: <em class="ok">${escapeHtml(caps.level)}</em>`);
+}
+
+async function cmdVersion() {
+  const caps = await freshCaps();
+  addRow('system', 'system=&gt;', `hyperia sidecar <code>v${escapeHtml(caps && caps.sidecar || '?')}</code>`);
+}
+
+function cmdShowCommands() {
+  addRow('system', 'system=&gt;', '— hardwired commands (always work, no AI needed) —');
+  const rows = [
+    ['change model',  'open the model picker'],
+    ['list models',   'show installed ollama models'],
+    ['show config',   'sidecar + agent + providers state'],
+    ['doctor',        'readiness probe with pass/fail per check'],
+    ['version',       'sidecar version'],
+    ['commands',      'this list'],
+  ];
+  for (const [cmd, desc] of rows) {
+    addRow('system', 'system=&gt;', `  <code>${escapeHtml(cmd)}</code> — ${escapeHtml(desc)}`);
+  }
+  addRow('system', 'system=&gt;', 'anything else goes to the agent.');
 }
 
 function setBusy(b) {
@@ -1193,6 +1622,7 @@ async function bootCapabilities() {
 async function boot() {
   const caps = await bootCapabilities();
   await seedHistory();
+  await seedAssets();
   const greeting = (() => {
     if (!caps) return "no sidecar capabilities — i'll wait here.";
     switch (caps.level) {
