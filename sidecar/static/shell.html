@@ -98,6 +98,18 @@
     color: var(--error);
     margin-right: 4px;
   }
+  .status .item.clickable {
+    cursor: pointer;
+  }
+  .status .item.clickable:hover .v {
+    color: var(--accent);
+    text-decoration: underline;
+  }
+  .status .item .warn {
+    color: var(--error);
+    margin-left: 6px;
+    font-size: 9px;
+  }
   @keyframes blink-soft {
     0%, 100% { opacity: 1; }
     50%      { opacity: 0.3; }
@@ -441,7 +453,7 @@
 <div class="status" id="status">
   <div class="item"><span>sidecar</span><span class="v" id="s-sidecar">…</span></div>
   <div class="item"><span>level</span><span class="v" id="s-level">…</span></div>
-  <div class="item"><span>model</span><span class="v" id="s-model">…</span></div>
+  <div class="item clickable" id="s-model-item" title="click to switch model"><span>model</span><span class="v" id="s-model">…</span></div>
   <div class="item"><span>ferricula</span><span class="v" id="s-ferricula">…</span></div>
 </div>
 
@@ -1117,7 +1129,24 @@ async function bootCapabilities() {
   // Status strip + cached level for dispatch
   $('s-sidecar').textContent  = (caps && caps.sidecar)  ? 'v' + caps.sidecar : '?';
   $('s-level').textContent    = (caps && caps.level)    ? caps.level         : '?';
-  $('s-model').textContent    = (caps && caps.agent && caps.agent.model)    ? caps.agent.model    : '(none)';
+  const modelName  = (caps && caps.agent && caps.agent.model)    ? caps.agent.model    : '(none)';
+  const providerNm = (caps && caps.agent && caps.agent.provider) ? caps.agent.provider : '';
+  const ollamaModels = (caps && caps.providers && caps.providers.ollama && Array.isArray(caps.providers.ollama.models))
+    ? caps.providers.ollama.models : [];
+  const modelInstalled = providerNm === 'ollama'
+    ? ollamaModels.includes(modelName)
+    : true;
+  const modelEl = $('s-model');
+  modelEl.textContent = modelName;
+  // Strip any prior warn span and append fresh if needed.
+  const modelItem = $('s-model-item');
+  modelItem.querySelectorAll('.warn').forEach(el => el.remove());
+  if (providerNm === 'ollama' && ollamaModels.length && !modelInstalled) {
+    const warn = document.createElement('span');
+    warn.className = 'warn';
+    warn.textContent = '(not pulled)';
+    modelItem.appendChild(warn);
+  }
   if (caps && caps.level) currentLevel = caps.level;
   const fcItem = $('s-ferricula').parentElement;
   fcItem.classList.remove('live', 'dead');
@@ -1126,6 +1155,14 @@ async function bootCapabilities() {
     $('s-ferricula').textContent = caps.ferricula.reachable ? 'live' : 'unreachable';
   } else {
     $('s-ferricula').textContent = '?';
+  }
+  // Cache capabilities for the picker click handler.
+  window.__caps__ = caps;
+  // Auto-prompt model picker on first capabilities load if configured model
+  // isn't installed and we have alternatives.
+  if (!modelInstalled && providerNm === 'ollama' && ollamaModels.length && !window.__model_prompted__) {
+    window.__model_prompted__ = true;
+    addRow('system', 'system=&gt;', `configured model <code>${escapeHtml(modelName)}</code> isn't pulled in ollama. <em class="path">click "model" in the status bar</em> to pick one of: ${ollamaModels.map(m => '<code>' + escapeHtml(m) + '</code>').join(', ')}.`);
   }
 
   if (!caps) {
@@ -1174,6 +1211,93 @@ async function boot() {
   setBusy(false);
   setTimeout(() => input.focus(), 0);
 }
+
+// ───────────────────────────────────────────────────────────────────────
+// Model picker — click the model field in the status strip to swap
+// ───────────────────────────────────────────────────────────────────────
+function openModelPicker() {
+  const caps = window.__caps__;
+  if (!caps) {
+    addRow('error', 'err!', 'no capabilities cached — refresh the page');
+    return;
+  }
+  // Build option list: all configured providers, with their models if known.
+  const options = [];
+  const ollama = caps.providers && caps.providers.ollama;
+  if (ollama && ollama.reachable && Array.isArray(ollama.models)) {
+    for (const m of ollama.models) {
+      options.push({ provider: 'ollama', model: m, label: 'ollama · ' + m });
+    }
+  }
+  // For frontier providers we don't have a model list (model_catalog tool
+  // owns that), so just offer a default per provider that has a token.
+  const frontierDefaults = {
+    anthropic: 'claude-sonnet-4-6',
+    openai:    'gpt-4o',
+    gemini:    'gemini-2.0-flash',
+  };
+  for (const p of ['anthropic', 'openai', 'gemini']) {
+    const pInfo = caps.providers && caps.providers[p];
+    if (pInfo && pInfo.token) {
+      options.push({ provider: p, model: frontierDefaults[p], label: p + ' · ' + frontierDefaults[p] });
+    }
+  }
+  if (!options.length) {
+    addRow('system', 'system=&gt;', 'no models available — no frontier token configured and no ollama models pulled. type <code>install ollama</code> in the prompt to get started.');
+    return;
+  }
+  // Render an inline picker row (reuse show_widget styling).
+  const r = document.createElement('div');
+  r.className = 'row widget';
+  let body = '<div class="prompt">? pick a model</div>';
+  options.forEach((o, i) => {
+    body += `<div class="option" data-provider="${escapeHtml(o.provider)}" data-model="${escapeHtml(o.model)}">
+      <span class="key">[${i + 1}]</span>${escapeHtml(o.label)}
+    </div>`;
+  });
+  body += '<div class="actions"><button class="dismiss">dismiss</button></div>';
+  r.innerHTML = body;
+  screen.appendChild(r);
+  autoscroll();
+  r.querySelectorAll('.option').forEach(el => {
+    el.addEventListener('click', async () => {
+      r.classList.add('submitted');
+      r.querySelectorAll('button, .option').forEach(x => x.disabled = true);
+      const resp = document.createElement('div');
+      resp.className = 'response';
+      resp.textContent = '✓ ' + el.dataset.provider + ' · ' + el.dataset.model;
+      r.appendChild(resp);
+      try {
+        const ok = await fetch('/api/ghost/set-model', {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({ provider: el.dataset.provider, model: el.dataset.model }),
+        });
+        if (!ok.ok) {
+          const j = await ok.json().catch(() => ({}));
+          addRow('error', 'err!', 'set-model failed: ' + escapeHtml(j.error || ('HTTP ' + ok.status)));
+          return;
+        }
+      } catch (e) {
+        addRow('error', 'err!', 'set-model failed: ' + escapeHtml(e.message));
+        return;
+      }
+      addRow('system', 'system=&gt;', `agent re-pointed at <code>${escapeHtml(el.dataset.provider)}/${escapeHtml(el.dataset.model)}</code>. next message uses the new model.`);
+      // Re-probe capabilities so the status bar updates.
+      await bootCapabilities();
+    });
+  });
+  r.querySelector('button.dismiss').addEventListener('click', () => {
+    r.classList.add('submitted');
+    r.querySelectorAll('button, .option').forEach(x => x.disabled = true);
+    const resp = document.createElement('div');
+    resp.className = 'response';
+    resp.style.color = 'var(--text-faint)';
+    resp.textContent = '× dismissed';
+    r.appendChild(resp);
+  });
+}
+$('s-model-item').addEventListener('click', openModelPicker);
 
 updateHud();
 autoresize();

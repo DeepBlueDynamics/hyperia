@@ -293,7 +293,7 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
         providers[name]["token"].as_str().map(|s| !s.is_empty()).unwrap_or(false)
     };
 
-    // Ollama probe — try /api/version.
+    // Ollama probe — try /api/version, then /api/tags to list installed models.
     let ollama_endpoint = providers["ollama"]["endpoint"]
         .as_str()
         .unwrap_or("http://localhost:11434")
@@ -305,6 +305,20 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
         .await
         .map(|r| r.status().is_success())
         .unwrap_or(false);
+    let mut ollama_models: Vec<String> = Vec::new();
+    if ollama_reachable {
+        if let Ok(resp) = client.get(format!("{}/api/tags", ollama_endpoint)).send().await {
+            if let Ok(j) = resp.json::<serde_json::Value>().await {
+                if let Some(arr) = j["models"].as_array() {
+                    for m in arr {
+                        if let Some(n) = m["name"].as_str() {
+                            ollama_models.push(n.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Ferricula probe — config.json() returns base_url. We just check reachable.
     let ferricula_info = state.ferricula.config_json();
@@ -346,6 +360,7 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
             "ollama":    {
                 "reachable": ollama_reachable,
                 "endpoint": ollama_endpoint,
+                "models":   ollama_models,
             }
         },
         "ferricula": {
@@ -364,6 +379,70 @@ fn config_raw() -> Option<serde_json::Value> {
     let path = std::path::PathBuf::from(home).join(".hyperia").join("hyperia.json");
     let content = std::fs::read_to_string(&path).ok()?;
     serde_json::from_str(&content).ok()
+}
+
+// ─── Set agent provider+model — small targeted writer for the shell picker ─
+
+/// POST /api/ghost/set-model — set `config.agent.provider` and
+/// `config.agent.model` in ~/.hyperia/hyperia.json. Used by the shell's
+/// model picker. Preserves all other config keys. Body:
+///   { "provider": "ollama" | "anthropic" | "openai" | "gemini",
+///     "model":    "gemma4:e2b" | "claude-sonnet-4-6" | ... }
+pub async fn ghost_set_model(
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let provider = body["provider"].as_str().unwrap_or("").trim().to_lowercase();
+    let model = body["model"].as_str().unwrap_or("").trim().to_string();
+    if provider.is_empty() || model.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "error": "provider and model are required" })),
+        ));
+    }
+    let path = match config_raw_path() {
+        Some(p) => p,
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "ok": false, "error": "couldn't resolve $HOME / $USERPROFILE" })),
+            ));
+        }
+    };
+    let mut json: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({ "config": {} }));
+    if !json["config"].is_object() {
+        json["config"] = serde_json::json!({});
+    }
+    if !json["config"]["agent"].is_object() {
+        json["config"]["agent"] = serde_json::json!({});
+    }
+    json["config"]["agent"]["provider"] = serde_json::json!(provider);
+    json["config"]["agent"]["model"] = serde_json::json!(model);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let payload = serde_json::to_string_pretty(&json).unwrap_or_default();
+    match std::fs::write(&path, payload) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "agent": { "provider": provider, "model": model },
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        )),
+    }
+}
+
+fn config_raw_path() -> Option<std::path::PathBuf> {
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").ok()?
+    } else {
+        std::env::var("HOME").ok()?
+    };
+    Some(std::path::PathBuf::from(home).join(".hyperia").join("hyperia.json"))
 }
 
 // ─── Bootstub: Level-0 micro-agent for when no model is wired ──────────────
