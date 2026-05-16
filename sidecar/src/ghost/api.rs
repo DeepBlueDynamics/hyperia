@@ -283,12 +283,28 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
     // Provider tokens — read straight off the config file (no model needed).
     let cfg = super::super::ghost::load_config();
     let active_provider = cfg.as_ref().map(|c| c.provider.clone()).unwrap_or_default();
-    let active_model = cfg.as_ref().map(|c| c.model.clone()).unwrap_or_default();
+    let mut active_model = cfg.as_ref().map(|c| c.model.clone()).unwrap_or_default();
 
     // Read raw config for per-provider token presence (independent of
     // load_config's fallback semantics).
     let raw_cfg = config_raw().unwrap_or(serde_json::Value::Null);
     let providers = &raw_cfg["config"]["providers"];
+
+    // Raw `agent.model` read straight off disk — distinguishes "user has
+    // never picked a model" (empty in JSON) from "load_config defaulted to
+    // llama3.2 because nothing was set". We auto-pick only when the raw
+    // JSON shows no model — respect explicit user choices even if the
+    // model isn't installed.
+    let raw_agent_model = raw_cfg["config"]["agent"]["model"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let raw_agent_provider = raw_cfg["config"]["agent"]["provider"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
     let has_token = |name: &str| -> bool {
         providers[name]["token"].as_str().map(|s| !s.is_empty()).unwrap_or(false)
     };
@@ -346,12 +362,34 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
         (false, false) => "none",
     };
 
+    // Auto-pick model: if the user hasn't explicitly chosen a model AND
+    // provider=ollama AND ollama has at least one model installed, write
+    // the first installed model to ~/.hyperia/hyperia.json so the agent
+    // doesn't fall back to the hardcoded llama3.2 (which often isn't
+    // pulled). Respects explicit user choices — only fires when the raw
+    // JSON `agent.model` is empty. Picks the first model that isn't a
+    // pure embedding/OCR specialist when possible.
+    let needs_autopick = raw_agent_model.is_empty()
+        && (raw_agent_provider.is_empty() || raw_agent_provider == "ollama")
+        && ollama_reachable
+        && !ollama_models.is_empty();
+    if needs_autopick {
+        let pick = pick_default_ollama_model(&ollama_models);
+        if let Err(e) = write_agent_model("ollama", &pick) {
+            tracing::warn!("auto-pick model failed to write config: {}", e);
+        } else {
+            tracing::info!("auto-picked ollama model '{}' (no model was configured)", pick);
+            active_model = pick.clone();
+        }
+    }
+
     Json(serde_json::json!({
         "sidecar": env!("CARGO_PKG_VERSION"),
         "level": level,
         "agent": {
-            "provider": active_provider,
+            "provider": if needs_autopick { "ollama".to_string() } else { active_provider },
             "model": active_model,
+            "auto_picked": needs_autopick,
         },
         "providers": {
             "anthropic": { "token": has_anthropic },
@@ -381,6 +419,52 @@ fn config_raw() -> Option<serde_json::Value> {
     serde_json::from_str(&content).ok()
 }
 
+/// Pick a sensible default ollama model from the installed list. Prefers
+/// general chat models over embedding/OCR specialists. Stable order: scan
+/// the installed list once, return the first non-specialist; fall back to
+/// the first installed model if everything looks specialized.
+fn pick_default_ollama_model(installed: &[String]) -> String {
+    let is_specialist = |name: &str| -> bool {
+        let n = name.to_lowercase();
+        n.contains("embed")
+            || n.contains("nomic-embed")
+            || n.contains("mxbai")
+            || n.contains("ocr")
+            || n.contains("guard")
+            || n.contains("rerank")
+    };
+    installed
+        .iter()
+        .find(|m| !is_specialist(m))
+        .cloned()
+        .or_else(|| installed.first().cloned())
+        .unwrap_or_default()
+}
+
+/// Write `config.agent.{provider, model}` to ~/.hyperia/hyperia.json,
+/// preserving all other config keys. Shared by /set-model and the
+/// capabilities auto-pick path.
+fn write_agent_model(provider: &str, model: &str) -> std::io::Result<()> {
+    let path = config_raw_path()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no home dir"))?;
+    let mut json: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({ "config": {} }));
+    if !json["config"].is_object() {
+        json["config"] = serde_json::json!({});
+    }
+    if !json["config"]["agent"].is_object() {
+        json["config"]["agent"] = serde_json::json!({});
+    }
+    json["config"]["agent"]["provider"] = serde_json::json!(provider);
+    json["config"]["agent"]["model"] = serde_json::json!(model);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap_or_default())
+}
+
 // ─── Set agent provider+model — small targeted writer for the shell picker ─
 
 /// POST /api/ghost/set-model — set `config.agent.provider` and
@@ -408,23 +492,7 @@ pub async fn ghost_set_model(
             ));
         }
     };
-    let mut json: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({ "config": {} }));
-    if !json["config"].is_object() {
-        json["config"] = serde_json::json!({});
-    }
-    if !json["config"]["agent"].is_object() {
-        json["config"]["agent"] = serde_json::json!({});
-    }
-    json["config"]["agent"]["provider"] = serde_json::json!(provider);
-    json["config"]["agent"]["model"] = serde_json::json!(model);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let payload = serde_json::to_string_pretty(&json).unwrap_or_default();
-    match std::fs::write(&path, payload) {
+    match write_agent_model(&provider, &model) {
         Ok(_) => Ok(Json(serde_json::json!({
             "ok": true,
             "agent": { "provider": provider, "model": model },
