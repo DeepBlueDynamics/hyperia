@@ -1271,7 +1271,7 @@ export function initHyperia() {
   // real use across all four boot levels.
   ipcMain.on('open-ghost', () => {
     const win = BrowserWindow.getFocusedWindow();
-    const rpc = (win as any)?.rpc;
+    const rpc = (win as unknown as {rpc?: {emit: (channel: string, data: unknown) => void}} | null)?.rpc;
     if (win && rpc) {
       const port = process.env.HYPERIA_PORT || '9800';
       rpc.emit('open web pane req', {url: `http://localhost:${port}/shell`});
