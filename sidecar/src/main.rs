@@ -154,13 +154,23 @@ async fn post_auto_describe(
     match client.post(format!("{}/api/generate", ollama_url)).json(&body).send().await {
         Ok(resp) => match resp.json::<serde_json::Value>().await {
             Ok(json) => {
+                // Strip everything quote-like, punctuation-like, and whitespace
+                // from both ends in one pass. Ollama models routinely emit
+                // smart quotes, trailing periods, and stacked quote/punct
+                // sequences like `Hard Finch'.` or `"Hard Finch'""` that
+                // the old chained trim_matches calls couldn't unwind past
+                // an interior period. trim_matches with a closure handles
+                // it all in a single scan.
                 let description = json["response"]
                     .as_str()
                     .unwrap_or("")
-                    .trim()
-                    .trim_matches('\'')
-                    .trim_matches('`')
-                    .trim()
+                    .trim_matches(|c: char| {
+                        c.is_whitespace()
+                            || c == '\'' || c == '"' || c == '`'
+                            || c == '\u{2018}' || c == '\u{2019}'   // curly single quotes
+                            || c == '\u{201C}' || c == '\u{201D}'   // curly double quotes
+                            || c == '.' || c == ',' || c == ':' || c == ';' || c == '!' || c == '?'
+                    })
                     .to_string();
                 // Update the session description in the bridge
                 state.bridge.set_description_by_uid(&uid, &description).await;
