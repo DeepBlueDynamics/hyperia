@@ -599,19 +599,24 @@ impl ToolRegistry {
                 let submit = input["submit"].as_bool().unwrap_or(true);
                 let wait_ms = input["wait_ms"].as_u64().unwrap_or(if submit { 2000 } else { 200 });
                 let command = command.trim_end_matches('\n').trim_end_matches('\r');
-                // Send text first, then Enter as a separate write
+                // Concatenate text + Enter into ONE PTY write so they
+                // arrive atomically. The previous implementation issued
+                // two separate POSTs back-to-back, which raced against
+                // TUI clients (Claude Code, vim, anything with input-mode
+                // semantics): the text would land but the trailing \r
+                // could be swallowed by the TUI's input handler before
+                // it reached "submit", leaving the buffer typed but not
+                // sent.
+                let body = if submit {
+                    format!("{}\r", command)
+                } else {
+                    command.to_string()
+                };
                 let _ = self.client
                     .post(build_target_url("/api/type"))
-                    .body(command.to_string())
+                    .body(body)
                     .send()
                     .await;
-                if submit {
-                    let _ = self.client
-                        .post(build_target_url("/api/type"))
-                        .body("\r")
-                        .send()
-                        .await;
-                }
                 tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
                 return self.read_screen(&build_target_url("/api/screen")).await;
             }
