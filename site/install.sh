@@ -22,9 +22,24 @@ case "$OS" in
     esac
     ;;
   Linux)
-    echo "Linux builds are not yet available in automated form."
-    echo "Check $RELEASES_URL for the latest packages."
-    exit 1
+    case "$ARCH" in
+      x86_64|amd64)
+        # Prefer .deb on dpkg-based systems (Ubuntu/Debian/Mint/Pop!_OS),
+        # fall back to AppImage everywhere else.
+        if command -v dpkg >/dev/null 2>&1; then
+          PATTERN="amd64.deb"
+          INSTALL_KIND="deb"
+        else
+          PATTERN="x86_64.AppImage"
+          INSTALL_KIND="appimage"
+        fi
+        ;;
+      *)
+        echo "Unsupported Linux architecture: $ARCH (only x86_64/amd64 builds exist)."
+        echo "Check $RELEASES_URL for available packages."
+        exit 1
+        ;;
+    esac
     ;;
   *)
     echo "Unsupported OS: $OS. For Windows use:"
@@ -49,6 +64,39 @@ fi
 VERSION=$(echo "$DOWNLOAD_URL" | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1)
 echo "==> Downloading Hyperia $VERSION ($ARCH)..."
 
+if [ "$OS" = "Linux" ]; then
+  EXT="${INSTALL_KIND}"
+  case "$INSTALL_KIND" in
+    deb)      TMP_FILE="/tmp/hyperia-${VERSION}.deb" ;;
+    appimage) TMP_FILE="$HOME/.local/bin/Hyperia-${VERSION}.AppImage" ;;
+  esac
+  mkdir -p "$(dirname "$TMP_FILE")"
+  curl -L --progress-bar "$DOWNLOAD_URL" -o "$TMP_FILE"
+
+  case "$INSTALL_KIND" in
+    deb)
+      echo "==> Installing .deb via apt (will prompt for sudo)..."
+      if sudo apt-get install -y "$TMP_FILE"; then
+        rm -f "$TMP_FILE"
+        echo ""
+        echo "Hyperia $VERSION installed. Launch from your application menu, or run: hyperia"
+      else
+        echo ""
+        echo ".deb install failed. Try: sudo dpkg -i $TMP_FILE && sudo apt-get -f install"
+        exit 1
+      fi
+      ;;
+    appimage)
+      chmod +x "$TMP_FILE"
+      echo ""
+      echo "Hyperia $VERSION AppImage saved to $TMP_FILE"
+      echo "Run it: $TMP_FILE"
+      ;;
+  esac
+  exit 0
+fi
+
+# --- macOS path ---
 # BSD mktemp (macOS) only substitutes X's at the end of the template.
 # Use -t to get a safe base path, then append .dmg.
 TMP_BASE=$(mktemp -t hyperia)
