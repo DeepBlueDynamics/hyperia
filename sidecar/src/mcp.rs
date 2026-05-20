@@ -1435,6 +1435,17 @@ pub async fn run_mcp_stdio(http_port: u16) -> anyhow::Result<()> {
 /// Return a Tower service that serves MCP over the Streamable HTTP transport.
 /// Mount with `.nest_service("/mcp", mcp::streamable_http_service(port))`.
 /// Claude Code connects via: claude mcp add hyperia --sse http://localhost:9800/mcp
+///
+/// Stateful_mode is forced to false. The default is true, which makes the
+/// server keep a per-client session id table and reject requests whose id
+/// it doesn't recognize. Every time the sidecar restarted (every hot-swap,
+/// every `yarn dist`, every crash + Hyperia respawn), Claude Code's MCP
+/// client would suddenly get HTTP 404 on every call because the new
+/// sidecar process had a fresh, empty session table. Reconnecting via
+/// `/mcp` worked but interrupted every iteration. None of our tools rely
+/// on session continuity (each is a one-shot JSON-RPC call), so
+/// stateless is correct: each request is processed independently, no
+/// session lookup, sidecar restarts are invisible to the client.
 pub fn streamable_http_service(
     http_port: u16,
 ) -> rmcp::transport::streamable_http_server::StreamableHttpService<HyperiaMcp> {
@@ -1444,6 +1455,9 @@ pub fn streamable_http_service(
     StreamableHttpService::new(
         move || Ok(HyperiaMcp::new(http_port)),
         Default::default(),
-        StreamableHttpServerConfig::default(),
+        StreamableHttpServerConfig {
+            stateful_mode: false,
+            ..Default::default()
+        },
     )
 }
