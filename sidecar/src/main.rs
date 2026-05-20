@@ -102,7 +102,15 @@ async fn get_screen(State(state): State<AppState>, Query(addr): Query<PaneAddres
         .await
     else {
         let session_count = state.bridge.session_count().await;
-        tracing::warn!("get_screen 404: window={:?} tab={:?} pane={:?} (sessions={})",
+        // Demoted from warn! to debug!: pollers (dashboard widgets, agent
+        // probes, stale subscriptions to closed tabs) routinely call
+        // get_screen with addresses that no longer exist. At warn! these
+        // miss-lookups flooded the tracing pipeline and serialized every
+        // real MCP call behind the shared log writer — 858 of 1000
+        // recent log entries were a single repeated 404 for a long-closed
+        // Mac tab. The 404 status is still returned to the caller; only
+        // the log line is downgraded.
+        tracing::debug!("get_screen 404: window={:?} tab={:?} pane={:?} (sessions={})",
             addr.window, addr.tab, addr.pane, session_count);
         return (StatusCode::NOT_FOUND, format!(
             "No pane at that address (window={:?} tab={:?} pane={:?}, {} sessions registered). \
