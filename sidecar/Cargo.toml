@@ -49,7 +49,7 @@ anyhow = "1"
 urlencoding = "2.1"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 # Process tree (foreground process detection)
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }

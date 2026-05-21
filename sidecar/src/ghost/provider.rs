@@ -286,6 +286,120 @@ fn parse_sse_event(event_type: &str, data: &str) -> Option<ProviderEvent> {
 // OllamaProvider — local Ollama via http://localhost:11434/api/chat
 // ---------------------------------------------------------------------------
 
+fn validate_arguments(schema: &serde_json::Value, args: &serde_json::Value) -> bool {
+    let properties = match schema.get("properties").and_then(|p| p.as_object()) {
+        Some(p) => p,
+        None => return true,
+    };
+
+    if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
+        for req in required {
+            if let Some(req_str) = req.as_str() {
+                if args.get(req_str).is_none() {
+                    return false;
+                }
+            }
+        }
+    }
+
+    if let Some(args_obj) = args.as_object() {
+        for (key, val) in args_obj {
+            if let Some(prop_schema) = properties.get(key) {
+                if let Some(expected_type) = prop_schema.get("type").and_then(|t| t.as_str()) {
+                    match expected_type {
+                        "string" => if !val.is_string() { return false; },
+                        "integer" | "number" => if !val.is_number() { return false; },
+                        "boolean" => if !val.is_boolean() { return false; },
+                        "array" => if !val.is_array() { return false; },
+                        "object" => if !val.is_object() { return false; },
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    true
+}
+
+async fn run_ollama_candidate(
+    client: reqwest::Client,
+    endpoint: String,
+    api_key: String,
+    model: String,
+    ollama_messages: Vec<serde_json::Value>,
+    format_schema: Option<serde_json::Value>,
+    temperature: f64,
+    tools: Vec<ToolDef>,
+) -> anyhow::Result<(String, Option<serde_json::Value>, String, u64, u64)> {
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": ollama_messages,
+        "stream": false,
+        "options": {
+            "temperature": temperature,
+        }
+    });
+
+    if let Some(schema) = format_schema {
+        body["format"] = schema;
+    }
+
+    let mut req = client
+        .post(format!("{}/api/chat", endpoint))
+        .header("content-type", "application/json")
+        .body(body.to_string());
+
+    if !api_key.is_empty() {
+        req = req.bearer_auth(&api_key);
+    }
+
+    let resp = req.send().await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let raw = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Ollama error {}: {}", status, raw);
+    }
+
+    let json: serde_json::Value = resp.json().await?;
+    let content = json["message"]["content"].as_str()
+        .ok_or_else(|| anyhow::anyhow!("No content in response"))?
+        .to_string();
+
+    let input_tokens = json["prompt_eval_count"].as_u64().unwrap_or(0);
+    let output_tokens = json["eval_count"].as_u64().unwrap_or(0);
+
+    // Parse the structured JSON
+    let parsed: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("Invalid JSON syntax in candidate output: {}. Raw: {}", e, content))?;
+    
+    let thought = parsed["thought"].as_str().unwrap_or("").to_string();
+    let reply = parsed["reply"].as_str().unwrap_or("").to_string();
+    let tool_call = parsed.get("tool_call").cloned();
+
+    // If there is a tool call, validate it
+    if let Some(ref tc) = tool_call {
+        if !tc.is_null() && tc.is_object() {
+            if let Some(name) = tc["name"].as_str() {
+                let arguments = &tc["arguments"];
+                
+                // Find the tool definition
+                if let Some(tool_def) = tools.iter().find(|t| t.name == name) {
+                    if !validate_arguments(&tool_def.input_schema, arguments) {
+                        anyhow::bail!("Invalid arguments for tool {}. Args: {}", name, arguments);
+                    }
+                } else {
+                    anyhow::bail!("Model called unknown tool {}", name);
+                }
+            } else {
+                anyhow::bail!("Missing tool name in tool_call");
+            }
+        }
+    }
+
+    Ok((thought, tool_call, reply, input_tokens, output_tokens))
+}
+
 pub struct OllamaProvider {
     client: reqwest::Client,
     model: String,
@@ -418,23 +532,6 @@ impl OllamaProvider {
         out
     }
 
-    /// Convert internal ToolDef list into Ollama tool format.
-    fn build_ollama_tools(tools: &[ToolDef]) -> Vec<serde_json::Value> {
-        tools
-            .iter()
-            .map(|t| {
-                serde_json::json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.input_schema,
-                    }
-                })
-            })
-            .collect()
-    }
-
     pub async fn stream(
         &self,
         system: &str,
@@ -445,205 +542,167 @@ impl OllamaProvider {
         let (tx, rx) = mpsc::channel(128);
 
         let ollama_messages = Self::build_ollama_messages(system, messages);
-        let ollama_tools = Self::build_ollama_tools(tools);
+        let active_tools = tools.to_vec();
 
-        let mut body = serde_json::json!({
-            "model": self.model,
-            "messages": ollama_messages,
-            "stream": true,
-        });
-
-        // Only include tools if there are any — some models choke on empty tools array
-        if !ollama_tools.is_empty() {
-            body["tools"] = serde_json::json!(ollama_tools);
+        // 1. Build the dynamic structured JSON Schema matching un-throttled tools
+        let mut tool_names = Vec::new();
+        for t in tools {
+            tool_names.push(t.name.clone());
         }
 
-        let mut req = self
-            .client
-            .post(format!("{}/api/chat", self.endpoint))
-            .header("content-type", "application/json")
-            .body(body.to_string());
-        if !self.api_key.is_empty() {
-            // Ollama Cloud and many proxies accept Bearer tokens.
-            req = req.bearer_auth(&self.api_key);
-        }
-        let resp = req.send().await;
-
-        let resp = match resp {
-            Ok(r) => r,
-            Err(e) => {
-                let msg = if e.is_connect() {
-                    format!(
-                        "Ollama not running. Start Ollama and pull {} with: ollama pull {}",
-                        self.model, self.model
-                    )
-                } else {
-                    format!("Ollama connection error: {}", e)
-                };
-                let _ = tx.send(ProviderEvent::Error(msg)).await;
-                return Ok(rx);
-            }
+        let format_schema = if !tool_names.is_empty() {
+            Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "thought": {
+                        "type": "string",
+                        "description": "Your internal reasoning process. Analyze terminal state, files, and prior actions before acting."
+                    },
+                    "tool_call": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "enum": tool_names
+                            },
+                            "arguments": {
+                                "type": "object",
+                                "description": "Exact JSON arguments matching the chosen tool's schema."
+                            }
+                        },
+                        "required": ["name", "arguments"]
+                    },
+                    "reply": {
+                        "type": "string",
+                        "description": "Your final response to the user. Use this if no tool call is needed."
+                    }
+                },
+                "required": ["thought"]
+            }))
+        } else {
+            Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "thought": {
+                        "type": "string",
+                        "description": "Your internal reasoning process."
+                    },
+                    "reply": {
+                        "type": "string",
+                        "description": "Your direct response to the user."
+                    }
+                },
+                "required": ["thought", "reply"]
+            }))
         };
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let raw = resp.text().await.unwrap_or_default();
-            let label = format!("Ollama API error {} — {}", status, raw);
-            let _ = tx.send(ProviderEvent::Error(label)).await;
-            return Ok(rx);
-        }
-
-        let mut stream = resp.bytes_stream();
-        let model_name = self.model.clone();
+        // 2. Parallel Candidate Generation (temperatures: 0.1, 0.4, 0.7)
+        let client = self.client.clone();
+        let endpoint = self.endpoint.clone();
+        let api_key = self.api_key.clone();
+        let model = self.model.clone();
 
         tokio::spawn(async move {
-            let mut buffer = String::new();
-            let mut had_tool_calls = false;
-            let mut tool_counter: usize = 0;
+            let mut candidates = Vec::new();
+            
+            // Spawn 3 candidate futures in parallel
+            let temp_list = vec![0.1, 0.4, 0.7];
+            for temp in temp_list {
+                let candidate_fut = run_ollama_candidate(
+                    client.clone(),
+                    endpoint.clone(),
+                    api_key.clone(),
+                    model.clone(),
+                    ollama_messages.clone(),
+                    format_schema.clone(),
+                    temp,
+                    active_tools.clone(),
+                );
+                candidates.push(Box::pin(candidate_fut) as std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<(String, Option<serde_json::Value>, String, u64, u64)>> + Send>>);
+            }
 
-            while let Some(chunk) = stream.next().await {
-                let chunk = match chunk {
-                    Ok(c) => c,
-                    Err(e) => {
-                        let _ = tx.send(ProviderEvent::Error(e.to_string())).await;
+            // We await candidates using futures::future::select_all to grab the first one that succeeds.
+            // If one succeeds, we drop all other candidates (canceling their in-flight HTTP requests).
+            let mut matched_candidate = None;
+            let mut last_error = None;
+
+            while !candidates.is_empty() {
+                let (res, _index, remaining) = futures::future::select_all(candidates).await;
+                candidates = remaining;
+
+                match res {
+                    Ok(val) => {
+                        matched_candidate = Some(val);
                         break;
                     }
-                };
-
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                // NDJSON: each line is a complete JSON object
-                while let Some(pos) = buffer.find('\n') {
-                    let line = buffer[..pos].trim().to_string();
-                    buffer = buffer[pos + 1..].to_string();
-
-                    if line.is_empty() {
-                        continue;
-                    }
-
-                    let json: serde_json::Value = match serde_json::from_str(&line) {
-                        Ok(j) => j,
-                        Err(_) => continue,
-                    };
-
-                    // Check for the final "done" message
-                    if json["done"].as_bool() == Some(true) {
-                        // Emit usage from the final summary
-                        let input_tokens =
-                            json["prompt_eval_count"].as_u64().unwrap_or(0);
-                        let output_tokens =
-                            json["eval_count"].as_u64().unwrap_or(0);
-                        if input_tokens > 0 || output_tokens > 0 {
-                            let _ = tx
-                                .send(ProviderEvent::Usage {
-                                    input_tokens,
-                                    output_tokens,
-                                })
-                                .await;
-                        }
-
-                        let stop_reason = if had_tool_calls {
-                            "tool_use".to_string()
-                        } else {
-                            "end_turn".to_string()
-                        };
-                        let _ = tx
-                            .send(ProviderEvent::MessageStop { stop_reason })
-                            .await;
-                        continue;
-                    }
-
-                    let message = &json["message"];
-
-                    // Text content
-                    if let Some(text) = message["content"].as_str() {
-                        if !text.is_empty() {
-                            let _ =
-                                tx.send(ProviderEvent::TextDelta(text.to_string())).await;
-                        }
-                    }
-
-                    // Tool calls
-                    if let Some(tool_calls) = message["tool_calls"].as_array() {
-                        for tc in tool_calls {
-                            let func = &tc["function"];
-                            let name = func["name"]
-                                .as_str()
-                                .unwrap_or("unknown")
-                                .to_string();
-                            let arguments = &func["arguments"];
-                            let id = format!("ol_{}", tool_counter);
-                            tool_counter += 1;
-                            had_tool_calls = true;
-
-                            let _ = tx
-                                .send(ProviderEvent::ToolCallStart {
-                                    id: id.clone(),
-                                    name,
-                                })
-                                .await;
-
-                            // Emit the full arguments as a single delta
-                            let args_str = arguments.to_string();
-                            let _ = tx
-                                .send(ProviderEvent::ToolCallDelta {
-                                    id: id.clone(),
-                                    json_fragment: args_str,
-                                })
-                                .await;
-
-                            let _ =
-                                tx.send(ProviderEvent::ToolCallEnd { id }).await;
-                        }
+                    Err(e) => {
+                        tracing::warn!("Ollama candidate generation failed: {}", e);
+                        last_error = Some(e);
                     }
                 }
             }
 
-            // Handle any remaining data in buffer (no trailing newline)
-            let remaining = buffer.trim().to_string();
-            if !remaining.is_empty() {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&remaining) {
-                    if json["done"].as_bool() == Some(true) {
-                        let input_tokens =
-                            json["prompt_eval_count"].as_u64().unwrap_or(0);
-                        let output_tokens =
-                            json["eval_count"].as_u64().unwrap_or(0);
-                        if input_tokens > 0 || output_tokens > 0 {
-                            let _ = tx
-                                .send(ProviderEvent::Usage {
-                                    input_tokens,
-                                    output_tokens,
-                                })
-                                .await;
-                        }
-                        let stop_reason = if had_tool_calls {
-                            "tool_use".to_string()
-                        } else {
-                            "end_turn".to_string()
-                        };
-                        let _ = tx
-                            .send(ProviderEvent::MessageStop { stop_reason })
-                            .await;
-                    } else if let Some(text) = json["message"]["content"].as_str() {
-                        if !text.is_empty() {
-                            let _ =
-                                tx.send(ProviderEvent::TextDelta(text.to_string())).await;
-                        }
+            let (thought, tool_call, reply, input_tokens, output_tokens) = match matched_candidate {
+                Some(val) => val,
+                None => {
+                    // All parallel candidates failed. Report the error.
+                    let err_msg = format!(
+                        "All parallel candidate generations failed. Last error: {}",
+                        last_error.map(|e| e.to_string()).unwrap_or_else(|| "Unknown failure".into())
+                    );
+                    let _ = tx.send(ProviderEvent::Error(err_msg)).await;
+                    return;
+                }
+            };
+
+            // Emit usage stats
+            if input_tokens > 0 || output_tokens > 0 {
+                let _ = tx.send(ProviderEvent::Usage { input_tokens, output_tokens }).await;
+            }
+
+            // Emit the thinking reasoning block to the text delta channel so the user/agent sees thoughts
+            if !thought.is_empty() {
+                let formatted_thought = format!("[Thinking: {}]\n\n", thought);
+                let _ = tx.send(ProviderEvent::TextDelta(formatted_thought)).await;
+            }
+
+            let mut had_tool_call = false;
+
+            // Emit tool call event if generated
+            if let Some(tc) = tool_call {
+                if !tc.is_null() && tc.is_object() {
+                    if let Some(name) = tc["name"].as_str() {
+                        let arguments = &tc["arguments"];
+                        let id = "ol_0".to_string(); // Single execution path id
+                        had_tool_call = true;
+
+                        let _ = tx.send(ProviderEvent::ToolCallStart {
+                            id: id.clone(),
+                            name: name.to_string(),
+                        }).await;
+
+                        let _ = tx.send(ProviderEvent::ToolCallDelta {
+                            id: id.clone(),
+                            json_fragment: arguments.to_string(),
+                        }).await;
+
+                        let _ = tx.send(ProviderEvent::ToolCallEnd { id }).await;
                     }
                 }
             }
 
-            // Safety: if we never got a done=true, emit a stop anyway
-            // (the channel will just drop if we already sent one)
-            let _ = tx
-                .send(ProviderEvent::MessageStop {
-                    stop_reason: if had_tool_calls {
-                        "tool_use".to_string()
-                    } else {
-                        "end_turn".to_string()
-                    },
-                })
-                .await;
+            // Emit final direct reply
+            if !reply.is_empty() {
+                let _ = tx.send(ProviderEvent::TextDelta(reply)).await;
+            }
+
+            // Emit completion stop reason
+            let stop_reason = if had_tool_call {
+                "tool_use".to_string()
+            } else {
+                "end_turn".to_string()
+            };
+            let _ = tx.send(ProviderEvent::MessageStop { stop_reason }).await;
         });
 
         Ok(rx)

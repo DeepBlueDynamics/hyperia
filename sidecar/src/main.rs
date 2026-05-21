@@ -28,6 +28,15 @@ struct Args {
     #[arg(long, default_value = "9800")]
     port: u16,
 
+    /// IP to bind the HTTP listener to. Default 127.0.0.1 (loopback only —
+    /// only the local Electron renderer and local MCP clients can reach
+    /// the sidecar). Set to 0.0.0.0 to expose to all interfaces (LAN
+    /// access from other machines, useful for SSH-less remote MCP). Other
+    /// valid forms: a specific IP like 192.168.1.10 for a single
+    /// interface. Honors the HYPERIA_BIND environment variable.
+    #[arg(long, env = "HYPERIA_BIND", default_value = "127.0.0.1")]
+    bind: std::net::IpAddr,
+
     /// Run as MCP stdio server
     #[arg(long)]
     mcp: bool,
@@ -1044,7 +1053,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(settings_routes)
         .nest_service("/mcp", mcp::streamable_http_service(args.port));
 
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
+    let addr = std::net::SocketAddr::new(args.bind, args.port);
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(e) => {
@@ -1052,6 +1061,16 @@ async fn main() -> anyhow::Result<()> {
             std::process::exit(0); // Exit cleanly so auto-restart doesn't loop
         }
     };
+    if !args.bind.is_loopback() {
+        tracing::warn!(
+            "Sidecar bound to {} — reachable from outside this machine. \
+            All Hyperia MCP tools (terminal_run, file_read, file_write, etc.) \
+            are now accessible to anyone who can reach this address. Use behind \
+            a firewall you trust.",
+            args.bind
+        );
+        eprintln!("[sidecar] WARNING: bound to {} (non-loopback) — exposed to network", args.bind);
+    }
     tracing::info!(%addr, "Sidecar HTTP listening");
     eprintln!("[sidecar] HTTP ready on :{}", args.port);
     if let Err(e) = axum::serve(listener, app).await {
