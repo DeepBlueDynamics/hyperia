@@ -314,11 +314,16 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
     };
 
     // Ollama probe — try /api/version, then /api/tags to list installed models.
-    let ollama_endpoint = providers["ollama"]["endpoint"]
+    let mut ollama_endpoint = providers["ollama"]["endpoint"]
         .as_str()
         .unwrap_or("http://localhost:11434")
         .trim_end_matches('/')
         .to_string();
+    if std::path::Path::new("/.dockerenv").exists() {
+        if ollama_endpoint == "http://localhost:11434" || ollama_endpoint == "http://127.0.0.1:11434" {
+            ollama_endpoint = "http://host.docker.internal:11434".to_string();
+        }
+    }
     let ollama_reachable = client
         .get(format!("{}/api/version", ollama_endpoint))
         .send()

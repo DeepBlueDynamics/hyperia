@@ -375,7 +375,17 @@ async fn run_ollama_candidate(
     
     let thought = parsed["thought"].as_str().unwrap_or("").to_string();
     let reply = parsed["reply"].as_str().unwrap_or("").to_string();
-    let tool_call = parsed.get("tool_call").cloned();
+    
+    // Remap flat fields back into nested tool_call format
+    let tool_call = if let Some(name) = parsed["tool_name"].as_str() {
+        let args = parsed.get("tool_arguments").cloned().unwrap_or(serde_json::json!({}));
+        Some(serde_json::json!({
+            "name": name,
+            "arguments": args
+        }))
+    } else {
+        parsed.get("tool_call").cloned()
+    };
 
     // If there is a tool call, validate it
     if let Some(ref tc) = tool_call {
@@ -421,9 +431,17 @@ impl OllamaProvider {
             .unwrap_or(&config.model)
             .to_string();
         let endpoint = if config.endpoint.is_empty() {
-            "http://localhost:11434".to_string()
+            if std::path::Path::new("/.dockerenv").exists() {
+                "http://host.docker.internal:11434".to_string()
+            } else {
+                "http://localhost:11434".to_string()
+            }
         } else {
-            config.endpoint.trim_end_matches('/').to_string()
+            let mut ep = config.endpoint.trim_end_matches('/').to_string();
+            if std::path::Path::new("/.dockerenv").exists() && (ep == "http://localhost:11434" || ep == "http://127.0.0.1:11434") {
+                ep = "http://host.docker.internal:11434".to_string();
+            }
+            ep
         };
         Self {
             client: reqwest::Client::builder()
@@ -563,27 +581,21 @@ impl OllamaProvider {
                         "type": "string",
                         "description": "Your internal reasoning process. Explain why you are calling a tool or why you are just replying."
                     },
-                    "tool_call": {
+                    "tool_name": {
+                        "type": "string",
+                        "description": "The name of the tool to execute. Set to 'none' if you do not want to call any tool.",
+                        "enum": tool_names
+                    },
+                    "tool_arguments": {
                         "type": "object",
-                        "description": "An optional tool call to execute. Set name to 'none' and arguments to {} if you do not want to call any tool.",
-                        "properties": {
-                            "name": {
-                                "type": "string",
-                                "enum": tool_names
-                            },
-                            "arguments": {
-                                "type": "object",
-                                "description": "Exact JSON arguments matching the chosen tool's schema."
-                            }
-                        },
-                        "required": ["name", "arguments"]
+                        "description": "Exact JSON arguments matching the chosen tool's schema. Set to {} if tool_name is 'none'."
                     },
                     "reply": {
                         "type": "string",
-                        "description": "Your final response to the user. Use this if you are not calling a tool (i.e., tool_call.name is 'none')."
+                        "description": "Your final response to the user. Use this if you are not calling a tool (i.e., tool_name is 'none')."
                     }
                 },
-                "required": ["thought"]
+                "required": ["thought", "tool_name", "tool_arguments"]
             }))
         } else {
             Some(serde_json::json!({

@@ -16,13 +16,19 @@ use std::path::PathBuf;
 
 /// Built-in default endpoint per known provider. Users can override per
 /// provider via `config.providers.<name>.endpoint`.
-fn default_endpoint(provider: &str) -> &'static str {
+fn default_endpoint(provider: &str) -> String {
     match provider {
-        "anthropic" => "https://api.anthropic.com",
-        "openai" => "https://api.openai.com",
-        "gemini" => "https://generativelanguage.googleapis.com",
-        "ollama" => "http://localhost:11434",
-        _ => "",
+        "anthropic" => "https://api.anthropic.com".to_string(),
+        "openai" => "https://api.openai.com".to_string(),
+        "gemini" => "https://generativelanguage.googleapis.com".to_string(),
+        "ollama" => {
+            if std::path::Path::new("/.dockerenv").exists() {
+                "http://host.docker.internal:11434".to_string()
+            } else {
+                "http://localhost:11434".to_string()
+            }
+        }
+        _ => "".to_string(),
     }
 }
 
@@ -98,14 +104,20 @@ pub fn load_config() -> Option<GhostConfig> {
         }
     }
 
-    let endpoint = {
+    let mut endpoint = {
         let configured = provider_section["endpoint"].as_str().unwrap_or("").trim();
         if configured.is_empty() {
-            default_endpoint(&provider).to_string()
+            default_endpoint(&provider)
         } else {
             configured.trim_end_matches('/').to_string()
         }
     };
+
+    if provider == "ollama" && std::path::Path::new("/.dockerenv").exists() {
+        if endpoint == "http://localhost:11434" || endpoint == "http://127.0.0.1:11434" {
+            endpoint = "http://host.docker.internal:11434".to_string();
+        }
+    }
 
     // Ollama doesn't require a token. Cloud providers do — without one we
     // can't honor the user's choice, so fall back to local Ollama and let
@@ -149,7 +161,7 @@ fn default_local_ollama() -> GhostConfig {
         provider: "ollama".into(),
         model: "llama3.2".into(),
         api_key: String::new(),
-        endpoint: default_endpoint("ollama").into(),
+        endpoint: default_endpoint("ollama"),
         max_turns: 25,
     }
 }
