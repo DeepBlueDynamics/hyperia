@@ -1,12 +1,12 @@
 {
   "name": "hyperia",
-  "version": "0.10.8",
+  "version": "0.10.9",
   "repository": "deepbluedynamics/hyperia",
   "scripts": {
     "start": "concurrently -n \"Webpack,TypeScript,App\" -c \"cyan.bold,blue.bold,green.bold\" \"webpack -w\" \"tsc --build -v --pretty --watch --preserveWatchOutput\" \"cross-env ELECTRONMON_LOGLEVEL=error electronmon target\" -k",
     "app": "cross-env ELECTRONMON_LOGLEVEL=error electronmon target",
     "dev": "concurrently -n \"Webpack,TypeScript\" -c \"cyan.bold,blue.bold\" \"webpack -w\" \"tsc --build -v --pretty --watch --preserveWatchOutput\" -k",
-    "build": "cross-env NODE_ENV=production webpack && tsc -b -v && cross-env BABEL_ENV=production babel target/renderer/bundle.js --out-file target/renderer/bundle.js --no-comments --minified",
+    "build": "node ./bin/verify-version.js && cross-env NODE_ENV=production webpack && tsc -b -v && cross-env BABEL_ENV=production babel target/renderer/bundle.js --out-file target/renderer/bundle.js --no-comments --minified",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx,.json",
     "test": "yarn run lint && yarn run test:unit",
     "test:unit": "ava",
@@ -14,7 +14,7 @@
     "test:e2e": "ava --config ava-e2e.config.js",
     "postinstall": "webpack --config-name hyper-app && electron-builder install-app-deps && cpy --cwd=target node_modules \"../../app/\" && husky install",
     "rebuild-node-pty": "electron-rebuild -f -o node-pty -m target",
-    "dist": "yarn run build && electron-builder",
+    "dist": "node ./bin/verify-version.js && yarn run build && electron-builder",
     "clean": "node ./bin/rimraf-standalone.js node_modules && node ./bin/rimraf-standalone.js ./app/node_modules && node ./bin/rimraf-standalone.js ./app/renderer",
     "generate-schema": "typescript-json-schema ./typings/config.d.ts rawConfig -o ./app/config/schema.json --required"
   },
