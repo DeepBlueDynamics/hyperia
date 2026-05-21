@@ -1,4 +1,4 @@
-# v0.10.9 — DRAFT (do not publish yet)
+# v0.10.9 — Local model reliability + LAN-reachable sidecar
 
 > Co-developed live with Antigravity (Gemini 3.5 Flash) over a shared workspace pane.
 
