@@ -1,14 +1,16 @@
 # v0.10.9 — DRAFT (do not publish yet)
 
-> ⚠️ Draft. Antigravity is implementing the OllamaProvider structured + parallel candidate upgrade per `../implementation_plan.md`. When that lands and tests pass, replace the `[in flight]` block below with the final feature description, then ship.
+> Co-developed live with Antigravity (Gemini 3.5 Flash) over a shared workspace pane.
 
 ## Highlights
 
-### Local model reliability — structured JSON + parallel candidates  *[in flight, Antigravity]*
+### Local model reliability — structured JSON + parallel candidates + `"none"` tool sentinel
 
-`OllamaProvider::stream` now constrains Ollama's output to a strict JSON schema (`thought` + optional `tool_call` + optional `reply`) via Ollama's `format` field, and runs **N=3 parallel candidate generations** at different temperatures (0.2 / 0.7 / 0.9). The first stream whose JSON validates against the active tool schema wins; the rest are aborted via `tokio::select!` to free GPU memory.
+`OllamaProvider::stream` now constrains Ollama's output to a strict JSON schema (`thought` + optional `tool_call` + optional `reply`) via Ollama's `format` field, and runs **N=3 parallel candidate generations** at different temperatures (0.2 / 0.7 / 0.9). The first candidate whose JSON validates against the active tool schema wins; the rest are aborted via `tokio::select!` to free GPU memory.
 
-Why it matters: in v0.10.8, small local models (gemma4:e2b, etc.) routinely freelanced — inventing `google:search`, refusing to acknowledge prior conversation context, or just emitting tool-call-shaped prose without firing a real call. Schema-constrained decoding eliminates the freelance path. Parallel sampling at varied temperatures gives at least one candidate room to thread the needle on hard prompts.
+A `"none"` sentinel was added as a valid `tool_call.name` value, so when the model has nothing to call it must explicitly select `"none"` instead of inventing a tool name. Validation + event emission both short-circuit when `name == "none"`, so the agent loop only sees real tool calls. (Commits `5ae64a2a` for the structured + parallel core, `b2ab8e65` for the `"none"` sentinel refinement.)
+
+Why it matters: in v0.10.8, small local models (gemma4:e2b, etc.) routinely freelanced — inventing `google:search`, refusing to acknowledge prior conversation context, or emitting tool-call-shaped prose without firing a real call. Schema-constrained decoding eliminates the freelance path. Parallel sampling at varied temperatures gives at least one candidate room to thread the needle on hard prompts. The `"none"` sentinel closes the remaining gap where the model wanted to reply but felt obligated to put *something* in `tool_call.name`.
 
 Implementation scope is contained to `provider.rs`. `agent.rs` and `api.rs` are unchanged — the structured response is translated back into the same `ProviderEvent` stream (`TextDelta` / `ToolCallStart` / `ToolCallDelta` / `ToolCallEnd` / `MessageStop`) the agent loop already consumes.
 
