@@ -381,15 +381,17 @@ async fn run_ollama_candidate(
     if let Some(ref tc) = tool_call {
         if !tc.is_null() && tc.is_object() {
             if let Some(name) = tc["name"].as_str() {
-                let arguments = &tc["arguments"];
-                
-                // Find the tool definition
-                if let Some(tool_def) = tools.iter().find(|t| t.name == name) {
-                    if !validate_arguments(&tool_def.input_schema, arguments) {
-                        anyhow::bail!("Invalid arguments for tool {}. Args: {}", name, arguments);
+                if name != "none" {
+                    let arguments = &tc["arguments"];
+                    
+                    // Find the tool definition
+                    if let Some(tool_def) = tools.iter().find(|t| t.name == name) {
+                        if !validate_arguments(&tool_def.input_schema, arguments) {
+                            anyhow::bail!("Invalid arguments for tool {}. Args: {}", name, arguments);
+                        }
+                    } else {
+                        anyhow::bail!("Model called unknown tool {}", name);
                     }
-                } else {
-                    anyhow::bail!("Model called unknown tool {}", name);
                 }
             } else {
                 anyhow::bail!("Missing tool name in tool_call");
@@ -546,20 +548,24 @@ impl OllamaProvider {
 
         // 1. Build the dynamic structured JSON Schema matching un-throttled tools
         let mut tool_names = Vec::new();
-        for t in tools {
-            tool_names.push(t.name.clone());
+        if !tools.is_empty() {
+            tool_names.push("none".to_string());
+            for t in tools {
+                tool_names.push(t.name.clone());
+            }
         }
 
-        let format_schema = if !tool_names.is_empty() {
+        let format_schema = if !tools.is_empty() {
             Some(serde_json::json!({
                 "type": "object",
                 "properties": {
                     "thought": {
                         "type": "string",
-                        "description": "Your internal reasoning process. Analyze terminal state, files, and prior actions before acting."
+                        "description": "Your internal reasoning process. Explain why you are calling a tool or why you are just replying."
                     },
                     "tool_call": {
                         "type": "object",
+                        "description": "An optional tool call to execute. Set name to 'none' and arguments to {} if you do not want to call any tool.",
                         "properties": {
                             "name": {
                                 "type": "string",
@@ -574,7 +580,7 @@ impl OllamaProvider {
                     },
                     "reply": {
                         "type": "string",
-                        "description": "Your final response to the user. Use this if no tool call is needed."
+                        "description": "Your final response to the user. Use this if you are not calling a tool (i.e., tool_call.name is 'none')."
                     }
                 },
                 "required": ["thought"]
@@ -672,21 +678,23 @@ impl OllamaProvider {
             if let Some(tc) = tool_call {
                 if !tc.is_null() && tc.is_object() {
                     if let Some(name) = tc["name"].as_str() {
-                        let arguments = &tc["arguments"];
-                        let id = "ol_0".to_string(); // Single execution path id
-                        had_tool_call = true;
+                        if name != "none" {
+                            let arguments = &tc["arguments"];
+                            let id = "ol_0".to_string(); // Single execution path id
+                            had_tool_call = true;
 
-                        let _ = tx.send(ProviderEvent::ToolCallStart {
-                            id: id.clone(),
-                            name: name.to_string(),
-                        }).await;
+                            let _ = tx.send(ProviderEvent::ToolCallStart {
+                                id: id.clone(),
+                                name: name.to_string(),
+                            }).await;
 
-                        let _ = tx.send(ProviderEvent::ToolCallDelta {
-                            id: id.clone(),
-                            json_fragment: arguments.to_string(),
-                        }).await;
+                            let _ = tx.send(ProviderEvent::ToolCallDelta {
+                                id: id.clone(),
+                                json_fragment: arguments.to_string(),
+                                }).await;
 
-                        let _ = tx.send(ProviderEvent::ToolCallEnd { id }).await;
+                            let _ = tx.send(ProviderEvent::ToolCallEnd { id }).await;
+                        }
                     }
                 }
             }
