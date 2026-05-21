@@ -9,16 +9,24 @@ const fs = require('fs');
 const path = require('path');
 
 // 1. Resolve paths
+//
+// IMPORTANT: app/package.json is the source of truth for the electron
+// app's version. tsc -b copies it to target/package.json during build,
+// so checking target/ here lies: target may temporarily be in sync (if
+// hand-bumped) but tsc -b will revert it from app/ on the very next
+// build, leaving electron-builder to name the installer with the OLD
+// version even though root + cargo say new. Check app/ instead so the
+// guardrail catches the actual misalignment per docs/building.md.
 const rootDir = path.join(__dirname, '..');
 const pkgPath = path.join(rootDir, 'package.json');
-const targetPkgPath = path.join(rootDir, 'target', 'package.json');
+const appPkgPath = path.join(rootDir, 'app', 'package.json');
 const cargoPath = path.join(rootDir, 'sidecar', 'Cargo.toml');
 
 // 2. Read current versions
 const rootVersion = require(pkgPath).version;
-let targetVersion = 'unknown';
-if (fs.existsSync(targetPkgPath)) {
-  targetVersion = require(targetPkgPath).version;
+let appVersion = 'unknown';
+if (fs.existsSync(appPkgPath)) {
+  appVersion = require(appPkgPath).version;
 }
 let cargoVersion = 'unknown';
 if (fs.existsSync(cargoPath)) {
@@ -29,12 +37,12 @@ if (fs.existsSync(cargoPath)) {
 
 console.log('=== Active Workspace Version Status ===');
 console.log(`- root package.json:   v${rootVersion}`);
-console.log(`- target package.json: v${targetVersion}`);
+console.log(`- app/ package.json:   v${appVersion}    (real source — tsc -b copies to target/)`);
 console.log(`- sidecar Cargo.toml:  v${cargoVersion}`);
 console.log('=======================================');
 
 // 3. Sync verification
-const filesAreInSync = rootVersion === targetVersion && rootVersion === cargoVersion;
+const filesAreInSync = rootVersion === appVersion && rootVersion === cargoVersion;
 if (!filesAreInSync) {
   console.error('\n\x1b[31m[ERROR] Version files are out of sync!\x1b[0m');
   console.error('All files must match before compiling/publishing.');
