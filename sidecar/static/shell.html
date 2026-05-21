@@ -1407,6 +1407,19 @@ async function handleHardwiredIntent(line) {
     case 'cmd':
       cmdShowCommands();
       return true;
+
+    case 'reset':
+    case 'reset conversation':
+    case 'new chat':
+    case 'clear chat':
+      await cmdResetConversation();
+      return true;
+
+    case 'continue':
+    case 'carry on':
+    case 'resume':
+      await cmdContinue();
+      return true;
   }
   return false;
 }
@@ -1510,12 +1523,45 @@ function cmdShowCommands() {
     ['show config',   'sidecar + agent + providers state'],
     ['doctor',        'readiness probe with pass/fail per check'],
     ['version',       'sidecar version'],
+    ['reset',         'clear the conversation history (server-side)'],
+    ['continue',      'cancel a pending stop request — agent resumes'],
     ['commands',      'this list'],
   ];
   for (const [cmd, desc] of rows) {
     addRow('system', 'system=&gt;', `  <code>${escapeHtml(cmd)}</code> — ${escapeHtml(desc)}`);
   }
   addRow('system', 'system=&gt;', 'anything else goes to the agent.');
+}
+
+async function cmdResetConversation() {
+  try {
+    const r = await fetch('/api/ghost/reset', { method: 'POST' });
+    if (!r.ok) {
+      addRow('error', 'err!', 'reset failed: HTTP ' + r.status);
+      return;
+    }
+  } catch (e) {
+    addRow('error', 'err!', 'reset unreachable: ' + escapeHtml(e.message));
+    return;
+  }
+  // Clear local scrollback so the visual state matches the server.
+  screen.innerHTML = '';
+  STATS.in = 0; STATS.out = 0; STATS.tools = 0; STATS.turns = 0;
+  updateHud();
+  addWatercooler('conversation reset');
+}
+
+async function cmdContinue() {
+  try {
+    const r = await fetch('/api/ghost/continue', { method: 'POST' });
+    if (!r.ok) {
+      addRow('error', 'err!', 'continue failed: HTTP ' + r.status);
+      return;
+    }
+    addRow('system', 'system=&gt;', 'stop request cleared — agent will continue on next turn.');
+  } catch (e) {
+    addRow('error', 'err!', 'continue unreachable: ' + escapeHtml(e.message));
+  }
 }
 
 function setBusy(b) {
@@ -1619,7 +1665,46 @@ async function bootCapabilities() {
   return caps;
 }
 
+// Post any uncaught JS error from the shell pane up to the sidecar's
+// /api/log so it lands in ~/.hyperia/logs/sidecar.log.YYYY-MM-DD. The web
+// pane has no devtools by default and crashes here used to be invisible;
+// /api/log keeps a record. Ported from the legacy ghost.ts wireup.
+function postClientLog(level, msg, extra) {
+  try {
+    fetch('/api/log', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({ source: 'shell', level, message: String(msg), extra: extra || null }),
+    }).catch(() => {});
+  } catch (_) {}
+}
+window.addEventListener('error', (e) => {
+  postClientLog('error', e.message || String(e.error), {
+    filename: e.filename, lineno: e.lineno, colno: e.colno,
+  });
+});
+window.addEventListener('unhandledrejection', (e) => {
+  postClientLog('error', 'unhandled promise rejection: ' + (e.reason && e.reason.message || String(e.reason)));
+});
+
+// If the sidecar thinks an agent run is still in flight (e.g. the previous
+// shell pane was closed mid-stream and the agent never got a clean exit),
+// reset it on boot so the user isn't blocked from sending new messages.
+// Ported from ghost.ts which did the same check via /api/ghost/status.
+async function maybeAutoResetIfStale() {
+  try {
+    const r = await fetch('/api/ghost/status');
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j.state === 'running') {
+      await fetch('/api/ghost/reset', { method: 'POST' });
+      addRow('system', 'system=&gt;', 'previous session left in <em class="fail">running</em> state — reset.');
+    }
+  } catch (_) {}
+}
+
 async function boot() {
+  await maybeAutoResetIfStale();
   const caps = await bootCapabilities();
   await seedHistory();
   await seedAssets();
