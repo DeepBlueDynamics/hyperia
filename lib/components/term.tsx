@@ -575,6 +575,10 @@ export default class Term extends React.PureComponent<
   }
 
   componentDidUpdate(prevProps: TermProps) {
+    if (this.props.isTermActive && !prevProps.isTermActive) {
+      this.focus();
+    }
+
     if (!prevProps.cleared && this.props.cleared) {
       this.clear();
     }

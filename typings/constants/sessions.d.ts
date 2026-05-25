@@ -76,6 +76,7 @@ export interface SessionSetXtermTitleAction {
 }
 export interface SessionSetCwdAction {
   type: typeof SESSION_SET_CWD;
+  uid?: string;
   cwd: string;
 }
 export interface SessionSearchAction {

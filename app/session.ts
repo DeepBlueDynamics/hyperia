@@ -100,6 +100,7 @@ export default class Session extends EventEmitter {
   ended: boolean;
   initTimestamp: number;
   profile!: string;
+  cwd!: string;
   constructor(options: SessionOptions) {
     super();
     this.pty = null;
@@ -112,6 +113,7 @@ export default class Session extends EventEmitter {
 
   init({uid, rows, cols, cwd, shell: _shell, shellArgs: _shellArgs, profile}: SessionOptions) {
     this.profile = profile;
+    this.cwd = cwd || '';
     const envFromConfig = config.getProfileConfig(profile).env || {};
     const defaultShellArgs = ['--login'];
 
@@ -168,10 +170,39 @@ export default class Session extends EventEmitter {
     }
 
     this.batcher = new DataBatcher(uid);
+    let osc7Buffer = '';
     this.pty.onData((chunk) => {
       if (this.ended) {
         return;
       }
+
+      // Parse OSC 7 current working directory sequences
+      osc7Buffer += chunk;
+      const osc7Match = /\x1b\]7;file:\/\/[^\/\x07\x1b]*(.*?)(?:\x07|\x1b\\)/.exec(osc7Buffer);
+      if (osc7Match) {
+        const uriPath = osc7Match[1];
+        try {
+          let rawPath = decodeURIComponent(uriPath);
+          if (process.platform === 'win32') {
+            if (/^\/[a-zA-Z]:/.test(rawPath)) {
+              rawPath = rawPath.slice(1);
+            }
+            rawPath = rawPath.replace(/\//g, '\\');
+          }
+          if (rawPath && rawPath !== this.cwd) {
+            this.cwd = rawPath;
+            this.emit('cwd', rawPath);
+          }
+        } catch (e) {
+          console.error('Failed to decode OSC 7 URI:', uriPath, e);
+        }
+        const matchIndex = osc7Buffer.indexOf(osc7Match[0]);
+        osc7Buffer = osc7Buffer.slice(matchIndex + osc7Match[0].length);
+      }
+      if (osc7Buffer.length > 4096) {
+        osc7Buffer = osc7Buffer.slice(-4096);
+      }
+
       this.batcher?.write(chunk);
     });
 

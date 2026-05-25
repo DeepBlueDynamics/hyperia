@@ -1,4 +1,5 @@
 import React, {forwardRef, useEffect, useRef} from 'react';
+import {clipboard} from 'electron';
 
 import Mousetrap from 'mousetrap';
 import type {MousetrapInstance} from 'mousetrap';
@@ -60,6 +61,14 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
         commandKeys,
         (e) => {
           const command = keys[commandKeys];
+          const activeTerm = terms.current?.getActiveTerm();
+          if (command === 'editor:break' && activeTerm && activeTerm.term.hasSelection()) {
+            clipboard.writeText(activeTerm.term.getSelection());
+            activeTerm.term.clearSelection();
+            (e as any).catched = true;
+            e.preventDefault();
+            return;
+          }
           // We should tell xterm to ignore this event.
           (e as any).catched = true;
           props.execCommand(command, getCommandHandler(command), e);

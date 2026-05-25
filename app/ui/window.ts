@@ -22,6 +22,7 @@ import {
   notifyResize,
   notifyUserActivity,
   updateSessionDescription,
+  updateSessionCwd,
   updateSessionTabName,
   updateSessionLayout,
   updateSessionActive,
@@ -196,13 +197,16 @@ export function newWindow(
     const profile = extraOptionsFiltered.profile || profileName;
     const activeSession = extraOptionsFiltered.activeUid ? sessions.get(extraOptionsFiltered.activeUid) : undefined;
     let cwd = '';
-    if (cfg.preserveCWD !== false && activeSession && activeSession.profile === profile) {
-      const activePID = activeSession.pty?.pid;
-      if (activePID !== undefined) {
-        try {
-          cwd = getWorkingDirectoryFromPID(activePID) || '';
-        } catch (error) {
-          console.error(error);
+    if (activeSession && activeSession.profile === profile) {
+      cwd = activeSession.cwd || '';
+      if (!cwd && cfg.preserveCWD !== false) {
+        const activePID = activeSession.pty?.pid;
+        if (activePID !== undefined) {
+          try {
+            cwd = getWorkingDirectoryFromPID(activePID) || '';
+          } catch (error) {
+            console.error(error);
+          }
         }
       }
       cwd = cwd && isAbsolute(cwd) && existsSync(cwd) ? cwd : '';
@@ -229,15 +233,16 @@ export function newWindow(
     }
 
     // remove the rows and cols, the wrong value of them will break layout when init create
+    const resolvedCwd = cwd || extraOptionsFiltered.cwd || workingDirectory;
     const defaultOptions = Object.assign(
       {
-        cwd: cwd || workingDirectory,
         splitDirection: undefined,
         shell: profileCfg.shell,
         shellArgs: profileCfg.shellArgs && Array.from(profileCfg.shellArgs)
       },
       extraOptionsFiltered,
       {
+        cwd: resolvedCwd,
         profile: extraOptionsFiltered.profile || profileName,
         uid
       }
@@ -287,6 +292,11 @@ export function newWindow(
     session.on('data', (data: string) => {
       rpc.emit('session data', data);
       if (cfg.sessionLogging) writeSessionLog(options.uid, data);
+    });
+
+    session.on('cwd', (cwd: string) => {
+      updateSessionCwd(options.uid, cwd);
+      rpc.emit('session cwd', {uid: options.uid, cwd});
     });
 
     session.on('exit', () => {

@@ -24,10 +24,12 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
         effect: () => {
           const {ui, sessions} = getState();
           const activeUid = _activeUid ? _activeUid : sessions.activeUid;
+          const activeSession = activeUid ? sessions.sessions[activeUid] : null;
+          const cwd = (activeSession && activeSession.cwd) || ui.cwd;
           const profile = _profile ? _profile : activeUid ? sessions.sessions[activeUid].profile : window.profileName;
           rpc.emit('new', {
             splitDirection: direction,
-            cwd: ui.cwd,
+            cwd,
             activeUid,
             profile
           });
@@ -53,8 +55,9 @@ export function requestTermGroup(_activeUid: string | undefined, _profile: strin
       type: TERM_GROUP_REQUEST,
       effect: () => {
         const {ui, sessions} = getState();
-        const {cwd} = ui;
         const activeUid = _activeUid ? _activeUid : sessions.activeUid;
+        const activeSession = activeUid ? sessions.sessions[activeUid] : null;
+        const cwd = (activeSession && activeSession.cwd) || ui.cwd;
         const profile = _profile ? _profile : activeUid ? sessions.sessions[activeUid].profile : window.profileName;
         rpc.emit('new', {
           isNewGroup: true,

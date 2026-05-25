@@ -33,3 +33,8 @@ plugins
 # TypeScript build info
 *.tsbuildinfo
 .release-notes-*.md
+
+# Antigravity agent scratch + transient build logs
+.antigravitycli/
+build_err.log
+issue91.txt

@@ -99,6 +99,10 @@ rpc.on('session rename', ({uid, name}: {uid: string; name: string}) => {
   store_.dispatch(sessionActions.setSessionTabName(uid, name, false) as any);
 });
 
+rpc.on('session cwd', ({uid, cwd}: {uid: string; cwd: string}) => {
+  store_.dispatch(sessionActions.setSessionCwd(uid, cwd));
+});
+
 rpc.on('termgroup close req', () => {
   store_.dispatch(termGroupActions.exitActiveTermGroup());
 });

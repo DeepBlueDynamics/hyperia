@@ -35,6 +35,8 @@ pub struct SessionInfo {
     pub bsp_y: f32,
     pub bsp_w: f32,
     pub bsp_h: f32,
+    pub cwd: String,
+    pub last_user_activity: Option<std::time::Instant>,
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +212,22 @@ impl Bridge {
         self.inner.sessions.lock().await.len()
     }
 
+    pub async fn get_last_tab_activity(&self, target_uid: &str) -> Option<std::time::Duration> {
+        let sessions = self.inner.sessions.lock().await;
+        let target_root_tab_uid = sessions.get(target_uid).map(|s| s.root_tab_uid.clone())?;
+        
+        let mut most_recent: Option<std::time::Instant> = None;
+        for info in sessions.values() {
+            if info.root_tab_uid == target_root_tab_uid {
+                if let Some(act) = info.last_user_activity {
+                    most_recent = Some(most_recent.map_or(act, |m| m.max(act)));
+                }
+            }
+        }
+        
+        most_recent.map(|inst| inst.elapsed())
+    }
+
     /// Resolve a window/tab/pane address to its session uid.
     pub async fn resolve_pane_uid(
         &self,
@@ -365,6 +383,7 @@ impl Bridge {
                             "rows": info.rows,
                             "pid": info.pid,
                             "active": info.pane_active,
+                            "cwd": info.cwd,
                         })
                     })
                     .collect();
@@ -440,6 +459,8 @@ impl Bridge {
                         bsp_y: 0.0,
                         bsp_w: 100.0,
                         bsp_h: 100.0,
+                        cwd: String::new(),
+                        last_user_activity: None,
                     },
                 );
             }
@@ -466,6 +487,15 @@ impl Bridge {
                 if let Some(info) = self.inner.sessions.lock().await.get_mut(uid) {
                     info.description = description.clone();
                     tracing::info!("Session {uid} described: {description}");
+                }
+            }
+
+            "SessionCwd" => {
+                let uid = msg["uid"].as_str().unwrap_or("");
+                let cwd = msg["cwd"].as_str().unwrap_or("").to_string();
+                if let Some(info) = self.inner.sessions.lock().await.get_mut(uid) {
+                    info.cwd = cwd.clone();
+                    tracing::info!("Session {uid} cwd updated: {cwd}");
                 }
             }
 
@@ -579,6 +609,15 @@ impl Bridge {
                 }
             }
 
+            "UserActivity" => {
+                let uid = msg["uid"].as_str().unwrap_or("");
+                let mut sessions = self.inner.sessions.lock().await;
+                if let Some(info) = sessions.get_mut(uid) {
+                    info.last_user_activity = Some(std::time::Instant::now());
+                    tracing::info!("User activity registered for session {uid}");
+                }
+            }
+
             _ => {
                 tracing::warn!("Unknown message type from Electron: {msg_type}");
             }
@@ -683,6 +722,7 @@ mod tests {
             bsp_y: 0.0,
             bsp_w: 100.0,
             bsp_h: 100.0,
+            cwd: String::new(),
         }
     }
 

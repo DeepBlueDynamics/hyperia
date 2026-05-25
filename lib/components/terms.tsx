@@ -49,10 +49,9 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
 
   componentDidMount() {
     window.addEventListener('contextmenu', () => {
-      const selection = window.getSelection()!.toString();
-      const {
-        props: {uid}
-      } = this.getActiveTerm();
+      const activeTerm = this.getActiveTerm();
+      const selection = activeTerm ? activeTerm.term.getSelection() : '';
+      const uid = activeTerm ? activeTerm.props.uid : this.props.activeSession!;
       this.props.onContextMenu(uid, selection);
     });
   }

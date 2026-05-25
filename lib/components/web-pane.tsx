@@ -71,7 +71,11 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     // The webview captures focus while mounted; without this the xterm textarea
     // stays unfocused (hollow cursor, input goes nowhere).
     requestAnimationFrame(() => {
-      document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')?.focus();
+      if (typeof window.focusActiveTerm === 'function') {
+        window.focusActiveTerm();
+      } else {
+        document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')?.focus();
+      }
     });
   }
 

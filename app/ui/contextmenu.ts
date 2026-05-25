@@ -30,27 +30,23 @@ const contextMenuTemplate = (
   const menu: MenuItemConstructorOptions[] = [];
 
   if (selection) {
-    menu.push({label: 'Copy', role: 'copy'});
+    menu.push({label: 'Copy', role: 'copy', accelerator: commandKeys['editor:copy']});
   }
-  menu.push({label: 'Paste', role: 'paste'});
+  menu.push({label: 'Paste', role: 'paste', accelerator: commandKeys['editor:paste']});
 
   menu.push(separator);
   menu.push({label: 'Split Down', accelerator: commandKeys['pane:splitDown'], click: cmd('pane:splitDown')});
   menu.push({label: 'Split Right', accelerator: commandKeys['pane:splitRight'], click: cmd('pane:splitRight')});
   menu.push({label: 'Close Pane', accelerator: commandKeys['pane:close'], click: cmd('pane:close')});
-  menu.push({label: 'New Web Pane…', click: cmd('pane:openWebPane')});
-  menu.push({label: 'Hyperia Shell', click: cmd('pane:openShellPane')});
 
   menu.push(separator);
   menu.push({label: 'New Tab', accelerator: commandKeys['tab:new'], click: cmd('tab:new')});
+  menu.push({label: 'New Hyperia Shell', click: cmd('pane:openShellPane')});
   menu.push({label: 'New Window', click: () => createWindow()});
 
   menu.push(separator);
-  menu.push({label: 'New Note', click: () => ipcMain.emit('new-sticky', {})});
-  // Always show — the shell pane handles the no-token case via the
-  // bootstub micro-agent, so hiding the entry when there's no agent
-  // would actually keep users from the place that helps them wire one.
-  menu.push({label: 'Ask Hyperia', click: () => ipcMain.emit('open-ghost')});
+  menu.push({label: 'New Stickys', click: () => ipcMain.emit('new-sticky', {})});
+  menu.push({label: 'Search Stickys', click: () => {}});
 
   menu.push(separator);
   menu.push({label: 'Clear Buffer', accelerator: commandKeys['editor:clearBuffer'], click: cmd('editor:clearBuffer')});

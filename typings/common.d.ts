@@ -98,6 +98,7 @@ export type RendererEvents = {
   'web-pane-reload': string;
   'session add': Session;
   'session data': string;
+  'session cwd': {uid: string; cwd: string};
   'session exit': {uid: string};
   'windowGeometry change': {isMaximized: boolean};
   move: {bounds: {x: number; y: number}};

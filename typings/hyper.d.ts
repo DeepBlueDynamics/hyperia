@@ -133,6 +133,7 @@ export type session = {
   splitDirection?: 'HORIZONTAL' | 'VERTICAL';
   activeUid?: string;
   profile: string;
+  cwd?: string;
 };
 
 export type sessionState = Immutable<{

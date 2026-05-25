@@ -13,7 +13,8 @@ import {
   SESSION_SET_TAB_NAME,
   SESSION_SET_XTERM_TITLE,
   SESSION_SEARCH,
-  SESSION_SET_DESCRIPTION
+  SESSION_SET_DESCRIPTION,
+  SESSION_SET_CWD
 } from '../../typings/constants/sessions';
 import {TERM_GROUP_SET_TAB_NAME} from '../../typings/constants/term-groups';
 import type {HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
@@ -237,3 +238,12 @@ export function sendSessionData(uid: string | null, data: string, escaped?: bool
     });
   };
 }
+
+export function setSessionCwd(uid: string, cwd: string): HyperActions {
+  return {
+    type: SESSION_SET_CWD,
+    uid,
+    cwd
+  };
+}
+

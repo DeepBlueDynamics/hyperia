@@ -19,7 +19,7 @@ import {createStickyNote, closeStickyNote, deleteStickyNote, updateStickyNote} f
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
 const HEARTBEAT_INTERVAL_MS = 5000;
-const AGENT_DEFER_MS = 1000; // defer agent writes this long after last user activity
+const AGENT_DEFER_MS = 60000; // defer agent writes this long after last user activity
 const DRAIN_INTERVAL_MS = 200; // how often to check queues
 const MAX_QUEUE_DEPTH = 100; // reject agent writes past this
 
@@ -689,6 +689,7 @@ export function updateSessionActive(uid: string, windowId: number) {
 
   tracked.paneActive = true;
   focusedWindowId = windowId;
+  notifyUserActivity(uid);
   send({type: 'SessionActive', uid, windowId});
 }
 
@@ -712,6 +713,14 @@ export function updateSessionDescription(uid: string, description: string) {
   if (tracked) {
     tracked.description = description;
     send({type: 'SessionDescribe', uid, description});
+  }
+}
+
+/** Update the working directory for a session. */
+export function updateSessionCwd(uid: string, cwd: string) {
+  const tracked = trackedSessions.get(uid);
+  if (tracked) {
+    send({type: 'SessionCwd', uid, cwd});
   }
 }
 
@@ -798,6 +807,7 @@ export function getSessionRootTab(uid: string): string {
 /** Signal user activity on a session. Defers agent input for AGENT_DEFER_MS. */
 export function notifyUserActivity(uid: string) {
   lastUserActivity.set(uid, Date.now());
+  send({type: 'UserActivity', uid});
 }
 
 /** Set an external command handler for custom downstream messages. */
