@@ -246,4 +246,3 @@ export function setSessionCwd(uid: string, cwd: string): HyperActions {
     cwd
   };
 }
-

@@ -1,5 +1,5 @@
-import React, {forwardRef, useEffect, useRef} from 'react';
 import {clipboard} from 'electron';
+import React, {forwardRef, useEffect, useRef} from 'react';
 
 import Mousetrap from 'mousetrap';
 import type {MousetrapInstance} from 'mousetrap';

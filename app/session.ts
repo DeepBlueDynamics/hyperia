@@ -176,9 +176,12 @@ export default class Session extends EventEmitter {
         return;
       }
 
-      // Parse OSC 7 current working directory sequences
+      // Parse OSC 7 current working directory sequences. The control
+      // characters (ESC \x1b, BEL \x07) are an intrinsic part of the OSC
+      // 7 wire format, so no-control-regex is intentionally disabled here.
       osc7Buffer += chunk;
-      const osc7Match = /\x1b\]7;file:\/\/[^\/\x07\x1b]*(.*?)(?:\x07|\x1b\\)/.exec(osc7Buffer);
+      // eslint-disable-next-line no-control-regex
+      const osc7Match = /\x1b\]7;file:\/\/[^/\x07\x1b]*(.*?)(?:\x07|\x1b\\)/.exec(osc7Buffer);
       if (osc7Match) {
         const uriPath = osc7Match[1];
         try {
