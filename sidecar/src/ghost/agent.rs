@@ -287,7 +287,7 @@ async fn run_loop(
     initial_tool_call_count: usize,
     initial_recent_calls: Vec<(String, String)>,
 ) -> anyhow::Result<(Vec<serde_json::Value>, String, usize, Vec<(String, String)>)> {
-    let tool_defs = registry.tool_defs();
+    let tool_defs = registry.tool_defs(Some(provider.provider_name()), Some(provider.model_name()));
 
     // Progressive throttle counters — seeded from session so they persist across messages.
     // Reset only when the user explicitly resets the conversation.

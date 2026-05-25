@@ -17,7 +17,10 @@
 //!   * anything else                               → "i don't know that yet" + menu
 
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -48,8 +51,38 @@ pub fn handle(message: &str) -> BootReply {
     if matches_help(&m) {
         return reply_what_is_possible();
     }
+    if let Some(reply) = try_set_provider_token(message) {
+        return reply;
+    }
     if let Some(reply) = try_set_token(message) {
         return reply;
+    }
+    if m == "list models" || m.contains("list models") {
+        return reply_list_models();
+    }
+    if m == "list panes" || m.contains("list panes") {
+        return reply_list_panes();
+    }
+    if m == "show logs" || m.contains("show logs") || m == "logs" {
+        return reply_show_logs();
+    }
+    if m == "doctor" {
+        return reply_doctor();
+    }
+    if m == "version" || m.contains("version") {
+        return reply_version();
+    }
+    if m.starts_with("get ") {
+        let path_arg = message[4..].trim();
+        return reply_get_config_path(path_arg);
+    }
+    if m.starts_with("run ") {
+        let cmd_arg = message[4..].trim();
+        return reply_run_cmd(cmd_arg);
+    }
+    if m.starts_with("open ") {
+        let url_arg = message[5..].trim();
+        return reply_open_url(url_arg);
     }
     if matches_show_config(&m) {
         return reply_show_config();
@@ -311,6 +344,483 @@ fn reply_unknown(raw: &str) -> BootReply {
     }
 }
 
+fn http_get(path: &str) -> Result<String, String> {
+    let port = std::env::var("HYPERIA_PORT").unwrap_or_else(|_| "9800".into());
+    let addr = format!("127.0.0.1:{}", port);
+    let mut stream = TcpStream::connect_timeout(
+        &addr.parse().map_err(|e| format!("parse error: {}", e))?,
+        Duration::from_secs(2),
+    ).map_err(|e| format!("connect error: {}", e))?;
+    
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
+
+    // Use HTTP/1.0 to guarantee NO chunked transfer encoding!
+    let request = format!(
+        "GET {} HTTP/1.0\r\n\
+         Host: 127.0.0.1\r\n\
+         Connection: close\r\n\r\n",
+        path
+    );
+
+    stream.write_all(request.as_bytes()).map_err(|e| format!("write error: {}", e))?;
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).map_err(|e| format!("read error: {}", e))?;
+
+    if let Some(body_start) = response.find("\r\n\r\n") {
+        Ok(response[body_start + 4..].to_string())
+    } else {
+        Ok(response)
+    }
+}
+
+fn http_post_json(path: &str, body: &serde_json::Value) -> Result<String, String> {
+    let port = std::env::var("HYPERIA_PORT").unwrap_or_else(|_| "9800".into());
+    let addr = format!("127.0.0.1:{}", port);
+    let mut stream = TcpStream::connect_timeout(
+        &addr.parse().map_err(|e| format!("parse error: {}", e))?,
+        Duration::from_secs(2),
+    ).map_err(|e| format!("connect error: {}", e))?;
+    
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
+
+    let body_str = body.to_string();
+    // Use HTTP/1.0 to avoid chunked encoding issues!
+    let request = format!(
+        "POST {} HTTP/1.0\r\n\
+         Host: 127.0.0.1\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\r\n\
+         {}",
+        path,
+        body_str.len(),
+        body_str
+    );
+
+    stream.write_all(request.as_bytes()).map_err(|e| format!("write error: {}", e))?;
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).map_err(|e| format!("read error: {}", e))?;
+
+    if let Some(body_start) = response.find("\r\n\r\n") {
+        Ok(response[body_start + 4..].to_string())
+    } else {
+        Ok(response)
+    }
+}
+
+fn reply_list_models() -> BootReply {
+    BootReply {
+        text: "Recommended Local & Cloud Models for Hyperia:\n\n\
+            * Local (Ollama):\n  \
+              - `gemma4:e2b` (Recommended - ~5GB, extremely fast, excellent structured JSON & tool dispatch)\n  \
+              - `qwen2.5-coder:7b` (Strong alternative - 4.7GB, robust code generation)\n  \
+              - `deepseek-coder:6.7b` (Coding specialist)\n\n\
+            * Cloud (Frontier):\n  \
+              - `claude-sonnet-4-6` (Default - Gold standard for agent tasks)\n  \
+              - `gpt-4o` (Excellent overall tool performance)\n  \
+              - `gemini-2.0-flash` (Extremely fast, massive context window)\n\n\
+            To configure a provider, paste its API key (e.g. `sk-ant-...` or `AIza...`), or install/run Ollama locally.".into(),
+        system: vec![],
+        config_changed: false,
+    }
+}
+
+fn reply_list_panes() -> BootReply {
+    match http_get("/api/status") {
+        Ok(status_str) => {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&status_str) {
+                let mut lines = Vec::new();
+                lines.push("Active Tab/Pane Hierarchy:".to_string());
+                lines.push("".to_string());
+                
+                if let Some(windows) = json["windows"].as_array() {
+                    for win in windows {
+                        let win_id = win["id"].as_u64().unwrap_or(0);
+                        let focused = if win["focused"].as_bool().unwrap_or(false) { " (focused)" } else { "" };
+                        lines.push(format!("Window {}{}:", win_id, focused));
+                        
+                        if let Some(tabs) = win["tabs"].as_array() {
+                            for tab in tabs {
+                                let tab_name = tab["name"].as_str().unwrap_or("shell");
+                                let active = if tab["active"].as_bool().unwrap_or(false) { " [active]" } else { "" };
+                                lines.push(format!("  Tab '{}'{}:", tab_name, active));
+                                
+                                if let Some(panes) = tab["panes"].as_array() {
+                                    for pane in panes {
+                                        let label = pane["label"].as_str().unwrap_or("");
+                                        let shell = pane["shell"].as_str().unwrap_or("");
+                                        let proc = pane["process"].as_str().unwrap_or("");
+                                        let active = if pane["active"].as_bool().unwrap_or(false) { " [active]" } else { "" };
+                                        let cwd = pane["cwd"].as_str().unwrap_or("");
+                                        
+                                        let proc_info = if proc.is_empty() {
+                                            shell.to_string()
+                                        } else {
+                                            format!("{} ({})", shell, proc)
+                                        };
+                                        
+                                        lines.push(format!(
+                                            "    Pane {}: {}{} in `{}`",
+                                            if label.is_empty() { "-" } else { label },
+                                            proc_info,
+                                            active,
+                                            cwd
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if lines.len() <= 2 {
+                    BootReply {
+                        text: "No active panes/sessions found.".to_string(),
+                        system: vec![],
+                        config_changed: false,
+                    }
+                } else {
+                    BootReply {
+                        text: lines.join("\n"),
+                        system: vec![],
+                        config_changed: false,
+                    }
+                }
+            } else {
+                BootReply {
+                    text: format!("Error: failed to parse /api/status JSON. Raw response: {}", status_str),
+                    system: vec![],
+                    config_changed: false,
+                }
+            }
+        }
+        Err(e) => BootReply {
+            text: format!("Error: failed to connect to /api/status. Is sidecar server running? Details: {}", e),
+            system: vec![],
+            config_changed: false,
+        }
+    }
+}
+
+fn try_set_provider_token(m: &str) -> Option<BootReply> {
+    let parts: Vec<&str> = m.split_whitespace().collect();
+    if parts.len() >= 4 && parts[0].to_lowercase() == "set" && parts[2].to_lowercase() == "token" {
+        let provider = parts[1].to_lowercase();
+        let token = parts[3].trim_matches(|c: char| !c.is_ascii_graphic() || c == '"' || c == '\'');
+        if provider == "anthropic" || provider == "openai" || provider == "gemini" {
+            return Some(write_token(&provider, token));
+        }
+    }
+    None
+}
+
+fn reply_get_config_path(path_arg: &str) -> BootReply {
+    let path = match config_path() {
+        Some(p) => p,
+        None => return BootReply { text: "Could not locate config directory.".into(), system: vec![], config_changed: false },
+    };
+    
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return BootReply { text: "No config file found yet. Configure a token first!".into(), system: vec![], config_changed: false },
+    };
+    
+    let json: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(j) => j,
+        Err(e) => return BootReply { text: format!("Error reading config JSON: {}", e), system: vec![], config_changed: false },
+    };
+    
+    let keys: Vec<&str> = path_arg.split(|c| c == '.' || c == '/').filter(|s| !s.is_empty()).collect();
+    if keys.is_empty() {
+        return BootReply { text: "Error: empty config path. Usage: `get <config path>` (e.g. `get agent.model`)".into(), system: vec![], config_changed: false };
+    }
+    
+    let mut current = &json;
+    let keys_to_traverse = keys.clone();
+    if !keys.is_empty() && keys[0] != "config" && json["config"].is_object() {
+        current = &json["config"];
+    }
+    
+    for key in keys_to_traverse {
+        if let Some(next) = current.get(key) {
+            current = next;
+        } else {
+            return BootReply {
+                text: format!("Config path `{}` not found.", path_arg),
+                system: vec![],
+                config_changed: false,
+            };
+        }
+    }
+    
+    let value_str = match current {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => {
+            let is_sensitive = path_arg.to_lowercase().contains("token") 
+                || path_arg.to_lowercase().contains("key") 
+                || path_arg.to_lowercase().contains("password");
+            if is_sensitive {
+                redact_token(s)
+            } else {
+                s.clone()
+            }
+        }
+        other => serde_json::to_string_pretty(other).unwrap_or_default(),
+    };
+    
+    BootReply {
+        text: format!("{} = {}", path_arg, value_str),
+        system: vec![],
+        config_changed: false,
+    }
+}
+
+fn reply_run_cmd(cmd_with_args: &str) -> BootReply {
+    let parts: Vec<&str> = cmd_with_args.split_whitespace().collect();
+    if parts.is_empty() {
+        return BootReply { text: "Error: no command specified. Usage: `run <cmd>`".into(), system: vec![], config_changed: false };
+    }
+    
+    let base_cmd = parts[0].to_lowercase();
+    let whitelisted = ["ls", "pwd", "whoami", "date"];
+    if !whitelisted.contains(&base_cmd.as_str()) {
+        return BootReply {
+            text: format!(
+                "Error: command `{}` is not in the whitelist. Whitelisted commands: ls, pwd, whoami, date",
+                base_cmd
+            ),
+            system: vec![],
+            config_changed: false,
+        };
+    }
+    
+    let shell = if cfg!(windows) { "cmd" } else { "sh" };
+    let shell_arg = if cfg!(windows) { "/c" } else { "-c" };
+    
+    match std::process::Command::new(shell)
+        .arg(shell_arg)
+        .arg(cmd_with_args)
+        .output()
+    {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let exit_code = output.status.code().unwrap_or(-1);
+            
+            let mut result = String::new();
+            if !stdout.is_empty() {
+                result.push_str(&stdout);
+            }
+            if !stderr.is_empty() {
+                if !result.is_empty() {
+                    result.push('\n');
+                }
+                result.push_str("stderr:\n");
+                result.push_str(&stderr);
+            }
+            if result.is_empty() {
+                result = format!("(command exited with code {})", exit_code);
+            }
+            
+            BootReply {
+                text: format!("$ {}\n{}", cmd_with_args, result.trim_end()),
+                system: vec![],
+                config_changed: false,
+            }
+        }
+        Err(e) => BootReply {
+            text: format!("Error: failed to execute command `{}`: {}", cmd_with_args, e),
+            system: vec![],
+            config_changed: false,
+        }
+    }
+}
+
+fn reply_open_url(url: &str) -> BootReply {
+    let full_url = if url.starts_with("http://") || url.starts_with("https://") {
+        url.to_string()
+    } else {
+        format!("https://{}", url)
+    };
+    
+    let body = serde_json::json!({ "url": full_url });
+    match http_post_json("/api/web-pane", &body) {
+        Ok(_) => BootReply {
+            text: format!("Opened web pane for `{}`", full_url),
+            system: vec![],
+            config_changed: false,
+        },
+        Err(e) => BootReply {
+            text: format!("Error opening web pane: {}", e),
+            system: vec![],
+            config_changed: false,
+        }
+    }
+}
+
+fn reply_show_logs() -> BootReply {
+    match http_get("/api/logs") {
+        Ok(logs_str) => {
+            if let Ok(lines) = serde_json::from_str::<Vec<String>>(&logs_str) {
+                if lines.is_empty() {
+                    BootReply {
+                        text: "Sidecar log buffer is currently empty.".to_string(),
+                        system: vec![],
+                        config_changed: false,
+                    }
+                } else {
+                    let limit = 30;
+                    let start = if lines.len() > limit { lines.len() - limit } else { 0 };
+                    let recent_lines = &lines[start..];
+                    BootReply {
+                        text: format!(
+                            "Recent sidecar logs (showing last {}/{} lines):\n\n```\n{}\n```",
+                            recent_lines.len(),
+                            lines.len(),
+                            recent_lines.join("\n")
+                        ),
+                        system: vec![],
+                        config_changed: false,
+                    }
+                }
+            } else {
+                BootReply {
+                    text: format!("Error: failed to parse /api/logs JSON. Raw response: {}", logs_str),
+                    system: vec![],
+                    config_changed: false,
+                }
+            }
+        }
+        Err(e) => BootReply {
+            text: format!("Error: failed to connect to /api/logs: {}", e),
+            system: vec![],
+            config_changed: false,
+        }
+    }
+}
+
+fn reply_doctor() -> BootReply {
+    let mut lines = Vec::new();
+    lines.push("Hyperia Diagnostic Report (Level-0 Bootstub):".to_string());
+    lines.push("==============================================".to_string());
+    
+    lines.push(format!("Platform: {} ({})", std::env::consts::OS, std::env::consts::ARCH));
+    
+    let config_file_path = config_path();
+    let mut config_ok = false;
+    let mut anthropic_configured = false;
+    let mut openai_configured = false;
+    let mut gemini_configured = false;
+    let mut active_provider = String::new();
+    let mut active_model = String::new();
+    
+    if let Some(p) = &config_file_path {
+        lines.push(format!("Config Path: {}", p.display()));
+        if p.exists() {
+            if let Ok(content) = fs::read_to_string(p) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    config_ok = true;
+                    let config_obj = &json["config"];
+                    
+                    if let Some(prov) = config_obj["agent"]["provider"].as_str() {
+                        active_provider = prov.to_string();
+                    }
+                    if let Some(mod_name) = config_obj["agent"]["model"].as_str() {
+                        active_model = mod_name.to_string();
+                    }
+                    
+                    if config_obj["providers"]["anthropic"]["token"].as_str().is_some() {
+                        anthropic_configured = true;
+                    }
+                    if config_obj["providers"]["openai"]["token"].as_str().is_some() {
+                        openai_configured = true;
+                    }
+                    if config_obj["providers"]["gemini"]["token"].as_str().is_some() {
+                        gemini_configured = true;
+                    }
+                }
+            }
+        }
+    }
+    
+    if config_ok {
+        lines.push("Config Status: Valid JSON".to_string());
+        lines.push(format!("Active Provider: {}", if active_provider.is_empty() { "None".to_string() } else { active_provider }));
+        lines.push(format!("Active Model: {}", if active_model.is_empty() { "None".to_string() } else { active_model }));
+        
+        let mut configured_provs = Vec::new();
+        if anthropic_configured { configured_provs.push("Anthropic"); }
+        if openai_configured { configured_provs.push("OpenAI"); }
+        if gemini_configured { configured_provs.push("Gemini"); }
+        
+        lines.push(format!("Configured API Tokens: {}", if configured_provs.is_empty() { "None".to_string() } else { configured_provs.join(", ") }));
+    } else {
+        lines.push("Config Status: Not found or invalid".to_string());
+    }
+    
+    let mut ollama_running = false;
+    let ollama_port = std::env::var("OLLAMA_PORT").unwrap_or_else(|_| "11434".into());
+    let ollama_addr = format!("127.0.0.1:{}", ollama_port);
+    if let Ok(addr) = ollama_addr.parse::<std::net::SocketAddr>() {
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
+            ollama_running = true;
+        }
+    }
+    
+    lines.push(format!(
+        "Ollama Status: {}",
+        if ollama_running {
+            "Running locally (responding on port 11434)"
+        } else {
+            "Not running / unreachable"
+        }
+    ));
+    
+    let sidecar_port = std::env::var("HYPERIA_PORT").unwrap_or_else(|_| "9800".into());
+    let sidecar_addr = format!("127.0.0.1:{}", sidecar_port);
+    let mut sidecar_running = false;
+    if let Ok(addr) = sidecar_addr.parse::<std::net::SocketAddr>() {
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
+            sidecar_running = true;
+        }
+    }
+    lines.push(format!(
+        "Sidecar Server: {}",
+        if sidecar_running {
+            format!("Running on port {}", sidecar_port)
+        } else {
+            "Unreachable".to_string()
+        }
+    ));
+    
+    lines.push("".to_string());
+    if (anthropic_configured || openai_configured || gemini_configured || ollama_running) && !active_provider.is_empty() {
+        lines.push("Diagnosis: Healthy! Capabilities should be active. If you are stuck in bootstub, try saying anything to start the real agent.".to_string());
+    } else {
+        lines.push("Diagnosis: Attention Required. Please configure a provider token or start Ollama local server to enable agent brains.".to_string());
+    }
+    
+    BootReply {
+        text: lines.join("\n"),
+        system: vec![],
+        config_changed: false,
+    }
+}
+
+fn reply_version() -> BootReply {
+    BootReply {
+        text: format!("Hyperia Sidecar Version: v{}", env!("CARGO_PKG_VERSION")),
+        system: vec![],
+        config_changed: false,
+    }
+}
+
 /// Line-based redaction of `"token": "..."` values. Not a full JSON parser
 /// (which would lose key order / comments), just a regex-free scan.
 fn redact_config_tokens(s: &str) -> String {
@@ -478,5 +988,109 @@ mod tests {
         assert!(r.starts_with("sk-ant"));
         assert!(r.ends_with("234"));
         assert!(r.contains("…"));
+    }
+
+    #[test]
+    fn test_list_models() {
+        let r = handle("list models");
+        assert!(r.text.contains("gemma4:e2b"));
+        assert!(r.text.contains("claude-sonnet-4-6"));
+        assert!(!r.config_changed);
+    }
+
+    #[test]
+    fn test_list_panes() {
+        let r = handle("list panes");
+        assert!(r.text.contains("Hierarchy") || r.text.contains("connect") || r.text.contains("No active panes"));
+        assert!(!r.config_changed);
+    }
+
+    #[test]
+    fn test_show_logs() {
+        let r = handle("show logs");
+        assert!(r.text.contains("Recent sidecar logs") || r.text.contains("connect") || r.text.contains("empty"));
+        assert!(!r.config_changed);
+    }
+
+    #[test]
+    fn test_doctor() {
+        let r = handle("doctor");
+        assert!(r.text.contains("Diagnostic Report"));
+        assert!(r.text.contains("Platform:"));
+        assert!(!r.config_changed);
+    }
+
+    #[test]
+    fn test_version() {
+        let r = handle("version");
+        assert!(r.text.contains("Version"));
+        assert!(!r.config_changed);
+    }
+
+    #[test]
+    fn test_run_command_whitelist() {
+        // Safe command
+        let r = handle("run pwd");
+        assert!(r.text.contains("$ pwd"));
+        
+        // Blocked command
+        let r2 = handle("run rm -rf /");
+        assert!(r2.text.contains("not in the whitelist"));
+    }
+
+    #[test]
+    fn test_open_url() {
+        let r = handle("open example.com");
+        assert!(r.text.contains("Opened web pane") || r.text.contains("Error opening web pane"));
+    }
+
+    #[test]
+    fn test_config_operations_integration() {
+        // Setup a unique temp directory for config
+        let temp_dir = std::env::temp_dir().join(format!("hyperia_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let orig_home = std::env::var("HOME").ok();
+        let orig_userprofile = std::env::var("USERPROFILE").ok();
+
+        std::env::set_var("HOME", &temp_dir);
+        std::env::set_var("USERPROFILE", &temp_dir);
+
+        // 1. set token
+        let r_set = handle("set anthropic token sk-ant-api03-abcdef123456");
+        assert!(r_set.text.contains("wrote anthropic token"));
+        assert!(r_set.config_changed);
+
+        // 2. get config path
+        let r_get_model = handle("get agent.model");
+        assert_eq!(r_get_model.text, "agent.model = claude-sonnet-4-6");
+
+        let r_get_provider = handle("get agent.provider");
+        assert_eq!(r_get_provider.text, "agent.provider = anthropic");
+
+        let r_get_token = handle("get providers.anthropic.token");
+        assert!(r_get_token.text.contains("sk-ant"));
+        assert!(r_get_token.text.contains("…"));
+        assert!(r_get_token.text.contains("456"));
+        assert!(!r_get_token.text.contains("abcdef"));
+
+        // 3. show config
+        let r_show = handle("show config");
+        assert!(r_show.text.contains("hyperia.json"));
+        assert!(r_show.text.contains("sk-ant"));
+        assert!(!r_show.text.contains("abcdef"));
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        if let Some(h) = orig_home {
+            std::env::set_var("HOME", h);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(up) = orig_userprofile {
+            std::env::set_var("USERPROFILE", up);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
     }
 }

@@ -107,7 +107,7 @@ impl ToolRegistry {
     }
 
     /// All tool definitions for sending to the Anthropic API.
-    pub fn tool_defs(&self) -> Vec<ToolDef> {
+    pub fn tool_defs(&self, provider: Option<&str>, model: Option<&str>) -> Vec<ToolDef> {
         let mut defs = self.builtins.clone();
         defs.push(tool_search_def());
         defs.push(tool_create_def());
@@ -140,6 +140,34 @@ impl ToolRegistry {
         for dt in dynamic.iter() {
             defs.push(dt.def.clone());
         }
+
+        let is_small_ollama = provider.map_or(false, |p| p.to_lowercase() == "ollama")
+            && model.map_or(false, |m| {
+                let m_lower = m.to_lowercase();
+                m_lower.contains("e2b") || m_lower.contains("2b") || m_lower.contains("3b") || m_lower.contains("1b") || m_lower.contains("small")
+            });
+
+        if is_small_ollama {
+            let allowed_tools = [
+                "terminal_run",
+                "terminal_keys",
+                "terminal_screen",
+                "terminal_status",
+                "terminal_split",
+                "file_read",
+                "file_write",
+                "web_fetch",
+                "open_web_pane",
+                "tab_snapshot",
+                "shell_state",
+                "show_input",
+                "show_picker",
+                "tool_search",
+                "help",
+            ];
+            defs.retain(|t| allowed_tools.contains(&t.name.as_str()));
+        }
+
         defs
     }
 
@@ -345,7 +373,7 @@ impl ToolRegistry {
 
     fn handle_tool_search(&self, input: &serde_json::Value) -> String {
         let query = input["query"].as_str().unwrap_or("").to_lowercase();
-        let all_defs = self.tool_defs();
+        let all_defs = self.tool_defs(None, None);
         let matches: Vec<_> = all_defs
             .iter()
             .filter(|t| {
@@ -1164,30 +1192,107 @@ fn unescape_keys(raw: &str) -> String {
                 Some('e') => out.push('\x1b'),
                 Some('\\') => out.push('\\'),
                 Some('x') => {
-                    let hi = chars.next().unwrap_or('0');
-                    let lo = chars.next().unwrap_or('0');
-                    let hex: String = [hi, lo].iter().collect();
-                    if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                        out.push(byte as char);
+                    let mut hex = String::new();
+                    if let Some(&h1) = chars.peek() {
+                        if h1.is_ascii_hexdigit() {
+                            chars.next();
+                            hex.push(h1);
+                            if let Some(&h2) = chars.peek() {
+                                if h2.is_ascii_hexdigit() {
+                                    chars.next();
+                                    hex.push(h2);
+                                }
+                            }
+                        }
+                    }
+                    if !hex.is_empty() {
+                        if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                            out.push(byte as char);
+                        } else {
+                            out.push('\\');
+                            out.push('x');
+                            out.push_str(&hex);
+                        }
+                    } else {
+                        out.push('\\');
+                        out.push('x');
                     }
                 }
-                Some(other) => { out.push('\\'); out.push(other); }
+                Some('u') => {
+                    let mut hex = String::new();
+                    for _ in 0..4 {
+                        if let Some(&h) = chars.peek() {
+                            if h.is_ascii_hexdigit() {
+                                chars.next();
+                                hex.push(h);
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    if hex.len() == 4 {
+                        if let Ok(val) = u32::from_str_radix(&hex, 16) {
+                            if let Some(ch) = std::char::from_u32(val) {
+                                out.push(ch);
+                            } else {
+                                out.push('\\');
+                                out.push('u');
+                                out.push_str(&hex);
+                            }
+                        } else {
+                            out.push('\\');
+                            out.push('u');
+                            out.push_str(&hex);
+                        }
+                    } else {
+                        out.push('\\');
+                        out.push('u');
+                        out.push_str(&hex);
+                    }
+                }
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
                 None => out.push('\\'),
             }
         } else {
             out.push(c);
         }
     }
-    // Handle "ctrl+X" patterns — convert to control characters
-    let ctrl_re_lower = "ctrl+";
-    let ctrl_re_upper = "Ctrl+";
-    let mut result = out.clone();
-    for prefix in [ctrl_re_lower, ctrl_re_upper] {
-        while let Some(pos) = result.find(prefix) {
+    
+    // Process control character combinations like ctrl+X, Ctrl+X, C-x, c-X, CTRL+X
+    let mut result = out;
+    let prefixes = ["ctrl+", "Ctrl+", "CTRL+", "c-", "C-"];
+    for prefix in prefixes {
+        while let Some(pos) = result.to_lowercase().find(&prefix.to_lowercase()) {
             if pos + prefix.len() < result.len() {
                 let ch = result.as_bytes()[pos + prefix.len()];
-                let ctrl_char = (ch & 0x1f) as char; // ctrl+a = 0x01, ctrl+c = 0x03, etc.
-                result = format!("{}{}{}", &result[..pos], ctrl_char, &result[pos + prefix.len() + 1..]);
+                let ch_upper = (ch as char).to_ascii_uppercase();
+                if ch_upper >= 'A' && ch_upper <= 'Z' {
+                    let ctrl_char = ((ch_upper as u8) - b'A' + 1) as char;
+                    result = format!(
+                        "{}{}{}",
+                        &result[..pos],
+                        ctrl_char,
+                        &result[pos + prefix.len() + 1..]
+                    );
+                } else if ch as char == '[' {
+                    result = format!(
+                        "{}{}{}",
+                        &result[..pos],
+                        '\x1b',
+                        &result[pos + prefix.len() + 1..]
+                    );
+                } else {
+                    result = format!(
+                        "{}{}",
+                        &result[..pos],
+                        &result[pos + prefix.len()..]
+                    );
+                }
             } else {
                 break;
             }

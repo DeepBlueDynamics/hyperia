@@ -30,6 +30,22 @@ impl AnyProvider {
         }
     }
 
+    pub fn provider_name(&self) -> &str {
+        match self {
+            AnyProvider::Anthropic(_) => "anthropic",
+            AnyProvider::Ollama(_) => "ollama",
+            AnyProvider::Unsupported(name) => name,
+        }
+    }
+
+    pub fn model_name(&self) -> &str {
+        match self {
+            AnyProvider::Anthropic(p) => &p.model,
+            AnyProvider::Ollama(p) => &p.model,
+            AnyProvider::Unsupported(_) => "",
+        }
+    }
+
     pub async fn stream(
         &self,
         system: &str,

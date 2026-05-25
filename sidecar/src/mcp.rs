@@ -1086,24 +1086,125 @@ fn strip_trailing_returns(s: &str) -> &str {
     s
 }
 
-fn unescape_keys(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
+fn unescape_keys(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\\' {
             match chars.next() {
-                Some('n') => out.push('\r'), // \n → Enter
+                Some('n') => out.push('\r'),
                 Some('r') => out.push('\r'),
                 Some('t') => out.push('\t'),
+                Some('e') => out.push('\x1b'),
                 Some('\\') => out.push('\\'),
-                Some(other) => { out.push('\\'); out.push(other); }
+                Some('x') => {
+                    let mut hex = String::new();
+                    if let Some(&h1) = chars.peek() {
+                        if h1.is_ascii_hexdigit() {
+                            chars.next();
+                            hex.push(h1);
+                            if let Some(&h2) = chars.peek() {
+                                if h2.is_ascii_hexdigit() {
+                                    chars.next();
+                                    hex.push(h2);
+                                }
+                            }
+                        }
+                    }
+                    if !hex.is_empty() {
+                        if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                            out.push(byte as char);
+                        } else {
+                            out.push('\\');
+                            out.push('x');
+                            out.push_str(&hex);
+                        }
+                    } else {
+                        out.push('\\');
+                        out.push('x');
+                    }
+                }
+                Some('u') => {
+                    let mut hex = String::new();
+                    for _ in 0..4 {
+                        if let Some(&h) = chars.peek() {
+                            if h.is_ascii_hexdigit() {
+                                chars.next();
+                                hex.push(h);
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    if hex.len() == 4 {
+                        if let Ok(val) = u32::from_str_radix(&hex, 16) {
+                            if let Some(ch) = std::char::from_u32(val) {
+                                out.push(ch);
+                            } else {
+                                out.push('\\');
+                                out.push('u');
+                                out.push_str(&hex);
+                            }
+                        } else {
+                            out.push('\\');
+                            out.push('u');
+                            out.push_str(&hex);
+                        }
+                    } else {
+                        out.push('\\');
+                        out.push('u');
+                        out.push_str(&hex);
+                    }
+                }
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
                 None => out.push('\\'),
             }
         } else {
             out.push(c);
         }
     }
-    out
+    
+    // Process control character combinations like ctrl+X, Ctrl+X, C-x, c-X, CTRL+X
+    let mut result = out;
+    let prefixes = ["ctrl+", "Ctrl+", "CTRL+", "c-", "C-"];
+    for prefix in prefixes {
+        while let Some(pos) = result.to_lowercase().find(&prefix.to_lowercase()) {
+            if pos + prefix.len() < result.len() {
+                let ch = result.as_bytes()[pos + prefix.len()];
+                let ch_upper = (ch as char).to_ascii_uppercase();
+                if ch_upper >= 'A' && ch_upper <= 'Z' {
+                    let ctrl_char = ((ch_upper as u8) - b'A' + 1) as char;
+                    result = format!(
+                        "{}{}{}",
+                        &result[..pos],
+                        ctrl_char,
+                        &result[pos + prefix.len() + 1..]
+                    );
+                } else if ch as char == '[' {
+                    result = format!(
+                        "{}{}{}",
+                        &result[..pos],
+                        '\x1b',
+                        &result[pos + prefix.len() + 1..]
+                    );
+                } else {
+                    result = format!(
+                        "{}{}",
+                        &result[..pos],
+                        &result[pos + prefix.len()..]
+                    );
+                }
+            } else {
+                break;
+            }
+        }
+    }
+    result
 }
 
 // -- Settings path helpers --
