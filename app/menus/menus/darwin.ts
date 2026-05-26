@@ -21,16 +21,6 @@ const darwinMenu = (
         type: 'separator'
       },
       {
-        label: 'Preferences...',
-        accelerator: commandKeys['window:preferences'],
-        click() {
-          execCommand('window:preferences');
-        }
-      },
-      {
-        type: 'separator'
-      },
-      {
         role: 'services',
         submenu: []
       },

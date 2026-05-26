@@ -130,19 +130,6 @@ const editMenu = (
     }
   ];
 
-  if (process.platform !== 'darwin') {
-    submenu.push(
-      {type: 'separator'},
-      {
-        label: 'Preferences...',
-        accelerator: commandKeys['window:preferences'],
-        click() {
-          execCommand('window:preferences');
-        }
-      }
-    );
-  }
-
   return {
     label: 'Edit',
     submenu

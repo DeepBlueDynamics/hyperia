@@ -52,11 +52,6 @@ const contextMenuTemplate = (
   menu.push({label: 'Clear Buffer', accelerator: commandKeys['editor:clearBuffer'], click: cmd('editor:clearBuffer')});
   menu.push({label: 'Search', accelerator: commandKeys['editor:search'], click: cmd('editor:search')});
 
-  if (process.platform !== 'darwin') {
-    menu.push(separator);
-    menu.push({label: 'Preferences', click: cmd('window:preferences')});
-  }
-
   return menu;
 };
 
