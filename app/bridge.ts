@@ -169,15 +169,36 @@ function sendSessionRegister(uid: string, tracked: TrackedSession) {
 // Agent input queue — defers writes while user is active
 // ---------------------------------------------------------------------------
 
-function isUserActive(uid: string): boolean {
-  const last = lastUserActivity.get(uid) || 0;
-  return Date.now() - last < AGENT_DEFER_MS;
+function getAgentDeferMs(): number {
+  const config = getConfig() as any;
+  const lockout = config.lockout || {};
+  const enabled = lockout.enabled !== false;
+  if (!enabled) {
+    return 0;
+  }
+  const durationSecs = typeof lockout.duration_secs === 'number' ? lockout.duration_secs : AGENT_DEFER_MS / 1000;
+  return durationSecs * 1000;
 }
 
-function enqueueOrWrite(uid: string, keys: string, seq: number | undefined) {
+function isUserActive(uid: string): boolean {
+  const last = lastUserActivity.get(uid) || 0;
+  return Date.now() - last < getAgentDeferMs();
+}
+
+function enqueueOrWrite(uid: string, keys: string, seq: number | undefined, interrupt = false) {
   const tracked = trackedSessions.get(uid);
   if (!tracked) {
     sendResult(seq, `No session: ${uid}`);
+    return;
+  }
+
+  // interrupt=true bypasses the human-activity queue and writes immediately —
+  // used to interrupt a running process (e.g. Ctrl-C) even while the human is
+  // active here. We still tell the agent it was an override so it's aware it
+  // took the pane from the human.
+  if (interrupt) {
+    tracked.session.write(keys);
+    sendResult(seq, isUserActive(uid) ? 'ok — interrupt override (a human was recently active in this pane)' : 'ok');
     return;
   }
 
@@ -188,7 +209,10 @@ function enqueueOrWrite(uid: string, keys: string, seq: number | undefined) {
     return;
   }
 
-  // User active — queue it
+  // User active — queue it and deliver automatically when they go idle. Reply
+  // NOW with a clear notice so the agent knows the keys were not sent yet (and
+  // how to force them). The queued entry carries no seq, so drainQueues won't
+  // send a second, duplicate result for it.
   let queue = agentQueues.get(uid);
   if (!queue) {
     queue = [];
@@ -196,12 +220,19 @@ function enqueueOrWrite(uid: string, keys: string, seq: number | undefined) {
   }
 
   if (queue.length >= MAX_QUEUE_DEPTH) {
-    sendResult(seq, 'Agent queue full — user is active, try again');
+    sendResult(
+      seq,
+      'queued: agent queue full — a human is active in this pane. Wait for them to go idle, or resend with interrupt=true to send immediately.'
+    );
     return;
   }
 
-  queue.push({keys, seq});
+  queue.push({keys, seq: undefined});
   ensureDrainTimer();
+  sendResult(
+    seq,
+    'queued: a human is active in this pane — your keys will be delivered automatically when they go idle. To send immediately (e.g. to interrupt a running process), resend with interrupt=true.'
+  );
 }
 
 function ensureDrainTimer() {
@@ -272,7 +303,8 @@ function handleCommand(msg: Record<string, unknown>) {
     case 'Keys': {
       const uid = msg.uid as string;
       const keys = msg.keys as string;
-      enqueueOrWrite(uid, keys, seq);
+      const interrupt = msg.interrupt === true;
+      enqueueOrWrite(uid, keys, seq, interrupt);
       break;
     }
 
@@ -730,7 +762,13 @@ export function updateSessionLayout(
     order: number;
     active: boolean;
     panes: Array<{uid: string; splitLabel: string}>;
-    bsp?: Array<{uid: string; x: number; y: number; width: number; height: number}>;
+    bsp?: Array<{
+      uid: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }>;
   }>
 ) {
   const seen = new Set<string>();
@@ -757,7 +795,12 @@ export function updateSessionLayout(
         splitLabel: tracked.splitLabel,
         tabOrder: tracked.tabOrder,
         tabActive: tracked.tabActive,
-        bsp: {x: tracked.bspX, y: tracked.bspY, width: tracked.bspW, height: tracked.bspH}
+        bsp: {
+          x: tracked.bspX,
+          y: tracked.bspY,
+          width: tracked.bspW,
+          height: tracked.bspH
+        }
       });
     }
   }

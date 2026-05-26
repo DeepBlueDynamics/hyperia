@@ -11,7 +11,7 @@ use crate::ghost::compressor::{ContextCompressor, FOCUS_MIN_CHARS};
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct KeysRequest {
-    /// Keystrokes to type into the terminal. Use \n for Enter, \t for Tab.
+    /// Keystrokes to type into the terminal. Use \n for Enter, \t for Tab, \x03 for Ctrl-C (interrupt).
     pub keys: String,
     /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
@@ -19,6 +19,8 @@ pub struct KeysRequest {
     pub tab: Option<String>,
     /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
     pub pane: Option<String>,
+    /// Set true to send immediately even when the human is active in this pane — use this to interrupt a running process (e.g. Ctrl-C). When the human is active and this is false/omitted, the keys are queued and you get a notice telling you to resend with interrupt=true.
+    pub interrupt: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -317,16 +319,20 @@ impl HyperiaMcp {
         }
     }
 
-    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab. These are unescaped automatically. Address panes with window/tab/pane. The pane field accepts either a pane label or the paneId from terminal_status; if the label is empty, use paneId.")]
+    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab, \\x03 for Ctrl-C. These are unescaped automatically. Address panes with window/tab/pane. The pane field accepts either a pane label or the paneId from terminal_status; if the label is empty, use paneId. If the human is currently active in the target pane, the keys are queued and the reply tells you so — resend with interrupt=true to send immediately (use this to interrupt a running process).")]
     async fn terminal_keys(
         &self,
         Parameters(req): Parameters<KeysRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         self.focus_pane(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
         let keys = unescape_keys(&req.keys);
-        let resp = self
-            .post_text(&self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref()), &keys)
-            .await?;
+        let mut path = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
+        if req.interrupt.unwrap_or(false) {
+            let sep = if path.contains('?') { '&' } else { '?' };
+            path.push(sep);
+            path.push_str("interrupt=true");
+        }
+        let resp = self.post_text(&path, &keys).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 

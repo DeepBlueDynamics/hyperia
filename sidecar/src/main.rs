@@ -59,6 +59,10 @@ struct PaneAddress {
     tab: Option<String>,
     pane: Option<String>,
     quiet_ms: Option<u64>,
+    /// When true on /api/type, bypass the human-activity lockout and deliver
+    /// keys immediately — used to interrupt a running process (e.g. Ctrl-C)
+    /// even while the human is active in the pane. Ignored by other routes.
+    interrupt: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -104,18 +108,45 @@ async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(state.bridge.get_status().await)
 }
 
+fn load_lockout_config() -> (bool, u64) {
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").ok()
+    } else {
+        std::env::var("HOME").ok()
+    };
+    let Some(h) = home else {
+        return (true, 60);
+    };
+    let path = std::path::PathBuf::from(h).join(".hyperia").join("hyperia.json");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return (true, 60);
+    };
+    let Ok(json): Result<serde_json::Value, _> = serde_json::from_str(&content) else {
+        return (true, 60);
+    };
+    let cfg = &json["config"]["lockout"];
+    let enabled = cfg["enabled"].as_bool().unwrap_or(true);
+    let duration = cfg["duration_secs"].as_u64().unwrap_or(60);
+    (enabled, duration)
+}
+
 async fn check_human_activity_lockout(
     state: &AppState,
     uid: &str,
 ) -> Result<(), (StatusCode, String)> {
+    let (enabled, duration_secs) = load_lockout_config();
+    if !enabled {
+        return Ok(());
+    }
+
     if let Some(elapsed) = state.bridge.get_last_tab_activity(uid).await {
-        if elapsed < std::time::Duration::from_secs(60) {
+        if elapsed < std::time::Duration::from_secs(duration_secs) {
             let secs = elapsed.as_secs();
             return Err((
                 StatusCode::CONFLICT,
                 format!(
-                    "Error: Human activity detected in this tab. The human was active {} seconds ago (activity decays over 60 seconds). To avoid conflict, terminal interactions are temporarily blocked. Human actions have priority.",
-                    secs
+                    "Error: Human activity detected in this tab. The human was active {} seconds ago (activity decays over {} seconds). To avoid conflict, terminal interactions are temporarily blocked. Human actions have priority.",
+                    secs, duration_secs
                 ),
             ));
         }
@@ -370,16 +401,20 @@ If the pane label is empty, use paneId.",
             ));
         }
     };
-    if let Err(err) = check_human_activity_lockout(&state, &uid).await {
-        return err;
-    }
+    let interrupt = addr.interrupt.unwrap_or(false);
+    // The human-activity gate now lives in the renderer (enqueueOrWrite): when
+    // the human is active in this pane it QUEUES the keys and replies with a
+    // "queued — resend with interrupt=true" notice instead of silently
+    // swallowing them. interrupt=true bypasses the queue and writes now (for
+    // Ctrl-C and other take-overs). We forward the flag and let the renderer
+    // decide, so the agent always gets an honest result.
     if let Some((tab, pane, win)) = state.bridge.pane_address_for_log(&uid).await {
         tracing::info!(
-            "type win={} tab={:?} pane={} bytes={} preview={:?}",
-            win, tab, pane, keys.len(), &keys[..keys.len().min(120)]
+            "type win={} tab={:?} pane={} bytes={} interrupt={} preview={:?}",
+            win, tab, pane, keys.len(), interrupt, &keys[..keys.len().min(120)]
         );
     }
-    let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys});
+    let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys, "interrupt": interrupt});
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),

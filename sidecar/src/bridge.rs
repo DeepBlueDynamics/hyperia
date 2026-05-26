@@ -374,6 +374,17 @@ impl Bridge {
                         } else {
                             String::new()
                         };
+                        // `focused` = this pane is where the human's keyboard
+                        // actually goes right now: the active pane of the
+                        // focused window. `userActiveSecsAgo` = seconds since
+                        // the human last typed in this pane (null if never /
+                        // not tracked). Together they let an agent see "the
+                        // human is in this pane and was just typing" before it
+                        // sends keys.
+                        let focused = focused_window_id == Some(*win_id) && info.pane_active;
+                        let user_active_secs_ago = info
+                            .last_user_activity
+                            .map(|t| t.elapsed().as_secs());
                         serde_json::json!({
                             "paneId": uid,
                             "label": info.split_label,
@@ -383,6 +394,8 @@ impl Bridge {
                             "rows": info.rows,
                             "pid": info.pid,
                             "active": info.pane_active,
+                            "focused": focused,
+                            "userActiveSecsAgo": user_active_secs_ago,
                             "cwd": info.cwd,
                         })
                     })
