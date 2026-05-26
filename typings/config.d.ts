@@ -191,6 +191,7 @@ type profileConfigOptions = {
   windowSize?: [number, number];
   /** set custom startup directory (must be an absolute path) */
   workingDirectory: string;
+  styleTheme?: any;
 };
 
 export type configOptions = rootConfigOptions &

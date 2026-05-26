@@ -25,6 +25,8 @@ export interface SessionAddAction {
   activeUid: string | null;
   now: number;
   profile: string;
+  groupUid?: string;
+  url?: string;
 }
 export interface SessionResizeAction {
   type: typeof SESSION_RESIZE;
@@ -73,6 +75,7 @@ export interface SessionSetXtermTitleAction {
   type: typeof SESSION_SET_XTERM_TITLE;
   uid: string;
   title: string;
+  manual?: boolean;
 }
 export interface SessionSetCwdAction {
   type: typeof SESSION_SET_CWD;

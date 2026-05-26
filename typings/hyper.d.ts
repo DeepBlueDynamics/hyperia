@@ -31,6 +31,7 @@ export type ITermGroup = Immutable<{
   sizes: number[] | null;
   children: string[];
   webUrl?: string | null;
+  isSwitching?: boolean;
   // User-set tab name. Lives on the root group so it survives splits.
   // null = use the auto-generated name from the active session.
   tabName?: string | null;
@@ -116,6 +117,7 @@ export type uiState = Immutable<{
   defaultProfile: string;
   profiles: configOptions['profiles'];
   agentStatuses: Record<string, AgentStatus>;
+  styleTheme?: any;
 }>;
 
 export type session = {
@@ -251,6 +253,7 @@ export type TabProps = {
   agentStatus?: AgentStatus;
   isWebPane?: boolean;
   webUrl?: string;
+  defaultProfile?: string;
 } & extensionProps;
 
 export type AgentStatus = {
@@ -416,7 +419,9 @@ export type TermProps = {
   onData: (data: string) => void;
   onOpenSearch: () => void;
   onResize: (cols: number, rows: number) => void;
-  onTitle: (title: string) => void;
+  onTitle: (title: string, manual?: boolean) => void;
+  onClosePane?: (groupUid: string) => void;
+  groupUid?: string;
   padding: string;
   quickEdit: boolean;
   rows: number | null;
@@ -433,6 +438,9 @@ export type TermProps = {
   webLinksActivationKey: 'ctrl' | 'alt' | 'meta' | 'shift' | '';
   windowsPty?: IWindowsPty;
   ref_: (uid: string, term: Term | null) => void;
+  defaultProfile?: string;
+  profiles?: any[];
+  sessionCwd?: string;
 } & extensionProps;
 
 // Utility types

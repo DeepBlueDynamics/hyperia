@@ -168,15 +168,31 @@ rpc.on('session search close', () => {
 });
 
 rpc.on('termgroup add req', ({activeUid, profile}) => {
-  store_.dispatch(termGroupActions.requestTermGroup(activeUid, profile));
+  store_.dispatch(termGroupActions.requestTermGroup(activeUid ?? undefined, profile ?? undefined));
 });
 
-rpc.on('split request horizontal', ({activeUid, profile}) => {
-  store_.dispatch(termGroupActions.requestHorizontalSplit(activeUid, profile));
+rpc.on('split request horizontal', ({activeUid, profile, url}) => {
+  store_.dispatch(termGroupActions.requestHorizontalSplit(activeUid ?? undefined, profile ?? undefined, url));
 });
 
-rpc.on('split request vertical', ({activeUid, profile}) => {
-  store_.dispatch(termGroupActions.requestVerticalSplit(activeUid, profile));
+rpc.on('split request vertical', ({activeUid, profile, url}) => {
+  store_.dispatch(termGroupActions.requestVerticalSplit(activeUid ?? undefined, profile ?? undefined, url));
+});
+
+rpc.on('clone request vertical', () => {
+  const state = store_.getState();
+  const activeUid = state.sessions.activeUid;
+  const activeSession = activeUid ? state.sessions.sessions[activeUid] : null;
+  const profile = activeSession ? activeSession.profile : undefined;
+  store_.dispatch(termGroupActions.requestVerticalSplit(activeUid ?? undefined, profile ?? undefined));
+});
+
+rpc.on('clone request horizontal', () => {
+  const state = store_.getState();
+  const activeUid = state.sessions.activeUid;
+  const activeSession = activeUid ? state.sessions.sessions[activeUid] : null;
+  const profile = activeSession ? activeSession.profile : undefined;
+  store_.dispatch(termGroupActions.requestHorizontalSplit(activeUid ?? undefined, profile ?? undefined));
 });
 
 rpc.on('reset fontSize req', () => {
@@ -253,6 +269,7 @@ rpc.on('agent status', ({sessionUid, connected, working, label, humanPercent}) =
 
 function countLeaves(group: any, termGroups: Record<string, any>): number {
   if (group?.sessionUid) return 1;
+  if (group?.webUrl !== undefined && group?.webUrl !== null) return 1;
   const children: string[] = (group?.children as string[]) || [];
   return children.reduce((count: number, childUid: string) => {
     const child = termGroups[childUid];
@@ -270,6 +287,9 @@ function collectPaneLayout(
   if (group?.sessionUid) {
     return [{uid: group.sessionUid, splitLabel: ''}];
   }
+  if (group?.webUrl !== undefined && group?.webUrl !== null) {
+    return [{uid: group.uid, splitLabel: ''}];
+  }
 
   const totalLeaves = countLeaves(group, termGroups);
   const needLabels = totalLeaves > 1 || !isRoot;
@@ -279,6 +299,7 @@ function collectPaneLayout(
   function collectLeaves(g: Record<string, any>): string[] {
     if (!g) return [];
     if (g.sessionUid) return [g.sessionUid as string];
+    if (g.webUrl !== undefined && g.webUrl !== null) return [g.uid as string];
     const children: string[] = (g.children as string[]) || [];
     return children.flatMap((cUid: string) => collectLeaves(termGroups[cUid] as Record<string, any>));
   }
@@ -303,6 +324,10 @@ function calcBspLayout(
   if (!node) return;
   if (node.sessionUid) {
     results.push({uid: node.sessionUid as string, x, y, width: w, height: h});
+    return;
+  }
+  if (node.webUrl !== undefined && node.webUrl !== null) {
+    results.push({uid: node.uid as string, x, y, width: w, height: h});
     return;
   }
   const children: string[] = (node.children as string[]) || [];

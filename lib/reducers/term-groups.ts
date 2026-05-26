@@ -100,7 +100,8 @@ const splitGroup = (state: ITermState, action: SessionAddAction) => {
   const newSession = TermGroup({
     uid: uuidv4(),
     sessionUid: uid,
-    parentUid: parentGroup.uid
+    parentUid: parentGroup.uid,
+    webUrl: (action as any).profile === 'Web Pane' ? ((action as any).url || '') : undefined
   });
 
   state = state.setIn(['termGroups', newSession.uid], newSession);
@@ -206,36 +207,57 @@ const resizeGroup = (state: ITermState, uid: string, sizes: number[]) => {
 };
 
 const reducer: ITermGroupReducer = (state = initialState, action) => {
-  switch (action.type) {
+  const act = action as any;
+  switch (act.type) {
     case SESSION_ADD: {
-      if (action.splitDirection) {
-        state = splitGroup(state, action);
-        return setActiveGroup(state, action);
+      if (act.groupUid) {
+        state = state
+          .setIn(['termGroups', act.groupUid, 'sessionUid'], act.uid)
+          .setIn(['activeSessions', act.groupUid], act.uid)
+          .setIn(['termGroups', act.groupUid, 'webUrl'], undefined)
+          .setIn(['termGroups', act.groupUid, 'isSwitching'], undefined);
+        return setActiveGroup(state, act);
+      }
+
+      if (act.splitDirection) {
+        state = splitGroup(state, act);
+        return setActiveGroup(state, act);
       }
 
       const uid = uuidv4();
       const termGroup = TermGroup({
         uid,
-        sessionUid: action.uid
+        sessionUid: act.uid,
+        webUrl: act.profile === 'Web Pane' ? (act.url || '') : undefined
       });
 
       return state
         .setIn(['termGroups', uid], termGroup)
-        .setIn(['activeSessions', uid], action.uid)
+        .setIn(['activeSessions', uid], act.uid)
         .set('activeRootGroup', uid);
     }
     case SESSION_SET_ACTIVE:
-      return setActiveGroup(state, action);
+      return setActiveGroup(state, act);
     case TERM_GROUP_RESIZE:
-      return resizeGroup(state, action.uid, action.sizes);
+      return resizeGroup(state, act.uid, act.sizes);
     case TERM_GROUP_EXIT:
-      return removeGroup(state, action.uid);
+      return removeGroup(state, act.uid);
+    case 'TERM_GROUP_PREPARE_SWITCH': {
+      const {uid} = act;
+      return state.setIn(['termGroups', uid, 'isSwitching'], true);
+    }
     case TERM_GROUP_SET_WEB_URL: {
-      const {uid, url} = action as unknown as {uid: string; url: string | null};
+      const {uid, url} = act;
+      if (url !== null && url !== undefined) {
+        return state
+          .setIn(['termGroups', uid, 'webUrl'], url)
+          .setIn(['termGroups', uid, 'sessionUid'], null)
+          .set('activeSessions', state.activeSessions.without(uid));
+      }
       return state.setIn(['termGroups', uid, 'webUrl'], url);
     }
     case TERM_GROUP_ADD_WEB_TAB: {
-      const {url} = action as unknown as {url: string};
+      const {url} = act;
       const uid = uuidv4();
       const termGroup = TermGroup({uid});
       return state
@@ -245,15 +267,15 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
         .set('activeRootGroup', uid);
     }
     case TERM_GROUP_ACTIVATE_WEB_TAB: {
-      const {uid} = action as unknown as {uid: string};
+      const {uid} = act;
       return state.set('activeRootGroup', uid);
     }
     case TERM_GROUP_SET_WEB_NAME: {
-      const {uid, name} = action as unknown as {uid: string; name: string};
+      const {uid, name} = act;
       return state.setIn(['termGroups', uid, 'webName'], name);
     }
     case TERM_GROUP_SET_TAB_NAME: {
-      const {uid, tabName} = action as unknown as {uid: string; tabName: string};
+      const {uid, tabName} = act;
       // uid may be a session uid OR a term-group uid — resolve to the root group.
       let groupUid: string | null = null;
       if (state.termGroups[uid]) {
@@ -266,7 +288,7 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       return state.setIn(['termGroups', groupUid, 'tabName'], tabName);
     }
     case TERM_GROUP_REORDER: {
-      const {fromUid, toIndex} = action as unknown as {fromUid: string; toIndex: number};
+      const {fromUid, toIndex} = act;
       // Get root group UIDs in current order
       const rootUids = Object.keys(state.termGroups).filter((uid) => !state.termGroups[uid].parentUid);
       const fromIndex = rootUids.indexOf(fromUid);

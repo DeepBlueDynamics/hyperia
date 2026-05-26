@@ -309,6 +309,10 @@
                 "workingDirectory": {
                     "description": "set custom startup directory (must be an absolute path)",
                     "type": "string"
+                },
+                "styleTheme": {
+                    "description": "Custom color-scheme / style overrides for flat developer-tool modernism variables",
+                    "type": "object"
                 }
             },
             "type": "object"

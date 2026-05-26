@@ -94,11 +94,9 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
         <div
           className="new_tab_btn"
           onClick={handleClick}
-          onContextMenu={handleContextMenu}
-          title="New Tab (right-click for profiles)"
+          title="New Tab"
         >
           <span className="new_tab_icon">+</span>
-          <span className="new_tab_arrow_icon">&rsaquo;</span>
         </div>
         {/* New window */}
         <div className="new_tab_btn" onClick={handleNewWindow} title="New Window">
@@ -122,31 +120,6 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
           </svg>
         </div>
       </div>
-
-      {open && shellProfiles.length > 0 && (
-        <div className="new_tab_dropdown">
-          <div className="new_tab_hint">left-click → launch · right-click → set default</div>
-          {shellProfiles.map((p: any) => {
-            const isDefault = p.name === effectiveDefault;
-            return (
-              <div
-                key={p.name}
-                className={`new_tab_option ${isDefault ? 'new_tab_option_default' : ''}`}
-                onClick={() => handleSelect(p.name)}
-                onContextMenu={(e) => handleSetDefault(e, p.name)}
-                title={
-                  isDefault
-                    ? 'Default profile · click to launch · right-click to keep as default'
-                    : 'click to launch · right-click to set as default'
-                }
-              >
-                {isDefault && <span className="new_tab_option_star">★</span>}
-                {p.name}
-              </div>
-            );
-          })}
-        </div>
-      )}
 
       <style jsx>{`
         .new_tab_wrapper {

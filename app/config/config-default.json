@@ -64,6 +64,10 @@
     "screenReaderMode": false,
     "sessionLogging": false,
     "imageSupport": true,
+    "styleTheme": {
+      "dark": {},
+      "light": {}
+    },
     "defaultProfile": "",
     "profiles": [
       {

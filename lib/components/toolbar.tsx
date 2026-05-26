@@ -5,7 +5,7 @@ import React, {useState, useRef, useEffect} from 'react';
 import type {configOptions} from '../../typings/config';
 import {ipcRenderer} from '../utils/ipc';
 
-import {showWebPaneDialog} from './web-pane-dialog';
+
 
 export interface Props {
   defaultProfile: string;
@@ -54,9 +54,7 @@ const Toolbar = ({defaultProfile, profiles, openNewTab, openWebPane}: Props) => 
   const handleNewSticky = () => {
     ipcRenderer.send('new-sticky');
   };
-  const handleNewWebPane = () => {
-    showWebPaneDialog((url) => openWebPane?.(url));
-  };
+
 
   return (
     <div className="toolbar_wrap" ref={ref}>
@@ -65,11 +63,9 @@ const Toolbar = ({defaultProfile, profiles, openNewTab, openWebPane}: Props) => 
         <div
           className="toolbar_btn"
           onClick={handleNewTab}
-          onContextMenu={handleNewTabContext}
-          title="New Tab (right-click for profiles)"
+          title="New Tab"
         >
           <span className="toolbar_plus">+</span>
-          <span className="toolbar_chevron">&rsaquo;</span>
         </div>
 
         {/* New window */}
@@ -95,30 +91,8 @@ const Toolbar = ({defaultProfile, profiles, openNewTab, openWebPane}: Props) => 
           </svg>
         </div>
 
-        {/* New web pane */}
-        <div className="toolbar_btn" onClick={handleNewWebPane} title="New Web Pane">
-          <svg viewBox="0 0 14 14" width="13" height="13">
-            <circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
-            <ellipse cx="7" cy="7" rx="2.2" ry="5.5" fill="none" stroke="currentColor" strokeWidth="0.9" />
-            <line x1="1.5" y1="5" x2="12.5" y2="5" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
-            <line x1="1.5" y1="9" x2="12.5" y2="9" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
-          </svg>
-        </div>
-      </div>
 
-      {profileOpen && shellProfiles.length > 0 && (
-        <div className="toolbar_dropdown">
-          {shellProfiles.map((p: {name: string; config?: Record<string, unknown>}) => (
-            <div
-              key={p.name}
-              className={`toolbar_option ${p.name === defaultProfile ? 'toolbar_option_active' : ''}`}
-              onClick={() => handleProfileSelect(p.name)}
-            >
-              {p.name}
-            </div>
-          ))}
-        </div>
-      )}
+      </div>
 
       <style jsx>{`
         .toolbar_wrap {

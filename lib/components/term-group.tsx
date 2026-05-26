@@ -62,6 +62,14 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
 
   renderTerm(uid: string, splitLabel?: string) {
     const session = this.props.sessions[uid];
+    if (!session) {
+      return (
+        <div
+          className="term_fit term_wrapper"
+          style={{position: 'relative', background: this.props.backgroundColor || '#0a0a12'}}
+        />
+      );
+    }
     const termRef = this.props.terms[uid];
     const props = getTermProps(uid, this.props, {
       splitLabel: splitLabel || '',
@@ -113,8 +121,18 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       screenReaderMode: this.props.screenReaderMode,
       windowsPty: this.props.windowsPty,
       imageSupport: this.props.imageSupport,
-      uid
-    });
+      uid,
+      groupUid: this.props.termGroup.uid,
+      defaultProfile: (this.props as any).defaultProfile,
+      profiles: (this.props as any).profiles,
+      setWebPaneUrl: (this.props as any).setWebPaneUrl,
+      switchPaneProfile: (this.props as any).switchPaneProfile,
+      switchPaneToWeb: (this.props as any).switchPaneToWeb,
+      onClosePane: (this.props as any).onClosePane,
+      sessionProfile: session ? (session as any).profile : undefined,
+      sessionTitle: session ? (session as any).title : undefined,
+      sessionCwd: session ? (session as any).cwd : undefined
+    } as any);
 
     // This will create a new ref_ function for every render,
     // which is inefficient. Should maybe do something similar
@@ -122,9 +140,10 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
     return <Term ref_={this.onTermRef} key={uid} {...props} />;
   }
 
-  // Count leaf (terminal) nodes in a group subtree
+  // Count leaf (terminal or web) nodes in a group subtree
   countLeaves(group: any): number {
     if (group.sessionUid) return 1;
+    if (group.webUrl !== undefined && group.webUrl !== null) return 1;
     const children = group.children || [];
     const {termGroups} = (this.props as any).parentProps || {};
     if (!termGroups) return (children.length || 1) as number;
@@ -142,18 +161,38 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
     const splitOffset = ((this.props as any).splitOffset as number) || 0;
     const isRoot = !(this.props as any).splitLabel && !splitOffset;
 
-    if ((termGroup as any).webUrl) {
-      return <WebPane url={(termGroup as any).webUrl} groupUid={termGroup.uid} hasSession={!!termGroup.sessionUid} />;
+    if ((termGroup as any).webUrl !== undefined && (termGroup as any).webUrl !== null) {
+      const label = (this.props as any).splitLabel as string | undefined || 'a';
+      return (
+        <WebPane
+          url={(termGroup as any).webUrl}
+          groupUid={termGroup.uid}
+          hasSession={!!termGroup.sessionUid}
+          sessionUid={termGroup.sessionUid}
+          splitLabel={label}
+          switchPaneProfile={(this.props as any).switchPaneProfile}
+          switchPaneToWeb={(this.props as any).switchPaneToWeb}
+        />
+      );
     }
 
     if (termGroup.sessionUid) {
-      const label = (this.props as any).splitLabel as string | undefined;
+      const label = (this.props as any).splitLabel as string | undefined || 'a';
       return this.renderTerm(termGroup.sessionUid, label);
+    }
+
+    if (!childGroups || childGroups.length === 0) {
+      return (
+        <div
+          className="term_fit term_wrapper"
+          style={{position: 'relative', background: this.props.backgroundColor || '#0a0a12'}}
+        />
+      );
     }
 
     // Count total leaves to decide if we need labels at all
     const totalLeaves = this.countLeaves(termGroup);
-    const needLabels = totalLeaves > 1 || !isRoot;
+    const needLabels = true;
 
     let offset = splitOffset;
     const groups = childGroups.asMutable().map((child) => {

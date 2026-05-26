@@ -141,7 +141,8 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     tabName,
     description,
     isWebPane,
-    webUrl
+    webUrl,
+    defaultProfile
   } = props;
 
   // Clear pendingName once Redux state has caught up to the committed rename.
@@ -151,8 +152,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     }
   }, [tabName, description, pendingName]);
 
+  const isFirstRun = !defaultProfile;
   // Optimistically show pendingName to avoid any flicker while Redux propagates.
-  const displayText = pendingName ?? (tabName || description || props.text);
+  const displayText = isFirstRun ? 'untitled' : (pendingName ?? (tabName || description || props.text));
 
   // Agent dot color
   const agentDotColor = agentStatus?.working
@@ -176,7 +178,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         style={{borderColor}}
         className={`tab_tab ${isFirst ? 'tab_first' : ''} ${isActive ? 'tab_active' : ''} ${
           isFirst && isActive ? 'tab_firstActive' : ''
-        } ${hasActivity ? 'tab_hasActivity' : ''} ${isWebPane ? 'tab_webPane' : ''}`}
+        } ${hasActivity ? 'tab_hasActivity' : ''} ${isWebPane ? 'tab_webPane' : ''} ${isFirstRun ? 'tab_firstRun' : ''}`}
         ref={ref}
       >
         {props.customChildrenBefore}
@@ -230,16 +232,19 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
 
       <style jsx>{`
         .tab_tab {
-          color: #999;
+          color: var(--text-secondary);
           list-style-type: none;
           flex: 1 1 0;
           min-width: 72px;
           max-width: 200px;
           position: relative;
-          background: #1a1a1a;
-          border-right: 1px solid #333;
+          background: var(--bg-secondary);
+          border-right: 0.5px solid var(--border-neutral);
           -webkit-app-region: no-drag;
           cursor: grab;
+          font-family: var(--font-sans);
+          font-size: 11px;
+          font-weight: 400;
         }
 
         .tab_tab:active {
@@ -247,12 +252,12 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         }
 
         .tab_tab[draggable]:drag-over {
-          border-left: 2px solid #4488ff;
+          border-left: 2px solid var(--border-focus);
         }
 
         .tab_tab:hover {
-          color: #ccc;
-          background: #252525;
+          color: var(--text-primary);
+          background: var(--bg-tertiary);
         }
 
         .tab_first {
@@ -262,27 +267,29 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         }
 
         .tab_active {
-          color: #fff;
-          background: #000;
+          color: var(--text-primary);
+          background: var(--bg-primary);
+          font-weight: 500;
         }
         .tab_active:hover {
-          color: #fff;
-          background: #000;
+          color: var(--text-primary);
+          background: var(--bg-primary);
         }
 
         .tab_webPane {
-          background: #1a1a1a;
-          border-right-color: #333;
+          background: var(--bg-secondary);
+          border-right-color: var(--border-neutral);
         }
         .tab_webPane:hover {
-          background: #252525;
+          background: var(--bg-tertiary);
         }
         .tab_webPane.tab_active {
-          background: #0a0a12;
-          color: #aabbdd;
+          background: var(--bg-primary);
+          color: var(--text-primary);
+          font-weight: 500;
         }
         .tab_webPane.tab_active:hover {
-          background: #0a0a12;
+          background: var(--bg-primary);
         }
 
         .tab_hasActivity {
@@ -291,6 +298,11 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
 
         .tab_hasActivity:hover {
           color: #50e3c2;
+        }
+
+        .tab_firstRun .tab_textContent {
+          font-style: italic;
+          color: var(--text-tertiary) !important;
         }
 
         .tab_text {

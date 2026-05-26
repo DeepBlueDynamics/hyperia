@@ -34,6 +34,12 @@ const commands: Record<string, (focusedWindow?: BrowserWindow) => void> = {
   'pane:splitDown': (focusedWindow) => {
     focusedWindow?.rpc?.emit('split request horizontal', {});
   },
+  'pane:cloneRight': (focusedWindow) => {
+    focusedWindow?.rpc?.emit('clone request vertical', {});
+  },
+  'pane:cloneDown': (focusedWindow) => {
+    focusedWindow?.rpc?.emit('clone request horizontal', {});
+  },
   'pane:close': (focusedWindow) => {
     focusedWindow?.rpc?.emit('termgroup close req');
   },

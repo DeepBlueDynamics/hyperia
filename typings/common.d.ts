@@ -15,6 +15,8 @@ export type Session = {
   pid: number | null;
   activeUid?: string;
   profile: string;
+  groupUid?: string;
+  url?: string;
 };
 
 export type sessionExtraOptions = {
@@ -27,6 +29,8 @@ export type sessionExtraOptions = {
   shell?: string;
   shellArgs?: string[];
   profile?: string;
+  groupUid?: string;
+  url?: string;
 };
 
 export type MainEvents = {
@@ -39,6 +43,8 @@ export type MainEvents = {
   maximize: never;
   minimize: never;
   new: sessionExtraOptions;
+  'reset session': {uid: string; profile: string};
+  'park session': {uid: string};
   'open context menu': string;
   'open external': {url: string};
   'open hamburger menu': {x: number; y: number};
@@ -56,6 +62,10 @@ export type MainEvents = {
   }>;
   unmaximize: never;
   'web-pane-reload': string;
+  'split request vertical': {activeUid?: string | null; profile?: string | null; url?: string};
+  'split request horizontal': {activeUid?: string | null; profile?: string | null; url?: string};
+  'clone request vertical': any;
+  'clone request horizontal': any;
 };
 
 export type RendererEvents = {
@@ -91,9 +101,11 @@ export type RendererEvents = {
   'term selectAll': never;
   reload: never;
   'session clear req': never;
-  'split request horizontal': {activeUid?: string; profile?: string};
-  'split request vertical': {activeUid?: string; profile?: string};
-  'termgroup add req': {activeUid?: string; profile?: string};
+  'split request horizontal': {activeUid?: string | null; profile?: string | null; url?: string};
+  'split request vertical': {activeUid?: string | null; profile?: string | null; url?: string};
+  'clone request vertical': any;
+  'clone request horizontal': any;
+  'termgroup add req': {activeUid?: string | null; profile?: string | null};
   'termgroup close req': never;
   'web-pane-reload': string;
   'session add': Session;

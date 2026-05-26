@@ -64,6 +64,7 @@ const initial: uiState = Immutable<Mutable<uiState>>({
   letterSpacing: 0,
   css: '',
   termCSS: '',
+  styleTheme: null,
   openAt: {},
   resizeAt: 0,
   colors: {
@@ -221,6 +222,10 @@ const reducer: IUiReducer = (state = initial, action) => {
 
             if (config.termCSS) {
               ret.termCSS = config.termCSS;
+            }
+
+            if (config.styleTheme) {
+              ret.styleTheme = config.styleTheme;
             }
 
             if (allowedBells.has(config.bell)) {

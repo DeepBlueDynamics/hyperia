@@ -32,6 +32,8 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
   onRef = (uid: string, term: Term | null) => {
     if (term) {
       this.terms[uid] = term;
+    } else {
+      delete this.terms[uid];
     }
   };
 
@@ -48,7 +50,30 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
   }
 
   componentDidMount() {
-    window.addEventListener('contextmenu', () => {
+    window.addEventListener('contextmenu', (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target) return;
+
+      // Do NOT trigger the default terminal context menu for UI elements, labels, and web panes.
+      // Prevent default to ensure no context menu shows up at all in these areas.
+      if (
+        target.closest('.term_splitLabel') ||
+        target.closest('.term_profileMenu') ||
+        target.closest('.toolbar_wrap') ||
+        target.closest('.toolbar_bar') ||
+        target.closest('.header_header') ||
+        target.closest('.header_bar') ||
+        target.closest('.tabs_nav') ||
+        target.closest('.web-pane') ||
+        target.closest('webview') ||
+        !target.closest('.xterm')
+      ) {
+        e.preventDefault();
+        return;
+      }
+
+      if (e.defaultPrevented) return;
+
       const activeTerm = this.getActiveTerm();
       const selection = activeTerm ? activeTerm.term.getSelection() : '';
       const uid = activeTerm ? activeTerm.props.uid : this.props.activeSession!;
@@ -124,6 +149,12 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
             screenReaderMode: this.props.screenReaderMode,
             windowsPty: this.props.windowsPty,
             imageSupport: this.props.imageSupport,
+            defaultProfile: (this.props as any).defaultProfile,
+            profiles: (this.props as any).profiles,
+            setWebPaneUrl: (this.props as any).setWebPaneUrl,
+            switchPaneProfile: (this.props as any).switchPaneProfile,
+            switchPaneToWeb: (this.props as any).switchPaneToWeb,
+            onClosePane: (this.props as any).onClosePane,
             parentProps: this.props
           });
 
@@ -149,8 +180,11 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
             top: 0;
             right: 0;
             left: 0;
-            bottom: 22px;
-            color: #fff;
+            bottom: 0;
+            color: var(--text-primary);
+            background: var(--bg-tertiary);
+            padding: 8px;
+            box-sizing: border-box;
           }
 
           .terms_termsShifted {

@@ -53,6 +53,16 @@ export function initSettings() {
     }
   });
 
+  ipcMain.on('show-about', () => {
+    const {dialog} = require('electron');
+    dialog.showMessageBoxSync({
+      title: `About Hyperia`,
+      message: `Hyperia 0.10.8 (stable)`,
+      detail: `by Kord Campbell\nCopyright © 2026 Deep Blue Dynamics\n\nBased on Hyper, Copyright © 2022 Vercel, Inc.`,
+      buttons: ['OK']
+    });
+  });
+
   ipcMain.on('factory-reset-config', (event) => {
     try {
       // Read current config to preserve agent token
@@ -97,5 +107,9 @@ export function initSettings() {
     } catch (e) {
       event.reply('factory-reset-done', false);
     }
+  });
+
+  ipcMain.handle('has-agent-token', () => {
+    return hasAgentToken();
   });
 }

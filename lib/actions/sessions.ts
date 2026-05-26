@@ -22,7 +22,7 @@ import rpc from '../rpc';
 import {keys} from '../utils/object';
 import findBySession from '../utils/term-groups';
 
-export function addSession({uid, shell, pid, cols = null, rows = null, splitDirection, activeUid, profile}: Session) {
+export function addSession({uid, shell, pid, cols = null, rows = null, splitDirection, activeUid, profile, groupUid, url}: Session) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     const {sessions} = getState();
     const resolvedActiveUid = activeUid ? activeUid : sessions.activeUid;
@@ -37,7 +37,9 @@ export function addSession({uid, shell, pid, cols = null, rows = null, splitDire
       splitDirection,
       activeUid: resolvedActiveUid,
       now,
-      profile
+      profile,
+      groupUid,
+      url
     });
     // Keep split panes attached to the parent tab's existing name when syncing
     // the tab label back to the main process / sidecar.
@@ -95,8 +97,11 @@ function createExitAction(type: typeof SESSION_USER_EXIT | typeof SESSION_PTY_EX
           rpc.emit('exit', {uid});
         }
 
+        const termGroupsState = getState().termGroups;
+        const hasAnyPanes = Object.keys(termGroupsState.termGroups).length > 0;
+
         const sessions = keys(getState().sessions.sessions);
-        if (sessions.length === 0) {
+        if (sessions.length === 0 && !hasAnyPanes) {
           window.close();
         }
       }
@@ -166,13 +171,14 @@ export function setSessionTabName(uid: string, tabName: string, sync = true) {
   };
 }
 
-export function setSessionXtermTitle(uid: string, title: string): HyperActions {
+export function setSessionXtermTitle(uid: string, title: string, manual = false): any {
   // Notify main process so Electron window title + taskbar update
   window.rpc.emit('session set xterm title', {uid, title});
   return {
     type: SESSION_SET_XTERM_TITLE,
     uid,
-    title
+    title,
+    manual
   };
 }
 

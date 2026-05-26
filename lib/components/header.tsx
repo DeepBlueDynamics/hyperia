@@ -121,8 +121,9 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
           height: 34px;
           display: flex;
           align-items: stretch;
-          background: #1a1a1a;
-          border-bottom: 1px solid #333;
+          background: var(--bg-secondary);
+          border-bottom: 0.5px solid var(--border-neutral);
+          box-sizing: border-box;
         }
 
         .header_shape,
@@ -131,12 +132,13 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
           height: 34px;
           padding: 12px 15px;
           -webkit-app-region: no-drag;
-          color: #fff;
-          opacity: 0.5;
+          color: var(--text-secondary);
+          opacity: 0.7;
           shape-rendering: crispEdges;
         }
 
         .header_shape:hover {
+          color: var(--text-primary);
           opacity: 1;
         }
 

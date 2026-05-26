@@ -149,11 +149,6 @@ export function newWindow(
     // notify renderer
     window.webContents.send('config change');
 
-    // notify user that shell changes require new sessions
-    if (cfg_.shell !== cfg.shell || JSON.stringify(cfg_.shellArgs) !== JSON.stringify(cfg.shellArgs)) {
-      notify('Shell configuration changed!', 'Open a new tab or window to start using the new shell');
-    }
-
     // update background color if necessary
     updateBackgroundColor();
 
@@ -266,7 +261,9 @@ export function newWindow(
       shell: session.shell,
       pid: session.pty ? session.pty.pid : null,
       activeUid: options.activeUid ?? undefined,
-      profile: options.profile
+      profile: options.profile,
+      groupUid: extraOptions.groupUid,
+      url: extraOptions.url
     });
 
     // Register with sidecar bridge for agent control
@@ -306,6 +303,29 @@ export function newWindow(
       unsetRendererType(options.uid);
       sessions.delete(options.uid);
     });
+  });
+
+  // Switch a pane to a different shell in place: kill the current PTY and
+  // respawn with the chosen profile, reusing the same uid/pane/xterm. Replaces
+  // the old keystroke-injection ('exec ...') approach which broke on
+  // PowerShell and only nested shells. The session's data/cwd/exit listeners
+  // are attached once (above) and survive the respawn.
+  rpc.on('reset session', ({uid, profile}: {uid: string; profile: string}) => {
+    const session = sessions.get(uid);
+    if (!session) return;
+    const profileCfg = app.plugins.getDecoratedConfig(profile);
+    session.resetWithProfile(
+      profile,
+      profileCfg.shell,
+      profileCfg.shellArgs && Array.from(profileCfg.shellArgs)
+    );
+  });
+
+  // Park a pane's shell when it switches to a web view: kill the PTY so the
+  // old shell stops running underneath. The Session object survives so the
+  // pane can return to a shell later via 'reset session'.
+  rpc.on('park session', ({uid}: {uid: string}) => {
+    sessions.get(uid)?.parkPty();
   });
 
   rpc.on('exit', ({uid}) => {
@@ -409,6 +429,18 @@ export function newWindow(
         window.setIcon(icon);
       }
     }
+  });
+  rpc.on('split request vertical', (options: {activeUid?: string | null; profile?: string | null}) => {
+    rpc.emit('split request vertical', options);
+  });
+  rpc.on('split request horizontal', (options: {activeUid?: string | null; profile?: string | null}) => {
+    rpc.emit('split request horizontal', options);
+  });
+  rpc.on('clone request vertical', () => {
+    rpc.emit('clone request vertical', undefined as any);
+  });
+  rpc.on('clone request horizontal', () => {
+    rpc.emit('clone request horizontal', undefined as any);
   });
   // Same deal as above, grabbing the window titlebar when the window
   // is maximized on Windows results in unmaximize, without hitting any

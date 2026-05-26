@@ -111,7 +111,6 @@ const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
               <div
                 onMouseDown={(e) => handleDragStart(e, i)}
                 onDoubleClick={(e) => handleAutoResize(e, i)}
-                style={{backgroundColor: borderColor}}
                 className={`splitpane_divider splitpane_divider_${direction}`}
               />
             ) : null}
@@ -128,6 +127,15 @@ const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
           position: relative;
           width: 100%;
           height: 100%;
+          /* Gutter is the SAME dark as the cards (--bg-primary), not the
+             lighter window behind it. Same color → the 8px gap doesn't read as
+             a bright beam (girder) AND the cards don't read as raised boxes in
+             a frame (nesting). The cards are defined only by their subtle
+             0.5px border + 4px radius, like the mockup. */
+          background: var(--bg-primary);
+          gap: 8px;
+          padding: 8px;
+          box-sizing: border-box;
         }
 
         .splitpane_panes_vertical {
@@ -142,28 +150,44 @@ const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
           flex: 1;
           outline: none;
           position: relative;
+          background: var(--bg-primary);
+          border: 0.5px solid var(--border-neutral);
+          border-radius: 4px;
+          overflow: hidden;
+          box-sizing: border-box;
+        }
+
+        /* A pane that wraps another split is a layout shell, not a card —
+           otherwise nested splits stack border+padding at every depth. */
+        .splitpane_pane:has(> .splitpane_panes) {
+          background: transparent;
+          border: none;
+          border-radius: 0;
+          overflow: visible;
+        }
+
+        /* A nested split inherits the gutter from its parent — don't double-pad. */
+        .splitpane_pane > .splitpane_panes {
+          padding: 0;
+          background: transparent;
         }
 
         .splitpane_divider {
           box-sizing: border-box;
-          z-index: 1;
-          background-clip: padding-box;
+          z-index: 10;
           flex-shrink: 0;
+          background: transparent;
         }
 
         .splitpane_divider_vertical {
-          border-left: 5px solid rgba(255, 255, 255, 0);
-          border-right: 5px solid rgba(255, 255, 255, 0);
-          width: 11px;
-          margin: 0 -5px;
+          width: 8px;
+          margin: 0 -4px;
           cursor: col-resize;
         }
 
         .splitpane_divider_horizontal {
-          height: 11px;
-          margin: -5px 0;
-          border-top: 5px solid rgba(255, 255, 255, 0);
-          border-bottom: 5px solid rgba(255, 255, 255, 0);
+          height: 8px;
+          margin: -4px 0;
           cursor: row-resize;
           width: 100%;
         }

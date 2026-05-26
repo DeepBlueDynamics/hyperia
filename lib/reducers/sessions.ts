@@ -131,6 +131,9 @@ const reducer: ISessionReducer = (state = initialState, action) => {
 
     case SESSION_SET_XTERM_TITLE: {
       const newTitle = action.title.trim();
+      if (action.manual) {
+        return state.setIn(['sessions', action.uid, 'title'], newTitle);
+      }
       // Ignore shell path titles — keep the cute name
       if (!newTitle || /[/\\]/.test(newTitle) || /^(cmd|powershell|bash|sh|zsh|Command Prompt)/i.test(newTitle)) {
         return state;

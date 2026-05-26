@@ -17,7 +17,7 @@ import findBySession from '../utils/term-groups';
 import {setActiveSession, ptyExitSession, userExitSession} from './sessions';
 
 function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
-  return (_activeUid: string | undefined, _profile: string | undefined) =>
+  return (_activeUid: string | undefined, _profile: string | undefined, url?: string) =>
     (dispatch: HyperDispatch, getState: () => HyperState): void => {
       dispatch({
         type: SESSION_REQUEST,
@@ -26,12 +26,13 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
           const activeUid = _activeUid ? _activeUid : sessions.activeUid;
           const activeSession = activeUid ? sessions.sessions[activeUid] : null;
           const cwd = (activeSession && activeSession.cwd) || ui.cwd;
-          const profile = _profile ? _profile : activeUid ? sessions.sessions[activeUid].profile : window.profileName;
+          const profile = _profile ? _profile : 'picker';
           rpc.emit('new', {
             splitDirection: direction,
             cwd,
             activeUid,
-            profile
+            profile,
+            url
           });
         }
       });
@@ -132,6 +133,10 @@ export function ptyExitTermGroup(sessionUid: string) {
       return dispatch(ptyExitSession(sessionUid));
     }
 
+    if ((group as any).isSwitching) {
+      return dispatch(ptyExitSession(sessionUid));
+    }
+
     dispatch({
       type: TERM_GROUP_EXIT,
       uid: group.uid,
@@ -157,8 +162,12 @@ export function userExitTermGroup(uid: string) {
       effect: () => {
         const group = termGroups.termGroups[uid];
         if (Object.keys(termGroups.termGroups).length <= 1) {
-          // Last group — exit the session if there is one
-          if (group.sessionUid) dispatch(userExitSession(group.sessionUid));
+          // Last group — exit the session if there is one, otherwise close the window
+          if (group.sessionUid) {
+            dispatch(userExitSession(group.sessionUid));
+          } else {
+            window.close();
+          }
           return;
         }
 
@@ -195,6 +204,48 @@ export function userExitTermGroup(uid: string) {
         // Web pane root tab with no children: TERM_GROUP_EXIT already removes the group
       }
     });
+  };
+}
+
+// Switch a pane to a different shell in place. The old session is completely terminated,
+// and a brand new clean terminal session is spawned in that same layout pane/group,
+// which fully unmounts the old xterm and mounts a fresh one.
+export function switchPaneProfile(groupUid: string, sessionUid: string | undefined, profileName: string) {
+  return (dispatch: HyperDispatch, getState: () => HyperState) => {
+    dispatch({ type: 'TERM_GROUP_PREPARE_SWITCH', uid: groupUid } as any);
+    dispatch({ type: TERM_GROUP_SET_WEB_URL, uid: groupUid, url: null } as any);
+
+    let cwd;
+    if (sessionUid) {
+      const { sessions, ui } = getState();
+      const activeSession = sessions.sessions[sessionUid];
+      cwd = (activeSession && activeSession.cwd) || ui.cwd;
+
+      rpc.emit('exit', { uid: sessionUid });
+      dispatch({ type: 'SESSION_USER_EXIT', uid: sessionUid, effect: () => {} } as any);
+    } else {
+      cwd = getState().ui.cwd;
+    }
+
+    rpc.emit('new', {
+      isNewGroup: false,
+      cwd,
+      activeUid: sessionUid,
+      profile: profileName,
+      groupUid
+    });
+  };
+}
+
+// Switch a pane to a web view. The old session is completely terminated,
+// and we clear the group's sessionUid, letting the Web Pane take up the entire pane.
+export function switchPaneToWeb(groupUid: string, sessionUid: string | undefined, url: string = '') {
+  return (dispatch: HyperDispatch) => {
+    if (sessionUid) {
+      rpc.emit('exit', { uid: sessionUid });
+      dispatch({ type: 'SESSION_USER_EXIT', uid: sessionUid, effect: () => {} } as any);
+    }
+    dispatch({ type: TERM_GROUP_SET_WEB_URL, uid: groupUid, url } as any);
   };
 }
 

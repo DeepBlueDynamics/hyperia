@@ -8,6 +8,7 @@ import {
   closeSearch
 } from '../actions/sessions';
 import {markTabBell, openContextMenu} from '../actions/ui';
+import {switchPaneProfile, switchPaneToWeb, userExitTermGroup} from '../actions/term-groups';
 import Terms from '../components/terms';
 import {getRootGroups} from '../selectors';
 import {connect} from '../utils/plugins';
@@ -54,18 +55,36 @@ const mapStateToProps = (state: HyperState) => {
     disableLigatures: state.ui.disableLigatures,
     screenReaderMode: state.ui.screenReaderMode,
     windowsPty: state.ui.windowsPty,
-    imageSupport: state.ui.imageSupport
+    imageSupport: state.ui.imageSupport,
+    defaultProfile: state.ui.defaultProfile,
+    profiles: state.ui.profiles ? (state.ui.profiles.asMutable ? state.ui.profiles.asMutable({deep: true}) : state.ui.profiles) : []
   };
 };
 
 const mapDispatchToProps = (dispatch: HyperDispatch) => {
   return {
+    onClosePane(groupUid: string) {
+      dispatch(userExitTermGroup(groupUid) as any);
+    },
+
+    setWebPaneUrl(groupUid: string, url: string | null) {
+      dispatch({type: 'TERM_GROUP_SET_WEB_URL', uid: groupUid, url} as any);
+    },
+
+    switchPaneProfile(groupUid: string, sessionUid: string | undefined, profileName: string) {
+      dispatch(switchPaneProfile(groupUid, sessionUid, profileName) as any);
+    },
+
+    switchPaneToWeb(groupUid: string, sessionUid: string | undefined, url = '') {
+      dispatch(switchPaneToWeb(groupUid, sessionUid, url) as any);
+    },
+
     onData(uid: string, data: string) {
       dispatch(sendSessionData(uid, data));
     },
 
-    onTitle(uid: string, title: string) {
-      dispatch(setSessionXtermTitle(uid, title));
+    onTitle(uid: string, title: string, manual?: boolean) {
+      dispatch(setSessionXtermTitle(uid, title, manual));
     },
 
     onResize(uid: string, cols: number, rows: number) {
