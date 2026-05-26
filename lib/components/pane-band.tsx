@@ -45,7 +45,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       icon !== undefined ? (
         icon
       ) : isAi ? (
-        <i className="ti ti-sparkles" style={{fontSize: '12px', color: 'var(--color-text-ai, #3C3489)'}} />
+        <span style={{fontSize: '12px'}}>✨</span>
       ) : paneType === 'web' ? (
         <span>🌐</span>
       ) : (
@@ -216,7 +216,25 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             }}
             style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
           >
-            <i className="ti ti-x" style={{fontSize: '12px', cursor: 'pointer'}} aria-hidden="true" />
+            {/* Inline SVG (not the `ti` icon font, which may not be loaded —
+                that's why the close × was invisible while the split controls,
+                which already use inline SVG, showed). currentColor inherits
+                the control-icon color so it stays visible + hover-tinted. */}
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{cursor: 'pointer'}}
+              aria-hidden="true"
+            >
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
             <div className="pane-band-tooltip" style={{right: '-2px'}}>
               <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
                 {resolvedTint === 'neutral' && paneType === 'web' ? 'Restore terminal' : 'Close pane'}

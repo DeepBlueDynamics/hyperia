@@ -736,6 +736,7 @@ mod tests {
             bsp_w: 100.0,
             bsp_h: 100.0,
             cwd: String::new(),
+            last_user_activity: None,
         }
     }
 

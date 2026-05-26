@@ -106,6 +106,13 @@ const config: webpack.Configuration[] = [
         {
           test: /\.css$/,
           use: ['style-loader', 'css-loader']
+        },
+        // Icon webfont (@tabler/icons-webfont) + any other bundled fonts.
+        // Without this the Tabler CSS's url(...woff2) refs don't resolve and
+        // every `ti ti-*` glyph renders as an empty box.
+        {
+          test: /\.(woff2?|ttf|eot)$/,
+          type: 'asset/resource'
         }
       ]
     },

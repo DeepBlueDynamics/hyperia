@@ -25,7 +25,6 @@ import {decorate} from '../utils/plugins';
 import {PaneBand} from './pane-band';
 import _SearchBox from './searchBox';
 
-const fs = require('fs');
 const path = require('path');
 
 import 'xterm/css/xterm.css';
@@ -937,10 +936,10 @@ export default class Term extends React.PureComponent<
   toggleDirNavigator = () => {
     const {isDirNavigatorOpen, navigatorCurrentPath} = this.state;
     const sessionCwd = (this.props as any).sessionCwd;
-    const activePath = navigatorCurrentPath || sessionCwd || process.env.HOME || process.env.USERPROFILE || '/';
+    // Empty string → the sidecar resolves to the user's home directory.
+    const activePath = navigatorCurrentPath || sessionCwd || '';
 
     if (!isDirNavigatorOpen) {
-      const subdirs = this.getSubdirectories(activePath);
       let navigatorLeft = 95;
       let navigatorWidth = 280;
 
@@ -954,10 +953,6 @@ export default class Term extends React.PureComponent<
       this.setState(
         {
           isDirNavigatorOpen: true,
-          navigatorCurrentPath: activePath,
-          navigatorDirs: subdirs,
-          searchBuffer: '',
-          focusedIndex: -1,
           navigatorLeft,
           navigatorWidth
         },
@@ -967,6 +962,9 @@ export default class Term extends React.PureComponent<
           });
         }
       );
+      // navigatorCurrentPath / navigatorDirs / searchBuffer / focusedIndex are
+      // set by loadNavigatorDirs once the sidecar responds.
+      this.loadNavigatorDirs(activePath);
     } else {
       this.setState({
         isDirNavigatorOpen: false
@@ -974,23 +972,40 @@ export default class Term extends React.PureComponent<
     }
   };
 
-  getSubdirectories = (dirPath: string): string[] => {
-    try {
-      const entries = fs.readdirSync(dirPath, {withFileTypes: true});
-      return entries
-        .filter((entry: any) => {
-          // Exclude files, only directories
-          if (!entry.isDirectory()) return false;
-          // Exclude hidden directories (starting with .)
-          if (entry.name.startsWith('.')) return false;
-          return true;
-        })
-        .map((entry: any) => entry.name)
-        .sort((a: string, b: string) => a.localeCompare(b));
-    } catch (err) {
-      console.error('Failed to read directory:', err);
-      return [];
+  // Directory listing lives in the Rust sidecar (fsnav): GET /api/fs/dirs
+  // resolves the path (home if absent/invalid) and returns only real, visible
+  // directories — dotfiles and Windows system dirs like $Recycle.Bin are
+  // filtered there, not re-implemented in the renderer. Sets navigatorCurrentPath
+  // to the sidecar's resolved path so an empty/bad path lands on home.
+  // BROWSE only — never cd. Clicking/navigating just moves the popup's view
+  // and fetches that directory's contents. We must NOT send `cd` while the
+  // user is browsing: if a CLI program is running in the pane, the keystrokes
+  // would feed the program, not the shell. The actual cd is deferred to the
+  // explicit Go action (goToNavigatorDir).
+  loadNavigatorDirs = (targetPath: string) => {
+    const port = process.env.HYPERIA_PORT || '9800';
+    // Reflect the requested path immediately; the fetch corrects it to the
+    // sidecar's resolved path (e.g. home) when it returns.
+    this.setState({navigatorCurrentPath: targetPath, searchBuffer: '', focusedIndex: -1});
+    fetch(`http://localhost:${port}/api/fs/dirs?path=${encodeURIComponent(targetPath)}`)
+      .then((r) => r.json())
+      .then((data: {path: string; parent: string | null; dirs: string[]}) => {
+        this.setState({navigatorCurrentPath: data.path, navigatorDirs: data.dirs});
+      })
+      .catch((err) => {
+        console.error('Failed to load directory listing:', err);
+        this.setState({navigatorDirs: []});
+      });
+  };
+
+  // The ONLY place that actually changes the shell's directory — on an explicit
+  // Go, never on browse. Queued navigation lands here.
+  goToNavigatorDir = () => {
+    const target = this.state.navigatorCurrentPath;
+    if (target && this.props.onData) {
+      this.props.onData(`cd "${target}"\r`);
     }
+    this.setState({isDirNavigatorOpen: false});
   };
 
   renderNavigatorBreadcrumbs = () => {
@@ -1013,16 +1028,7 @@ export default class Term extends React.PureComponent<
     });
 
     const handleHopClick = (hopPath: string) => {
-      const subdirs = this.getSubdirectories(hopPath);
-      this.setState({
-        navigatorCurrentPath: hopPath,
-        navigatorDirs: subdirs,
-        searchBuffer: '',
-        focusedIndex: -1
-      });
-      if (this.props.onData) {
-        this.props.onData(`cd "${hopPath}"\r`);
-      }
+      this.loadNavigatorDirs(hopPath);
     };
 
     const rootPath = isWindows ? 'C:\\' : '/';
@@ -1079,6 +1085,31 @@ export default class Term extends React.PureComponent<
             </React.Fragment>
           );
         })}
+        {/* Go — the ONLY thing that cd's the shell. Browsing above just moves
+            the popup's view; nothing is sent to the PTY until Go, so a running
+            CLI never gets a stray cd. */}
+        <span
+          onClick={this.goToNavigatorDir}
+          className="term_navigatorGo"
+          title="cd to this directory"
+          style={{
+            marginLeft: 'auto',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '4px',
+            fontSize: '11px',
+            fontWeight: 600,
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--text-info)',
+            border: '0.5px solid var(--border-neutral)',
+            borderRadius: '3px',
+            padding: '1px 8px'
+          }}
+        >
+          Go
+          <i className="ti ti-arrow-right" style={{fontSize: '12px'}} aria-hidden="true" />
+        </span>
       </div>
     );
   };
@@ -1088,16 +1119,7 @@ export default class Term extends React.PureComponent<
 
     const handleRowClick = (dirName: string) => {
       const targetPath = path.join(navigatorCurrentPath, dirName);
-      const subdirs = this.getSubdirectories(targetPath);
-      this.setState({
-        navigatorCurrentPath: targetPath,
-        navigatorDirs: subdirs,
-        searchBuffer: '',
-        focusedIndex: -1
-      });
-      if (this.props.onData) {
-        this.props.onData(`cd "${targetPath}"\r`);
-      }
+      this.loadNavigatorDirs(targetPath);
     };
 
     if (navigatorDirs.length === 0) {
@@ -1284,16 +1306,7 @@ export default class Term extends React.PureComponent<
       } else {
         const parentPath = path.dirname(navigatorCurrentPath);
         if (parentPath && parentPath !== navigatorCurrentPath) {
-          const subdirs = this.getSubdirectories(parentPath);
-          this.setState({
-            navigatorCurrentPath: parentPath,
-            navigatorDirs: subdirs,
-            searchBuffer: '',
-            focusedIndex: -1
-          });
-          if (this.props.onData) {
-            this.props.onData(`cd "${parentPath}"\r`);
-          }
+          this.loadNavigatorDirs(parentPath);
         }
       }
       return;
@@ -1337,16 +1350,7 @@ export default class Term extends React.PureComponent<
       if (focusedIndex >= 0 && focusedIndex < navigatorDirs.length) {
         const dirName = navigatorDirs[focusedIndex];
         const targetPath = path.join(navigatorCurrentPath, dirName);
-        const subdirs = this.getSubdirectories(targetPath);
-        this.setState({
-          navigatorCurrentPath: targetPath,
-          navigatorDirs: subdirs,
-          searchBuffer: '',
-          focusedIndex: -1
-        });
-        if (this.props.onData) {
-          this.props.onData(`cd "${targetPath}"\r`);
-        }
+        this.loadNavigatorDirs(targetPath);
       }
       return;
     }

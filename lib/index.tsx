@@ -1,4 +1,8 @@
 import './v8-snapshot-util';
+// Tabler icon webfont — backs every `ti ti-*` glyph in the pane bands,
+// navigators, and controls. Without this import the classes resolve to an
+// empty box (the close ×, folder, type icons, etc. were all invisible).
+import '@tabler/icons-webfont/dist/tabler-icons.css';
 import {webFrame} from 'electron';
 import React from 'react';
 

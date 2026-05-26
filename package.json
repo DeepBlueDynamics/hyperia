@@ -1,6 +1,6 @@
 {
   "name": "hyperia",
-  "version": "0.10.26",
+  "version": "0.10.27",
   "repository": "deepbluedynamics/hyperia",
   "scripts": {
     "start": "concurrently -n \"Webpack,TypeScript,App\" -c \"cyan.bold,blue.bold,green.bold\" \"webpack -w\" \"tsc --build -v --pretty --watch --preserveWatchOutput\" \"cross-env ELECTRONMON_LOGLEVEL=error electronmon target\" -k",
@@ -27,6 +27,7 @@
     "@electron/remote": "2.1.3",
     "@react-icons/all-files": "4.1.0",
     "@redux-devtools/extension": "^3.3.0",
+    "@tabler/icons-webfont": "3",
     "args": "5.0.3",
     "chalk": "5.3.0",
     "clsx": "2.1.0",

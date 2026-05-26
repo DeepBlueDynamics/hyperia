@@ -3,6 +3,7 @@
 mod bridge;
 mod chat;
 mod dashboard;
+mod fsnav;
 mod ghost;
 mod logs;
 mod mcp;
@@ -68,6 +69,19 @@ struct PaneAddress {
 #[derive(Debug, Default, Deserialize)]
 struct NotesQuery {
     q: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FsDirsQuery {
+    /// Directory to list. Omit/empty/nonexistent → the user's home directory.
+    path: Option<String>,
+}
+
+/// List the visible subdirectories of a path (home if absent). Backs the pane
+/// directory navigator — the filtering rules (dirs only, no hidden/$system)
+/// live in Rust (fsnav), not in the renderer.
+async fn get_fs_dirs(Query(q): Query<FsDirsQuery>) -> Json<crate::fsnav::DirListing> {
+    Json(crate::fsnav::list_dirs(q.path.as_deref()))
 }
 
 /// Serve the Hyperia Python MCP tool file. Nemesis8 fetches this at container startup.
@@ -1145,6 +1159,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/log", axum::routing::post(post_client_log))
         .route("/api/status", axum::routing::get(get_status))
         .route("/api/screen", axum::routing::get(get_screen))
+        .route("/api/fs/dirs", axum::routing::get(get_fs_dirs))
         // Write endpoints
         .route("/api/type", axum::routing::post(post_type))
         .route("/api/type-and-collect", axum::routing::post(post_type_and_collect))
