@@ -18,6 +18,7 @@ interface WebPaneProps {
   groupUid: string;
   hasSession?: boolean; // true = overlaying a terminal; show × to restore it
   onClose?: () => void;
+  onSetTitle?: (title: string) => void;
 }
 
 interface WebPaneState {
@@ -51,6 +52,14 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     wv.addEventListener('did-fail-load', (e: {errorCode: number; errorDescription: string}) => {
       if (e.errorCode === -3) return;
       this.setState({loading: false, error: e.errorDescription || 'Failed to load'});
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    wv.addEventListener('page-title-updated', (e: {title?: string}) => {
+      const title = e.title || '';
+      if (title && this.props.onSetTitle) {
+        this.props.onSetTitle(title);
+      }
     });
 
     // Listen for reload requests from the tab right-click menu
@@ -210,6 +219,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 const mapDispatchToProps = (dispatch: HyperDispatch, ownProps: WebPaneProps) => ({
   onClose() {
     dispatch(clearWebPane(ownProps.groupUid) as any);
+  },
+  onSetTitle(title: string) {
+    dispatch({type: 'TERM_GROUP_SET_WEB_NAME', uid: ownProps.groupUid, name: title} as any);
   }
 });
 

@@ -144,17 +144,6 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     webUrl
   } = props;
 
-  // For web pane tabs: derive the short display label (host+port) and full tooltip
-  let webShortLabel = '';
-  if (isWebPane && webUrl) {
-    try {
-      const u = new URL(webUrl);
-      webShortLabel = u.port ? `${u.hostname}:${u.port}` : u.hostname;
-    } catch {
-      webShortLabel = webUrl;
-    }
-  }
-
   // Clear pendingName once Redux state has caught up to the committed rename.
   useEffect(() => {
     if (pendingName !== null && (tabName === pendingName || description === pendingName)) {
@@ -220,9 +209,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
             ) : (
               <span className="tab_textContent">
                 <span className="tab_webIcon">{isWebPane ? '🌐' : null}</span>
-                {isWebPane && webShortLabel ? (
+                {isWebPane ? (
                   <span className={`tab_webUrl ${isActive ? 'tab_webUrlScroll' : ''}`} title={webUrl}>
-                    {webShortLabel}
+                    {displayText}
                   </span>
                 ) : (
                   displayText
