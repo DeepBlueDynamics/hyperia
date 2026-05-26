@@ -305,28 +305,6 @@ export function newWindow(
     });
   });
 
-  // Switch a pane to a different shell in place: kill the current PTY and
-  // respawn with the chosen profile, reusing the same uid/pane/xterm. Replaces
-  // the old keystroke-injection ('exec ...') approach which broke on
-  // PowerShell and only nested shells. The session's data/cwd/exit listeners
-  // are attached once (above) and survive the respawn.
-  rpc.on('reset session', ({uid, profile}: {uid: string; profile: string}) => {
-    const session = sessions.get(uid);
-    if (!session) return;
-    const profileCfg = app.plugins.getDecoratedConfig(profile);
-    session.resetWithProfile(
-      profile,
-      profileCfg.shell,
-      profileCfg.shellArgs && Array.from(profileCfg.shellArgs)
-    );
-  });
-
-  // Park a pane's shell when it switches to a web view: kill the PTY so the
-  // old shell stops running underneath. The Session object survives so the
-  // pane can return to a shell later via 'reset session'.
-  rpc.on('park session', ({uid}: {uid: string}) => {
-    sessions.get(uid)?.parkPty();
-  });
 
   rpc.on('exit', ({uid}) => {
     console.log(`[window] RPC exit request: ${uid} (session exists: ${sessions.has(uid)})`);

@@ -214,8 +214,7 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
         state = state
           .setIn(['termGroups', act.groupUid, 'sessionUid'], act.uid)
           .setIn(['activeSessions', act.groupUid], act.uid)
-          .setIn(['termGroups', act.groupUid, 'webUrl'], undefined)
-          .setIn(['termGroups', act.groupUid, 'isSwitching'], undefined);
+          .setIn(['termGroups', act.groupUid, 'webUrl'], undefined);
         return setActiveGroup(state, act);
       }
 
@@ -242,10 +241,7 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       return resizeGroup(state, act.uid, act.sizes);
     case TERM_GROUP_EXIT:
       return removeGroup(state, act.uid);
-    case 'TERM_GROUP_PREPARE_SWITCH': {
-      const {uid} = act;
-      return state.setIn(['termGroups', uid, 'isSwitching'], true);
-    }
+
     case TERM_GROUP_SET_WEB_URL: {
       const {uid, url} = act;
       if (url !== null && url !== undefined) {

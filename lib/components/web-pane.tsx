@@ -20,8 +20,6 @@ interface WebPaneProps {
   hasSession?: boolean; // true = overlaying a terminal; show × to restore it
   sessionUid?: string | null;
   splitLabel?: string;
-  switchPaneProfile?: (groupUid: string, sessionUid: string | undefined, profileName: string) => void;
-  switchPaneToWeb?: (groupUid: string, sessionUid: string | undefined, url?: string) => void;
   onClose?: () => void;
   onClosePane?: () => void;
   onSetTitle?: (title: string) => void;
@@ -95,9 +93,6 @@ interface WebHistoryEntry {
 interface WebPaneState {
   error: string | null;
   loading: boolean;
-  isProfileMenuOpen?: boolean;
-  showWebPaneInput?: boolean;
-  webPaneUrlInput?: string;
   canGoBack: boolean;
   canGoForward: boolean;
   activeUrl: string;
@@ -182,9 +177,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     this.state = {
       error: null,
       loading: true,
-      isProfileMenuOpen: false,
-      showWebPaneInput: false,
-      webPaneUrlInput: '',
       canGoBack: false,
       canGoForward: false,
       activeUrl: props.url || '',
@@ -210,7 +202,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     };
   }
 
-  menuRef = React.createRef<HTMLDivElement>();
   labelRef = React.createRef<HTMLDivElement>();
   inputRef = React.createRef<HTMLInputElement>();
 
@@ -702,12 +693,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
   handleOutsideClick = (e: MouseEvent) => {
     if (
-      this.menuRef.current &&
-      !this.menuRef.current.contains(e.target as Node) &&
       this.labelRef.current &&
       !this.labelRef.current.contains(e.target as Node)
     ) {
-      this.setState({isProfileMenuOpen: false, showWebPaneInput: false, isEditingUrl: false});
+      this.setState({isEditingUrl: false});
     }
 
     if (
@@ -719,62 +708,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     ) {
       this.setState({isUrlNavigatorOpen: false});
     }
-  };
-
-  toggleProfileMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    this.setState((state) => ({
-      isProfileMenuOpen: !state.isProfileMenuOpen,
-      showWebPaneInput: false,
-      webPaneUrlInput: ''
-    }));
-  };
-
-  handleShellProfileSelect = (p: any) => {
-    const {groupUid, sessionUid, switchPaneProfile} = this.props as any;
-    if (switchPaneProfile && groupUid) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      switchPaneProfile(groupUid, sessionUid, p.name);
-    }
-    this.setState({isProfileMenuOpen: false, showWebPaneInput: false});
-  };
-
-  handleRightClickProfile = (e: React.MouseEvent, name: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      ipcRenderer.send('set-default-profile', name);
-    } catch (err) {
-      console.error('Failed to set default profile:', err);
-    }
-  };
-
-  handleWebPaneSelect = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    this.setState({showWebPaneInput: true}, () => {
-      requestAnimationFrame(() => {
-        this.inputRef.current?.focus();
-      });
-    });
-  };
-
-  handleWebPaneSubmit = () => {
-    const trimmed = (this.state.webPaneUrlInput || '').trim();
-    if (!trimmed) return;
-    const url = /^https?:\/\//i.test(trimmed) ? trimmed : 'https://' + trimmed;
-    const {groupUid, sessionUid, switchPaneToWeb} = this.props as any;
-    if (switchPaneToWeb && groupUid) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      switchPaneToWeb(groupUid, sessionUid, url);
-    }
-    this.setState({isProfileMenuOpen: false, showWebPaneInput: false, webPaneUrlInput: ''});
-  };
-
-  handleWebPaneCancel = () => {
-    this.setState({showWebPaneInput: false, webPaneUrlInput: ''});
   };
 
   isInputUrl = (val: string): boolean => {
@@ -938,8 +871,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       );
     }
 
-    const wasActive = prevState.isProfileMenuOpen || prevState.isEditingUrl || prevState.isUrlNavigatorOpen;
-    const isActive = this.state.isProfileMenuOpen || this.state.isEditingUrl || this.state.isUrlNavigatorOpen;
+    const wasActive = prevState.isEditingUrl || prevState.isUrlNavigatorOpen;
+    const isActive = this.state.isEditingUrl || this.state.isUrlNavigatorOpen;
 
     if (isActive && !wasActive) {
       document.addEventListener('mousedown', this.handleOutsideClick);
@@ -1428,7 +1361,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 (this.props as any).onClosePane();
               }
             }}
-            onClick={this.toggleProfileMenu}
             onContextMenu={this.handlePaneBandContextMenu}
             height={isAi ? 'normal' : 'compact'}
           />
@@ -2476,61 +2408,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           })()}
         </div>
 
-        {this.state.isProfileMenuOpen && (
-          <div ref={this.menuRef} className="term_profileMenu">
-            {this.state.showWebPaneInput ? (
-              <div className="term_webPaneInputRow">
-                <span className="term_globeIcon">🌐</span>
-                <input
-                  ref={this.inputRef}
-                  type="text"
-                  className="term_webPaneInput"
-                  placeholder="Type URL & hit Enter..."
-                  value={this.state.webPaneUrlInput}
-                  onChange={(e) => this.setState({webPaneUrlInput: e.target.value})}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      this.handleWebPaneSubmit();
-                    } else if (e.key === 'Escape') {
-                      e.stopPropagation();
-                      this.handleWebPaneCancel();
-                    }
-                  }}
-                />
-              </div>
-            ) : (
-              <>
-                <div className="term_menuTitle">Switch Profile</div>
-                {/* eslint-disable-next-line @typescript-eslint/no-unsafe-call */}
-                {((this.props as any).profiles || []).map((p: any) => {
-                  const isDefault = p.name === (this.props as any).defaultProfile;
-                  return (
-                    <div
-                      key={p.name}
-                      className="term_menuOption"
-                      onClick={() => this.handleShellProfileSelect(p)}
-                      onContextMenu={(e) => this.handleRightClickProfile(e, p.name as string)}
-                      title="Left-click to switch shell. Right-click to set as default."
-                    >
-                      {isDefault && <span className="term_activeStar">★</span>}
-                      {p.name}
-                    </div>
-                  );
-                })}
-                <div className="term_menuDivider" />
-                <div
-                  className="term_menuOption term_webPaneOption"
-                  onClick={this.handleWebPaneSelect}
-                  onContextMenu={(e) => this.handleRightClickProfile(e, 'Web Pane')}
-                  title="Left-click to switch to Web Pane. Right-click to set as default."
-                >
-                  {(this.props as any).defaultProfile === 'Web Pane' && <span className="term_activeStar">★</span>}
-                  🌐 Web Pane
-                </div>
-              </>
-            )}
-          </div>
-        )}
         {loading && url && !showStrip && (
           <div
             style={{
@@ -2554,107 +2431,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             to { transform: rotate(360deg); }
           }
 
-          .term_profileMenu {
-            position: absolute;
-            top: 24px;
-            right: var(--space-8);
-            min-width: 180px;
-            background: var(--bg-secondary);
-            border: 0.5px solid var(--border-neutral);
-            border-radius: var(--radius-4);
-            padding: var(--space-6) 0;
-            z-index: 10000;
-          }
-
-          .term_menuTitle {
-            padding: var(--space-4) var(--space-12) var(--space-6);
-            font-size: 11px;
-            font-weight: var(--weight-medium);
-            color: var(--text-tertiary);
-            border-bottom: 0.5px solid var(--border-neutral);
-            margin-bottom: var(--space-4);
-            user-select: none;
-            font-family: var(--font-sans);
-          }
-
-          .term_menuOption {
-            padding: var(--space-6) var(--space-12);
-            font-size: 11px;
-            color: var(--text-secondary);
-            cursor: pointer;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            transition:
-              background 0.15s ease,
-              color 0.15s ease;
-            font-family: var(--font-sans);
-            font-weight: var(--weight-regular);
-          }
-
-          .term_menuOption:hover {
-            background: var(--info-bg);
-            color: var(--text-primary);
-          }
-
-          .term_menuOptionActive {
-            color: var(--text-primary);
-            font-weight: var(--weight-medium);
-          }
-
-          .term_activeStar {
-            color: #0096ff;
-            margin-right: var(--space-6);
-            font-size: 10px;
-          }
-
-          .term_menuDivider {
-            height: 0.5px;
-            background: var(--border-neutral);
-            margin: var(--space-4) 0;
-          }
-
-          .term_webPaneOption {
-            color: var(--info-text);
-            font-weight: var(--weight-medium);
-          }
-
-          .term_webPaneOption:hover {
-            background: var(--info-bg);
-            color: var(--text-primary);
-          }
-
-          .term_webPaneInputRow {
-            display: flex;
-            align-items: center;
-            gap: var(--space-6);
-            background: var(--bg-tertiary);
-            border: 0.5px solid var(--border-neutral);
-            border-radius: var(--radius-4);
-            padding: var(--space-4) var(--space-8);
-            margin: var(--space-4) var(--space-8);
-          }
-
-          .term_globeIcon {
-            flex-shrink: 0;
-            font-size: 12px;
-          }
-
-          .term_webPaneInput {
-            flex: 1;
-            background: transparent;
-            border: none;
-            outline: none;
-            color: var(--text-primary);
-            font-size: 11px;
-            font-family: var(--font-sans);
-            padding: var(--space-2) 0;
-            min-width: 140px;
-          }
-
-          .term_webPaneInput::placeholder {
-            color: var(--text-tertiary);
-          }
 
           .term_controlIcon {
             display: inline-flex;

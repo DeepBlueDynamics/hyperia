@@ -133,9 +133,7 @@ export function ptyExitTermGroup(sessionUid: string) {
       return dispatch(ptyExitSession(sessionUid));
     }
 
-    if ((group as any).isSwitching) {
-      return dispatch(ptyExitSession(sessionUid));
-    }
+
 
     dispatch({
       type: TERM_GROUP_EXIT,
@@ -207,47 +205,7 @@ export function userExitTermGroup(uid: string) {
   };
 }
 
-// Switch a pane to a different shell in place. The old session is completely terminated,
-// and a brand new clean terminal session is spawned in that same layout pane/group,
-// which fully unmounts the old xterm and mounts a fresh one.
-export function switchPaneProfile(groupUid: string, sessionUid: string | undefined, profileName: string) {
-  return (dispatch: HyperDispatch, getState: () => HyperState) => {
-    dispatch({ type: 'TERM_GROUP_PREPARE_SWITCH', uid: groupUid } as any);
-    dispatch({ type: TERM_GROUP_SET_WEB_URL, uid: groupUid, url: null } as any);
 
-    let cwd;
-    if (sessionUid) {
-      const { sessions, ui } = getState();
-      const activeSession = sessions.sessions[sessionUid];
-      cwd = (activeSession && activeSession.cwd) || ui.cwd;
-
-      rpc.emit('exit', { uid: sessionUid });
-      dispatch({ type: 'SESSION_USER_EXIT', uid: sessionUid, effect: () => {} } as any);
-    } else {
-      cwd = getState().ui.cwd;
-    }
-
-    rpc.emit('new', {
-      isNewGroup: false,
-      cwd,
-      activeUid: sessionUid,
-      profile: profileName,
-      groupUid
-    });
-  };
-}
-
-// Switch a pane to a web view. The old session is completely terminated,
-// and we clear the group's sessionUid, letting the Web Pane take up the entire pane.
-export function switchPaneToWeb(groupUid: string, sessionUid: string | undefined, url: string = '') {
-  return (dispatch: HyperDispatch) => {
-    if (sessionUid) {
-      rpc.emit('exit', { uid: sessionUid });
-      dispatch({ type: 'SESSION_USER_EXIT', uid: sessionUid, effect: () => {} } as any);
-    }
-    dispatch({ type: TERM_GROUP_SET_WEB_URL, uid: groupUid, url } as any);
-  };
-}
 
 export function setWebPane(url: string | null) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {

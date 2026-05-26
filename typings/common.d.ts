@@ -43,8 +43,6 @@ export type MainEvents = {
   maximize: never;
   minimize: never;
   new: sessionExtraOptions;
-  'reset session': {uid: string; profile: string};
-  'park session': {uid: string};
   'open context menu': string;
   'open external': {url: string};
   'open hamburger menu': {x: number; y: number};

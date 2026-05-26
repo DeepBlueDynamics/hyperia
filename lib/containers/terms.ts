@@ -8,7 +8,7 @@ import {
   closeSearch
 } from '../actions/sessions';
 import {markTabBell, openContextMenu} from '../actions/ui';
-import {switchPaneProfile, switchPaneToWeb, userExitTermGroup} from '../actions/term-groups';
+import {userExitTermGroup} from '../actions/term-groups';
 import Terms from '../components/terms';
 import {getRootGroups} from '../selectors';
 import {connect} from '../utils/plugins';
@@ -71,13 +71,6 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
       dispatch({type: 'TERM_GROUP_SET_WEB_URL', uid: groupUid, url} as any);
     },
 
-    switchPaneProfile(groupUid: string, sessionUid: string | undefined, profileName: string) {
-      dispatch(switchPaneProfile(groupUid, sessionUid, profileName) as any);
-    },
-
-    switchPaneToWeb(groupUid: string, sessionUid: string | undefined, url = '') {
-      dispatch(switchPaneToWeb(groupUid, sessionUid, url) as any);
-    },
 
     onData(uid: string, data: string) {
       dispatch(sendSessionData(uid, data));

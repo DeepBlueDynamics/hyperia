@@ -130,15 +130,12 @@ export default class Term extends React.PureComponent<
       wholeWord: boolean;
       regex: boolean;
     };
-    searchResults:
+     searchResults:
       | {
           resultIndex: number;
           resultCount: number;
         }
       | undefined;
-    isProfileMenuOpen?: boolean;
-    showWebPaneInput?: boolean;
-    webPaneUrlInput?: string;
     useForFutureSplits?: boolean;
     isRenamingLabel?: boolean;
     renameLabelValue?: string;
@@ -176,9 +173,6 @@ export default class Term extends React.PureComponent<
       regex: false
     },
     searchResults: undefined,
-    isProfileMenuOpen: false,
-    showWebPaneInput: false,
-    webPaneUrlInput: '',
     useForFutureSplits: !this.props.defaultProfile,
     isRenamingLabel: false,
     renameLabelValue: '',
@@ -199,22 +193,12 @@ export default class Term extends React.PureComponent<
     navigatorWidth: 280
   };
 
-  menuRef = React.createRef<HTMLDivElement>();
   labelRef = React.createRef<HTMLDivElement>();
   inputRef = React.createRef<HTMLInputElement>();
   dirNavigatorRef = React.createRef<HTMLDivElement>();
   pathBarRef = React.createRef<HTMLDivElement>();
 
   handleOutsideClick = (e: MouseEvent) => {
-    if (
-      this.menuRef.current &&
-      !this.menuRef.current.contains(e.target as Node) &&
-      this.labelRef.current &&
-      !this.labelRef.current.contains(e.target as Node)
-    ) {
-      this.setState({isProfileMenuOpen: false, showWebPaneInput: false});
-    }
-
     if (
       this.state.isDirNavigatorOpen &&
       this.dirNavigatorRef.current &&
@@ -224,17 +208,6 @@ export default class Term extends React.PureComponent<
     ) {
       this.setState({isDirNavigatorOpen: false});
     }
-  };
-
-  toggleProfileMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (this.state.isRenamingLabel) return;
-    this.setState((state) => ({
-      isProfileMenuOpen: !state.isProfileMenuOpen,
-      showWebPaneInput: false,
-      webPaneUrlInput: ''
-    }));
   };
 
   handleLabelDoubleClick = (e: React.MouseEvent) => {
@@ -251,8 +224,7 @@ export default class Term extends React.PureComponent<
     const labelText = isDefaultTitle ? `Pane ${splitLabel}` : customTitle;
     this.setState({
       isRenamingLabel: true,
-      renameLabelValue: labelText,
-      isProfileMenuOpen: false
+      renameLabelValue: labelText
     });
   };
 
@@ -321,8 +293,7 @@ export default class Term extends React.PureComponent<
         click: () => {
           this.setState({
             isRenamingLabel: true,
-            renameLabelValue: (this.props as any).sessionTitle || `Pane ${this.props.splitLabel}`,
-            isProfileMenuOpen: false
+            renameLabelValue: (this.props as any).sessionTitle || `Pane ${this.props.splitLabel}`
           });
         }
       })
@@ -376,9 +347,10 @@ export default class Term extends React.PureComponent<
           finalUrl = 'https://' + finalUrl;
         }
       }
-      const {groupUid, uid, switchPaneToWeb} = this.props as any;
-      if (switchPaneToWeb && groupUid) {
-        switchPaneToWeb(groupUid, uid, finalUrl);
+      const {groupUid, uid, setWebPaneUrl} = this.props as any;
+      if (setWebPaneUrl && groupUid) {
+        rpc.emit('exit', {uid});
+        setWebPaneUrl(groupUid, finalUrl);
       }
       this.setState({urlInput: '', urlError: ''});
     } else {
@@ -386,48 +358,6 @@ export default class Term extends React.PureComponent<
     }
   };
 
-  handleShellProfileSelect = (p: any) => {
-    const {groupUid, uid, switchPaneProfile} = this.props as any;
-    if (switchPaneProfile && groupUid) {
-      switchPaneProfile(groupUid, uid, p.name);
-    }
-    this.setState({isProfileMenuOpen: false, showWebPaneInput: false});
-  };
-
-  handleRightClickProfile = (e: React.MouseEvent, name: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    try {
-      ipcRenderer.send('set-default-profile', name);
-    } catch (err) {
-      console.error('Failed to set default profile:', err);
-    }
-  };
-
-  handleWebPaneSelect = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    this.setState({showWebPaneInput: true}, () => {
-      requestAnimationFrame(() => {
-        this.inputRef.current?.focus();
-      });
-    });
-  };
-
-  handleWebPaneSubmit = () => {
-    const trimmed = this.state.webPaneUrlInput.trim();
-    if (!trimmed) return;
-    const url = /^https?:\/\//i.test(trimmed) ? trimmed : 'https://' + trimmed;
-    const {groupUid, uid, switchPaneToWeb} = this.props as any;
-    if (switchPaneToWeb && groupUid) {
-      switchPaneToWeb(groupUid, uid, url);
-    }
-    this.setState({isProfileMenuOpen: false, showWebPaneInput: false, webPaneUrlInput: ''});
-  };
-
-  handleWebPaneCancel = () => {
-    this.setState({showWebPaneInput: false, webPaneUrlInput: ''});
-  };
 
   constructor(props: TermProps) {
     super(props);
@@ -1040,8 +970,8 @@ export default class Term extends React.PureComponent<
           display: 'flex',
           flexWrap: 'wrap',
           alignItems: 'center',
-          gap: '4px',
-          padding: '8px 12px',
+          gap: 'var(--space-4)',
+          padding: 'var(--space-8) var(--space-12)',
           borderBottom: '0.5px solid var(--border-neutral)'
         }}
       >
@@ -1097,14 +1027,14 @@ export default class Term extends React.PureComponent<
             cursor: 'pointer',
             display: 'inline-flex',
             alignItems: 'center',
-            gap: '4px',
+            gap: 'var(--space-4)',
             fontSize: '11px',
             fontWeight: 600,
             fontFamily: 'var(--font-mono)',
             color: 'var(--text-info)',
             border: '0.5px solid var(--border-neutral)',
-            borderRadius: '3px',
-            padding: '1px 8px'
+            borderRadius: 'var(--radius-3)',
+            padding: '1px var(--space-8)'
           }}
         >
           Go
@@ -1170,13 +1100,13 @@ export default class Term extends React.PureComponent<
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                padding: '6px 12px',
+                padding: 'var(--space-6) var(--space-12)',
                 cursor: 'pointer',
                 background: showFocus ? 'var(--info-bg)' : undefined,
                 transition: 'background 0.1s ease'
               }}
             >
-              <div style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
+              <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-6)'}}>
                 <i
                   className="ti ti-folder term_folderIcon"
                   style={{fontSize: '13px', color: showFocus ? 'var(--info-text)' : 'var(--text-tertiary)'}}
@@ -1206,11 +1136,11 @@ export default class Term extends React.PureComponent<
       </div>
     );
   };
-
+ 
   renderNavigatorFooter = () => {
     const {navigatorDirs, searchBuffer, focusedIndex} = this.state;
     const isBufferActive = searchBuffer.length > 0;
-
+ 
     if (isBufferActive) {
       const hasMatch = focusedIndex !== -1;
       const pillBg = hasMatch ? 'var(--info-bg)' : 'var(--danger-bg)';
@@ -1221,12 +1151,12 @@ export default class Term extends React.PureComponent<
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            padding: '6px 12px',
+            padding: 'var(--space-6) var(--space-12)',
             borderTop: '0.5px solid var(--border-neutral)',
             boxSizing: 'border-box'
           }}
         >
-          <div style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
+          <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-6)'}}>
             <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
               Typing
             </span>
@@ -1234,10 +1164,10 @@ export default class Term extends React.PureComponent<
               style={{
                 fontFamily: 'var(--font-mono)',
                 fontSize: '10px',
-                padding: '1px 5px',
+                padding: 'var(--space-2) var(--space-4)',
                 background: pillBg,
                 color: pillColor,
-                borderRadius: '3px',
+                borderRadius: 'var(--radius-3)',
                 fontWeight: 500
               }}
             >
@@ -1250,7 +1180,7 @@ export default class Term extends React.PureComponent<
         </div>
       );
     }
-
+ 
     const count = navigatorDirs.length;
     return (
       <div
@@ -1258,7 +1188,7 @@ export default class Term extends React.PureComponent<
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          padding: '6px 12px',
+          padding: 'var(--space-6) var(--space-12)',
           borderTop: '0.5px solid var(--border-neutral)',
           boxSizing: 'border-box'
         }}
@@ -1442,8 +1372,8 @@ export default class Term extends React.PureComponent<
       }
     }
 
-    const wasActive = prevState.isProfileMenuOpen || prevState.isDirNavigatorOpen;
-    const isActive = this.state.isProfileMenuOpen || this.state.isDirNavigatorOpen;
+    const wasActive = prevState.isDirNavigatorOpen;
+    const isActive = this.state.isDirNavigatorOpen;
 
     if (isActive && !wasActive) {
       document.addEventListener('mousedown', this.handleOutsideClick);
@@ -1764,7 +1694,6 @@ export default class Term extends React.PureComponent<
                 this.props.onClosePane(this.props.groupUid);
               }
             }}
-            onClick={isPicker ? undefined : this.toggleProfileMenu}
             onContextMenu={this.handlePaneBandContextMenu}
             height="compact"
           />
@@ -1810,8 +1739,8 @@ export default class Term extends React.PureComponent<
                 flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                padding: '20px 16px',
-                gap: '14px',
+                padding: 'var(--space-20) var(--space-16)',
+                gap: 'var(--space-14)',
                 width: '100%'
               }}
             >
@@ -1831,11 +1760,11 @@ export default class Term extends React.PureComponent<
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '8px',
+                    gap: 'var(--space-8)',
                     background: 'var(--bg-primary)',
                     border: '0.5px solid var(--border-neutral)',
-                    borderRadius: '6px',
-                    padding: '0 10px',
+                    borderRadius: 'var(--radius-6)',
+                    padding: '0 var(--space-10)',
                     height: '36px',
                     width: '100%',
                     boxSizing: 'border-box'
@@ -1874,9 +1803,9 @@ export default class Term extends React.PureComponent<
                     style={{
                       fontFamily: 'var(--font-mono)',
                       fontSize: '11px',
-                      padding: '1px 5px',
+                      padding: 'var(--space-2) var(--space-4)',
                       border: '0.5px solid var(--border-neutral)',
-                      borderRadius: '3px',
+                      borderRadius: 'var(--radius-3)',
                       color: 'var(--text-tertiary)',
                       userSelect: 'none',
                       lineHeight: '1.2'
@@ -1890,7 +1819,7 @@ export default class Term extends React.PureComponent<
                     style={{
                       fontSize: '11px',
                       color: '#ff3b30',
-                      marginTop: '4px',
+                      marginTop: 'var(--space-4)',
                       textAlign: 'left',
                       fontFamily: 'var(--font-sans)'
                     }}
@@ -1900,7 +1829,7 @@ export default class Term extends React.PureComponent<
                 )}
               </div>
 
-              <div style={{display: 'flex', alignItems: 'center', gap: '10px', width: '100%', maxWidth: '280px'}}>
+              <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-10)', width: '100%', maxWidth: '280px'}}>
                 <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
                 <div style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
                   or pick a shell
@@ -1934,7 +1863,14 @@ export default class Term extends React.PureComponent<
                       key={p.name}
                       className="term_pickerButton_rev"
                       onClick={() => {
-                        this.handleShellProfileSelect(p);
+                        const {groupUid, uid, sessionCwd} = this.props as any;
+                        rpc.emit('new', {
+                          isNewGroup: false,
+                          cwd: sessionCwd || (this.props as any).cwd,
+                          activeUid: uid,
+                          profile: p.name,
+                          groupUid
+                        });
                       }}
                     >
                       <i className={iconClass} style={{fontSize: '14px'}} aria-hidden="true" />
@@ -1949,9 +1885,10 @@ export default class Term extends React.PureComponent<
                   onClick={() => {
                     const port = process.env.HYPERIA_PORT || '9800';
                     const shellUrl = `http://localhost:${port}/shell`;
-                    const {groupUid, uid, switchPaneToWeb} = this.props as any;
-                    if (switchPaneToWeb && groupUid) {
-                      switchPaneToWeb(groupUid, uid, shellUrl);
+                    const {groupUid, uid, setWebPaneUrl} = this.props as any;
+                    if (setWebPaneUrl && groupUid) {
+                      rpc.emit('exit', {uid});
+                      setWebPaneUrl(groupUid, shellUrl);
                     }
                   }}
                 >
@@ -1981,63 +1918,7 @@ export default class Term extends React.PureComponent<
           />
         )}
 
-        {this.state.isProfileMenuOpen && (
-          <div ref={this.menuRef} className="term_profileMenu">
-            {this.state.showWebPaneInput ? (
-              <div className="term_webPaneInputRow">
-                <span className="term_globeIcon">🌐</span>
-                <input
-                  ref={this.inputRef}
-                  type="text"
-                  className="term_webPaneInput"
-                  placeholder="Type URL & hit Enter..."
-                  value={this.state.webPaneUrlInput}
-                  onChange={(e) => this.setState({webPaneUrlInput: e.target.value})}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      this.handleWebPaneSubmit();
-                    } else if (e.key === 'Escape') {
-                      e.stopPropagation();
-                      this.handleWebPaneCancel();
-                    }
-                  }}
-                />
-              </div>
-            ) : (
-              <>
-                <div className="term_menuTitle">Switch Profile</div>
-                {((this.props as any).profiles || []).map((p: any) => {
-                  const isDefault = p.name === (this.props as any).defaultProfile;
-                  const isCurrent = p.name === (this.props as any).sessionProfile;
-                  return (
-                    <div
-                      key={p.name}
-                      className={`term_menuOption ${isCurrent ? 'term_menuOptionActive' : ''}`}
-                      onClick={() => this.handleShellProfileSelect(p)}
-                      onContextMenu={(e) => this.handleRightClickProfile(e, p.name)}
-                      title="Left-click to switch shell. Right-click to set as default."
-                    >
-                      {isDefault && <span className="term_activeStar">★</span>}
-                      {p.name}
-                    </div>
-                  );
-                })}
-                <div className="term_menuDivider" />
-                <div
-                  className="term_menuOption term_webPaneOption"
-                  onClick={this.handleWebPaneSelect}
-                  onContextMenu={(e) => this.handleRightClickProfile(e, 'Web Pane')}
-                  title="Left-click to switch to Web Pane. Right-click to set as default."
-                >
-                  {(this.props as any).defaultProfile === 'Web Pane' && <span className="term_activeStar">★</span>}
-                  🌐 Web Pane
-                </div>
-              </>
-            )}
-          </div>
-        )}
+
         {this.props.customChildren}
         {this.props.search ? (
           <SearchBox
@@ -2286,107 +2167,6 @@ export default class Term extends React.PureComponent<
             transition: opacity 0.15s ease;
           }
 
-          .term_profileMenu {
-            position: absolute;
-            top: 24px;
-            right: var(--space-8);
-            min-width: 180px;
-            background: var(--bg-secondary);
-            border: 0.5px solid var(--border-neutral);
-            border-radius: var(--radius-4);
-            padding: var(--space-6) 0;
-            z-index: 10000;
-          }
-
-          .term_menuTitle {
-            padding: var(--space-4) var(--space-12) var(--space-6);
-            font-size: 11px;
-            font-weight: var(--weight-medium);
-            color: var(--text-tertiary);
-            border-bottom: 0.5px solid var(--border-neutral);
-            margin-bottom: var(--space-4);
-            user-select: none;
-            font-family: var(--font-sans);
-          }
-
-          .term_menuOption {
-            padding: var(--space-6) var(--space-12);
-            font-size: 11px;
-            color: var(--text-secondary);
-            cursor: pointer;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            transition:
-              background 0.15s ease,
-              color 0.15s ease;
-            font-family: var(--font-sans);
-            font-weight: var(--weight-regular);
-          }
-
-          .term_menuOption:hover {
-            background: var(--info-bg);
-            color: var(--text-primary);
-          }
-
-          .term_menuOptionActive {
-            color: var(--text-primary);
-            font-weight: var(--weight-medium);
-          }
-
-          .term_activeStar {
-            color: #0096ff;
-            margin-right: var(--space-6);
-            font-size: 10px;
-          }
-
-          .term_menuDivider {
-            height: 0.5px;
-            background: var(--border-neutral);
-            margin: var(--space-4) 0;
-          }
-
-          .term_webPaneOption {
-            color: var(--info-text);
-            font-weight: var(--weight-medium);
-          }
-
-          .term_webPaneOption:hover {
-            background: var(--info-bg);
-            color: var(--text-primary);
-          }
-
-          .term_webPaneInputRow {
-            display: flex;
-            align-items: center;
-            gap: var(--space-6);
-            background: var(--bg-tertiary);
-            border: 0.5px solid var(--border-neutral);
-            border-radius: var(--radius-4);
-            padding: var(--space-4) var(--space-8);
-            margin: var(--space-4) var(--space-8);
-          }
-
-          .term_globeIcon {
-            flex-shrink: 0;
-            font-size: 12px;
-          }
-
-          .term_webPaneInput {
-            flex: 1;
-            background: transparent;
-            border: none;
-            outline: none;
-            color: var(--text-primary);
-            font-size: 11px;
-            font-family: var(--font-sans);
-            padding: var(--space-2) 0;
-            min-width: 140px;
-          }
-
-          .term_webPaneInput::placeholder {
-            color: var(--text-tertiary);
-          }
 
           .term_paneRenameInput {
             background: rgba(0, 0, 0, 0.2);

@@ -126,8 +126,6 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       defaultProfile: (this.props as any).defaultProfile,
       profiles: (this.props as any).profiles,
       setWebPaneUrl: (this.props as any).setWebPaneUrl,
-      switchPaneProfile: (this.props as any).switchPaneProfile,
-      switchPaneToWeb: (this.props as any).switchPaneToWeb,
       onClosePane: (this.props as any).onClosePane,
       sessionProfile: session ? (session as any).profile : undefined,
       sessionTitle: session ? (session as any).title : undefined,
@@ -170,8 +168,6 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
           hasSession={!!termGroup.sessionUid}
           sessionUid={termGroup.sessionUid}
           splitLabel={label}
-          switchPaneProfile={(this.props as any).switchPaneProfile}
-          switchPaneToWeb={(this.props as any).switchPaneToWeb}
         />
       );
     }

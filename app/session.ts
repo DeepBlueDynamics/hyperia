@@ -101,10 +101,6 @@ export default class Session extends EventEmitter {
   initTimestamp: number;
   profile!: string;
   cwd!: string;
-  // Bumped on every spawn. A PTY's onExit handler captures the gen it was
-  // spawned under and ignores the event if the gen has moved on — so killing
-  // a PTY to switch the pane's mode never tears the pane down.
-  gen = 0;
   constructor(options: SessionOptions) {
     super();
     this.pty = null;
@@ -184,11 +180,9 @@ export default class Session extends EventEmitter {
     }
 
     this.batcher = new DataBatcher(uid);
-    this.gen += 1;
-    const myGen = this.gen;
     let osc7Buffer = '';
     this.pty.onData((chunk) => {
-      if (this.ended || this.gen !== myGen) {
+      if (this.ended) {
         return;
       }
 
@@ -230,10 +224,6 @@ export default class Session extends EventEmitter {
     });
 
     this.pty.onExit((e) => {
-      // Ignore the exit of a PTY we've already replaced (mode switch / reset).
-      if (this.gen !== myGen) {
-        return;
-      }
       if (!this.ended) {
         // fall back to default shell config if the shell exits within 1 sec with non zero exit code
         // this will inform users in case there are errors in the config instead of instant exit
@@ -300,47 +290,7 @@ No fallback available, please check the shell config.
     }
   }
 
-  /**
-   * Switch this pane to a fresh shell: kill the current PTY (the gen guard
-   * keeps its onExit from tearing the pane down) and respawn with the given
-   * profile's shell, reusing the same uid so the same xterm receives output.
-   * The renderer should clear its buffer when it requests this.
-   */
-  resetWithProfile(profile: string, shell?: string, shellArgs?: string[]) {
-    const uid = this.batcher?.uid;
-    if (!uid) return;
-    const cols = this.pty?.cols;
-    const rows = this.pty?.rows;
-    const cwd = this.cwd;
-    // Invalidate the outgoing PTY's onExit before killing it so it can't tear
-    // the pane down. init() will bump gen again for the fresh PTY.
-    this.gen += 1;
-    try {
-      this.pty?.kill();
-    } catch {
-      // ignore — the gen guard ignores the resulting onExit anyway
-    }
-    this.pty = null;
-    this.ended = false;
-    this.initTimestamp = new Date().getTime();
-    this.init({uid, rows, cols, cwd, shell, shellArgs, profile});
-  }
 
-  /**
-   * Kill the PTY but keep the Session + pane alive (no 'exit' emit). Used when
-   * a pane switches to a web view so the old shell stops running rather than
-   * lingering underneath. Call resetWithProfile() to return to a shell.
-   */
-  parkPty() {
-    // Invalidate the PTY's onExit so killing it doesn't tear the pane down.
-    this.gen += 1;
-    try {
-      this.pty?.kill();
-    } catch {
-      // ignore — gen guard ignores the onExit
-    }
-    this.pty = null;
-  }
 
   destroy() {
     if (this.pty) {

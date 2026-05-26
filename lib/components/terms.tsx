@@ -152,8 +152,6 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
             defaultProfile: (this.props as any).defaultProfile,
             profiles: (this.props as any).profiles,
             setWebPaneUrl: (this.props as any).setWebPaneUrl,
-            switchPaneProfile: (this.props as any).switchPaneProfile,
-            switchPaneToWeb: (this.props as any).switchPaneToWeb,
             onClosePane: (this.props as any).onClosePane,
             parentProps: this.props
           });
