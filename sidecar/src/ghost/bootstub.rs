@@ -751,7 +751,7 @@ fn reply_doctor() -> BootReply {
     
     if config_ok {
         lines.push("Config Status: Valid JSON".to_string());
-        lines.push(format!("Active Provider: {}", if active_provider.is_empty() { "None".to_string() } else { active_provider }));
+        lines.push(format!("Active Provider: {}", if active_provider.is_empty() { "None".to_string() } else { active_provider.clone() }));
         lines.push(format!("Active Model: {}", if active_model.is_empty() { "None".to_string() } else { active_model }));
         
         let mut configured_provs = Vec::new();
