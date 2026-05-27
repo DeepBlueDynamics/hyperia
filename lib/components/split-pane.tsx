@@ -102,9 +102,14 @@ const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
           flexGrow: 0
         };
 
+        const isSplit =
+          React.isValidElement(child) &&
+          !!(child.props?.termGroup?.children && child.props.termGroup.children.length > 0);
+        const paneClass = `splitpane_pane ${isSplit ? 'splitpane_pane_shell' : ''}`;
+
         return (
           <React.Fragment key={i}>
-            <div className="splitpane_pane" style={style}>
+            <div className={paneClass} style={style}>
               {child}
             </div>
             {i < children.length - 1 ? (
@@ -127,14 +132,9 @@ const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
           position: relative;
           width: 100%;
           height: 100%;
-          /* Gutter is the SAME dark as the cards (--bg-primary), not the
-             lighter window behind it. Same color → the 8px gap doesn't read as
-             a bright beam (girder) AND the cards don't read as raised boxes in
-             a frame (nesting). The cards are defined only by their subtle
-             0.5px border + 4px radius, like the mockup. */
-          background: var(--bg-primary);
-          gap: 8px;
-          padding: 8px;
+          background: transparent;
+          gap: 0;
+          padding: 0;
           box-sizing: border-box;
         }
 
@@ -157,19 +157,16 @@ const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
           box-sizing: border-box;
         }
 
-        /* A pane that wraps another split is a layout shell, not a card —
-           otherwise nested splits stack border+padding at every depth. */
-        .splitpane_pane:has(> .splitpane_panes) {
-          background: transparent;
-          border: none;
-          border-radius: 0;
-          overflow: visible;
+        .splitpane_pane_shell {
+          background: transparent !important;
+          border: none !important;
+          border-radius: 0 !important;
+          overflow: visible !important;
         }
 
-        /* A nested split inherits the gutter from its parent — don't double-pad. */
-        .splitpane_pane > .splitpane_panes {
-          padding: 0;
-          background: transparent;
+        .splitpane_pane_shell > .splitpane_panes {
+          padding: 0 !important;
+          background: transparent !important;
         }
 
         .splitpane_divider {
@@ -181,13 +178,11 @@ const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
 
         .splitpane_divider_vertical {
           width: 8px;
-          margin: 0 -4px;
           cursor: col-resize;
         }
 
         .splitpane_divider_horizontal {
           height: 8px;
-          margin: -4px 0;
           cursor: row-resize;
           width: 100%;
         }

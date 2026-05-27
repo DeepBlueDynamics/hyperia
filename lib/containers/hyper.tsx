@@ -14,7 +14,6 @@ import {connect} from '../utils/plugins';
 import {HeaderContainer} from './header';
 import NotificationsContainer from './notifications';
 import TermsContainer from './terms';
-import {ToolbarContainer} from './toolbar';
 
 const isMac = /Mac/.test(navigator.userAgent);
 
@@ -24,7 +23,9 @@ const getThemeCSS = (styleTheme: any) => {
   if (styleTheme.root) {
     css += `
       :root {
-        ${Object.entries(styleTheme.root).map(([key, val]) => `--${key}: ${val};`).join('\n')}
+        ${Object.entries(styleTheme.root)
+          .map(([key, val]) => `--${key}: ${val};`)
+          .join('\n')}
       }
     `;
   }
@@ -32,7 +33,9 @@ const getThemeCSS = (styleTheme: any) => {
     css += `
       @media (prefers-color-scheme: dark) {
         :root {
-          ${Object.entries(styleTheme.dark).map(([key, val]) => `--${key}: ${val};`).join('\n')}
+          ${Object.entries(styleTheme.dark)
+            .map(([key, val]) => `--${key}: ${val};`)
+            .join('\n')}
         }
       }
     `;
@@ -41,7 +44,9 @@ const getThemeCSS = (styleTheme: any) => {
     css += `
       @media (prefers-color-scheme: light) {
         :root {
-          ${Object.entries(styleTheme.light).map(([key, val]) => `--${key}: ${val};`).join('\n')}
+          ${Object.entries(styleTheme.light)
+            .map(([key, val]) => `--${key}: ${val};`)
+            .join('\n')}
         }
       }
     `;
@@ -142,7 +147,6 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
         className={`hyper_main ${isMac_ && 'hyper_mainRounded'} ${fullScreen ? 'fullScreen' : ''}`}
       >
         <HeaderContainer />
-        <ToolbarContainer />
         <TermsContainer ref_={onTermsRef} />
         {/* Status bar removed — agent status shown per-tab via dot indicators */}
         {props.customInnerChildren}
@@ -154,7 +158,7 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
 
       <style jsx global>{`
         :root {
-          --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+          --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
           --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
           --weight-regular: 400;
           --weight-medium: 500;
@@ -177,8 +181,8 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
           --radius-8: 8px;
 
           /* Band Heights */
-          --band-height: 32px;
-          --band-height-compact: 22px;
+          --band-height: 42px;
+          --band-height-compact: 34px;
         }
 
         @media (prefers-color-scheme: dark) {
@@ -199,9 +203,9 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
             --warning-text: #fbbf24;
             --danger-bg: rgba(239, 68, 68, 0.1);
             --danger-text: #f87171;
-            --color-background-ai: #3C3489;
-            --color-text-ai: #EEEDFE;
-            --color-ai-purple: #7F77DD;
+            --color-background-ai: #3c3489;
+            --color-text-ai: #eeedfe;
+            --color-ai-purple: #7f77dd;
 
             /* Semantic themed tints */
             --bg-success: rgba(16, 185, 129, 0.1);
@@ -212,8 +216,8 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
             --text-warning: #fbbf24;
             --bg-danger: rgba(239, 68, 68, 0.1);
             --text-danger: #f87171;
-            --bg-ai: #3C3489;
-            --text-ai: #EEEDFE;
+            --bg-ai: #3c3489;
+            --text-ai: #eeedfe;
           }
         }
 
@@ -235,9 +239,9 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
             --warning-text: #92400e;
             --danger-bg: rgba(254, 226, 226, 0.5);
             --danger-text: #991b1b;
-            --color-background-ai: #EEEDFE;
-            --color-text-ai: #3C3489;
-            --color-ai-purple: #7F77DD;
+            --color-background-ai: #eeedfe;
+            --color-text-ai: #3c3489;
+            --color-ai-purple: #7f77dd;
 
             /* Semantic themed tints */
             --bg-success: rgba(209, 250, 229, 0.5);
@@ -248,8 +252,8 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
             --text-warning: #92400e;
             --bg-danger: rgba(254, 226, 226, 0.5);
             --text-danger: #991b1b;
-            --bg-ai: #EEEDFE;
-            --text-ai: #3C3489;
+            --bg-ai: #eeedfe;
+            --text-ai: #3c3489;
           }
         }
 

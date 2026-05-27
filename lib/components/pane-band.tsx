@@ -60,7 +60,6 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
         onContextMenu={onContextMenu}
         style={{
           display: 'flex',
-          justifyContent: 'space-between',
           alignItems: 'center',
           width: '100%',
           paddingRight: 'var(--space-10)',
@@ -70,36 +69,47 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           userSelect: 'none'
         }}
       >
-        {/* Name Cluster */}
+        {/* Left-justified content */}
         <div
-          className="pane-band-name-cluster"
           style={{
-            display: 'inline-flex',
+            display: 'flex',
             alignItems: 'center',
-            gap: 'var(--space-6)',
-            fontSize: '11px',
-            fontWeight: 500,
-            flexShrink: 0
+            gap: 'var(--space-8)',
+            flex: 1,
+            minWidth: 0
           }}
         >
-          {!isPlaceholder && resolvedIcon && (
-            <span style={{display: 'flex', alignItems: 'center'}}>{resolvedIcon}</span>
-          )}
-          {isPlaceholder ? (
-            <span style={{color: 'var(--text-tertiary)', fontStyle: 'italic', fontWeight: 400}}>{label}</span>
-          ) : (
-            <span style={{display: 'inline-flex', alignItems: 'center', gap: 'var(--space-4)'}}>
-              {label}
-              {profileChip}
-            </span>
-          )}
+          {/* Name Cluster */}
+          <div
+            className="pane-band-name-cluster"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 'var(--space-6)',
+              fontSize: '11px',
+              fontWeight: 500,
+              flexShrink: 0
+            }}
+          >
+            {!isPlaceholder && resolvedIcon && (
+              <span style={{display: 'flex', alignItems: 'center'}}>{resolvedIcon}</span>
+            )}
+            {isPlaceholder ? (
+              <span style={{color: 'var(--text-tertiary)', fontStyle: 'italic', fontWeight: 400}}>{label}</span>
+            ) : (
+              <span style={{display: 'inline-flex', alignItems: 'center', gap: 'var(--space-4)'}}>
+                {label}
+                {profileChip}
+              </span>
+            )}
+          </div>
+
+          {/* Nav Cluster */}
+          {navCluster}
+
+          {/* Location Bar */}
+          {locationBar}
         </div>
-
-        {/* Nav Cluster */}
-        {navCluster}
-
-        {/* Location Bar */}
-        {locationBar}
 
         {/* Controls Cluster */}
         <div
@@ -327,7 +337,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           .pane-band-tooltip {
             display: none;
             position: absolute;
-            top: 22px;
+            top: 28px;
             right: -6px;
             background: var(--bg-primary);
             border: 0.5px solid var(--border-neutral);

@@ -130,7 +130,7 @@ export default class Term extends React.PureComponent<
       wholeWord: boolean;
       regex: boolean;
     };
-     searchResults:
+    searchResults:
       | {
           resultIndex: number;
           resultCount: number;
@@ -150,6 +150,7 @@ export default class Term extends React.PureComponent<
     focusedIndex: number;
     navigatorLeft: number;
     navigatorWidth: number;
+    navigatorTop: number;
   }
 > {
   termRef: HTMLElement | null;
@@ -190,7 +191,8 @@ export default class Term extends React.PureComponent<
     searchBuffer: '',
     focusedIndex: -1,
     navigatorLeft: 95,
-    navigatorWidth: 280
+    navigatorWidth: 280,
+    navigatorTop: 38
   };
 
   labelRef = React.createRef<HTMLDivElement>();
@@ -357,7 +359,6 @@ export default class Term extends React.PureComponent<
       this.setState({urlError: "Doesn't look like a URL"});
     }
   };
-
 
   constructor(props: TermProps) {
     super(props);
@@ -864,27 +865,34 @@ export default class Term extends React.PureComponent<
   };
 
   toggleDirNavigator = () => {
-    const {isDirNavigatorOpen, navigatorCurrentPath} = this.state;
+    const {isDirNavigatorOpen} = this.state;
     const sessionCwd = (this.props as any).sessionCwd;
-    // Empty string → the sidecar resolves to the user's home directory.
-    const activePath = navigatorCurrentPath || sessionCwd || '';
+    // Always open on the pane's CURRENT directory (sessionCwd), not a stale
+    // browsed path. Empty → the sidecar resolves to the user's home directory.
+    const activePath = sessionCwd || '';
 
     if (!isDirNavigatorOpen) {
-      let navigatorLeft = 95;
-      let navigatorWidth = 280;
+      let navigatorLeft = 8;
+      let navigatorWidth = 320;
+      let navigatorTop = 38;
 
-      if (this.pathBarRef.current && this.labelRef.current) {
-        const pathBarRect = this.pathBarRef.current.getBoundingClientRect();
-        const labelRect = this.labelRef.current.getBoundingClientRect();
-        navigatorLeft = pathBarRect.left - labelRect.left;
-        navigatorWidth = Math.max(250, pathBarRect.width);
+      if (this.pathBarRef.current) {
+        const rect = this.pathBarRef.current.getBoundingClientRect();
+        const termFit = this.pathBarRef.current.closest('.term_fit');
+        if (termFit) {
+          const parentRect = termFit.getBoundingClientRect();
+          navigatorLeft = rect.left - parentRect.left;
+          navigatorTop = rect.bottom - parentRect.top + 4; // 4px margin below the path bar
+        }
+        navigatorWidth = rect.width;
       }
 
       this.setState(
         {
           isDirNavigatorOpen: true,
           navigatorLeft,
-          navigatorWidth
+          navigatorWidth,
+          navigatorTop
         },
         () => {
           requestAnimationFrame(() => {
@@ -1136,11 +1144,11 @@ export default class Term extends React.PureComponent<
       </div>
     );
   };
- 
+
   renderNavigatorFooter = () => {
     const {navigatorDirs, searchBuffer, focusedIndex} = this.state;
     const isBufferActive = searchBuffer.length > 0;
- 
+
     if (isBufferActive) {
       const hasMatch = focusedIndex !== -1;
       const pillBg = hasMatch ? 'var(--info-bg)' : 'var(--danger-bg)';
@@ -1180,7 +1188,7 @@ export default class Term extends React.PureComponent<
         </div>
       );
     }
- 
+
     const count = navigatorDirs.length;
     return (
       <div
@@ -1548,15 +1556,13 @@ export default class Term extends React.PureComponent<
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: 'var(--space-2)',
                   fontWeight: 400,
-                  opacity: 0.85,
+                  opacity: 0.7,
                   fontSize: '10px',
-                  marginLeft: 'var(--space-4)',
-                  cursor: 'pointer'
+                  marginLeft: 'var(--space-4)'
                 }}
               >
-                {sessionProfile} <span style={{fontSize: '7px'}}>▼</span>
+                ({sessionProfile})
               </span>
             }
             navCluster={
@@ -1653,10 +1659,10 @@ export default class Term extends React.PureComponent<
                     : '0.5px solid var(--border-neutral)',
                   borderRadius: 'var(--radius-3)',
                   padding: '0 var(--space-6)',
-                  height: '18px',
+                  height: '24px',
                   flex: 1,
                   minWidth: 0,
-                  maxWidth: '380px',
+                  maxWidth: '560px',
                   cursor: 'pointer',
                   boxSizing: 'border-box',
                   marginLeft: 'var(--space-4)',
@@ -1676,14 +1682,16 @@ export default class Term extends React.PureComponent<
                 <span
                   style={{
                     fontFamily: 'var(--font-mono)',
-                    fontSize: '10px',
-                    color: 'var(--text-secondary)',
+                    fontSize: '11px',
+                    color: this.state.isDirNavigatorOpen ? 'var(--text-primary)' : 'var(--text-secondary)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap'
                   }}
                 >
-                  {this.props.sessionCwd || '/'}
+                  {this.state.isDirNavigatorOpen
+                    ? this.state.navigatorCurrentPath || '/'
+                    : this.props.sessionCwd || '/'}
                 </span>
               </div>
             }
@@ -1706,9 +1714,10 @@ export default class Term extends React.PureComponent<
             className="term_dirNavigatorPopup"
             style={{
               position: 'absolute',
-              top: '24px',
+              top: `${this.state.navigatorTop}px`,
               left: `${this.state.navigatorLeft}px`,
               width: `${this.state.navigatorWidth}px`,
+              minWidth: '320px',
               background: 'var(--bg-secondary)',
               border: '0.5px solid var(--border-neutral)',
               borderRadius: '4px',
@@ -1829,7 +1838,15 @@ export default class Term extends React.PureComponent<
                 )}
               </div>
 
-              <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-10)', width: '100%', maxWidth: '280px'}}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-10)',
+                  width: '100%',
+                  maxWidth: '280px'
+                }}
+              >
                 <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
                 <div style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
                   or pick a shell
@@ -1918,7 +1935,6 @@ export default class Term extends React.PureComponent<
           />
         )}
 
-
         {this.props.customChildren}
         {this.props.search ? (
           <SearchBox
@@ -1998,8 +2014,6 @@ export default class Term extends React.PureComponent<
             background: var(--border-neutral);
             border-radius: 10px;
           }
-
-
 
           .term_pickerContainer {
             flex: 1;
@@ -2166,7 +2180,6 @@ export default class Term extends React.PureComponent<
             pointer-events: none;
             transition: opacity 0.15s ease;
           }
-
 
           .term_paneRenameInput {
             background: rgba(0, 0, 0, 0.2);

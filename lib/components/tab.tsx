@@ -154,7 +154,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
 
   const isFirstRun = !defaultProfile;
   // Optimistically show pendingName to avoid any flicker while Redux propagates.
-  const displayText = isFirstRun ? 'untitled' : (pendingName ?? (tabName || description || props.text));
+  const displayText = isFirstRun ? 'untitled' : pendingName ?? (tabName || description || props.text);
 
   // Agent dot color
   const agentDotColor = agentStatus?.working
@@ -234,9 +234,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         .tab_tab {
           color: var(--text-secondary);
           list-style-type: none;
-          flex: 1 1 0;
-          min-width: 72px;
-          max-width: 200px;
+          flex: 1 1 auto;
+          min-width: 120px;
+          max-width: 260px;
           position: relative;
           background: var(--bg-secondary);
           border-right: 0.5px solid var(--border-neutral);

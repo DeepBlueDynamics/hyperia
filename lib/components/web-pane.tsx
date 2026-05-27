@@ -5,6 +5,7 @@ import {connect} from 'react-redux';
 import type {HyperDispatch} from '../../typings/hyper';
 import {clearWebPane, userExitTermGroup} from '../actions/term-groups';
 import rpc from '../rpc';
+
 import {PaneBand} from './pane-band';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -692,10 +693,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   };
 
   handleOutsideClick = (e: MouseEvent) => {
-    if (
-      this.labelRef.current &&
-      !this.labelRef.current.contains(e.target as Node)
-    ) {
+    if (this.labelRef.current && !this.labelRef.current.contains(e.target as Node)) {
       this.setState({isEditingUrl: false});
     }
 
@@ -1292,10 +1290,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     : '0.5px solid var(--border-neutral)',
                   borderRadius: 'var(--radius-3)',
                   padding: '0 var(--space-6)',
-                  height: '18px',
+                  height: '24px',
                   flex: 1,
                   minWidth: 0,
-                  maxWidth: '380px',
+                  maxWidth: '560px',
                   cursor: 'pointer',
                   boxSizing: 'border-box',
                   marginLeft: 'var(--space-4)',
@@ -1333,7 +1331,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 <span
                   style={{
                     fontFamily: isAi ? 'var(--font-sans)' : 'var(--font-mono)',
-                    fontSize: '10px',
+                    fontSize: '11px',
                     color: this.state.isUrlNavigatorOpen ? 'var(--text-tertiary)' : 'var(--text-secondary)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',

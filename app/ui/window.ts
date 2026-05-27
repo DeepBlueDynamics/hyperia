@@ -2,7 +2,7 @@ import {existsSync} from 'fs';
 import {isAbsolute, normalize, sep} from 'path';
 import {URL, fileURLToPath} from 'url';
 
-import {app, BrowserWindow, shell, Menu, nativeImage} from 'electron';
+import {app, BrowserWindow, shell, Menu, nativeImage, dialog} from 'electron';
 import type {BrowserWindowConstructorOptions} from 'electron';
 
 import {enable as remoteEnable} from '@electron/remote/main';
@@ -100,6 +100,7 @@ export function newWindow(
   const window = new BrowserWindow(app.plugins.getDecoratedBrowserOptions(winOpts));
 
   window.profileName = profileName;
+  (window as any).tabCount = 1;
 
   // Enable remote module on this window
   remoteEnable(window.webContents);
@@ -305,7 +306,6 @@ export function newWindow(
     });
   });
 
-
   rpc.on('exit', ({uid}) => {
     console.log(`[window] RPC exit request: ${uid} (session exists: ${sessions.has(uid)})`);
     const session = sessions.get(uid);
@@ -374,6 +374,7 @@ export function newWindow(
         panes: Array<{uid: string; splitLabel: string}>;
       }>
     ) => {
+      (window as any).tabCount = payload.length;
       updateSessionLayout(payload);
     }
   );
@@ -433,6 +434,26 @@ export function newWindow(
     const position = window.getPosition();
     rpc.emit('move', {bounds: {x: position[0], y: position[1]}});
   });
+  window.on('close', (e) => {
+    const tabCount = (window as any).tabCount || 1;
+    if (tabCount > 1) {
+      const choice = dialog.showMessageBoxSync(window, {
+        type: 'question',
+        buttons: ['Yes', 'No'],
+        defaultId: 1,
+        title: 'Confirm Close',
+        message: `Are you sure you want to close all ${tabCount} tabs?`,
+        detail: 'This will close the entire window and terminate all active sessions.',
+        cancelId: 1
+      });
+      if (choice !== 0) {
+        e.preventDefault();
+        return;
+      }
+    }
+    deleteSessions();
+  });
+
   rpc.on('close', () => {
     window.close();
   });

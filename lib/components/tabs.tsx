@@ -1,8 +1,8 @@
 import React, {forwardRef, useEffect, useRef, useCallback, useState} from 'react';
 
 import type {TabsProps} from '../../typings/hyper';
-import {decorate, getTabProps} from '../utils/plugins';
 import {ipcRenderer} from '../utils/ipc';
+import {decorate, getTabProps} from '../utils/plugins';
 
 import Tab_ from './tab';
 
@@ -267,111 +267,55 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
       <div className="tabs_newTabPair">
         <button
           className="tabs_newTabBtn"
-          onClick={() => props.openNewTab(props.defaultProfile)}
+          onClick={() => props.openNewTab('picker')}
           aria-label="New tab"
           title="New Tab"
         >
           +
         </button>
+
         <button
-          ref={chevronRef}
-          className="tabs_chevronBtn"
-          onClick={() => setIsOpen(!isOpen)}
-          aria-label="New tab options"
-          aria-haspopup="menu"
-          aria-expanded={isOpen}
+          className="tabs_newTabBtn"
+          onClick={() => {
+            try {
+              ipcRenderer.send('new-window');
+            } catch (err) {
+              console.error(err);
+            }
+          }}
+          aria-label="New window"
+          title="New Window"
         >
-          <svg viewBox="0 0 10 10" width="8" height="8">
-            <path
-              d="M1 3.5l4 4 4-4"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
+          <svg viewBox="0 0 14 14" width="13" height="13">
+            <rect x="1" y="3" width="10" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+            <rect x="3" y="1" width="10" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
           </svg>
         </button>
 
-        {isOpen && (
-          <div className="new_tab_menu" role="menu" ref={menuRef}>
-            {sortedProfiles.map((p, i) => (
-              <div
-                key={p.id}
-                className={`new_tab_menu_item ${p.isDefault ? 'new_tab_menu_item_default' : ''}`}
-                onClick={() => triggerItem(i)}
-                onMouseEnter={() => setFocusedIndex(i)}
-                tabIndex={-1}
-                data-index={i}
-                role="menuitem"
-              >
-                {p.iconPath ? (
-                  <img
-                    src={p.iconPath}
-                    alt=""
-                    style={{
-                      width: '12px',
-                      height: '12px',
-                      marginRight: '8px',
-                      objectFit: 'contain',
-                      opacity: 0.8
-                    }}
-                  />
-                ) : (
-                  <svg
-                    viewBox="0 0 16 16"
-                    width="12"
-                    height="12"
-                    style={{
-                      marginRight: '8px',
-                      opacity: 0.7,
-                      flexShrink: 0
-                    }}
-                  >
-                    <path
-                      d="M2 3h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm1 2v6h10V5H3zm2 1.5l2 1.5-2 1.5v-3zm3.5 3h3v1h-3v-1z"
-                      fill="currentColor"
-                    />
-                  </svg>
-                )}
-                <span style={{ flexGrow: 1, textOverflow: 'ellipsis', overflow: 'hidden' }}>{p.displayName}</span>
-                {p.isDefault && (
-                  <svg viewBox="0 0 16 16" width="12" height="12" style={{ marginLeft: 'auto', color: '#0096ff' }}>
-                    <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z" fill="none" stroke="currentColor" strokeWidth="1.5"/>
-                  </svg>
-                )}
-              </div>
-            ))}
-            <div className="new_tab_menu_divider" />
-            <div
-              className="new_tab_menu_item"
-              onClick={() => triggerItem(sortedProfiles.length)}
-              onMouseEnter={() => setFocusedIndex(sortedProfiles.length)}
-              tabIndex={-1}
-              data-index={sortedProfiles.length}
-              role="menuitem"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" style={{ marginRight: '8px', opacity: 0.7 }}>
-                <path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.86z" fill="currentColor"/>
-              </svg>
-              Settings…
-            </div>
-            <div
-              className="new_tab_menu_item"
-              onClick={() => triggerItem(sortedProfiles.length + 1)}
-              onMouseEnter={() => setFocusedIndex(sortedProfiles.length + 1)}
-              tabIndex={-1}
-              data-index={sortedProfiles.length + 1}
-              role="menuitem"
-            >
-              <svg viewBox="0 0 16 16" width="12" height="12" style={{ marginRight: '8px', opacity: 0.7 }}>
-                <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z" fill="currentColor"/>
-                <path d="M8.93 6.588l-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z" fill="currentColor"/>
-              </svg>
-              About
-            </div>
-          </div>
-        )}
+        <button
+          className="tabs_newTabBtn"
+          onClick={() => {
+            try {
+              ipcRenderer.send('new-sticky');
+            } catch (err) {
+              console.error(err);
+            }
+          }}
+          aria-label="New sticky note"
+          title="New Sticky"
+        >
+          <svg viewBox="0 0 14 14" width="13" height="13">
+            <path
+              d="M2 1h10a1 1 0 0 1 1 1v7l-4 4H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.2"
+            />
+            <path d="M9 8v5l4-4H9z" fill="currentColor" opacity="0.35" />
+            <line x1="4" y1="5" x2="10" y2="5" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
+            <line x1="4" y1="7.5" x2="8" y2="7.5" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
+          </svg>
+        </button>
       </div>
 
       {isMac && tabs.length > 1 && (
@@ -381,7 +325,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           className={`tabs_borderShim ${fullScreen ? 'tabs_borderShimUndo' : ''}`}
         />
       )}
-      {!isMac && <div className="tabs_dragSpace" aria-hidden="true" />}
+      <div className="tabs_dragSpace" aria-hidden="true" />
       {props.customChildren}
 
       <style jsx>{`
@@ -409,7 +353,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           flex-flow: row;
           margin: 0 0 0 ${isMac ? '76px' : '0'};
           padding: 0;
-          flex: 1 1 auto;
+          flex: 0 1 auto;
           min-width: 0;
           overflow-x: auto;
           overflow-y: hidden;
@@ -427,8 +371,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         }
 
         .tabs_dragSpace {
-          flex: 0 0 ${trailingDragWidth}px;
-          min-width: ${trailingDragWidth}px;
+          flex: 1 1 auto;
           -webkit-app-region: drag;
         }
 
@@ -482,7 +425,6 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           align-items: center;
           height: 34px;
           background: transparent;
-          border-left: 0.5px solid var(--border-neutral);
           -webkit-app-region: no-drag;
           z-index: 10;
           position: relative;
@@ -501,7 +443,9 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           padding: 0;
           font-size: 18px;
           font-weight: var(--weight-regular);
-          transition: background 0.15s, color 0.15s;
+          transition:
+            background 0.15s,
+            color 0.15s;
           outline: none;
         }
 
@@ -522,7 +466,9 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           background: transparent;
           border: none;
           padding: 0;
-          transition: background 0.15s, color 0.15s;
+          transition:
+            background 0.15s,
+            color 0.15s;
           outline: none;
         }
 
@@ -555,7 +501,9 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           cursor: pointer;
           white-space: nowrap;
           outline: none;
-          transition: background 0.15s ease, color 0.15s ease;
+          transition:
+            background 0.15s ease,
+            color 0.15s ease;
           font-weight: var(--weight-regular);
         }
 
