@@ -1,10 +1,12 @@
 import React from 'react';
 
+import {shell} from 'electron';
 import {connect} from 'react-redux';
 
 import type {HyperDispatch} from '../../typings/hyper';
 import {clearWebPane, userExitTermGroup} from '../actions/term-groups';
 import rpc from '../rpc';
+import {countPathHorizontalStacks} from '../utils/term-groups';
 
 import {PaneBand} from './pane-band';
 
@@ -25,6 +27,8 @@ interface WebPaneProps {
   onClosePane?: () => void;
   onSetTitle?: (title: string) => void;
   onSetUrl?: (url: string) => void;
+  allTermGroups?: Record<string, any>;
+  webName?: string;
 }
 
 const getSecurityState = (urlStr: string): 'https' | 'http' | 'localhost' | 'error' => {
@@ -54,6 +58,17 @@ const getSecurityState = (urlStr: string): 'https' | 'http' | 'localhost' | 'err
     return 'error';
   } catch (err) {
     return 'error';
+  }
+};
+
+const OAUTH_HOST_RE = /(^|\.)(accounts\.google\.com|appleid\.apple\.com|login\.microsoftonline\.com|login\.live\.com|github\.com\/login\/oauth|gitlab\.com\/users\/sign_in)/i;
+const isOAuthUrl = (u: string): boolean => {
+  if (!u) return false;
+  try {
+    const parsed = new URL(u);
+    return OAUTH_HOST_RE.test(parsed.host) || OAUTH_HOST_RE.test(parsed.host + parsed.pathname);
+  } catch {
+    return false;
   }
 };
 
@@ -132,6 +147,10 @@ interface WebPaneState {
   aiStreamingMessage: string;
   paneHistory: string[];
   paneHistoryIndex: number;
+  navigatorLeft?: number;
+  navigatorWidth?: number;
+  navigatorTop?: number;
+  isNarrow: boolean;
 }
 
 class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
@@ -140,6 +159,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   urlNavigatorRef = React.createRef<HTMLDivElement>();
   urlBarRef = React.createRef<HTMLDivElement>();
   navigatorInputRef = React.createRef<HTMLInputElement>();
+  webWrapperRef = React.createRef<HTMLDivElement>();
+  resizeObserver: any = null;
   _windowKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
   searchAbortCtrl: AbortController | null = null;
 
@@ -199,7 +220,11 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       aiInputVal: '',
       aiStreamingMessage: '',
       paneHistory: props.url ? [props.url] : [],
-      paneHistoryIndex: props.url ? 0 : -1
+      paneHistoryIndex: props.url ? 0 : -1,
+      navigatorLeft: 8,
+      navigatorWidth: 320,
+      navigatorTop: 38,
+      isNarrow: false
     };
   }
 
@@ -288,6 +313,30 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   };
 
   handleKeyDown = (e: React.KeyboardEvent) => {
+    let isSplitDownDisabled = false;
+    const {groupUid, allTermGroups} = this.props as any;
+    if (groupUid && allTermGroups) {
+      const stacks = countPathHorizontalStacks(groupUid, allTermGroups);
+      if (stacks >= 11) {
+        isSplitDownDisabled = true;
+      }
+    }
+
+    if (this.state.isNarrow && (e.ctrlKey || e.metaKey) && e.key === '|') {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (isSplitDownDisabled && (e.ctrlKey || e.metaKey) && (e.key === '_' || e.key === '-')) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (isSplitDownDisabled && (e.ctrlKey || e.metaKey) && e.altKey && (e.key === '_' || e.key === '-')) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (e.key === 'F5') {
       e.preventDefault();
       e.stopPropagation();
@@ -296,6 +345,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   };
 
   navigateWebview = (targetUrl: string) => {
+    if (isOAuthUrl(targetUrl)) {
+      void shell.openExternal(targetUrl);
+      return;
+    }
     this.props.onSetUrl?.(targetUrl);
     this.addToHistory('url', targetUrl);
   };
@@ -692,6 +745,64 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
   };
 
+  removeHistoryEntry = (kind: 'url' | 'ai-query', value: string, visitedAt?: number) => {
+    const newHistory = this.state.webHistory.filter((item) => {
+      if (item.kind === kind && item.value === value) {
+        if (visitedAt === undefined || item.visitedAt === visitedAt) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    this.setState({
+      webHistory: newHistory
+    });
+
+    try {
+      localStorage.setItem(`web_pane_history_${this.props.groupUid}`, JSON.stringify(newHistory));
+    } catch (err) {
+      console.error('Failed to persist web pane history:', err);
+    }
+  };
+
+  clearAllHistory = () => {
+    this.setState({
+      webHistory: []
+    });
+
+    try {
+      localStorage.removeItem(`web_pane_history_${this.props.groupUid}`);
+    } catch (err) {
+      console.error('Failed to clear web pane history:', err);
+    }
+  };
+
+  removeAiConversation = (id: string) => {
+    const newConvs = this.state.aiConversations.filter((c) => c.id !== id);
+    this.setState({
+      aiConversations: newConvs
+    });
+
+    try {
+      localStorage.setItem('web_pane_ai_conversations', JSON.stringify(newConvs));
+    } catch (err) {
+      console.error('Failed to persist AI conversations:', err);
+    }
+  };
+
+  clearAllAiConversations = () => {
+    this.setState({
+      aiConversations: []
+    });
+
+    try {
+      localStorage.removeItem('web_pane_ai_conversations');
+    } catch (err) {
+      console.error('Failed to clear AI conversations:', err);
+    }
+  };
+
   handleOutsideClick = (e: MouseEvent) => {
     if (this.labelRef.current && !this.labelRef.current.contains(e.target as Node)) {
       this.setState({isEditingUrl: false});
@@ -739,17 +850,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
-      if (this.state.navigatorInputVal) {
-        this.setState({
-          navigatorInputVal: '',
-          navigatorFocusedIndex: -1,
-          navigatorError: null
-        });
-      } else {
-        this.setState({
-          isUrlNavigatorOpen: false
-        });
-      }
+      this.setState({
+        isUrlNavigatorOpen: false
+      });
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       e.stopPropagation();
@@ -781,7 +884,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
               this.navigateWebview(`ai://${newConvId}`);
             } else {
               rpc.emit('split request vertical', {
-                activeUid: this.props.sessionUid,
+                activeUid: this.props.sessionUid || this.props.groupUid,
                 profile: 'Web Pane',
                 url: `ai://${newConvId}`
               });
@@ -824,7 +927,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
               this.navigateWebview(`ai://${conversationId}`);
             } else {
               rpc.emit('split request vertical', {
-                activeUid: this.props.sessionUid,
+                activeUid: this.props.sessionUid || this.props.groupUid,
                 profile: 'Web Pane',
                 url: `ai://${conversationId}`
               });
@@ -880,6 +983,20 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   }
 
   componentDidMount() {
+    if (this.webWrapperRef.current) {
+      this.resizeObserver = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (entry) {
+          const width = entry.contentRect.width;
+          const isNarrow = width < 380;
+          if (isNarrow !== this.state.isNarrow) {
+            this.setState({isNarrow});
+          }
+        }
+      });
+      this.resizeObserver.observe(this.webWrapperRef.current);
+    }
+
     // Check if AI is configured
     try {
       /* eslint-disable @typescript-eslint/no-unsafe-call */
@@ -944,6 +1061,87 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     wv.addEventListener('dom-ready', () => {
       this.updateNavigationState();
+      try {
+        const wc = wv.getWebContents();
+        if (wc) {
+          wc.removeAllListeners('before-input-event');
+          wc.on('before-input-event', (event: any, input: any) => {
+            if (input.type === 'keyDown') {
+              const isPlus = input.key === '=' || input.key === '+';
+              const isMinus = input.key === '-';
+              const isZero = input.key === '0';
+
+              if ((input.control || input.meta) && isPlus) {
+                event.preventDefault();
+                try {
+                  const currentZoom = wv.getZoomFactor();
+                  wv.setZoomFactor(Math.min(currentZoom + 0.1, 3.0));
+                } catch (err) {
+                  console.error('Failed to zoom in:', err);
+                }
+              } else if ((input.control || input.meta) && isMinus) {
+                event.preventDefault();
+                try {
+                  const currentZoom = wv.getZoomFactor();
+                  wv.setZoomFactor(Math.max(currentZoom - 0.1, 0.5));
+                } catch (err) {
+                  console.error('Failed to zoom out:', err);
+                }
+              } else if ((input.control || input.meta) && isZero) {
+                event.preventDefault();
+                try {
+                  wv.setZoomFactor(1.0);
+                } catch (err) {
+                  console.error('Failed to reset zoom:', err);
+                }
+              }
+            }
+          });
+
+          wc.on('context-menu', (event: any) => {
+            event.preventDefault();
+            this.handleContextMenu(event);
+          });
+
+          wc.on('will-navigate', (event: any, url: string) => {
+            if (isOAuthUrl(url)) {
+              event.preventDefault();
+              void shell.openExternal(url);
+            }
+          });
+
+          wc.on('will-redirect', (event: any, url: string) => {
+            if (isOAuthUrl(url)) {
+              event.preventDefault();
+              void shell.openExternal(url);
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('Failed to access webContents for zoom/contextmenu:', err);
+      }
+    });
+
+    // OAuth bail-out. Google (and a few others) refuse to sign users in from
+    // embedded browsers — per RFC 8252 native apps "should not" embed a user
+    // agent for OAuth. So any nav targeting a known OAuth host gets handed to
+    // the system browser instead. The webview stays put; the user completes
+    // sign-in externally. Hyperia is a terminal, not a Gmail client.
+    // Same-frame redirect → stop, hand to system browser.
+    wv.addEventListener('will-navigate', (e: any) => {
+      const url = (e?.url as string) || '';
+      if (isOAuthUrl(url)) {
+        try { wv.stop(); } catch { /* ignore — webview may not be ready */ }
+        void shell.openExternal(url);
+      }
+    });
+    // Popup (e.g. clicking "Sign in with Google" usually opens a new window).
+    wv.addEventListener('new-window', (e: any) => {
+      const url = (e?.url as string) || '';
+      if (isOAuthUrl(url)) {
+        e.preventDefault?.();
+        void shell.openExternal(url);
+      }
     });
     /* eslint-enable @typescript-eslint/no-unsafe-call */
 
@@ -984,6 +1182,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   }
 
   componentWillUnmount() {
+    this.resizeObserver?.disconnect();
     document.removeEventListener('mousedown', this.handleOutsideClick);
     if (this._windowKeydownHandler) {
       window.removeEventListener('keydown', this._windowKeydownHandler);
@@ -1033,6 +1232,15 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     e.preventDefault();
     e.stopPropagation();
 
+    let isSplitDownDisabled = false;
+    const {groupUid, allTermGroups} = this.props as any;
+    if (groupUid && allTermGroups) {
+      const stacks = countPathHorizontalStacks(groupUid, allTermGroups);
+      if (stacks >= 11) {
+        isSplitDownDisabled = true;
+      }
+    }
+
     /* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
     const remote = require('@electron/remote');
     const {Menu, MenuItem} = remote;
@@ -1042,8 +1250,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       new MenuItem({
         label: 'Split Right',
         accelerator: 'Ctrl+Shift+|',
+        enabled: !this.state.isNarrow,
         click: () => {
-          rpc.emit('split request vertical', {activeUid: this.props.sessionUid});
+          rpc.emit('split request vertical', {activeUid: this.props.sessionUid || this.props.groupUid});
         }
       })
     );
@@ -1052,8 +1261,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       new MenuItem({
         label: 'Split Down',
         accelerator: 'Ctrl+Shift+_',
+        enabled: !isSplitDownDisabled,
         click: () => {
-          rpc.emit('split request horizontal', {activeUid: this.props.sessionUid});
+          rpc.emit('split request horizontal', {activeUid: this.props.sessionUid || this.props.groupUid});
         }
       })
     );
@@ -1062,9 +1272,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       new MenuItem({
         label: 'Clone Right',
         accelerator: 'Ctrl+Alt+Shift+|',
+        enabled: !this.state.isNarrow,
         click: () => {
           rpc.emit('split request vertical', {
-            activeUid: this.props.sessionUid || undefined,
+            activeUid: this.props.sessionUid || this.props.groupUid,
             profile: (this.props as any).defaultProfile || undefined
           });
         }
@@ -1075,9 +1286,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       new MenuItem({
         label: 'Clone Down',
         accelerator: 'Ctrl+Alt+Shift+_',
+        enabled: !isSplitDownDisabled,
         click: () => {
           rpc.emit('split request horizontal', {
-            activeUid: this.props.sessionUid || undefined,
+            activeUid: this.props.sessionUid || this.props.groupUid,
             profile: (this.props as any).defaultProfile || undefined
           });
         }
@@ -1118,7 +1330,351 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     /* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
   };
 
+  renderUrlBreadcrumbs = () => {
+    const {url} = this.props;
+    const isAi = url && url.startsWith('ai://');
+    const currentUrl = isAi ? 'AI Chat' : this.state.activeUrl || this.props.url || 'about:blank';
+
+    if (isAi) {
+      const conversationId = url.slice(5);
+      const conv = this.state.aiConversations.find((c) => c.id === conversationId);
+      const title = conv ? conv.title : 'AI Conversation';
+      return (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--space-6)',
+            padding: 'var(--space-8) var(--space-12)',
+            borderBottom: '0.5px solid var(--border-neutral)',
+            background: 'var(--bg-dim)',
+            fontSize: '11px',
+            color: 'var(--text-secondary)',
+            fontFamily: 'var(--font-sans)',
+            fontWeight: 500,
+            userSelect: 'none'
+          }}
+        >
+          <i className="ti ti-sparkles" style={{color: 'var(--color-ai-purple, #7F77DD)', marginRight: '4px'}} />
+          <span>AI Chat</span>
+          <span style={{color: 'var(--text-tertiary)'}}>&gt;</span>
+          <span style={{color: 'var(--text-primary)'}}>{title}</span>
+        </div>
+      );
+    }
+
+    // Parse standard URL for breadcrumbs
+    let protocol = 'https:';
+    let hostname = 'about:blank';
+    let pathname = '';
+    let showHops = false;
+    try {
+      const parsed = new URL(/^https?:\/\//i.test(currentUrl) ? currentUrl : 'https://' + currentUrl);
+      protocol = parsed.protocol;
+      hostname = parsed.hostname;
+      pathname = parsed.pathname;
+      showHops = true;
+    } catch (e) {
+      // invalid URL, ignore
+    }
+
+    if (!showHops) {
+      return (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--space-6)',
+            padding: 'var(--space-8) var(--space-12)',
+            borderBottom: '0.5px solid var(--border-neutral)',
+            background: 'var(--bg-dim)',
+            fontSize: '11px',
+            color: 'var(--text-secondary)',
+            fontFamily: 'var(--font-mono)',
+            userSelect: 'none'
+          }}
+        >
+          <i className="ti ti-world" style={{color: 'var(--info-text)', marginRight: '4px'}} />
+          <span style={{color: 'var(--text-primary)'}}>{currentUrl}</span>
+        </div>
+      );
+    }
+
+    const paths = pathname.split('/').filter(Boolean);
+    const handleHostClick = () => {
+      this.navigateWebview(`${protocol}//${hostname}`);
+      this.setState({isUrlNavigatorOpen: false});
+    };
+
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 'var(--space-4)',
+          padding: 'var(--space-8) var(--space-12)',
+          borderBottom: '0.5px solid var(--border-neutral)',
+          background: 'var(--bg-dim)',
+          fontSize: '11px',
+          color: 'var(--text-secondary)',
+          fontFamily: 'var(--font-mono)',
+          userSelect: 'none'
+        }}
+      >
+        <i className="ti ti-world" style={{color: 'var(--info-text)', marginRight: 'var(--space-4)'}} />
+        <span style={{color: 'var(--text-tertiary)'}}>{protocol}//</span>
+        <span
+          onClick={handleHostClick}
+          style={{cursor: 'pointer', color: 'var(--text-primary)', fontWeight: 500}}
+          title={`Go to ${protocol}//${hostname}`}
+        >
+          {hostname}
+        </span>
+        {paths.map((p, idx) => {
+          const subpath = `${protocol}//${hostname}/${paths.slice(0, idx + 1).join('/')}`;
+          return (
+            <React.Fragment key={idx}>
+              <span style={{color: 'var(--text-tertiary)'}}>/</span>
+              <span
+                onClick={() => {
+                  this.navigateWebview(subpath);
+                  this.setState({isUrlNavigatorOpen: false});
+                }}
+                style={{cursor: 'pointer', color: 'var(--text-secondary)'}}
+                title={`Go to ${subpath}`}
+              >
+                {p}
+              </span>
+            </React.Fragment>
+          );
+        })}
+      </div>
+    );
+  };
+
+  renderUrlNavigatorFooter = () => {
+    const {url} = this.props;
+    const isAi = url && url.startsWith('ai://');
+    const val = this.state.navigatorInputVal;
+    const query = val.toLowerCase();
+
+    const filtered = isAi
+      ? query
+        ? this.state.aiConversations.filter((c) => c.title.toLowerCase().includes(query))
+        : this.state.aiConversations
+      : query
+        ? this.state.webHistory.filter((item) => item.value.toLowerCase().includes(query))
+        : this.state.webHistory;
+
+    const isTyping = val !== (isAi ? '' : this.state.activeUrl || this.props.url || '');
+
+    let statusText = '';
+    let statusColor = 'var(--text-tertiary)';
+
+    if (isTyping && val.trim()) {
+      const trimmed = val.trim();
+      const isUrl = this.isInputUrl(trimmed);
+      const hasAi = this.state.hasAiConfigured;
+
+      if (isAi) {
+        statusText = '✨ AI query · Enter starts new thread';
+      } else if (isUrl) {
+        statusText = '🌐 URL · Enter navigates';
+      } else if (!hasAi) {
+        statusText = '✨ AI not configured — see settings';
+        statusColor = 'var(--warning-text)';
+      } else {
+        const isPlausibleHost = !/\s/.test(trimmed);
+        statusText = `✨ AI query · Enter sends to Claude${isPlausibleHost ? ' (Ctrl+Enter to navigate as URL)' : ''}`;
+      }
+    } else {
+      const count = filtered.length;
+      statusText = isAi
+        ? `${count} ${count === 1 ? 'active thread' : 'active threads'}`
+        : `${count} ${count === 1 ? 'recent visit' : 'recent visits'}`;
+    }
+
+    const handleGo = () => {
+      const idx = this.state.navigatorFocusedIndex;
+      const filteredList = isAi
+        ? query
+          ? this.state.aiConversations.filter((c) => c.title.toLowerCase().includes(query))
+          : this.state.aiConversations
+        : query
+          ? this.state.webHistory.filter((item) => item.value.toLowerCase().includes(query))
+          : this.state.webHistory;
+
+      if (idx >= 0 && idx < filteredList.length) {
+        const item = filteredList[idx] as any;
+        if (item.kind === 'ai-query') {
+          const conversationId = item.conversationId || `conv-${Date.now()}`;
+          this.navigateWebview(`ai://${conversationId}`);
+        } else {
+          const val = (item as any).value || (item as any).title;
+          if ((item as any).id) {
+            this.navigateWebview(`ai://${(item as any).id}`);
+          } else {
+            this.navigateWebview(val);
+          }
+        }
+      } else {
+        const trimmed = val.trim();
+        if (trimmed) {
+          const isUrl = this.isInputUrl(trimmed);
+          if (isUrl) {
+            let finalUrl = trimmed;
+            if (!/^https?:\/\//i.test(finalUrl)) {
+              if (/^(localhost|127\.0\.0\.1)/i.test(finalUrl)) {
+                finalUrl = 'http://' + finalUrl;
+              } else {
+                finalUrl = 'https://' + finalUrl;
+              }
+            }
+            this.navigateWebview(finalUrl);
+          } else {
+            if (!this.state.hasAiConfigured) {
+              this.setState({navigatorError: 'AI not configured — please check settings'});
+              return;
+            }
+            const conversationId = 'conv-' + Date.now();
+            this.createConversation(conversationId, trimmed);
+            this.navigateWebview(`ai://${conversationId}`);
+          }
+        }
+      }
+      this.setState({isUrlNavigatorOpen: false});
+    };
+
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          borderTop: '0.5px solid var(--border-neutral)',
+          background: 'var(--bg-primary)',
+          borderBottomLeftRadius: '4px',
+          borderBottomRightRadius: '4px',
+          boxSizing: 'border-box'
+        }}
+      >
+        {/* Input row */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--space-8)',
+            padding: 'var(--space-8) var(--space-12)',
+            boxSizing: 'border-box'
+          }}
+        >
+          {this.state.loading && url ? (
+            <span
+              style={{
+                fontSize: '11px',
+                display: 'inline-block',
+                animation: 'web-pane-spin 1s linear infinite',
+                opacity: 0.6,
+                flexShrink: 0
+              }}
+            >
+              ⟳
+            </span>
+          ) : (
+            <i
+              className="ti ti-search"
+              style={{
+                fontSize: '13px',
+                color: 'var(--text-tertiary)',
+                flexShrink: 0
+              }}
+              aria-hidden="true"
+            />
+          )}
+          <input
+            ref={this.navigatorInputRef}
+            type="text"
+            style={{
+              flex: 1,
+              background: 'transparent',
+              border: 'none',
+              outline: 'none',
+              color: 'var(--text-primary)',
+              fontSize: '11px',
+              fontFamily: isAi || (val.trim() && !this.isInputUrl(val)) ? 'var(--font-sans)' : 'var(--font-mono)',
+              height: '24px',
+              padding: 0
+            }}
+            placeholder={isAi ? 'Search threads or ask a new question...' : 'Search history or type URL... (Esc to close)'}
+            value={this.state.navigatorInputVal}
+            onChange={(e) => {
+              const newVal = e.target.value;
+              const newQuery = newVal.toLowerCase();
+              this.setState({
+                navigatorInputVal: newVal,
+                navigatorFocusedIndex: -1,
+                navigatorError: null
+              });
+            }}
+            onKeyDown={this.handlePopupKeyDown}
+          />
+          <span
+            onClick={handleGo}
+            onMouseDown={(e) => e.preventDefault()}
+            style={{
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 'var(--space-4)',
+              fontSize: '10px',
+              fontWeight: 600,
+              fontFamily: 'var(--font-mono)',
+              color: 'var(--text-info)',
+              border: '0.5px solid var(--border-neutral)',
+              borderRadius: 'var(--radius-3)',
+              padding: '1px var(--space-6)',
+              background: 'var(--bg-secondary)',
+              userSelect: 'none'
+            }}
+            title="Navigate to URL or search term"
+          >
+            Go
+          </span>
+        </div>
+
+        {/* Helper/Status bar */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: '4px 12px 6px 12px',
+            fontSize: '9px',
+            color: statusColor,
+            fontFamily: 'var(--font-sans)',
+            userSelect: 'none',
+            borderTop: '0.5px solid rgba(255, 255, 255, 0.03)'
+          }}
+        >
+          <span>{statusText}</span>
+          <span style={{color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>
+            Esc to close
+          </span>
+        </div>
+      </div>
+    );
+  };
+
   render() {
+    let isSplitDownDisabled = false;
+    const {groupUid, allTermGroups} = this.props as any;
+    if (groupUid && allTermGroups) {
+      const stacks = countPathHorizontalStacks(groupUid, allTermGroups);
+      if (stacks >= 11) {
+        isSplitDownDisabled = true;
+      }
+    }
+
     const {url, onClose, hasSession} = this.props;
     const {error, loading} = this.state;
     const splitLabel = (this.props as any).splitLabel;
@@ -1135,25 +1691,16 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             : splitLabel === 'd'
               ? 'danger'
               : 'info';
-    const labelText = isAi ? 'ask' : splitLabel ? `Pane ${splitLabel}` : 'Web pane';
+    const labelText = isAi ? 'ask' : (this.props as any).webName || (splitLabel ? `Pane ${splitLabel}` : 'Web pane');
 
     return (
       <div
+        ref={this.webWrapperRef}
+        className="web_fit"
         onKeyDown={this.handleKeyDown}
         onContextMenu={this.handleContextMenu}
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          background: 'var(--bg-primary)'
-        }}
       >
         {showStrip && (
           <PaneBand
@@ -1161,6 +1708,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             paneType={isAi ? 'ai' : 'web'}
             tint={tint as any}
             label={labelText}
+            isSplitRightDisabled={this.state.isNarrow}
+            isSplitDownDisabled={isSplitDownDisabled}
             navCluster={
               <div
                 style={{
@@ -1179,7 +1728,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     display: 'flex',
                     alignItems: 'center',
                     cursor: this.state.canGoBack ? 'pointer' : 'default',
-                    opacity: this.state.canGoBack ? 0.4 : 1,
+                    opacity: this.state.canGoBack ? 1 : 0.4,
                     pointerEvents: this.state.canGoBack ? 'auto' : 'none'
                   }}
                 >
@@ -1205,7 +1754,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     display: 'flex',
                     alignItems: 'center',
                     cursor: this.state.canGoForward ? 'pointer' : 'default',
-                    opacity: this.state.canGoForward ? 0.4 : 1,
+                    opacity: this.state.canGoForward ? 1 : 0.4,
                     pointerEvents: this.state.canGoForward ? 'auto' : 'none'
                   }}
                 >
@@ -1258,15 +1807,34 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             locationBar={
               <div
                 ref={this.urlBarRef}
+                className="web_locationBar"
                 onClick={(e) => {
                   e.stopPropagation();
                   const isOpen = !this.state.isUrlNavigatorOpen;
+                  let navigatorLeft = 8;
+                  let navigatorWidth = 320;
+                  let navigatorTop = 38;
+                  if (isOpen) {
+                    const el = this.urlBarRef.current;
+                    if (el) {
+                      const rect = el.getBoundingClientRect();
+                      const parentRect = el.parentElement?.getBoundingClientRect();
+                      if (parentRect) {
+                        navigatorLeft = rect.left - parentRect.left;
+                        navigatorTop = rect.bottom - parentRect.top + 4;
+                      }
+                      navigatorWidth = rect.width;
+                    }
+                  }
                   this.setState(
                     {
                       isUrlNavigatorOpen: isOpen,
                       navigatorInputVal: isAi ? '' : this.state.activeUrl || this.props.url || '',
-                      navigatorFocusedIndex: 0,
-                      navigatorError: null
+                      navigatorFocusedIndex: -1,
+                      navigatorError: null,
+                      navigatorLeft,
+                      navigatorWidth,
+                      navigatorTop
                     },
                     () => {
                       if (isOpen) {
@@ -1285,9 +1853,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                   alignItems: 'center',
                   gap: 'var(--space-4)',
                   background: 'var(--bg-primary)',
-                  border: this.state.isUrlNavigatorOpen
-                    ? '0.5px solid var(--border-focus)'
-                    : '0.5px solid var(--border-neutral)',
+                  border: '0.5px solid var(--border-focus)',
                   borderRadius: 'var(--radius-3)',
                   padding: '0 var(--space-6)',
                   height: '24px',
@@ -1320,9 +1886,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                       fontSize: '12px',
                       color: isAi
                         ? 'var(--color-ai-purple, #7F77DD)'
-                        : this.state.isUrlNavigatorOpen
-                          ? 'var(--text-tertiary)'
-                          : 'var(--text-secondary)',
+                        : 'var(--info-text)',
                       flexShrink: 0
                     }}
                     aria-hidden="true"
@@ -1332,7 +1896,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                   style={{
                     fontFamily: isAi ? 'var(--font-sans)' : 'var(--font-mono)',
                     fontSize: '11px',
-                    color: this.state.isUrlNavigatorOpen ? 'var(--text-tertiary)' : 'var(--text-secondary)',
+                    color: 'var(--text-primary)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap'
@@ -1349,8 +1913,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 </span>
               </div>
             }
-            onSplitRight={() => rpc.emit('split request vertical', {activeUid: this.props.sessionUid})}
-            onSplitDown={() => rpc.emit('split request horizontal', {activeUid: this.props.sessionUid})}
+            onSplitRight={() => rpc.emit('split request vertical', {activeUid: this.props.sessionUid || this.props.groupUid})}
+            onSplitDown={() => rpc.emit('split request horizontal', {activeUid: this.props.sessionUid || this.props.groupUid})}
             onClose={() => {
               if (hasSession) {
                 onClose?.();
@@ -1369,9 +1933,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             ref={this.urlNavigatorRef}
             style={{
               position: 'absolute',
-              top: '24px',
-              left: '8px',
-              right: '8px',
+              top: `${this.state.navigatorTop ?? 38}px`,
+              left: `${this.state.navigatorLeft ?? 8}px`,
+              width: `${this.state.navigatorWidth ?? 320}px`,
+              minWidth: '320px',
               background: 'var(--bg-secondary)',
               border: '0.5px solid var(--border-neutral)',
               borderRadius: '4px',
@@ -1382,127 +1947,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Top: editable URL input */}
-            {/* Top: editable URL input */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '8px 12px',
-                borderBottom: '0.5px solid var(--border-neutral)',
-                boxSizing: 'border-box'
-              }}
-            >
-              <i
-                className={(() => {
-                  const val = this.state.navigatorInputVal.trim();
-                  if (!val) {
-                    if (isAi) return 'ti ti-sparkles';
-                    const state = getSecurityState(this.state.activeUrl || this.props.url || '');
-                    return state === 'https'
-                      ? 'ti ti-lock'
-                      : state === 'http'
-                        ? 'ti ti-lock-open'
-                        : state === 'localhost'
-                          ? 'ti ti-flask'
-                          : 'ti ti-alert-triangle';
-                  }
-                  if (this.isInputUrl(val)) {
-                    const state = getSecurityState(val);
-                    return state === 'https'
-                      ? 'ti ti-lock'
-                      : state === 'http'
-                        ? 'ti ti-lock-open'
-                        : state === 'localhost'
-                          ? 'ti ti-flask'
-                          : 'ti ti-alert-triangle';
-                  }
-                  return 'ti ti-sparkles';
-                })()}
-                style={{
-                  fontSize: '13px',
-                  color: (() => {
-                    const val = this.state.navigatorInputVal.trim();
-                    if (!val) {
-                      if (isAi) return 'var(--color-ai-purple, #7F77DD)';
-                      const state = getSecurityState(this.state.activeUrl || this.props.url || '');
-                      return state === 'https'
-                        ? 'var(--success-text)'
-                        : state === 'http'
-                          ? 'var(--warning-text)'
-                          : state === 'localhost'
-                            ? 'var(--info-text)'
-                            : 'var(--danger-text)';
-                    }
-                    if (this.isInputUrl(val)) {
-                      const state = getSecurityState(val);
-                      return state === 'https'
-                        ? 'var(--success-text)'
-                        : state === 'http'
-                          ? 'var(--warning-text)'
-                          : state === 'localhost'
-                            ? 'var(--info-text)'
-                            : 'var(--danger-text)';
-                    }
-                    return 'var(--color-ai-purple, #7F77DD)';
-                  })()
-                }}
-              />
-              <input
-                ref={this.navigatorInputRef}
-                type="text"
-                className="web_pane_navigator_input"
-                value={this.state.navigatorInputVal}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  const query = val.toLowerCase();
-                  const filtered = query
-                    ? this.state.webHistory.filter((item) => item.value.toLowerCase().includes(query))
-                    : this.state.webHistory;
-                  this.setState({
-                    navigatorInputVal: val,
-                    navigatorFocusedIndex: filtered.length > 0 ? 0 : -1,
-                    navigatorError: null
-                  });
-                }}
-                onKeyDown={this.handlePopupKeyDown}
-                style={{
-                  flex: 1,
-                  background: 'transparent',
-                  border: 'none',
-                  outline: 'none',
-                  fontFamily:
-                    (url && url.startsWith('ai://')) ||
-                    (this.state.navigatorInputVal.trim() && !this.isInputUrl(this.state.navigatorInputVal))
-                      ? 'var(--font-sans)'
-                      : 'var(--font-mono)',
-                  fontSize: '11px',
-                  color: 'var(--text-primary)',
-                  padding: 0
-                }}
-                placeholder={
-                  url && url.startsWith('ai://')
-                    ? 'Search threads or ask a new question...'
-                    : 'Type URL or search history...'
-                }
-              />
-              <span
-                style={{
-                  fontSize: '11px',
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--text-tertiary)',
-                  border: '0.5px solid var(--border-neutral)',
-                  borderRadius: '3px',
-                  padding: '1px 4px',
-                  userSelect: 'none',
-                  flexShrink: 0
-                }}
-                title="Press Enter to navigate"
-              >
-                ↵
-              </span>
-            </div>
+            {/* Top: Premium breadcrumbs header */}
+            {this.renderUrlBreadcrumbs()}
 
             {/* Error Message if invalid */}
             {this.state.navigatorError && (
@@ -1528,7 +1974,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
               }}
             >
               {(() => {
-                const query = this.state.navigatorInputVal.toLowerCase();
+                const isInitialUrl =
+                  this.state.navigatorInputVal === this.state.activeUrl ||
+                  this.state.navigatorInputVal === this.props.url;
+                const query = isInitialUrl ? '' : this.state.navigatorInputVal.toLowerCase().trim();
 
                 const highlightMatch = (text: string, q: string) => {
                   if (!q) return <span>{text}</span>;
@@ -1553,8 +2002,195 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     ? this.state.aiConversations.filter((c) => c.title.toLowerCase().includes(query))
                     : this.state.aiConversations;
 
-                  if (filtered.length === 0) {
-                    return (
+                  return (
+                    <>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '6px 12px 4px 12px',
+                          borderBottom: '0.5px solid var(--border-neutral)',
+                          background: 'var(--bg-dim)',
+                          userSelect: 'none'
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: '9px',
+                            fontWeight: 600,
+                            color: 'var(--text-tertiary)',
+                            letterSpacing: '0.5px',
+                            fontFamily: 'var(--font-sans)'
+                          }}
+                        >
+                          RECENT THREADS
+                        </span>
+                        {filtered.length > 0 && (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm('Clear all AI conversation threads?')) {
+                                this.clearAllAiConversations();
+                              }
+                            }}
+                            className="web-navigator-clear-all"
+                            style={{
+                              fontSize: '9px',
+                              fontWeight: 600,
+                              color: 'var(--danger-text)',
+                              cursor: 'pointer',
+                              textTransform: 'uppercase',
+                              fontFamily: 'var(--font-sans)'
+                            }}
+                            title="Clear all threads"
+                          >
+                            Clear All
+                          </span>
+                        )}
+                      </div>
+                      {filtered.length === 0 ? (
+                        <div
+                          style={{
+                            padding: '12px',
+                            textAlign: 'center',
+                            fontSize: '11px',
+                            color: 'var(--text-tertiary)',
+                            fontFamily: 'var(--font-sans)'
+                          }}
+                        >
+                          No threads found
+                        </div>
+                      ) : (
+                        filtered.map((item, index) => {
+                          const isFocused = index === this.state.navigatorFocusedIndex;
+                          return (
+                            <div
+                              key={item.id}
+                              onClick={() => {
+                                this.navigateWebview(`ai://${item.id}`);
+                                this.setState({isUrlNavigatorOpen: false});
+                              }}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                padding: '6px 12px',
+                                cursor: 'pointer',
+                                background: isFocused ? 'var(--info-bg)' : undefined,
+                                transition: 'background 0.1s ease'
+                              }}
+                              className={isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow'}
+                            >
+                              <i
+                                className="ti ti-sparkles"
+                                style={{
+                                  fontSize: '13px',
+                                  color: 'var(--color-ai-purple, #7F77DD)',
+                                  flexShrink: 0
+                                }}
+                              />
+                              <span
+                                style={{
+                                  fontFamily: 'var(--font-sans)',
+                                  fontSize: '11px',
+                                  color: isFocused ? 'var(--color-ai-purple, #7F77DD)' : 'var(--text-primary)',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                  userSelect: 'none',
+                                  flex: 1
+                                }}
+                              >
+                                {highlightMatch(item.title, query)}
+                              </span>
+                              <div
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  this.removeAiConversation(item.id);
+                                }}
+                                className="web-navigator-row-delete"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  width: '18px',
+                                  height: '18px',
+                                  borderRadius: '50%',
+                                  color: 'var(--text-tertiary)',
+                                  cursor: 'pointer',
+                                  transition: 'background 0.15s, color 0.15s',
+                                  marginLeft: 'var(--space-6)',
+                                  flexShrink: 0
+                                }}
+                                title="Delete thread"
+                              >
+                                <i className="ti ti-x" style={{fontSize: '10px'}} aria-hidden="true" />
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </>
+                  );
+                }
+
+                const filtered = query
+                  ? this.state.webHistory.filter(
+                      (item) =>
+                        item.value.toLowerCase().includes(query) ||
+                        (item.titleAtVisit && item.titleAtVisit.toLowerCase().includes(query))
+                    )
+                  : this.state.webHistory;
+
+                return (
+                  <>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '6px 12px 4px 12px',
+                        borderBottom: '0.5px solid var(--border-neutral)',
+                        background: 'var(--bg-dim)',
+                        userSelect: 'none'
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: '9px',
+                          fontWeight: 600,
+                          color: 'var(--text-tertiary)',
+                          letterSpacing: '0.5px',
+                          fontFamily: 'var(--font-sans)'
+                        }}
+                      >
+                        BROWSER HISTORY
+                      </span>
+                      {filtered.length > 0 && (
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (confirm('Clear all browser history?')) {
+                              this.clearAllHistory();
+                            }
+                          }}
+                          className="web-navigator-clear-all"
+                          style={{
+                            fontSize: '9px',
+                            fontWeight: 600,
+                            color: 'var(--danger-text)',
+                            cursor: 'pointer',
+                            textTransform: 'uppercase',
+                            fontFamily: 'var(--font-sans)'
+                          }}
+                          title="Clear all history"
+                        >
+                          Clear All
+                        </span>
+                      )}
+                    </div>
+                    {filtered.length === 0 ? (
                       <div
                         style={{
                           padding: '12px',
@@ -1564,256 +2200,142 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                           fontFamily: 'var(--font-sans)'
                         }}
                       >
-                        No threads found
+                        No history matches
                       </div>
-                    );
-                  }
+                    ) : (
+                      filtered.map((item, index) => {
+                        const isFocused = index === this.state.navigatorFocusedIndex;
+                        const isAiRow = item.kind === 'ai-query';
 
-                  return filtered.map((item, index) => {
-                    const isFocused = index === this.state.navigatorFocusedIndex;
-                    return (
-                      <div
-                        key={item.id}
-                        onClick={() => {
-                          this.navigateWebview(`ai://${item.id}`);
-                          this.setState({isUrlNavigatorOpen: false});
-                        }}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '8px',
-                          padding: '6px 12px',
-                          cursor: 'pointer',
-                          background: isFocused ? 'var(--info-bg)' : undefined,
-                          transition: 'background 0.1s ease'
-                        }}
-                        className={isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow'}
-                      >
-                        <i
-                          className="ti ti-sparkles"
-                          style={{
-                            fontSize: '13px',
-                            color: 'var(--color-ai-purple, #7F77DD)',
-                            flexShrink: 0
-                          }}
-                        />
-                        <span
-                          style={{
-                            fontFamily: 'var(--font-sans)',
-                            fontSize: '11px',
-                            color: isFocused ? 'var(--color-ai-purple, #7F77DD)' : 'var(--text-primary)',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                            userSelect: 'none',
-                            flex: 1
-                          }}
-                        >
-                          {highlightMatch(item.title, this.state.navigatorInputVal)}
-                        </span>
-                      </div>
-                    );
-                  });
-                }
+                        const secState = isAiRow ? 'localhost' : item.securityState || getSecurityState(item.value);
+                        const iconClass = isAiRow
+                          ? 'ti ti-sparkles'
+                          : secState === 'https'
+                            ? 'ti ti-lock'
+                            : secState === 'http'
+                              ? 'ti ti-lock-open'
+                              : secState === 'localhost'
+                                ? 'ti ti-flask'
+                                : 'ti ti-alert-triangle';
+                        const iconColor = isAiRow
+                          ? 'var(--color-ai-purple, #7F77DD)'
+                          : secState === 'https'
+                            ? 'var(--success-text)'
+                            : secState === 'http'
+                              ? 'var(--warning-text)'
+                              : secState === 'localhost'
+                                ? 'var(--info-text)'
+                                : 'var(--danger-text)';
 
-                const filtered = query
-                  ? this.state.webHistory.filter((item) => item.value.toLowerCase().includes(query))
-                  : this.state.webHistory;
-
-                if (filtered.length === 0) {
-                  return (
-                    <div
-                      style={{
-                        padding: '12px',
-                        textAlign: 'center',
-                        fontSize: '11px',
-                        color: 'var(--text-tertiary)',
-                        fontFamily: 'var(--font-sans)'
-                      }}
-                    >
-                      No history matches
-                    </div>
-                  );
-                }
-
-                return filtered.map((item, index) => {
-                  const isFocused = index === this.state.navigatorFocusedIndex;
-                  const isAiRow = item.kind === 'ai-query';
-
-                  const secState = isAiRow ? 'localhost' : item.securityState || getSecurityState(item.value);
-                  const iconClass = isAiRow
-                    ? 'ti ti-sparkles'
-                    : secState === 'https'
-                      ? 'ti ti-lock'
-                      : secState === 'http'
-                        ? 'ti ti-lock-open'
-                        : secState === 'localhost'
-                          ? 'ti ti-flask'
-                          : 'ti ti-alert-triangle';
-                  const iconColor = isAiRow
-                    ? 'var(--color-ai-purple, #7F77DD)'
-                    : secState === 'https'
-                      ? 'var(--success-text)'
-                      : secState === 'http'
-                        ? 'var(--warning-text)'
-                        : secState === 'localhost'
-                          ? 'var(--info-text)'
-                          : 'var(--danger-text)';
-
-                  return (
-                    <div
-                      key={`${item.value}-${item.visitedAt}`}
-                      onClick={(e) => {
-                        if (isAiRow) {
-                          const conversationId = item.conversationId || `conv-${Date.now()}`;
-                          if (e.shiftKey) {
-                            const newConvId = `conv-${Date.now()}`;
-                            this.createConversation(newConvId, item.value);
-                            const isCurrentPaneEmpty =
-                              !this.props.url || this.props.url === 'about:blank' || this.props.url === '';
-                            if (isCurrentPaneEmpty) {
-                              this.navigateWebview(`ai://${newConvId}`);
-                            } else {
-                              rpc.emit('split request vertical', {
-                                activeUid: this.props.sessionUid,
-                                profile: 'Web Pane',
-                                url: `ai://${newConvId}`
-                              });
-                            }
-                          } else {
-                            this.navigateWebview(`ai://${conversationId}`);
-                          }
-                          this.setState({isUrlNavigatorOpen: false});
-                        } else {
-                          this.navigateWebview(item.value);
-                          this.setState({isUrlNavigatorOpen: false});
-                        }
-                      }}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        padding: '6px 12px',
-                        cursor: 'pointer',
-                        background: isFocused ? 'var(--info-bg)' : undefined,
-                        transition: 'background 0.1s ease'
-                      }}
-                      className={isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow'}
-                    >
-                      <i
-                        className={iconClass}
-                        style={{
-                          fontSize: '13px',
-                          color: isFocused
-                            ? isAiRow
-                              ? 'var(--color-ai-purple, #7F77DD)'
-                              : 'var(--info-text)'
-                            : iconColor,
-                          flexShrink: 0
-                        }}
-                      />
-                      <span
-                        style={{
-                          fontFamily: isAiRow ? 'var(--font-sans)' : 'var(--font-mono)',
-                          fontSize: '11px',
-                          color: isFocused
-                            ? isAiRow
-                              ? 'var(--color-ai-purple, #7F77DD)'
-                              : 'var(--info-text)'
-                            : 'var(--text-primary)',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          userSelect: 'none',
-                          flex: 1
-                        }}
-                      >
-                        {highlightMatch(item.value, this.state.navigatorInputVal)}
-                      </span>
-                    </div>
-                  );
-                });
+                        return (
+                          <div
+                            key={`${item.value}-${item.visitedAt}`}
+                            onClick={(e) => {
+                              if (isAiRow) {
+                                const conversationId = item.conversationId || `conv-${Date.now()}`;
+                                if (e.shiftKey) {
+                                  const newConvId = `conv-${Date.now()}`;
+                                  this.createConversation(newConvId, item.value);
+                                  const isCurrentPaneEmpty =
+                                    !this.props.url || this.props.url === 'about:blank' || this.props.url === '';
+                                  if (isCurrentPaneEmpty) {
+                                    this.navigateWebview(`ai://${newConvId}`);
+                                  } else {
+                                    rpc.emit('split request vertical', {
+                                      activeUid: this.props.sessionUid || this.props.groupUid,
+                                      profile: 'Web Pane',
+                                      url: `ai://${newConvId}`
+                                    });
+                                  }
+                                } else {
+                                  this.navigateWebview(`ai://${conversationId}`);
+                                }
+                                this.setState({isUrlNavigatorOpen: false});
+                              } else {
+                                this.navigateWebview(item.value);
+                                this.setState({isUrlNavigatorOpen: false});
+                              }
+                            }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              padding: '6px 12px',
+                              cursor: 'pointer',
+                              background: isFocused ? 'var(--info-bg)' : undefined,
+                              transition: 'background 0.1s ease'
+                            }}
+                            className={isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow'}
+                          >
+                            <i
+                              className={iconClass}
+                              style={{
+                                fontSize: '13px',
+                                color: isFocused
+                                  ? 'var(--info-text)'
+                                  : iconColor,
+                                flexShrink: 0
+                              }}
+                            />
+                            <span
+                              style={{
+                                fontFamily: isAiRow ? 'var(--font-sans)' : 'var(--font-mono)',
+                                fontSize: '11px',
+                                color: isFocused
+                                  ? isAiRow
+                                    ? 'var(--color-ai-purple, #7F77DD)'
+                                    : 'var(--info-text)'
+                                  : 'var(--text-primary)',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                userSelect: 'none',
+                                flex: 1
+                              }}
+                            >
+                              {item.titleAtVisit ? (
+                                <span style={{display: 'inline-flex', alignItems: 'center', gap: 'var(--space-6)'}}>
+                                  <span style={{fontWeight: 600}}>{highlightMatch(item.titleAtVisit, query)}</span>
+                                  <span style={{color: 'var(--text-tertiary)', fontSize: '10px'}}>{highlightMatch(item.value, query)}</span>
+                                </span>
+                              ) : (
+                                highlightMatch(item.value, query)
+                              )}
+                            </span>
+                            <div
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                this.removeHistoryEntry(item.kind, item.value, item.visitedAt);
+                              }}
+                              className="web-navigator-row-delete"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '18px',
+                                height: '18px',
+                                borderRadius: '50%',
+                                color: 'var(--text-tertiary)',
+                                cursor: 'pointer',
+                                transition: 'background 0.15s, color 0.15s',
+                                marginLeft: 'var(--space-6)',
+                                flexShrink: 0
+                              }}
+                              title="Delete from history"
+                            >
+                              <i className="ti ti-x" style={{fontSize: '10px'}} aria-hidden="true" />
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </>
+                );
               })()}
             </div>
 
-            {/* Footer */}
-            {(() => {
-              const val = this.state.navigatorInputVal;
-              const query = val.toLowerCase();
-
-              const filtered = isAi
-                ? query
-                  ? this.state.aiConversations.filter((c) => c.title.toLowerCase().includes(query))
-                  : this.state.aiConversations
-                : query
-                  ? this.state.webHistory.filter((item) => item.value.toLowerCase().includes(query))
-                  : this.state.webHistory;
-
-              const isTyping = val !== (this.state.activeUrl || this.props.url || '');
-
-              if (isTyping && val.trim()) {
-                const trimmed = val.trim();
-                const isUrl = this.isInputUrl(trimmed);
-                const hasAi = this.state.hasAiConfigured;
-
-                let leftText = '';
-                let leftColor = 'var(--text-tertiary)';
-                if (isAi) {
-                  leftText = '✨ AI query · Enter starts new thread';
-                } else if (isUrl) {
-                  leftText = '🌐 URL · Enter navigates';
-                } else if (!hasAi) {
-                  leftText = '✨ AI not configured — see settings';
-                  leftColor = 'var(--warning-text)';
-                } else {
-                  const isPlausibleHost = !/\s/.test(trimmed);
-                  leftText = `✨ AI query · Enter sends to Claude${isPlausibleHost ? ' (Ctrl+Enter to navigate as URL)' : ''}`;
-                }
-
-                return (
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      padding: '6px 12px',
-                      borderTop: '0.5px solid var(--border-neutral)',
-                      boxSizing: 'border-box'
-                    }}
-                  >
-                    <span style={{fontSize: '10px', color: leftColor, fontFamily: 'var(--font-sans)', fontWeight: 500}}>
-                      {leftText}
-                    </span>
-                    <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>
-                      Esc to clear
-                    </span>
-                  </div>
-                );
-              }
-
-              const count = filtered.length;
-              return (
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    padding: '6px 12px',
-                    borderTop: '0.5px solid var(--border-neutral)',
-                    boxSizing: 'border-box'
-                  }}
-                >
-                  <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
-                    {isAi
-                      ? `${count} ${count === 1 ? 'active thread' : 'active threads'}`
-                      : `${count} ${count === 1 ? 'recent visit' : 'recent visits'}`}
-                  </span>
-                  <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>
-                    Esc to close
-                  </span>
-                </div>
-              );
-            })()}
+            {/* Footer: Search/URL input entry bar */}
+            {this.renderUrlNavigatorFooter()}
           </div>
         )}
 
@@ -2399,7 +2921,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 ref={this.webviewRef}
                 src={url}
                 useragent={BROWSER_UA}
-                style={{flex: 1, display: error ? 'none' : 'flex'}}
+                style={{flex: 1, display: error ? 'none' : 'flex', border: 'none', outline: 'none'}}
               />
               /* eslint-enable react/no-unknown-property */
             );
@@ -2522,6 +3044,27 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           .web_pane_navigator_input::selection {
             background: var(--info-bg);
             color: var(--info-text);
+          }
+
+          .web-navigator-row-delete {
+            opacity: 0;
+            pointer-events: none;
+          }
+
+          .term_navigatorDirRow:hover .web-navigator-row-delete,
+          .term_navigatorDirRow_focused:hover .web-navigator-row-delete {
+            opacity: 1;
+            pointer-events: auto;
+          }
+
+          .web-navigator-row-delete:hover {
+            background: var(--border-neutral) !important;
+            color: var(--danger-text) !important;
+          }
+
+          .web-navigator-clear-all:hover {
+            opacity: 0.8;
+            text-decoration: underline;
           }
 
           .seeker_container {
@@ -2775,13 +3318,48 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             font-size: 12px;
           }
 
-          .seeker_stats_row {
-            color: var(--text-tertiary);
             font-size: 10px;
             margin-top: auto;
             padding-top: var(--space-10);
             border-top: 0.5px dashed var(--border-neutral);
             user-select: none;
+          }
+
+          webview {
+            border: none !important;
+            outline: none !important;
+            width: 100%;
+            height: 100%;
+          }
+
+          .web_fit {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background: var(--bg-primary);
+            container-type: inline-size;
+            container-name: pane;
+          }
+
+          @container pane (max-width: 380px) {
+            .web_locationBar {
+              border-color: transparent !important;
+              background: transparent !important;
+              padding: 0 !important;
+              width: fit-content !important;
+              min-width: unset !important;
+              max-width: unset !important;
+              margin-right: 0 !important;
+              margin-left: 0 !important;
+            }
+            .web_locationBar span {
+              display: none !important;
+            }
           }
         `}</style>
       </div>
@@ -2789,15 +3367,19 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   }
 }
 
-const mapStateToProps = (state: any) => ({
-  defaultProfile: state.ui.defaultProfile,
-  profiles: state.ui.profiles
-    ? state.ui.profiles.asMutable
-      ? // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-        state.ui.profiles.asMutable({deep: true})
-      : state.ui.profiles
-    : []
-});
+const mapStateToProps = (state: any, ownProps: WebPaneProps) => {
+  const termGroup = state.termGroups.termGroups[ownProps.groupUid];
+  return {
+    defaultProfile: state.ui.defaultProfile,
+    profiles: state.ui.profiles
+      ? state.ui.profiles.asMutable
+        ? // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+          state.ui.profiles.asMutable({deep: true})
+        : state.ui.profiles
+      : [],
+    webName: termGroup ? termGroup.webName : undefined
+  };
+};
 
 const mapDispatchToProps = (dispatch: HyperDispatch, ownProps: WebPaneProps) => ({
   onClose() {
