@@ -20,7 +20,9 @@ import type {TermProps} from '../../typings/hyper';
 import rpc from '../rpc';
 import terms from '../terms';
 import processClipboard from '../utils/paste';
+import {translatePath} from '../utils/path-translate';
 import {decorate} from '../utils/plugins';
+import {countPathHorizontalStacks} from '../utils/term-groups';
 
 import {PaneBand} from './pane-band';
 import _SearchBox from './searchBox';
@@ -122,6 +124,11 @@ const getTermOptions = (props: TermProps): ITerminalOptions => {
   };
 };
 
+interface SubdirInfo {
+  name: string;
+  count: number;
+}
+
 export default class Term extends React.PureComponent<
   TermProps,
   {
@@ -144,13 +151,15 @@ export default class Term extends React.PureComponent<
     cwdHistory: string[];
     cwdCursor: number;
     isDirNavigatorOpen: boolean;
-    navigatorDirs: string[];
+    navigatorDirs: (string | SubdirInfo)[];
     navigatorCurrentPath: string;
     searchBuffer: string;
     focusedIndex: number;
     navigatorLeft: number;
     navigatorWidth: number;
     navigatorTop: number;
+    isGlimmerActive?: boolean;
+    isNarrow: boolean;
   }
 > {
   termRef: HTMLElement | null;
@@ -165,6 +174,9 @@ export default class Term extends React.PureComponent<
   term!: Terminal;
   resizeObserver!: ResizeObserver;
   resizeTimeout!: NodeJS.Timeout;
+  stabilizeResizeTimeout!: NodeJS.Timeout;
+  dprMediaQuery!: MediaQueryList;
+  dprUpdateHandler!: () => void;
   searchDecorations: ISearchDecorationOptions;
   searchBufferTimeout: NodeJS.Timeout | null = null;
   state = {
@@ -186,19 +198,23 @@ export default class Term extends React.PureComponent<
 
     // Directory Navigator
     isDirNavigatorOpen: false,
-    navigatorDirs: [] as string[],
+    navigatorDirs: [] as (string | SubdirInfo)[],
     navigatorCurrentPath: '',
     searchBuffer: '',
     focusedIndex: -1,
     navigatorLeft: 95,
     navigatorWidth: 280,
-    navigatorTop: 38
+    navigatorTop: 38,
+    isGlimmerActive: false,
+    isNarrow: false
   };
 
   labelRef = React.createRef<HTMLDivElement>();
   inputRef = React.createRef<HTMLInputElement>();
   dirNavigatorRef = React.createRef<HTMLDivElement>();
   pathBarRef = React.createRef<HTMLDivElement>();
+  navigatorSearchInputRef = React.createRef<HTMLInputElement>();
+  termOuterRef = React.createRef<HTMLDivElement>();
 
   handleOutsideClick = (e: MouseEvent) => {
     if (
@@ -235,6 +251,13 @@ export default class Term extends React.PureComponent<
     e.stopPropagation();
 
     const isPicker = (this.props as any).sessionProfile === 'picker';
+    let isSplitDownDisabled = false;
+    if (this.props.groupUid && (this.props as any).allTermGroups) {
+      const stacks = countPathHorizontalStacks(this.props.groupUid, (this.props as any).allTermGroups);
+      if (stacks >= 11) {
+        isSplitDownDisabled = true;
+      }
+    }
 
     const remote = require('@electron/remote');
     const {Menu, MenuItem} = remote;
@@ -244,6 +267,7 @@ export default class Term extends React.PureComponent<
       new MenuItem({
         label: 'Split Right',
         accelerator: 'Ctrl+Shift+|',
+        enabled: !this.state.isNarrow,
         click: () => {
           rpc.emit('split request vertical', {activeUid: this.props.uid});
         }
@@ -254,6 +278,7 @@ export default class Term extends React.PureComponent<
       new MenuItem({
         label: 'Split Down',
         accelerator: 'Ctrl+Shift+_',
+        enabled: !isSplitDownDisabled,
         click: () => {
           rpc.emit('split request horizontal', {activeUid: this.props.uid});
         }
@@ -264,6 +289,7 @@ export default class Term extends React.PureComponent<
       new MenuItem({
         label: 'Clone Right',
         accelerator: 'Ctrl+Alt+Shift+|',
+        enabled: !this.state.isNarrow,
         click: () => {
           rpc.emit('split request vertical', {
             activeUid: this.props.uid,
@@ -277,6 +303,7 @@ export default class Term extends React.PureComponent<
       new MenuItem({
         label: 'Clone Down',
         accelerator: 'Ctrl+Alt+Shift+_',
+        enabled: !isSplitDownDisabled,
         click: () => {
           rpc.emit('split request horizontal', {
             activeUid: this.props.uid,
@@ -616,9 +643,13 @@ export default class Term extends React.PureComponent<
     }
 
     if (props.onActive) {
-      this.term.textarea?.addEventListener('focus', props.onActive);
+      const handleFocus = () => {
+        this.forceReflow();
+        props.onActive();
+      };
+      this.term.textarea?.addEventListener('focus', handleFocus);
       this.disposableListeners.push({
-        dispose: () => this.term.textarea?.removeEventListener('focus', this.props.onActive)
+        dispose: () => this.term.textarea?.removeEventListener('focus', handleFocus)
       });
     }
 
@@ -671,7 +702,47 @@ export default class Term extends React.PureComponent<
       capture: true
     });
 
+    window.addEventListener('resize', this.onWindowResize);
+    rpc.on('move', this.onWindowMove);
+
+    this.dprUpdateHandler = () => {
+      this.forceReflow();
+      if (this.dprMediaQuery && this.dprUpdateHandler) {
+        this.dprMediaQuery.removeEventListener('change', this.dprUpdateHandler);
+      }
+      this.dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      this.dprMediaQuery.addEventListener('change', this.dprUpdateHandler);
+    };
+    this.dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    this.dprMediaQuery.addEventListener('change', this.dprUpdateHandler);
+
     terms[this.props.uid] = this;
+
+    const outerEl = this.termOuterRef.current;
+    if (outerEl) {
+      this.resizeObserver = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (entry) {
+          const width = entry.contentRect.width;
+          const isNarrow = width < 380;
+          if (isNarrow !== this.state.isNarrow) {
+            this.setState({isNarrow});
+          }
+        }
+        if (this.termWrapperRef) {
+          clearTimeout(this.resizeTimeout);
+          this.resizeTimeout = setTimeout(() => {
+            this.fitResize();
+          }, 30);
+
+          clearTimeout(this.stabilizeResizeTimeout);
+          this.stabilizeResizeTimeout = setTimeout(() => {
+            this.fitResize();
+          }, 250);
+        }
+      });
+      this.resizeObserver.observe(outerEl);
+    }
   }
 
   getTermDocument() {
@@ -685,10 +756,72 @@ export default class Term extends React.PureComponent<
     return document;
   }
 
+  handleImagePaste = async (img: any) => {
+    try {
+      const pngBuffer = img.toPNG();
+      if (!pngBuffer || pngBuffer.length === 0) return;
+
+      const blob = new Blob([pngBuffer], {type: 'image/png'});
+      const port = process.env.HYPERIA_PORT || '9800';
+
+      const response = await fetch(`http://localhost:${port}/api/ghost/asset`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'image/png',
+          'x-filename': `pasted-${Date.now()}.png`
+        },
+        body: blob
+      });
+
+      if (!response.ok) {
+        console.error('[term] Image upload to AssetStore failed with status', response.status);
+        return;
+      }
+
+      const meta = await response.json();
+      if (!meta || !meta.id) {
+        console.error('[term] Invalid AssetMeta returned from sidecar', meta);
+        return;
+      }
+
+      // Construct canonical Windows host path
+      const home = process.env.USERPROFILE || process.env.HOME || '';
+      const pathSeparator = process.platform === 'win32' ? '\\' : '/';
+      const ext = '.png';
+      const hostPath = [home, '.hyperia', 'assets', `${meta.id}${ext}`].join(pathSeparator);
+
+      // Resolve profile and its pathTranslate configuration
+      const profileName = (this.props as any).sessionProfile;
+      const profiles = (this.props as any).profiles || [];
+      const currentProfile = profiles.find((p: any) => p.name === profileName);
+      const pathTranslate = currentProfile?.config?.pathTranslate;
+
+      // Translate host path
+      const translated = translatePath(hostPath, pathTranslate);
+
+      // Paste translated path to xterm
+      this.term.paste(translated);
+    } catch (err) {
+      console.error('[term] Error in handleImagePaste:', err);
+    }
+  };
+
   // intercepting paste event for any necessary processing of
   // clipboard data, if result is falsy, paste event continues
   onWindowPaste = (e: Event) => {
     if (!this.props.isTermActive) return;
+
+    const formats = clipboard.availableFormats();
+    const hasImage = formats.some(f => f.startsWith('image/')) || !clipboard.readImage().isEmpty();
+    if (hasImage) {
+      const img = clipboard.readImage();
+      if (!img.isEmpty()) {
+        e.preventDefault();
+        e.stopPropagation();
+        void this.handleImagePaste(img);
+        return;
+      }
+    }
 
     const processed = processClipboard();
     if (processed) {
@@ -764,10 +897,63 @@ export default class Term extends React.PureComponent<
     if (!this.termWrapperRef) {
       return;
     }
-    this.fitAddon.fit();
+    try {
+      this.fitAddon.fit();
+      this.term.refresh(0, this.term.rows - 1);
+    } catch (e) {
+      console.error(e);
+    }
   }
 
+  forceReflow() {
+    if (!this.termWrapperRef || !this.term) return;
+    try {
+      const cols = this.term.cols;
+      const rows = this.term.rows;
+      if (cols > 0 && rows > 0) {
+        this.term.resize(cols + 1, rows);
+        this.term.resize(cols, rows);
+      }
+      this.fitAddon.fit();
+      this.term.refresh(0, this.term.rows - 1);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  onWindowResize = () => {
+    clearTimeout(this.resizeTimeout);
+    this.resizeTimeout = setTimeout(() => {
+      this.forceReflow();
+    }, 100);
+
+    clearTimeout(this.stabilizeResizeTimeout);
+    this.stabilizeResizeTimeout = setTimeout(() => {
+      this.forceReflow();
+    }, 300);
+  };
+
+  onWindowMove = () => {
+    clearTimeout(this.resizeTimeout);
+    this.resizeTimeout = setTimeout(() => {
+      this.forceReflow();
+    }, 100);
+
+    clearTimeout(this.stabilizeResizeTimeout);
+    this.stabilizeResizeTimeout = setTimeout(() => {
+      this.forceReflow();
+    }, 300);
+  };
+
   keyboardHandler = (e: any) => {
+    let isSplitDownDisabled = false;
+    if (this.props.groupUid && (this.props as any).allTermGroups) {
+      const stacks = countPathHorizontalStacks(this.props.groupUid, (this.props as any).allTermGroups);
+      if (stacks >= 11) {
+        isSplitDownDisabled = true;
+      }
+    }
+
     // Intercept Alt+Left/Alt+Right for directory history navigation
     if (e.altKey && e.key === 'ArrowLeft') {
       e.preventDefault();
@@ -779,12 +965,54 @@ export default class Term extends React.PureComponent<
       this.navigateForward();
       return false;
     }
-    // Intercept Ctrl+Shift+O to toggle directory navigator
-    if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'O') {
+    // Intercept Ctrl+O (or Ctrl+Shift+O) to toggle directory navigator
+    if (e.ctrlKey && e.key.toUpperCase() === 'O') {
       e.preventDefault();
       this.toggleDirNavigator();
       return false;
     }
+
+    // If pane is squished/narrow, disable split right and clone right keystrokes completely
+    if (this.state.isNarrow && (e.ctrlKey || e.metaKey) && e.key === '|') {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    }
+
+    // If split down limit is reached (11 stacks), disable split down and clone down keystrokes completely
+    if (isSplitDownDisabled && (e.ctrlKey || e.metaKey) && (e.key === '_' || e.key === '-')) {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    }
+
+    // Intercept Ctrl+Alt+Shift+| and Ctrl+Alt+Shift+_ (or Cmd equivalents on macOS) to prevent xterm from swallowing them
+    if ((e.ctrlKey || e.metaKey) && e.altKey && (e.key === '|' || e.key === '_')) {
+      if (isSplitDownDisabled && e.key === '_') {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      return false;
+    }
+
+
+    // Intercept Ctrl+C (when terminal has a selection) or Ctrl+Shift+C or Cmd+C (on macOS) to copy
+    const isCtrlC = e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key?.toLowerCase() === 'c';
+    const isCtrlShiftC = e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key?.toLowerCase() === 'c';
+    const isCmdC = e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && e.key?.toLowerCase() === 'c';
+
+    if (
+      (isCtrlC && this.term.hasSelection()) ||
+      (isCtrlShiftC && this.term.hasSelection()) ||
+      (isCmdC && this.term.hasSelection())
+    ) {
+      clipboard.writeText(this.term.getSelection());
+      this.term.clearSelection();
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    }
+
     return !e.catched;
   };
 
@@ -864,6 +1092,14 @@ export default class Term extends React.PureComponent<
     menu.popup();
   };
 
+  triggerPickerGlimmer = () => {
+    this.setState({isGlimmerActive: true}, () => {
+      setTimeout(() => {
+        this.setState({isGlimmerActive: false});
+      }, 800);
+    });
+  };
+
   toggleDirNavigator = () => {
     const {isDirNavigatorOpen} = this.state;
     const sessionCwd = (this.props as any).sessionCwd;
@@ -895,18 +1131,26 @@ export default class Term extends React.PureComponent<
           navigatorTop
         },
         () => {
-          requestAnimationFrame(() => {
-            this.dirNavigatorRef.current?.focus();
-          });
+          setTimeout(() => {
+            this.navigatorSearchInputRef.current?.focus();
+            this.navigatorSearchInputRef.current?.select();
+          }, 50);
         }
       );
       // navigatorCurrentPath / navigatorDirs / searchBuffer / focusedIndex are
       // set by loadNavigatorDirs once the sidecar responds.
       this.loadNavigatorDirs(activePath);
     } else {
-      this.setState({
-        isDirNavigatorOpen: false
-      });
+      this.setState(
+        {
+          isDirNavigatorOpen: false
+        },
+        () => {
+          setTimeout(() => {
+            this.focus();
+          }, 50);
+        }
+      );
     }
   };
 
@@ -927,12 +1171,12 @@ export default class Term extends React.PureComponent<
     this.setState({navigatorCurrentPath: targetPath, searchBuffer: '', focusedIndex: -1});
     fetch(`http://localhost:${port}/api/fs/dirs?path=${encodeURIComponent(targetPath)}`)
       .then((r) => r.json())
-      .then((data: {path: string; parent: string | null; dirs: string[]}) => {
+      .then((data: {path: string; parent: string | null; dirs: (string | SubdirInfo)[]}) => {
         this.setState({navigatorCurrentPath: data.path, navigatorDirs: data.dirs});
       })
       .catch((err) => {
         console.error('Failed to load directory listing:', err);
-        this.setState({navigatorDirs: []});
+        this.setState({navigatorDirs: [] as (string | SubdirInfo)[]});
       });
   };
 
@@ -943,7 +1187,19 @@ export default class Term extends React.PureComponent<
     if (target && this.props.onData) {
       this.props.onData(`cd "${target}"\r`);
     }
-    this.setState({isDirNavigatorOpen: false});
+    if (target && (this.props as any).onCwd) {
+      (this.props as any).onCwd(target);
+    }
+    this.setState(
+      {
+        isDirNavigatorOpen: false
+      },
+      () => {
+        setTimeout(() => {
+          this.focus();
+        }, 50);
+      }
+    );
   };
 
   renderNavigatorBreadcrumbs = () => {
@@ -1028,6 +1284,7 @@ export default class Term extends React.PureComponent<
             CLI never gets a stray cd. */}
         <span
           onClick={this.goToNavigatorDir}
+          onMouseDown={(e) => e.preventDefault()}
           className="term_navigatorGo"
           title="cd to this directory"
           style={{
@@ -1055,12 +1312,19 @@ export default class Term extends React.PureComponent<
   renderNavigatorDirectoryList = () => {
     const {navigatorDirs, navigatorCurrentPath, searchBuffer, focusedIndex} = this.state;
 
+    const filteredDirs = searchBuffer.length > 0
+      ? navigatorDirs.filter(dir => {
+          const name = typeof dir === 'string' ? dir : dir.name;
+          return name.toLowerCase().includes(searchBuffer.toLowerCase());
+        })
+      : navigatorDirs;
+
     const handleRowClick = (dirName: string) => {
       const targetPath = path.join(navigatorCurrentPath, dirName);
       this.loadNavigatorDirs(targetPath);
     };
 
-    if (navigatorDirs.length === 0) {
+    if (filteredDirs.length === 0) {
       return (
         <div
           style={{
@@ -1071,29 +1335,33 @@ export default class Term extends React.PureComponent<
             fontFamily: 'var(--font-sans)'
           }}
         >
-          No subdirectories
+          No matching subdirectories
         </div>
       );
     }
 
     return (
       <div style={{maxHeight: '220px', overflowY: 'auto'}} className="term_navigatorDirList">
-        {navigatorDirs.map((dirName, index) => {
+        {filteredDirs.map((dir, index) => {
           const isMatched = index === focusedIndex;
-          const isBufferActive = searchBuffer.length > 0;
           const showFocus = isMatched;
+          const dirName = typeof dir === 'string' ? dir : dir.name;
+          const dirCount = typeof dir === 'object' && dir !== null ? dir.count : undefined;
 
           let dirLabelNode: React.ReactNode = dirName;
-          if (showFocus && isBufferActive) {
+          if (showFocus && searchBuffer.length > 0) {
             const prefixLower = searchBuffer.toLowerCase();
             const dirLower = dirName.toLowerCase();
-            if (dirLower.startsWith(prefixLower)) {
-              const matchedPart = dirName.substring(0, prefixLower.length);
-              const restPart = dirName.substring(prefixLower.length);
+            const matchIndex = dirLower.indexOf(prefixLower);
+            if (matchIndex !== -1) {
+              const beforePart = dirName.substring(0, matchIndex);
+              const matchedPart = dirName.substring(matchIndex, matchIndex + prefixLower.length);
+              const afterPart = dirName.substring(matchIndex + prefixLower.length);
               dirLabelNode = (
-                <span style={{color: 'var(--info-text)', fontWeight: 500}}>
-                  <span style={{textDecoration: 'underline', textUnderlineOffset: '2px'}}>{matchedPart}</span>
-                  <span>{restPart}</span>
+                <span style={{color: showFocus ? 'var(--info-text)' : 'var(--text-primary)', fontWeight: showFocus ? 500 : 'normal'}}>
+                  <span>{beforePart}</span>
+                  <span style={{textDecoration: 'underline', textUnderlineOffset: '2px', fontWeight: 'bold'}}>{matchedPart}</span>
+                  <span>{afterPart}</span>
                 </span>
               );
             }
@@ -1114,10 +1382,10 @@ export default class Term extends React.PureComponent<
                 transition: 'background 0.1s ease'
               }}
             >
-              <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-6)'}}>
+              <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-6)', minWidth: 0, flex: 1}}>
                 <i
                   className="ti ti-folder term_folderIcon"
-                  style={{fontSize: '13px', color: showFocus ? 'var(--info-text)' : 'var(--text-tertiary)'}}
+                  style={{fontSize: '13px', color: showFocus ? 'var(--info-text)' : 'var(--text-tertiary)', flexShrink: 0}}
                   aria-hidden="true"
                 />
                 <span
@@ -1127,15 +1395,31 @@ export default class Term extends React.PureComponent<
                     color: showFocus ? 'var(--info-text)' : 'var(--text-primary)',
                     fontFamily: 'var(--font-sans)',
                     fontWeight: showFocus ? 500 : 'normal',
-                    userSelect: 'none'
+                    userSelect: 'none',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    marginRight: 'var(--space-6)'
                   }}
                 >
                   {dirLabelNode}
                 </span>
+                {typeof dirCount === 'number' && !isNaN(dirCount) && (
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      color: showFocus ? 'var(--info-text)' : 'var(--text-tertiary)',
+                      fontFamily: 'var(--font-sans)',
+                      flexShrink: 0
+                    }}
+                  >
+                    ({dirCount} {dirCount === 1 ? 'directory' : 'directories'})
+                  </span>
+                )}
               </div>
               <i
                 className="ti ti-chevron-right term_chevronIcon"
-                style={{fontSize: '11px', color: showFocus ? 'var(--info-text)' : 'var(--text-tertiary)'}}
+                style={{fontSize: '11px', color: showFocus ? 'var(--info-text)' : 'var(--text-tertiary)', flexShrink: 0}}
                 aria-hidden="true"
               />
             </div>
@@ -1145,75 +1429,33 @@ export default class Term extends React.PureComponent<
     );
   };
 
-  renderNavigatorFooter = () => {
-    const {navigatorDirs, searchBuffer, focusedIndex} = this.state;
-    const isBufferActive = searchBuffer.length > 0;
-
-    if (isBufferActive) {
-      const hasMatch = focusedIndex !== -1;
-      const pillBg = hasMatch ? 'var(--info-bg)' : 'var(--danger-bg)';
-      const pillColor = hasMatch ? 'var(--info-text)' : 'var(--danger-text)';
-      return (
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            padding: 'var(--space-6) var(--space-12)',
-            borderTop: '0.5px solid var(--border-neutral)',
-            boxSizing: 'border-box'
-          }}
-        >
-          <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-6)'}}>
-            <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
-              Typing
-            </span>
-            <span
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '10px',
-                padding: 'var(--space-2) var(--space-4)',
-                background: pillBg,
-                color: pillColor,
-                borderRadius: 'var(--radius-3)',
-                fontWeight: 500
-              }}
-            >
-              {searchBuffer}
-            </span>
-          </div>
-          <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>
-            Esc to clear
-          </span>
-        </div>
-      );
-    }
-
-    const count = navigatorDirs.length;
-    return (
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: 'var(--space-6) var(--space-12)',
-          borderTop: '0.5px solid var(--border-neutral)',
-          boxSizing: 'border-box'
-        }}
-      >
-        <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
-          {count} {count === 1 ? 'directory' : 'directories'}
-        </span>
-        <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>
-          Esc to close
-        </span>
-      </div>
-    );
+  handleSearchInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    const {navigatorDirs} = this.state;
+    
+    const filteredDirs = val.length > 0
+      ? navigatorDirs.filter(dir => {
+          const name = typeof dir === 'string' ? dir : dir.name;
+          return name.toLowerCase().includes(val.toLowerCase());
+        })
+      : navigatorDirs;
+      
+    this.setState({
+      searchBuffer: val,
+      focusedIndex: filteredDirs.length > 0 ? 0 : -1
+    });
   };
 
-  handleNavigatorKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+  handleSearchInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     const {navigatorDirs, searchBuffer, focusedIndex, navigatorCurrentPath} = this.state;
     const key = e.key;
+
+    const filteredDirs = searchBuffer.length > 0
+      ? navigatorDirs.filter(dir => {
+          const name = typeof dir === 'string' ? dir : dir.name;
+          return name.toLowerCase().includes(searchBuffer.toLowerCase());
+        })
+      : navigatorDirs;
 
     if (key === 'Escape') {
       e.preventDefault();
@@ -1221,31 +1463,26 @@ export default class Term extends React.PureComponent<
       if (searchBuffer.length > 0) {
         this.setState({searchBuffer: '', focusedIndex: -1});
       } else {
-        this.setState({isDirNavigatorOpen: false});
-        this.focus();
+        this.setState(
+          {
+            isDirNavigatorOpen: false
+          },
+          () => {
+            setTimeout(() => {
+              this.focus();
+            }, 50);
+          }
+        );
       }
       return;
     }
 
-    if (key === 'Backspace') {
+    if (key === 'Backspace' && searchBuffer.length === 0) {
       e.preventDefault();
       e.stopPropagation();
-      if (searchBuffer.length > 0) {
-        const newBuffer = searchBuffer.slice(0, -1);
-        let newFocusedIndex = -1;
-        if (newBuffer.length > 0) {
-          const prefix = newBuffer.toLowerCase();
-          newFocusedIndex = navigatorDirs.findIndex((dir) => dir.toLowerCase().startsWith(prefix));
-        }
-        this.setState({
-          searchBuffer: newBuffer,
-          focusedIndex: newFocusedIndex
-        });
-      } else {
-        const parentPath = path.dirname(navigatorCurrentPath);
-        if (parentPath && parentPath !== navigatorCurrentPath) {
-          this.loadNavigatorDirs(parentPath);
-        }
+      const parentPath = path.dirname(navigatorCurrentPath);
+      if (parentPath && parentPath !== navigatorCurrentPath) {
+        this.loadNavigatorDirs(parentPath);
       }
       return;
     }
@@ -1253,15 +1490,9 @@ export default class Term extends React.PureComponent<
     if (key === 'ArrowDown') {
       e.preventDefault();
       e.stopPropagation();
-      if (navigatorDirs.length > 0) {
-        let newIdx = 0;
-        if (focusedIndex !== -1) {
-          newIdx = (focusedIndex + 1) % navigatorDirs.length;
-        }
-        this.setState({
-          focusedIndex: newIdx,
-          searchBuffer: ''
-        });
+      if (filteredDirs.length > 0) {
+        const newIdx = (focusedIndex + 1) % filteredDirs.length;
+        this.setState({focusedIndex: newIdx});
       }
       return;
     }
@@ -1269,15 +1500,9 @@ export default class Term extends React.PureComponent<
     if (key === 'ArrowUp') {
       e.preventDefault();
       e.stopPropagation();
-      if (navigatorDirs.length > 0) {
-        let newIdx = navigatorDirs.length - 1;
-        if (focusedIndex !== -1) {
-          newIdx = focusedIndex === 0 ? navigatorDirs.length - 1 : focusedIndex - 1;
-        }
-        this.setState({
-          focusedIndex: newIdx,
-          searchBuffer: ''
-        });
+      if (filteredDirs.length > 0) {
+        const newIdx = focusedIndex <= 0 ? filteredDirs.length - 1 : focusedIndex - 1;
+        this.setState({focusedIndex: newIdx});
       }
       return;
     }
@@ -1285,66 +1510,97 @@ export default class Term extends React.PureComponent<
     if (key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (focusedIndex >= 0 && focusedIndex < navigatorDirs.length) {
-        const dirName = navigatorDirs[focusedIndex];
+
+      if (e.ctrlKey) {
+        this.goToNavigatorDir();
+        return;
+      }
+
+      if (focusedIndex >= 0 && focusedIndex < filteredDirs.length) {
+        const selected = filteredDirs[focusedIndex];
+        const dirName = typeof selected === 'string' ? selected : selected.name;
         const targetPath = path.join(navigatorCurrentPath, dirName);
         this.loadNavigatorDirs(targetPath);
-      }
-      return;
-    }
-
-    if (key === 'Tab') {
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-
-    const isPrintable = key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey;
-    if (isPrintable) {
-      e.preventDefault();
-      e.stopPropagation();
-
-      const keyLower = key.toLowerCase();
-      const isSameCharCycle = searchBuffer.toLowerCase() === keyLower;
-      let newBuffer = isSameCharCycle ? searchBuffer : searchBuffer + key;
-      if (isSameCharCycle) {
-        newBuffer = keyLower;
-      }
-
-      let newFocusedIndex = -1;
-      if (isSameCharCycle) {
-        const matchingIndices: number[] = [];
-        navigatorDirs.forEach((dir, idx) => {
-          if (dir.toLowerCase().startsWith(keyLower)) {
-            matchingIndices.push(idx);
-          }
-        });
-
-        if (matchingIndices.length > 0) {
-          const currentMatchIdx = matchingIndices.indexOf(focusedIndex);
-          if (currentMatchIdx !== -1) {
-            newFocusedIndex = matchingIndices[(currentMatchIdx + 1) % matchingIndices.length];
-          } else {
-            newFocusedIndex = matchingIndices[0];
-          }
-        }
       } else {
-        const prefix = newBuffer.toLowerCase();
-        newFocusedIndex = navigatorDirs.findIndex((dir) => dir.toLowerCase().startsWith(prefix));
+        let targetPath = searchBuffer.trim();
+        if (targetPath) {
+          if (!path.isAbsolute(targetPath) && !targetPath.startsWith('~') && !/^[A-Za-z]:/.test(targetPath)) {
+            targetPath = path.join(navigatorCurrentPath, targetPath);
+          }
+          this.loadNavigatorDirs(targetPath);
+        }
       }
-
-      this.setState({
-        searchBuffer: newBuffer,
-        focusedIndex: newFocusedIndex
-      });
-
-      if (this.searchBufferTimeout) {
-        clearTimeout(this.searchBufferTimeout);
-      }
-      this.searchBufferTimeout = setTimeout(() => {
-        this.setState({searchBuffer: ''});
-      }, 700);
+      return;
     }
+  };
+
+  renderNavigatorFooter = () => {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-8)',
+          padding: 'var(--space-8) var(--space-12)',
+          borderTop: '0.5px solid var(--border-neutral)',
+          background: 'var(--bg-primary)',
+          borderBottomLeftRadius: '4px',
+          borderBottomRightRadius: '4px',
+          boxSizing: 'border-box'
+        }}
+      >
+        <i
+          className="ti ti-search"
+          style={{fontSize: '13px', color: 'var(--text-tertiary)', flexShrink: 0}}
+          aria-hidden="true"
+        />
+        <input
+          ref={this.navigatorSearchInputRef}
+          type="text"
+          style={{
+            flex: 1,
+            background: 'transparent',
+            border: 'none',
+            outline: 'none',
+            color: 'var(--text-primary)',
+            fontSize: '11px',
+            fontFamily: 'var(--font-mono)',
+            height: '24px',
+            padding: 0
+          }}
+          placeholder="Search or enter path... (Esc to close, Ctrl+Enter to Go)"
+          value={this.state.searchBuffer}
+          onChange={this.handleSearchInputChange}
+          onKeyDown={this.handleSearchInputKeyDown}
+        />
+        <span
+          onClick={this.goToNavigatorDir}
+          onMouseDown={(e) => e.preventDefault()}
+          style={{
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 'var(--space-4)',
+            fontSize: '10px',
+            fontWeight: 600,
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--text-info)',
+            border: '0.5px solid var(--border-neutral)',
+            borderRadius: 'var(--radius-3)',
+            padding: '1px var(--space-6)',
+            background: 'var(--bg-secondary)',
+            userSelect: 'none'
+          }}
+          title="cd to current browsed path"
+        >
+          Go
+        </span>
+      </div>
+    );
+  };
+
+  handleNavigatorKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    this.handleSearchInputKeyDown(e as any);
   };
 
   setBellSound(bell: 'SOUND' | false, sound: string | null) {
@@ -1438,21 +1694,21 @@ export default class Term extends React.PureComponent<
 
   onTermWrapperRef = (component: HTMLElement | null) => {
     this.termWrapperRef = component;
-
     if (component) {
-      this.resizeObserver = new ResizeObserver(() => {
-        clearTimeout(this.resizeTimeout);
-        this.resizeTimeout = setTimeout(() => {
-          this.fitResize();
-        }, 500);
-      });
-      this.resizeObserver.observe(component);
-    } else {
-      this.resizeObserver?.disconnect();
+      this.fitResize();
     }
   };
 
   componentWillUnmount() {
+    window.removeEventListener('resize', this.onWindowResize);
+    rpc.removeListener('move', this.onWindowMove);
+    if (this.dprMediaQuery && this.dprUpdateHandler) {
+      this.dprMediaQuery.removeEventListener('change', this.dprUpdateHandler);
+    }
+    clearTimeout(this.resizeTimeout);
+    clearTimeout(this.stabilizeResizeTimeout);
+
+    this.resizeObserver?.disconnect();
     document.removeEventListener('mousedown', this.handleOutsideClick);
     terms[this.props.uid] = null;
     this.termWrapperRef?.removeChild(this.termRef!);
@@ -1471,17 +1727,36 @@ export default class Term extends React.PureComponent<
   }
 
   render() {
+    let isSplitDownDisabled = false;
+    if (this.props.groupUid && (this.props as any).allTermGroups) {
+      const stacks = countPathHorizontalStacks(this.props.groupUid, (this.props as any).allTermGroups);
+      if (stacks >= 11) {
+        isSplitDownDisabled = true;
+      }
+    }
+
     const splitLabel = this.props.splitLabel;
-    const sessionProfile = (this.props as any).sessionProfile;
     const customTitle = (this.props as any).sessionTitle;
-    const isDefaultTitle =
-      !customTitle ||
-      ['zsh', 'bash', 'sh', 'cmd', 'powershell', 'pwsh', 'wsl', 'node', 'tmux', 'Untitled'].some((t) =>
-        customTitle.toLowerCase().includes(t)
-      ) ||
-      customTitle.includes('/') ||
-      customTitle.includes('\\');
-    const labelText = isDefaultTitle ? `Pane ${splitLabel}` : customTitle;
+    const sessionProfile = (this.props as any).sessionProfile;
+    const sessionShellName = (this.props as any).sessionShellName;
+    const isPicker = sessionProfile === 'picker';
+    const shellType = isPicker ? 'New Pane' : sessionProfile || 'Shell';
+    const labelText =
+      !isPicker && sessionShellName
+        ? `${shellType} (${sessionShellName})`
+        : isPicker
+          ? 'New Pane'
+          : customTitle &&
+              !['zsh', 'bash', 'sh', 'cmd', 'powershell', 'pwsh', 'wsl', 'node', 'tmux', 'Untitled'].some((t) =>
+                customTitle.toLowerCase().includes(t)
+              ) &&
+              !customTitle.includes('/') &&
+              !customTitle.includes('\\')
+            ? customTitle
+            : `Pane ${splitLabel}`;
+
+    const labelFull = !isPicker && sessionShellName ? `${sessionShellName} | ${shellType}` : labelText;
+    const labelShort = !isPicker && sessionShellName ? sessionShellName : labelText;
 
     const nameLower = (sessionProfile || '').toLowerCase();
     let icon = '⚡';
@@ -1491,7 +1766,6 @@ export default class Term extends React.PureComponent<
     else if (nameLower.includes('cmd') || nameLower.includes('command')) icon = '💻';
     else if (nameLower.includes('claude')) icon = '🤖';
 
-    const isPicker = sessionProfile === 'picker';
     const tint = isPicker
       ? 'picker'
       : splitLabel === 'a'
@@ -1505,6 +1779,7 @@ export default class Term extends React.PureComponent<
 
     return (
       <div
+        ref={this.termOuterRef}
         className={`term_fit ${this.props.isTermActive ? 'term_active' : ''}`}
         onMouseUp={this.onMouseUp}
         style={{position: 'relative'}}
@@ -1516,6 +1791,8 @@ export default class Term extends React.PureComponent<
             paneType="shell"
             tint={isPicker ? 'neutral' : (tint as any)}
             isPlaceholder={isPicker}
+            isSplitRightDisabled={this.state.isNarrow}
+            isSplitDownDisabled={isSplitDownDisabled}
             label={
               this.state.isRenamingLabel ? (
                 <input
@@ -1547,24 +1824,13 @@ export default class Term extends React.PureComponent<
                   autoFocus
                 />
               ) : (
-                <span onDoubleClick={this.handleLabelDoubleClick}>{labelText}</span>
+                <span onDoubleClick={this.handleLabelDoubleClick}>
+                  <span className="term_labelFull">{labelFull}</span>
+                  <span className="term_labelShort">{labelShort}</span>
+                </span>
               )
             }
             icon={<span>{icon}</span>}
-            profileChip={
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  fontWeight: 400,
-                  opacity: 0.7,
-                  fontSize: '10px',
-                  marginLeft: 'var(--space-4)'
-                }}
-              >
-                ({sessionProfile})
-              </span>
-            }
             navCluster={
               <div
                 style={{
@@ -1645,6 +1911,7 @@ export default class Term extends React.PureComponent<
             locationBar={
               <div
                 ref={this.pathBarRef}
+                className="term_locationBar"
                 onClick={(e) => {
                   e.stopPropagation();
                   this.toggleDirNavigator();
@@ -1654,9 +1921,7 @@ export default class Term extends React.PureComponent<
                   alignItems: 'center',
                   gap: 'var(--space-4)',
                   background: 'var(--bg-primary)',
-                  border: this.state.isDirNavigatorOpen
-                    ? '0.5px solid var(--border-focus)'
-                    : '0.5px solid var(--border-neutral)',
+                  border: '0.5px solid var(--border-focus)',
                   borderRadius: 'var(--radius-3)',
                   padding: '0 var(--space-6)',
                   height: '24px',
@@ -1668,13 +1933,13 @@ export default class Term extends React.PureComponent<
                   marginLeft: 'var(--space-4)',
                   marginRight: 'var(--space-8)'
                 }}
-                title="Click to browse directories (Ctrl+Shift+O)"
+                title="Click to browse directories (Ctrl+O)"
               >
                 <i
                   className={this.state.isDirNavigatorOpen ? 'ti ti-folder-open' : 'ti ti-folder'}
                   style={{
                     fontSize: '12px',
-                    color: this.state.isDirNavigatorOpen ? 'var(--info-text)' : 'var(--text-tertiary)',
+                    color: 'var(--info-text)',
                     flexShrink: 0
                   }}
                   aria-hidden="true"
@@ -1683,7 +1948,7 @@ export default class Term extends React.PureComponent<
                   style={{
                     fontFamily: 'var(--font-mono)',
                     fontSize: '11px',
-                    color: this.state.isDirNavigatorOpen ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    color: 'var(--text-primary)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap'
@@ -1740,17 +2005,24 @@ export default class Term extends React.PureComponent<
           </div>
         )}
         {isPicker ? (
-          <div className="term_pickerContainer">
+          <div
+            className="term_pickerContainer"
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              this.triggerPickerGlimmer();
+            }}
+          >
             <div
               style={{
-                flex: 1,
+                margin: 'auto 0',
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
-                justifyContent: 'center',
-                padding: 'var(--space-20) var(--space-16)',
-                gap: 'var(--space-14)',
-                width: '100%'
+                padding: 'var(--space-10) 0',
+                gap: 'var(--space-10)',
+                width: '100%',
+                flexShrink: 0
               }}
             >
               <div
@@ -1766,6 +2038,7 @@ export default class Term extends React.PureComponent<
 
               <div style={{display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '280px'}}>
                 <div
+                  className={this.state.isGlimmerActive ? 'term_glimmer' : ''}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -1776,7 +2049,8 @@ export default class Term extends React.PureComponent<
                     padding: '0 var(--space-10)',
                     height: '36px',
                     width: '100%',
-                    boxSizing: 'border-box'
+                    boxSizing: 'border-box',
+                    transition: 'all 0.15s ease'
                   }}
                 >
                   <i
@@ -1855,50 +2129,101 @@ export default class Term extends React.PureComponent<
               </div>
 
               <div className="term_pickerGrid_rev">
-                {((this.props as any).profiles || []).map((p: any) => {
-                  const profileNameLower = p.name.toLowerCase();
-                  let iconClass = 'ti ti-terminal-2';
-                  if (profileNameLower.includes('powershell') || profileNameLower.includes('pwsh'))
-                    iconClass = 'ti ti-terminal-2';
-                  else if (
-                    profileNameLower.includes('wsl') ||
-                    profileNameLower.includes('ubuntu') ||
-                    profileNameLower.includes('debian')
-                  )
-                    iconClass = 'ti ti-brand-debian';
-                  else if (profileNameLower.includes('bash') || profileNameLower.includes('git'))
-                    iconClass = 'ti ti-brand-git';
-                  else if (profileNameLower.includes('cmd') || profileNameLower.includes('command'))
-                    iconClass = 'ti ti-terminal';
-                  else if (profileNameLower.includes('azure') || profileNameLower.includes('cloud'))
-                    iconClass = 'ti ti-cloud';
+                {((this.props as any).profiles || [])
+                  .filter((p: any) => p.name.toLowerCase() !== 'claude code')
+                  .map((p: any) => {
+                    const profileNameLower = p.name.toLowerCase();
+                    let iconClass = 'ti ti-terminal-2';
+                    if (profileNameLower.includes('powershell') || profileNameLower.includes('pwsh'))
+                      iconClass = 'ti ti-terminal-2';
+                    else if (
+                      profileNameLower.includes('wsl') ||
+                      profileNameLower.includes('ubuntu') ||
+                      profileNameLower.includes('debian')
+                    )
+                      iconClass = 'ti ti-brand-debian';
+                    else if (profileNameLower.includes('bash') || profileNameLower.includes('git'))
+                      iconClass = 'ti ti-brand-git';
+                    else if (profileNameLower.includes('cmd') || profileNameLower.includes('command'))
+                      iconClass = 'ti ti-terminal';
+                    else if (profileNameLower.includes('azure') || profileNameLower.includes('cloud'))
+                      iconClass = 'ti ti-cloud';
 
-                  const displayName = p.name.charAt(0).toUpperCase() + p.name.slice(1);
+                    const displayName = p.name.charAt(0).toUpperCase() + p.name.slice(1);
 
-                  return (
-                    <button
-                      key={p.name}
-                      className="term_pickerButton_rev"
-                      onClick={() => {
-                        const {groupUid, uid, sessionCwd} = this.props as any;
-                        rpc.emit('new', {
-                          isNewGroup: false,
-                          cwd: sessionCwd || (this.props as any).cwd,
-                          activeUid: uid,
-                          profile: p.name,
-                          groupUid
-                        });
-                      }}
-                    >
-                      <i className={iconClass} style={{fontSize: '14px'}} aria-hidden="true" />
-                      <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
-                        {displayName}
-                      </span>
-                    </button>
-                  );
-                })}
+                    return (
+                      <button
+                        key={p.name}
+                        className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
+                        onClick={() => {
+                          const {groupUid, uid, sessionCwd} = this.props as any;
+                          rpc.emit('new', {
+                            isNewGroup: false,
+                            cwd: sessionCwd || (this.props as any).cwd,
+                            activeUid: uid,
+                            profile: p.name,
+                            groupUid
+                          });
+                        }}
+                      >
+                        <i className={iconClass} style={{fontSize: '14px'}} aria-hidden="true" />
+                        <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                          {displayName}
+                        </span>
+                      </button>
+                    );
+                  })}
                 <button
-                  className="term_pickerButton_rev"
+                  className={'term_pickerButton_rev term_pickerButton_custom_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
+                  onClick={() => {
+                    try {
+                      ipcRenderer.send('edit-config-external');
+                    } catch (err) {
+                      console.error(err);
+                    }
+                  }}
+                >
+                  <i className="ti ti-plus" style={{fontSize: '14px'}} aria-hidden="true" />
+                  <span>Custom…</span>
+                </button>
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-10)',
+                  width: '100%',
+                  maxWidth: '280px',
+                  marginTop: 'var(--space-4)'
+                }}
+              >
+                <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
+                <div style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
+                  or pick an app
+                </div>
+                <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
+              </div>
+
+              <div className="term_pickerGrid_rev">
+                <button
+                  className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
+                  onClick={() => {
+                    const {groupUid, uid, sessionCwd} = this.props as any;
+                    rpc.emit('new', {
+                      isNewGroup: false,
+                      cwd: sessionCwd || (this.props as any).cwd,
+                      activeUid: uid,
+                      profile: 'Claude Code',
+                      groupUid
+                    });
+                  }}
+                >
+                  <i className="ti ti-sparkles" style={{fontSize: '14px', color: 'var(--info-text)'}} aria-hidden="true" />
+                  <span>Claude Code</span>
+                </button>
+                <button
+                  className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
                   onClick={() => {
                     const port = process.env.HYPERIA_PORT || '9800';
                     const shellUrl = `http://localhost:${port}/shell`;
@@ -1911,19 +2236,6 @@ export default class Term extends React.PureComponent<
                 >
                   <i className="ti ti-robot" style={{fontSize: '14px'}} aria-hidden="true" />
                   <span>Hyperia Shell</span>
-                </button>
-                <button
-                  className="term_pickerButton_rev term_pickerButton_custom_rev"
-                  onClick={() => {
-                    try {
-                      ipcRenderer.send('edit-config-external');
-                    } catch (err) {
-                      console.error(err);
-                    }
-                  }}
-                >
-                  <i className="ti ti-plus" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <span>Custom…</span>
                 </button>
               </div>
             </div>
@@ -2020,10 +2332,11 @@ export default class Term extends React.PureComponent<
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
             background: var(--bg-primary);
-            padding: 20px;
+            padding: var(--space-10) var(--space-16);
             box-sizing: border-box;
+            overflow-y: auto;
+            min-height: 0;
           }
 
           .term_pickerGrid {
@@ -2072,6 +2385,25 @@ export default class Term extends React.PureComponent<
             gap: 6px;
             user-select: none;
             cursor: pointer;
+          }
+
+          @keyframes pickerGlimmer {
+            0% {
+              border-color: var(--border-neutral);
+              box-shadow: none;
+            }
+            30% {
+              border-color: var(--border-focus);
+              box-shadow: 0 0 10px rgba(0, 149, 255, 0.4);
+            }
+            100% {
+              border-color: var(--border-neutral);
+              box-shadow: none;
+            }
+          }
+
+          .term_glimmer {
+            animation: pickerGlimmer 0.6s ease-in-out;
           }
 
           .term_pickerGrid_rev {
@@ -2196,6 +2528,45 @@ export default class Term extends React.PureComponent<
           }
           .term_paneRenameInput:focus {
             border-color: var(--info-text);
+          }
+
+          .term_fit {
+            position: relative;
+            container-type: inline-size;
+            container-name: pane;
+          }
+
+          .term_labelFull {
+            display: inline;
+          }
+
+          .term_labelShort {
+            display: none;
+          }
+
+          @container pane (max-width: 380px) {
+            .term_labelFull {
+              display: none !important;
+            }
+            .term_labelShort {
+              display: inline !important;
+            }
+            .term_profileChip {
+              display: none !important;
+            }
+            .term_locationBar {
+              border-color: transparent !important;
+              background: transparent !important;
+              padding: 0 !important;
+              width: fit-content !important;
+              min-width: unset !important;
+              max-width: unset !important;
+              margin-right: 0 !important;
+              margin-left: 0 !important;
+            }
+            .term_locationBar span {
+              display: none !important;
+            }
           }
         `}</style>
       </div>
