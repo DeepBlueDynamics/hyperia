@@ -42,6 +42,7 @@ import {initSettings} from './settings';
 import {initSticky} from './sticky';
 import {newWindow} from './ui/window';
 import {installCLI} from './utils/cli-install';
+import {restoreFor} from './window-state';
 import * as windowUtils from './utils/window-utils';
 
 const windowSet = new Set<BrowserWindow>([]);
@@ -359,7 +360,7 @@ app.on('ready', () => {
         const winSet = config.getWin();
         let [startX, startY] = winSet.position;
 
-        const [width, height] = options.size ? options.size : cfg.windowSize || winSet.size;
+        let [width, height] = options.size ? options.size : cfg.windowSize || winSet.size;
 
         const winPos = options.position;
 
@@ -396,8 +397,24 @@ app.on('ready', () => {
           [startX, startY] = config.windowDefaults.windowPosition;
         }
 
+        // For the first window of the session, restore last-saved bounds + chrome
+        // (maximize / fullscreen). Multi-display aware: if the saved display is
+        // gone, the helper falls back to a visible default. Subsequent windows
+        // fall through to the existing "spawn next to focused" offset above so
+        // they don't stomp the saved state.
+        let stateAttach: ((w: BrowserWindow) => void) | null = null;
+        if (windowSet.size === 0) {
+          const restore = restoreFor({width, height, x: startX, y: startY});
+          width = restore.opts.width;
+          height = restore.opts.height;
+          if (typeof restore.opts.x === 'number') startX = restore.opts.x;
+          if (typeof restore.opts.y === 'number') startY = restore.opts.y;
+          stateAttach = restore.attach;
+        }
+
         const hwin = newWindow({width, height, x: startX, y: startY}, cfg, fn, profileName);
         windowSet.add(hwin);
+        if (stateAttach) stateAttach(hwin);
         void hwin.loadURL(url);
 
         // the window can be closed by the browser process itself
