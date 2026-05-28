@@ -38,3 +38,11 @@ plugins
 .antigravitycli/
 build_err.log
 issue91.txt
+
+# Dev-loop build/run logs (created by our build cycle)
+/app_run.log
+/build_run.log
+/dev_run.log
+/build_v*.log
+/sidecar_build.log
+/ci_watch.log
