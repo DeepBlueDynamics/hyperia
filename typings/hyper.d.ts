@@ -135,6 +135,7 @@ export type session = {
   activeUid?: string;
   profile: string;
   cwd?: string;
+  shellName?: string;
 };
 
 export type sessionState = Immutable<{
@@ -440,6 +441,7 @@ export type TermProps = {
   defaultProfile?: string;
   profiles?: any[];
   sessionCwd?: string;
+  onCwd?: (cwd: string) => void;
 } & extensionProps;
 
 // Utility types

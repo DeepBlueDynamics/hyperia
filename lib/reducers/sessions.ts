@@ -18,7 +18,52 @@ import {
 import type {sessionState, session, Mutable, ISessionReducer} from '../../typings/hyper';
 import {decorateSessionsReducer} from '../utils/plugins';
 
+const generatedTabNames = new Set<string>();
+
 function nextTabName(): string {
+  const prefixes = [
+    'Project', 'Scheme', 'Plan', 'Codename', 'Operation', 'Taskforce',
+    'Protocol', 'Endeavor', 'Mission', 'Quest', 'Venture', 'Initiative',
+    'Enterprise', 'Campaign', 'Maneuver', 'Blueprint', 'Strategy', 'Crusade'
+  ];
+  const adjs = [
+    'Shimmering', 'Preposterous', 'Gigantic', 'Turbulent', 'Furious', 'Whispering',
+    'Obsolete', 'Cybernetic', 'Hypnotic', 'Invisible', 'Explosive', 'Scurrying',
+    'Spicy', 'Gelatinous', 'Cosmic', 'Polka-Dot', 'Retro', 'Electric', 'Volatile',
+    'Bizarre', 'Fuzzy', 'Microscopic', 'Hyperactive', 'Delirious', 'Sassy'
+  ];
+  const suffixes = [
+    'NUCLEAR ☢️', 'Octopus 🐙', 'Slipper 🥿', 'Sausage 🌭', 'Mongoose 🦡',
+    'Tornado 🌪️', 'Glitch 👾', 'Banana 🍌', 'Thunder ⚡', 'Whisper 🤫',
+    'Flamingo 🦩', 'Taco 🌮', 'Waffle 🧇', 'Unicorn 🦄', 'Zombie 🧟',
+    'Laser 🔫', 'Quantum 🌀', 'Rhubarb 🥬', 'Pickle 🥒', 'Bacon 🥓',
+    'Sputnik 🚀', 'Dynamite 🧨', 'Jellyfish 🪼', 'Cactus 🌵', 'Marshmallow 🍢',
+    'Sloth 🦥', 'Wombat 🐨', 'Noodle 🍜', 'Meatball 🧆', 'Teapot 🫖',
+    'Balloon 🎈', 'Disaster 💥', 'Specter 👻', 'Goblin 👺', 'Kraken 🦑',
+    'Pineapple 🍍', 'Accordion 🪗', 'Boomerang 🪃', 'Lollipop 🍭', 'Disco 🪩',
+    'Gumball 🍬', 'Capybara 🦦', 'Panda 🐼', 'Lobster 🦞', 'Caterpillar 🐛',
+    'Dragon 🐉', 'Dinosaur 🦖', 'Mammoth 🦣', 'Robot 🤖', 'Alien 👽',
+    'Firefly 🪰', 'Jellybean 🍬', 'Cupcake 🧁', 'Doughnut 🍩', 'Avocado 🥑',
+    'Broccoli 🥦', 'Garlic 🧄', 'Croissant 🥐', 'Pretzel 🥨', 'Cheese 🧀'
+  ];
+
+  let name = '';
+  let retries = 0;
+  while (retries < 100) {
+    const p = prefixes[Math.floor(Math.random() * prefixes.length)];
+    const adj = adjs[Math.floor(Math.random() * adjs.length)];
+    const s = suffixes[Math.floor(Math.random() * suffixes.length)];
+    name = `${p} ${adj} ${s}`;
+    if (!generatedTabNames.has(name)) {
+      generatedTabNames.add(name);
+      break;
+    }
+    retries++;
+  }
+  return name;
+}
+
+function nextShellName(): string {
   return uniqueNamesGenerator({
     dictionaries: [adjectives, animals],
     separator: ' ',
@@ -44,7 +89,8 @@ function Session(obj: Immutable.DeepPartial<session>) {
     search: false,
     shell: '',
     pid: null,
-    profile: ''
+    profile: '',
+    shellName: ''
   };
   return Immutable(x).merge(obj);
 }
@@ -61,7 +107,7 @@ const reducer: ISessionReducer = (state = initialState, action) => {
   switch (action.type) {
     case SESSION_ADD: {
       const inheritedTabName =
-        action.splitDirection && action.activeUid
+        (action.splitDirection || !action.isNewGroup) && action.activeUid
           ? state.sessions[action.activeUid]?.description ||
             state.sessions[action.activeUid]?.tabName ||
             state.sessions[action.activeUid]?.title ||
@@ -79,7 +125,9 @@ const reducer: ISessionReducer = (state = initialState, action) => {
           description: '',
           shell: action.shell ? action.shell.split('/').pop() : null,
           pid: action.pid,
-          profile: action.profile
+          profile: action.profile,
+          cwd: action.cwd || '',
+          shellName: nextShellName()
         })
       );
     }

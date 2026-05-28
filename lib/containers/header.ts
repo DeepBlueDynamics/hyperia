@@ -17,6 +17,40 @@ const getActiveSessions = ({termGroups}: HyperState) => termGroups.activeSession
 const getActivityMarkers = ({ui}: HyperState) => ui.activityMarkers;
 const getBellMarkers = ({ui}: HyperState) => ui.bellMarkers;
 const getAgentStatuses = ({ui}: HyperState) => ui.agentStatuses;
+const getTermGroups = ({termGroups}: HyperState) => termGroups.termGroups;
+const getActiveTermGroup = ({termGroups}: HyperState) => (termGroups as any).activeTermGroup;
+
+const findActiveLeaf = (
+  termGroups: Record<string, any>,
+  activeTermGroup: string | null,
+  group: any
+): any => {
+  if (!group) return null;
+  if (group.sessionUid || group.webUrl !== undefined) {
+    return group;
+  }
+  const children = group.children || [];
+  if (children.length === 0) return group;
+
+  const isDescendant = (parentUid: string, targetUid: string): boolean => {
+    const parent = termGroups[parentUid];
+    if (!parent) return false;
+    const ch = parent.children || [];
+    if (ch.includes(targetUid)) return true;
+    return ch.some((cId: string) => isDescendant(cId, targetUid));
+  };
+
+  if (activeTermGroup && isDescendant(group.uid, activeTermGroup)) {
+    for (const cUid of children) {
+      if (cUid === activeTermGroup || isDescendant(cUid, activeTermGroup)) {
+        return findActiveLeaf(termGroups, activeTermGroup, termGroups[cUid]);
+      }
+    }
+  }
+
+  return findActiveLeaf(termGroups, activeTermGroup, termGroups[children[0]]);
+};
+
 const getTabs = createSelector(
   [
     getSessions,
@@ -25,24 +59,30 @@ const getTabs = createSelector(
     getActiveRootGroup,
     getActivityMarkers,
     getBellMarkers,
-    getAgentStatuses
+    getAgentStatuses,
+    getTermGroups,
+    getActiveTermGroup
   ],
-  (sessions, rootGroups, activeSessions, activeRootGroup, activityMarkers, bellMarkers, agentStatuses) =>
-    rootGroups.map((t): ITab => {
+  (sessions, rootGroups, activeSessions, activeRootGroup, activityMarkers, bellMarkers, agentStatuses, termGroups, activeTermGroup) =>
+    rootGroups.map((t: any): ITab => {
       const activeSessionUid = activeSessions[t.uid];
       const session = sessions[activeSessionUid];
+      const groupTabName = (t as any).tabName as string | null | undefined;
       if (!session) {
         // Web pane tab — derive title from custom name or URL
-        const webUrl = (t as any).webUrl as string | undefined;
-        const webName = (t as any).webName as string | undefined;
-        let title = 'Web Pane';
-        if (webName) {
-          title = webName;
-        } else if (webUrl) {
-          try {
-            title = new URL(webUrl).hostname || webUrl;
-          } catch {
-            title = webUrl;
+        const activeLeaf = findActiveLeaf(termGroups, activeTermGroup, t);
+        const webUrl = activeLeaf ? activeLeaf.webUrl : (t as any).webUrl;
+        const webName = activeLeaf ? activeLeaf.webName : (t as any).webName;
+        let title = groupTabName || 'Web Pane';
+        if (!groupTabName) {
+          if (webName) {
+            title = webName;
+          } else if (webUrl) {
+            try {
+              title = new URL(webUrl).hostname || webUrl;
+            } catch {
+              title = webUrl;
+            }
           }
         }
         return {
@@ -60,7 +100,6 @@ const getTabs = createSelector(
       }
       // Source of truth for the tab label: the root group's tabName.
       // Falls back to per-session fields for tabs created before this change.
-      const groupTabName = (t as any).tabName as string | null | undefined;
       return {
         uid: t.uid,
         title: session.title,

@@ -287,30 +287,94 @@ function collectPaneLayout(
   termGroups: Record<string, any>,
   splitOffset = 0,
   isRoot = true
-): Array<{uid: string; splitLabel: string}> {
-  if (group?.sessionUid) {
-    return [{uid: group.sessionUid, splitLabel: ''}];
-  }
-  if (group?.webUrl !== undefined && group?.webUrl !== null) {
-    return [{uid: group.uid, splitLabel: ''}];
-  }
-
+): Array<{
+  uid: string;
+  splitLabel: string;
+  isWeb: boolean;
+  isAi: boolean;
+  title: string;
+  url?: string;
+  active: boolean;
+}> {
+  const state = store_.getState() as any;
   const totalLeaves = countLeaves(group, termGroups);
   const needLabels = totalLeaves > 1 || !isRoot;
-  const panes: Array<{uid: string; splitLabel: string}> = [];
+
+  if (group?.sessionUid) {
+    const session = state.sessions.sessions[group.sessionUid];
+    const shellName = session ? session.shellName : '';
+    const shellType = session ? session.profile || 'shell' : 'shell';
+    const customTitle = session ? session.title : '';
+    const title = shellName ? shellName : (customTitle || shellType);
+    const active = group.sessionUid === state.sessions.activeUid;
+    return [{uid: group.sessionUid, splitLabel: '', isWeb: false, isAi: false, title, active}];
+  }
+  if (group?.webUrl !== undefined && group?.webUrl !== null) {
+    const isAi = group.webUrl.startsWith('ai://');
+    let title = group.tabName || group.webName;
+    if (!title && group.webUrl) {
+      if (isAi) {
+        title = 'ask';
+      } else {
+        try {
+          title = new URL(group.webUrl).hostname || group.webUrl;
+        } catch {
+          title = group.webUrl;
+        }
+      }
+    }
+    if (!title) {
+      title = isAi ? 'ask' : 'Web pane';
+    }
+    const active = group.uid === state.termGroups.activeTermGroup;
+    return [{uid: group.uid, splitLabel: '', isWeb: true, isAi, title, url: group.webUrl, active}];
+  }
+
+  const panes: any[] = [];
 
   // Collect all leaf uids first (in order), then assign unique sequential labels
-  function collectLeaves(g: Record<string, any>): string[] {
+  function collectLeaves(g: Record<string, any>): Array<{uid: string; isWeb: boolean; isAi: boolean; title: string; url?: string; active: boolean}> {
     if (!g) return [];
-    if (g.sessionUid) return [g.sessionUid as string];
-    if (g.webUrl !== undefined && g.webUrl !== null) return [g.uid as string];
+    if (g.sessionUid) {
+      const session = state.sessions.sessions[g.sessionUid];
+      const shellName = session ? session.shellName : '';
+      const shellType = session ? session.profile || 'shell' : 'shell';
+      const customTitle = session ? session.title : '';
+      const title = shellName ? shellName : (customTitle || shellType);
+      const active = g.sessionUid === state.sessions.activeUid;
+      return [{uid: g.sessionUid as string, isWeb: false, isAi: false, title, active}];
+    }
+    if (g.webUrl !== undefined && g.webUrl !== null) {
+      const isAi = g.webUrl.startsWith('ai://');
+      let title = group?.tabName || g.webName;
+      if (!title && g.webUrl) {
+        if (isAi) {
+          title = 'ask';
+        } else {
+          try {
+            title = new URL(g.webUrl).hostname || g.webUrl;
+          } catch {
+            title = g.webUrl;
+          }
+        }
+      }
+      if (!title) {
+        title = isAi ? 'ask' : 'Web pane';
+      }
+      const active = g.uid === state.termGroups.activeTermGroup;
+      return [{uid: g.uid as string, isWeb: true, isAi, title, url: g.webUrl, active}];
+    }
     const children: string[] = (g.children as string[]) || [];
     return children.flatMap((cUid: string) => collectLeaves(termGroups[cUid] as Record<string, any>));
   }
 
   const leaves = collectLeaves(group as Record<string, any>);
-  leaves.forEach((uid, idx) => {
-    panes.push({uid, splitLabel: needLabels ? String.fromCharCode(97 + splitOffset + idx) : ''});
+  leaves.forEach((leaf, idx) => {
+    const splitLabel = needLabels ? String.fromCharCode(97 + splitOffset + idx) : '';
+    panes.push({
+      ...leaf,
+      splitLabel
+    });
   });
 
   return panes;

@@ -27,6 +27,8 @@ export interface SessionAddAction {
   profile: string;
   groupUid?: string;
   url?: string;
+  cwd?: string;
+  isNewGroup?: boolean;
 }
 export interface SessionResizeAction {
   type: typeof SESSION_RESIZE;

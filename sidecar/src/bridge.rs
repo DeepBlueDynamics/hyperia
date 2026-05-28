@@ -37,6 +37,7 @@ pub struct SessionInfo {
     pub bsp_h: f32,
     pub cwd: String,
     pub last_user_activity: Option<std::time::Instant>,
+    pub title: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +398,7 @@ impl Bridge {
                             "focused": focused,
                             "userActiveSecsAgo": user_active_secs_ago,
                             "cwd": info.cwd,
+                            "title": info.title,
                         })
                     })
                     .collect();
@@ -447,6 +449,7 @@ impl Bridge {
                 let tab_order = msg["tabOrder"].as_u64().unwrap_or(0) as u32;
                 let tab_active = msg["tabActive"].as_bool().unwrap_or(false);
                 let pane_active = msg["paneActive"].as_bool().unwrap_or(false);
+                let title = msg["title"].as_str().unwrap_or("").to_string();
                 tracing::info!("Session registered: {uid} ({tab_name}) {cols}x{rows} pid={pid} tab={root_tab_uid} win={window_id}");
                 let mut focused_window_id = self.inner.focused_window_id.lock().await;
                 if focused_window_id.is_none() {
@@ -474,6 +477,7 @@ impl Bridge {
                         bsp_h: 100.0,
                         cwd: String::new(),
                         last_user_activity: None,
+                        title,
                     },
                 );
             }
@@ -509,6 +513,15 @@ impl Bridge {
                 if let Some(info) = self.inner.sessions.lock().await.get_mut(uid) {
                     info.cwd = cwd.clone();
                     tracing::info!("Session {uid} cwd updated: {cwd}");
+                }
+            }
+
+            "SessionTitle" => {
+                let uid = msg["uid"].as_str().unwrap_or("");
+                let title = msg["title"].as_str().unwrap_or("").to_string();
+                if let Some(info) = self.inner.sessions.lock().await.get_mut(uid) {
+                    info.title = title.clone();
+                    tracing::info!("Session {uid} title updated: {title}");
                 }
             }
 
@@ -737,6 +750,7 @@ mod tests {
             bsp_h: 100.0,
             cwd: String::new(),
             last_user_activity: None,
+            title: String::new(),
         }
     }
 

@@ -101,6 +101,7 @@ export function newWindow(
 
   window.profileName = profileName;
   (window as any).tabCount = 1;
+  (window as any).paneCount = 1;
 
   // Enable remote module on this window
   remoteEnable(window.webContents);
@@ -229,7 +230,7 @@ export function newWindow(
     }
 
     // remove the rows and cols, the wrong value of them will break layout when init create
-    const resolvedCwd = cwd || extraOptionsFiltered.cwd || workingDirectory;
+    const resolvedCwd = extraOptionsFiltered.cwd || cwd || workingDirectory;
     const defaultOptions = Object.assign(
       {
         splitDirection: undefined,
@@ -264,7 +265,9 @@ export function newWindow(
       activeUid: options.activeUid ?? undefined,
       profile: options.profile,
       groupUid: extraOptions.groupUid,
-      url: extraOptions.url
+      url: extraOptions.url,
+      cwd: options.cwd,
+      isNewGroup: extraOptions.isNewGroup
     });
 
     // Register with sidecar bridge for agent control
@@ -371,10 +374,23 @@ export function newWindow(
         rootGroupUid: string;
         order: number;
         active: boolean;
-        panes: Array<{uid: string; splitLabel: string}>;
+        panes: Array<{
+          uid: string;
+          splitLabel: string;
+          isWeb: boolean;
+          isAi: boolean;
+          title: string;
+          url?: string;
+          active: boolean;
+        }>;
       }>
     ) => {
       (window as any).tabCount = payload.length;
+      let totalPanes = 0;
+      payload.forEach((tab) => {
+        totalPanes += tab.panes ? tab.panes.length : 0;
+      });
+      (window as any).paneCount = totalPanes;
       updateSessionLayout(payload);
     }
   );
@@ -436,14 +452,22 @@ export function newWindow(
   });
   window.on('close', (e) => {
     const tabCount = (window as any).tabCount || 1;
-    if (tabCount > 1) {
+    const paneCount = (window as any).paneCount || 1;
+    if (tabCount > 1 || paneCount > 1) {
+      const message = tabCount > 1
+        ? `Are you sure you want to close all ${tabCount} tabs?`
+        : `Are you sure you want to close this tab with all ${paneCount} split panes?`;
+      const detail = tabCount > 1
+        ? 'This will close the entire window and terminate all active sessions.'
+        : 'This will close the entire window and terminate all active sessions inside this tab.';
+
       const choice = dialog.showMessageBoxSync(window, {
         type: 'question',
         buttons: ['Yes', 'No'],
         defaultId: 1,
         title: 'Confirm Close',
-        message: `Are you sure you want to close all ${tabCount} tabs?`,
-        detail: 'This will close the entire window and terminate all active sessions.',
+        message,
+        detail,
         cancelId: 1
       });
       if (choice !== 0) {

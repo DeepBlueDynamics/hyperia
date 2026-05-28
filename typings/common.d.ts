@@ -17,6 +17,8 @@ export type Session = {
   profile: string;
   groupUid?: string;
   url?: string;
+  cwd?: string;
+  isNewGroup?: boolean;
 };
 
 export type sessionExtraOptions = {
@@ -56,7 +58,15 @@ export type MainEvents = {
     rootGroupUid: string;
     order: number;
     active: boolean;
-    panes: Array<{uid: string; splitLabel: string}>;
+    panes: Array<{
+      uid: string;
+      splitLabel: string;
+      isWeb: boolean;
+      isAi: boolean;
+      title: string;
+      url?: string;
+      active: boolean;
+    }>;
   }>;
   unmaximize: never;
   'web-pane-reload': string;

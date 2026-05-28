@@ -104,6 +104,7 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       bellSoundURL: this.props.bellSoundURL,
       bellSound: this.props.bellSound,
       onActive: this.bind(this.props.onActive, null, uid),
+      onCwd: (this.props as any).onCwd ? this.bind((this.props as any).onCwd, null, uid) : undefined,
       onBell: this.bind(this.props.onBell, null, uid),
       onResize: this.bind(this.props.onResize, null, uid),
       onTitle: this.bind(this.props.onTitle, null, uid),
@@ -129,7 +130,9 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       onClosePane: (this.props as any).onClosePane,
       sessionProfile: session ? (session as any).profile : undefined,
       sessionTitle: session ? (session as any).title : undefined,
-      sessionCwd: session ? (session as any).cwd : undefined
+      sessionCwd: session ? (session as any).cwd : undefined,
+      sessionShellName: session ? (session as any).shellName : undefined,
+      allTermGroups: (this.props as any).parentProps.allTermGroups
     } as any);
 
     // This will create a new ref_ function for every render,
@@ -168,6 +171,7 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
           hasSession={!!termGroup.sessionUid}
           sessionUid={termGroup.sessionUid}
           splitLabel={label}
+          allTermGroups={(this.props as any).parentProps.allTermGroups}
         />
       );
     }

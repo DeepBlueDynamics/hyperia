@@ -129,18 +129,18 @@ fn load_lockout_config() -> (bool, u64) {
         std::env::var("HOME").ok()
     };
     let Some(h) = home else {
-        return (true, 60);
+        return (true, 15);
     };
     let path = std::path::PathBuf::from(h).join(".hyperia").join("hyperia.json");
     let Ok(content) = std::fs::read_to_string(&path) else {
-        return (true, 60);
+        return (true, 15);
     };
     let Ok(json): Result<serde_json::Value, _> = serde_json::from_str(&content) else {
-        return (true, 60);
+        return (true, 15);
     };
     let cfg = &json["config"]["lockout"];
     let enabled = cfg["enabled"].as_bool().unwrap_or(true);
-    let duration = cfg["duration_secs"].as_u64().unwrap_or(60);
+    let duration = cfg["duration_secs"].as_u64().unwrap_or(15);
     (enabled, duration)
 }
 

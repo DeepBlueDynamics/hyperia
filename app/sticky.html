@@ -35,7 +35,7 @@
   body {
     /* color set dynamically by textColorForBg() */
     font-family: 'Cascadia Code', 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
-    font-size: 13px;
+    font-size: 16px;
     display: flex;
     flex-direction: column;
   }
@@ -140,7 +140,7 @@
     background: transparent;
     color: inherit;
     font-family: inherit;
-    font-size: 13px;
+    font-size: 16px;
     resize: none;
     outline: none;
     line-height: 1.5;
@@ -176,7 +176,7 @@
     margin: 0;
     flex: 1;
     font-family: inherit;
-    font-size: 12px;
+    font-size: 15px;
     line-height: 1.6;
     tab-size: 4;
     background: transparent !important;
@@ -204,6 +204,83 @@
     user-select: none;
   }
 
+  /* Search Stickys Styles */
+  .search-container {
+    padding: 6px 0 10px 0;
+    flex-shrink: 0;
+  }
+  #searchInput {
+    width: 100%;
+    height: 36px;
+    padding: 0 12px;
+    background: rgba(0,0,0,0.05);
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 6px;
+    color: inherit;
+    font-family: inherit;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  #searchInput:focus {
+    border-color: #bbdefb;
+    box-shadow: 0 0 0 2px rgba(187, 222, 251, 0.2);
+  }
+  .results-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-right: 2px;
+  }
+  .result-item {
+    padding: 10px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    background: rgba(0,0,0,0.03);
+    border: 1.5px solid transparent;
+    transition: all 0.1s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .result-item:hover {
+    border-color: rgba(0,0,0,0.1);
+    background: rgba(0,0,0,0.06);
+    transform: translateY(-1px);
+  }
+  .result-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .result-item-title {
+    font-weight: bold;
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+  .result-item-color {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 0.5px solid rgba(0,0,0,0.2);
+  }
+  .result-item-body {
+    font-size: 11px;
+    opacity: 0.7;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: inherit;
+  }
+  .no-results {
+    text-align: center;
+    padding: 24px;
+    font-size: 12px;
+    opacity: 0.5;
+  }
+
 </style>
 </head>
 <body>
@@ -217,7 +294,7 @@
   <div class="content" id="content"></div>
 
 <script>
-const { ipcRenderer, clipboard } = require('electron');
+const { ipcRenderer, clipboard, webFrame } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -244,6 +321,38 @@ function textColorForBg(hex) {
   const L = 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
   return L > 0.25 ? '#1a1a1a' : '#f0f0f0';
 }
+
+// Global zoom key handler for stickies
+window.addEventListener('keydown', (e) => {
+  const isPlus = e.key === '=' || e.key === '+';
+  const isMinus = e.key === '-';
+  const isZero = e.key === '0';
+
+  if ((e.ctrlKey || e.metaKey) && isPlus) {
+    e.preventDefault();
+    try {
+      const currentZoom = webFrame.getZoomFactor();
+      webFrame.setZoomFactor(Math.min(currentZoom + 0.1, 3.0));
+    } catch (err) {
+      console.error(err);
+    }
+  } else if ((e.ctrlKey || e.metaKey) && isMinus) {
+    e.preventDefault();
+    try {
+      const currentZoom = webFrame.getZoomFactor();
+      webFrame.setZoomFactor(Math.max(currentZoom - 0.1, 0.5));
+    } catch (err) {
+      console.error(err);
+    }
+  } else if ((e.ctrlKey || e.metaKey) && isZero) {
+    e.preventDefault();
+    try {
+      webFrame.setZoomFactor(1.0);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+});
 
 function applyBgColor(colorOrCode) {
   const theme = CODE_THEMES[colorOrCode];
@@ -538,7 +647,82 @@ closeBtn.addEventListener('click', (e) => {
   ipcRenderer.send('sticky-close', noteId);
 });
 
-if (filePath) {
+const isSearchMode = params.get('mode') === 'search';
+
+if (isSearchMode) {
+  content.innerHTML = `
+    <div class="search-container">
+      <input type="text" id="searchInput" placeholder="Search title or content... (Esc to close)" />
+    </div>
+    <div id="resultsList" class="results-list"></div>
+  `;
+
+  const searchInput = document.getElementById('searchInput');
+  const resultsList = document.getElementById('resultsList');
+
+  const allNotes = readNotes().filter(n => n.id !== 'sticky-search-window' && n.text && n.text.trim().length > 0);
+
+  function renderResults(query) {
+    resultsList.innerHTML = '';
+    const filtered = allNotes.filter(n => {
+      const nameMatch = n.name && n.name.toLowerCase().includes(query.toLowerCase());
+      const textMatch = n.text && n.text.toLowerCase().includes(query.toLowerCase());
+      return nameMatch || textMatch;
+    });
+
+    if (filtered.length === 0) {
+      resultsList.innerHTML = `<div class="no-results">No stickies found</div>`;
+      return;
+    }
+
+    for (const note of filtered) {
+      const item = document.createElement('div');
+      item.className = 'result-item';
+      item.style.backgroundColor = note.color ? note.color + '22' : 'rgba(0,0,0,0.03)';
+
+      const header = document.createElement('div');
+      header.className = 'result-item-header';
+
+      const title = document.createElement('span');
+      title.className = 'result-item-title';
+      title.textContent = note.name || 'Untitled Note';
+      header.appendChild(title);
+
+      const colorDot = document.createElement('span');
+      colorDot.className = 'result-item-color';
+      colorDot.style.backgroundColor = note.color || '#fff9c4';
+      header.appendChild(colorDot);
+
+      item.appendChild(header);
+
+      const body = document.createElement('div');
+      body.className = 'result-item-body';
+      body.textContent = note.text ? note.text.replace(/\s+/g, ' ').substring(0, 100) : 'Empty note';
+      item.appendChild(body);
+
+      item.addEventListener('click', () => {
+        ipcRenderer.send('sticky-open-note', note.id);
+        ipcRenderer.send('sticky-close', 'sticky-search-window');
+      });
+
+      resultsList.appendChild(item);
+    }
+  }
+
+  searchInput.addEventListener('input', () => {
+    renderResults(searchInput.value);
+  });
+
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      ipcRenderer.send('sticky-close', 'sticky-search-window');
+    }
+  });
+
+  searchInput.focus();
+  renderResults('');
+} else if (filePath) {
   let fileContent = '';
   let fileName = path.basename(filePath);
   let fileExt = path.extname(filePath).slice(1).toLowerCase();

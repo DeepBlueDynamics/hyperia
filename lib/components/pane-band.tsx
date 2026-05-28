@@ -15,6 +15,34 @@ type PaneBandProps = {
   onClick?: (e: React.MouseEvent) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   height?: 'normal' | 'compact'; // maps to var(--band-height) | var(--band-height-compact)
+  isSplitRightDisabled?: boolean;
+  isSplitDownDisabled?: boolean;
+  paneName?: string; // Explicit string to copy to clipboard
+};
+
+const getTextFromNode = (node: React.ReactNode): string => {
+  if (!node) return '';
+  if (typeof node === 'string' || typeof node === 'number') {
+    return String(node);
+  }
+  if (Array.isArray(node)) {
+    return node.map(getTextFromNode).join('');
+  }
+  if (React.isValidElement(node)) {
+    const props = node.props as any;
+    if (props) {
+      if (props.className === 'term_labelFull') {
+        return getTextFromNode(props.children);
+      }
+      if (props.className === 'term_labelShort') {
+        return ''; // Skip short version to prevent duplication
+      }
+      if (props.children !== undefined) {
+        return getTextFromNode(props.children);
+      }
+    }
+  }
+  return '';
 };
 
 export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
@@ -33,12 +61,41 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       onClose,
       onClick,
       onContextMenu,
-      height = 'compact'
+      height = 'compact',
+      isSplitRightDisabled = false,
+      isSplitDownDisabled = false,
+      paneName
     },
     ref
   ) => {
     const resolvedTint = isPlaceholder ? 'neutral' : tint;
     const isAi = paneType === 'ai';
+
+    const [copied, setCopied] = React.useState(false);
+
+    React.useEffect(() => {
+      if (copied) {
+        const timer = setTimeout(() => {
+          setCopied(false);
+        }, 1000);
+        return () => clearTimeout(timer);
+      }
+    }, [copied]);
+
+    const handleNameClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      const textToCopy = paneName || getTextFromNode(label) || 'Pane';
+      const cleanText = textToCopy.trim();
+      if (cleanText) {
+        navigator.clipboard.writeText(cleanText)
+          .then(() => {
+            setCopied(true);
+          })
+          .catch((err) => {
+            console.error('Failed to copy pane name to clipboard:', err);
+          });
+      }
+    };
 
     // Default fallback icons if none provided
     const resolvedIcon =
@@ -82,14 +139,21 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           {/* Name Cluster */}
           <div
             className="pane-band-name-cluster"
+            onClick={handleNameClick}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: 'var(--space-6)',
               fontSize: '11px',
               fontWeight: 500,
-              flexShrink: 0
+              flexShrink: 0,
+              cursor: 'pointer',
+              position: 'relative',
+              padding: '2px var(--space-4)',
+              borderRadius: 'var(--radius-4)',
+              transition: 'background 0.15s ease',
             }}
+            title="Click to copy name"
           >
             {!isPlaceholder && resolvedIcon && (
               <span style={{display: 'flex', alignItems: 'center'}}>{resolvedIcon}</span>
@@ -102,6 +166,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 {profileChip}
               </span>
             )}
+            {copied && <div className="pane-band-copied-badge">Copied!</div>}
           </div>
 
           {/* Nav Cluster */}
@@ -118,104 +183,108 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           onClick={(e) => e.stopPropagation()}
         >
           {/* Split Right */}
-          <span
-            className="pane-band-control-icon pane-band-tooltip-trigger"
-            onClick={(e) => {
-              e.stopPropagation();
-              onSplitRight();
-            }}
-            style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
-          >
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
+          {!isSplitRightDisabled && (
+            <span
+              className="pane-band-control-icon pane-band-tooltip-trigger"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSplitRight();
+              }}
+              style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
             >
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <line x1="12" y1="3" x2="12" y2="21" />
-            </svg>
-            <div className="pane-band-tooltip">
-              <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Split right</div>
-              <div
-                style={{
-                  fontSize: '11px',
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--text-secondary)',
-                  marginTop: 'var(--space-2)'
-                }}
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
               >
-                Ctrl+Shift+|
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <line x1="12" y1="3" x2="12" y2="21" />
+              </svg>
+              <div className="pane-band-tooltip">
+                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Split right</div>
+                <div
+                  style={{
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--text-secondary)',
+                    marginTop: 'var(--space-2)'
+                  }}
+                >
+                  Ctrl+Shift+D
+                </div>
+                <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: 'var(--space-6) 0'}} />
+                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Clone right</div>
+                <div
+                  style={{
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--text-secondary)',
+                    marginTop: 'var(--space-2)'
+                  }}
+                >
+                  Ctrl+Alt+Shift+D
+                </div>
               </div>
-              <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: 'var(--space-6) 0'}} />
-              <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Clone right</div>
-              <div
-                style={{
-                  fontSize: '11px',
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--text-secondary)',
-                  marginTop: 'var(--space-2)'
-                }}
-              >
-                Ctrl+Alt+Shift+|
-              </div>
-            </div>
-          </span>
+            </span>
+          )}
 
           {/* Split Down */}
-          <span
-            className="pane-band-control-icon pane-band-tooltip-trigger"
-            onClick={(e) => {
-              e.stopPropagation();
-              onSplitDown();
-            }}
-            style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
-          >
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
+          {!isSplitDownDisabled && (
+            <span
+              className="pane-band-control-icon pane-band-tooltip-trigger"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSplitDown();
+              }}
+              style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
             >
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <line x1="3" y1="12" x2="21" y2="12" />
-            </svg>
-            <div className="pane-band-tooltip">
-              <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Split down</div>
-              <div
-                style={{
-                  fontSize: '11px',
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--text-secondary)',
-                  marginTop: 'var(--space-2)'
-                }}
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
               >
-                Ctrl+Shift+_
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <line x1="3" y1="12" x2="21" y2="12" />
+              </svg>
+              <div className="pane-band-tooltip">
+                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Split down</div>
+                <div
+                  style={{
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--text-secondary)',
+                    marginTop: 'var(--space-2)'
+                  }}
+                >
+                  Ctrl+Shift+_
+                </div>
+                <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: 'var(--space-6) 0'}} />
+                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Clone down</div>
+                <div
+                  style={{
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--text-secondary)',
+                    marginTop: 'var(--space-2)'
+                  }}
+                >
+                  Ctrl+Alt+Shift+_
+                </div>
               </div>
-              <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: 'var(--space-6) 0'}} />
-              <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Clone down</div>
-              <div
-                style={{
-                  fontSize: '11px',
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--text-secondary)',
-                  marginTop: 'var(--space-2)'
-                }}
-              >
-                Ctrl+Alt+Shift+_
-              </div>
-            </div>
-          </span>
+            </span>
+          )}
 
           {/* Close */}
           <span
@@ -352,6 +421,47 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
 
           .pane-band-tooltip-trigger:hover .pane-band-tooltip {
             display: block;
+          }
+
+          .pane-band-name-cluster:hover {
+            background: rgba(255, 255, 255, 0.08) !important;
+          }
+
+          .pane-band-copied-badge {
+            position: absolute;
+            top: -24px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--info-text);
+            color: #ffffff;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: var(--radius-4);
+            white-space: nowrap;
+            z-index: 1010;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            pointer-events: none;
+            animation: paneCopiedPop 1s ease-in-out forwards;
+          }
+
+          @keyframes paneCopiedPop {
+            0% {
+              opacity: 0;
+              transform: translateX(-50%) translateY(4px) scale(0.9);
+            }
+            15% {
+              opacity: 1;
+              transform: translateX(-50%) translateY(0) scale(1);
+            }
+            80% {
+              opacity: 1;
+              transform: translateX(-50%) translateY(0) scale(1);
+            }
+            100% {
+              opacity: 0;
+              transform: translateX(-50%) translateY(-6px) scale(0.95);
+            }
           }
         `}</style>
       </div>

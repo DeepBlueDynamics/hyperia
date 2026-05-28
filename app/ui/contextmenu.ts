@@ -1,4 +1,4 @@
-import {ipcMain} from 'electron';
+import {ipcMain, clipboard} from 'electron';
 import type {BrowserWindow, MenuItemConstructorOptions} from 'electron';
 
 import {execCommand} from '../commands';
@@ -30,7 +30,13 @@ const contextMenuTemplate = (
   const menu: MenuItemConstructorOptions[] = [];
 
   if (selection) {
-    menu.push({label: 'Copy', role: 'copy', accelerator: commandKeys['editor:copy']});
+    menu.push({
+      label: 'Copy',
+      accelerator: commandKeys['editor:copy'],
+      click: () => {
+        clipboard.writeText(selection);
+      }
+    });
   }
   menu.push({label: 'Paste', role: 'paste', accelerator: commandKeys['editor:paste']});
 
@@ -43,12 +49,11 @@ const contextMenuTemplate = (
 
   menu.push(separator);
   menu.push({label: 'New Tab', accelerator: commandKeys['tab:new'], click: cmd('tab:new')});
-  menu.push({label: 'New Hyperia Shell', click: cmd('pane:openShellPane')});
   menu.push({label: 'New Window', click: () => createWindow()});
 
   menu.push(separator);
   menu.push({label: 'New Stickys', click: () => ipcMain.emit('new-sticky', {})});
-  menu.push({label: 'Search Stickys', click: () => {}});
+  menu.push({label: 'Search Stickys', click: () => ipcMain.emit('search-stickies')});
 
   menu.push(separator);
   menu.push({label: 'Clear Buffer', accelerator: commandKeys['editor:clearBuffer'], click: cmd('editor:clearBuffer')});

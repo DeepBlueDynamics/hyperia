@@ -16,7 +16,7 @@ import {
 } from '../../typings/constants/term-groups';
 import type {ITermGroup, ITermState, ITermGroups, ITermGroupReducer, Mutable} from '../../typings/hyper';
 import {decorateTermGroupsReducer} from '../utils/plugins';
-import findBySession from '../utils/term-groups';
+import findBySession, {countPathHorizontalStacks} from '../utils/term-groups';
 
 const MIN_SIZE = 0.05;
 const initialState: ITermState = Immutable<Mutable<ITermState>>({
@@ -80,7 +80,18 @@ const removalRebalance = (oldSizes: ImmutableType<number[]>, index: number) => {
 
 const splitGroup = (state: ITermState, action: SessionAddAction) => {
   const {splitDirection, uid, activeUid} = action;
-  const activeGroup = findBySession(state, activeUid!)!;
+  let activeGroup = findBySession(state, activeUid!);
+  if (!activeGroup && state.termGroups[activeUid!]) {
+    activeGroup = state.termGroups[activeUid!];
+  }
+  if (!activeGroup) return state;
+
+  if (splitDirection === 'HORIZONTAL') {
+    const stacks = countPathHorizontalStacks(activeGroup.uid, state.termGroups);
+    if (stacks >= 11) {
+      return state;
+    }
+  }
   // If we're splitting in the same direction as the current active
   // group's parent - or if it's the first split for that group -
   // we want the parent to get another child:
@@ -105,17 +116,19 @@ const splitGroup = (state: ITermState, action: SessionAddAction) => {
   });
 
   state = state.setIn(['termGroups', newSession.uid], newSession);
-  if (parentGroup.sessionUid) {
+  if (parentGroup.sessionUid || (parentGroup as any).webUrl !== undefined) {
     const existingSession = TermGroup({
       uid: uuidv4(),
       sessionUid: parentGroup.sessionUid,
-      parentUid: parentGroup.uid
+      parentUid: parentGroup.uid,
+      webUrl: (parentGroup as any).webUrl
     });
 
     return state.setIn(['termGroups', existingSession.uid], existingSession).setIn(
       ['termGroups', parentGroup.uid],
       parentGroup.merge({
         sessionUid: '',
+        webUrl: undefined,
         direction: splitDirection,
         children: [existingSession.uid, newSession.uid]
       })

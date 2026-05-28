@@ -16,14 +16,20 @@
 use serde::Serialize;
 use std::path::PathBuf;
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct SubdirInfo {
+    pub name: String,
+    pub count: usize,
+}
+
 #[derive(Serialize)]
 pub struct DirListing {
     /// The resolved absolute path that was listed.
     pub path: String,
     /// Parent directory, or `null` at a filesystem/drive root.
     pub parent: Option<String>,
-    /// Visible subdirectory names (not full paths), sorted case-insensitively.
-    pub dirs: Vec<String>,
+    /// Visible subdirectory names and their subdirectory counts, sorted case-insensitively.
+    pub dirs: Vec<SubdirInfo>,
 }
 
 /// The user's home directory: `USERPROFILE` on Windows, `HOME` elsewhere.
@@ -70,12 +76,30 @@ fn has_hidden_attr(_entry: &std::fs::DirEntry) -> bool {
     false
 }
 
+fn count_subdirs(dir: &std::path::Path) -> usize {
+    let mut count = 0;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            match entry.file_type() {
+                Ok(ft) if ft.is_dir() => {}
+                _ => continue,
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if is_hidden_name(&name) || has_hidden_attr(&entry) {
+                continue;
+            }
+            count += 1;
+        }
+    }
+    count
+}
+
 /// List the visible subdirectories of `path` (or the home directory if `path`
 /// is absent/empty/nonexistent).
 pub fn list_dirs(path: Option<&str>) -> DirListing {
     let dir = resolve_start(path);
 
-    let mut dirs: Vec<String> = Vec::new();
+    let mut dirs: Vec<SubdirInfo> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             // Directories only. file_type() avoids a stat where possible;
@@ -88,10 +112,12 @@ pub fn list_dirs(path: Option<&str>) -> DirListing {
             if is_hidden_name(&name) || has_hidden_attr(&entry) {
                 continue;
             }
-            dirs.push(name);
+            let full_path = dir.join(&name);
+            let count = count_subdirs(&full_path);
+            dirs.push(SubdirInfo { name, count });
         }
     }
-    dirs.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
     let parent = dir.parent().map(|p| p.to_string_lossy().into_owned());
     DirListing {
@@ -127,8 +153,8 @@ mod tests {
         // Home should exist and contain at least zero entries; result sorted.
         let listing = list_dirs(None);
         let mut sorted = listing.dirs.clone();
-        sorted.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        sorted.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         assert_eq!(listing.dirs, sorted);
-        assert!(listing.dirs.iter().all(|d| !d.starts_with('.') && !d.starts_with('$')));
+        assert!(listing.dirs.iter().all(|d| !d.name.starts_with('.') && !d.name.starts_with('$')));
     }
 }

@@ -34,7 +34,14 @@ type rootConfigOptions = {
   useConpty?: boolean;
 };
 
+export type PathTranslate = {
+  kind: 'identity' | 'wsl' | 'docker-mount';
+  hostPrefix?: string;
+  containerPrefix?: string;
+};
+
 type profileConfigOptions = {
+  pathTranslate?: PathTranslate;
   /**
    * terminal background color
    *

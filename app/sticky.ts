@@ -392,7 +392,7 @@ function createStickyNote(
   });
 
   // Persist initial record for notes
-  if (!options.filePath) {
+  if (!options.filePath && noteId !== 'sticky-search-window') {
     const current = getNote(noteId) || {
       id: noteId,
       name: displayName,
@@ -415,6 +415,7 @@ function createStickyNote(
   queryParams.set('color', colorHex);
   queryParams.set('name', displayName);
   if (options.filePath) queryParams.set('file', options.filePath);
+  if (noteId === 'sticky-search-window') queryParams.set('mode', 'search');
   void win.loadFile(htmlPath, {search: queryParams.toString()});
 
   // Show and focus once ready
@@ -433,7 +434,7 @@ function createStickyNote(
 
   // Persist geometry on move/resize
   const saveGeom = () => {
-    if (options.filePath) return; // file mode doesn't persist
+    if (options.filePath || noteId === 'sticky-search-window') return; // file mode and search window don't persist note data
     const bounds = win.getBounds();
     const note = getNote(noteId);
     if (note) {
@@ -457,6 +458,16 @@ export function initSticky() {
 
   ipcMain.on('new-sticky-file', (_event, filePath: string) => {
     createStickyNote({filePath, width: 600, height: 500});
+  });
+
+  ipcMain.on('search-stickies', () => {
+    createStickyNote({
+      id: 'sticky-search-window',
+      name: '🔍 Search Stickys',
+      color: '#ffffff',
+      width: 400,
+      height: 500
+    });
   });
 
   // Close from renderer

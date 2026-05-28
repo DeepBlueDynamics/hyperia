@@ -22,7 +22,8 @@ import rpc from '../rpc';
 import {keys} from '../utils/object';
 import findBySession from '../utils/term-groups';
 
-export function addSession({uid, shell, pid, cols = null, rows = null, splitDirection, activeUid, profile, groupUid, url}: Session) {
+export function addSession(data: Session) {
+  const {uid, shell, pid, cols = null, rows = null, splitDirection, activeUid, profile, groupUid, url, cwd, isNewGroup} = data;
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     const {sessions} = getState();
     const resolvedActiveUid = activeUid ? activeUid : sessions.activeUid;
@@ -39,16 +40,47 @@ export function addSession({uid, shell, pid, cols = null, rows = null, splitDire
       now,
       profile,
       groupUid,
-      url
+      url,
+      cwd,
+      isNewGroup
     });
     // Keep split panes attached to the parent tab's existing name when syncing
     // the tab label back to the main process / sidecar.
     const newSession = getState().sessions.sessions[uid];
     const parentSession = resolvedActiveUid ? getState().sessions.sessions[resolvedActiveUid] : undefined;
-    const tabName =
-      splitDirection && parentSession
-        ? parentSession.description || parentSession.tabName || parentSession.title
-        : newSession?.tabName;
+
+    // Find the root group's existing tab name if this is an addition to an existing tab group.
+    let existingTabName: string | undefined;
+    if (!isNewGroup) {
+      const termGroupsState = getState().termGroups;
+      const termGroup = findBySession(termGroupsState, uid);
+      if (termGroup) {
+        // Traverse up to find the root term group
+        let current = termGroup;
+        while (current.parentUid && termGroupsState.termGroups[current.parentUid]) {
+          current = termGroupsState.termGroups[current.parentUid];
+        }
+        if (current.tabName) {
+          existingTabName = current.tabName;
+        } else if ((current as any).webName) {
+          existingTabName = (current as any).webName;
+        } else if ((current as any).webUrl) {
+          try {
+            existingTabName = new URL((current as any).webUrl).hostname || (current as any).webUrl;
+          } catch {
+            existingTabName = (current as any).webUrl;
+          }
+        }
+      }
+
+      // If we couldn't find it from the termGroup tree, fall back to parent session if available
+      if (!existingTabName && parentSession) {
+        existingTabName = parentSession.description || parentSession.tabName || parentSession.title;
+      }
+    }
+
+    const tabName = existingTabName || newSession?.tabName;
+
     if (tabName) {
       window.rpc.emit('session set tab name', {uid, tabName});
     }

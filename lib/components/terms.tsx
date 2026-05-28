@@ -33,7 +33,9 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
     if (term) {
       this.terms[uid] = term;
     } else {
-      delete this.terms[uid];
+      if (!this.props.sessions[uid]) {
+        delete this.terms[uid];
+      }
     }
   };
 
@@ -65,8 +67,7 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
         target.closest('.header_bar') ||
         target.closest('.tabs_nav') ||
         target.closest('.web-pane') ||
-        target.closest('webview') ||
-        !target.closest('.xterm')
+        target.closest('webview')
       ) {
         e.preventDefault();
         return;
@@ -74,9 +75,31 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
 
       if (e.defaultPrevented) return;
 
-      const activeTerm = this.getActiveTerm();
-      const selection = activeTerm ? activeTerm.term.getSelection() : '';
-      const uid = activeTerm ? activeTerm.props.uid : this.props.activeSession!;
+      // Find the specific terminal component that was clicked
+      let clickedTerm: Term | null = null;
+      let clickedUid: string | null = null;
+      for (const key in this.terms) {
+        const term = this.terms[key];
+        const outerRef = (term as any)?.termOuterRef?.current;
+        const wrapperRef = term?.termWrapperRef;
+        if (
+          term &&
+          ((outerRef && (outerRef.contains(target) || outerRef === target)) ||
+           (wrapperRef && (wrapperRef.contains(target) || wrapperRef === target)))
+        ) {
+          clickedTerm = term;
+          clickedUid = key;
+          break;
+        }
+      }
+
+      // If the right-click was not inside any terminal pane, ignore it
+      if (!clickedTerm) {
+        return;
+      }
+
+      const selection = clickedTerm.term.getSelection();
+      const uid = clickedUid || this.props.activeSession!;
       this.props.onContextMenu(uid, selection);
     });
   }
@@ -134,6 +157,7 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
             copyOnSelect: this.props.copyOnSelect,
             modifierKeys: this.props.modifierKeys,
             onActive: this.props.onActive,
+            onCwd: (this.props as any).onCwd,
             onBell: this.props.onBell,
             onResize: this.props.onResize,
             onTitle: this.props.onTitle,

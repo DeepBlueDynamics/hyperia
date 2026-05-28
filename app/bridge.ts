@@ -19,7 +19,7 @@ import {createStickyNote, closeStickyNote, deleteStickyNote, updateStickyNote} f
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
 const HEARTBEAT_INTERVAL_MS = 5000;
-const AGENT_DEFER_MS = 60000; // defer agent writes this long after last user activity
+const AGENT_DEFER_MS = 15000; // defer agent writes this long after last user activity
 const DRAIN_INTERVAL_MS = 200; // how often to check queues
 const MAX_QUEUE_DEPTH = 100; // reject agent writes past this
 
@@ -761,7 +761,15 @@ export function updateSessionLayout(
     rootGroupUid: string;
     order: number;
     active: boolean;
-    panes: Array<{uid: string; splitLabel: string}>;
+    panes: Array<{
+      uid: string;
+      splitLabel: string;
+      isWeb: boolean;
+      isAi: boolean;
+      title: string;
+      url?: string;
+      active: boolean;
+    }>;
     bsp?: Array<{
       uid: string;
       x: number;
@@ -776,18 +784,51 @@ export function updateSessionLayout(
   for (const tab of tabs) {
     const bspMap = new Map((tab.bsp || []).map((b) => [b.uid, b]));
     for (const pane of tab.panes) {
-      const tracked = trackedSessions.get(pane.uid);
+      let tracked = trackedSessions.get(pane.uid);
+      if (!tracked) {
+        if (pane.isWeb) {
+          const fakeTracked: any = {
+            session: { pty: null } as any,
+            rows: 24,
+            cols: 80,
+            name: pane.isAi ? 'ai' : 'web',
+            tabName: tab.rootGroupUid,
+            description: '',
+            rootTabUid: tab.rootGroupUid,
+            windowId: focusedWindowId || 1,
+            splitLabel: pane.splitLabel,
+            tabOrder: tab.order,
+            tabActive: tab.active,
+            paneActive: pane.active,
+            bspX: 0,
+            bspY: 0,
+            bspW: 100,
+            bspH: 100
+          };
+          trackedSessions.set(pane.uid, fakeTracked);
+          tracked = fakeTracked;
+
+          sendSessionRegister(pane.uid, fakeTracked);
+        } else {
+          continue;
+        }
+      }
+
       if (!tracked) continue;
+
       tracked.rootTabUid = tab.rootGroupUid || tracked.rootTabUid;
       tracked.splitLabel = pane.splitLabel || '';
       tracked.tabOrder = tab.order;
       tracked.tabActive = tab.active;
+      tracked.paneActive = pane.active;
+
       const bsp = bspMap.get(pane.uid);
       tracked.bspX = bsp?.x ?? 0;
       tracked.bspY = bsp?.y ?? 0;
       tracked.bspW = bsp?.width ?? 100;
       tracked.bspH = bsp?.height ?? 100;
       seen.add(pane.uid);
+
       send({
         type: 'SessionLayout',
         uid: pane.uid,
@@ -802,21 +843,33 @@ export function updateSessionLayout(
           height: tracked.bspH
         }
       });
+
+      if (pane.title) {
+        send({type: 'SessionTitle', uid: pane.uid, title: pane.title});
+      }
+      if (pane.url) {
+        send({type: 'SessionCwd', uid: pane.uid, cwd: pane.url});
+      }
     }
   }
 
   for (const [uid, tracked] of trackedSessions) {
     if (seen.has(uid)) continue;
-    tracked.splitLabel = '';
-    tracked.tabActive = false;
-    send({
-      type: 'SessionLayout',
-      uid,
-      rootTabUid: tracked.rootTabUid,
-      splitLabel: '',
-      tabOrder: tracked.tabOrder,
-      tabActive: false
-    });
+    if (tracked.name === 'web' || tracked.name === 'ai') {
+      trackedSessions.delete(uid);
+      send({type: 'SessionExit', uid});
+    } else {
+      tracked.splitLabel = '';
+      tracked.tabActive = false;
+      send({
+        type: 'SessionLayout',
+        uid,
+        rootTabUid: tracked.rootTabUid,
+        splitLabel: '',
+        tabOrder: tracked.tabOrder,
+        tabActive: false
+      });
+    }
   }
 }
 

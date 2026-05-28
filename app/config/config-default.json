@@ -102,7 +102,22 @@
         "name": "Ubuntu (WSL)",
         "config": {
           "shell": "C:\\Windows\\System32\\wsl.exe",
-          "shellArgs": ["-d", "Ubuntu"]
+          "shellArgs": ["-d", "Ubuntu"],
+          "pathTranslate": {
+            "kind": "wsl"
+          }
+        }
+      },
+      {
+        "name": "n8",
+        "config": {
+          "shell": "/bin/bash",
+          "shellArgs": ["--login"],
+          "pathTranslate": {
+            "kind": "docker-mount",
+            "hostPrefix": "~/.hyperia/assets",
+            "containerPrefix": "/host/paste"
+          }
         }
       },
       {

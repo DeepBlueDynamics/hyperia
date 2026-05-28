@@ -5,7 +5,8 @@ import {
   setSessionXtermTitle,
   setActiveSession,
   openSearch,
-  closeSearch
+  closeSearch,
+  setSessionCwd
 } from '../actions/sessions';
 import {markTabBell, openContextMenu} from '../actions/ui';
 import {userExitTermGroup} from '../actions/term-groups';
@@ -21,6 +22,7 @@ const mapStateToProps = (state: HyperState) => {
     rows: state.ui.rows,
     scrollback: state.ui.scrollback,
     termGroups: getRootGroups(state),
+    allTermGroups: state.termGroups.termGroups,
     activeRootGroup: state.termGroups.activeRootGroup,
     activeSession: state.sessions.activeUid,
     customCSS: state.ui.termCSS,
@@ -92,6 +94,10 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
           d(setActiveSession(uid));
         }
       }) as any);
+    },
+
+    onCwd(uid: string, cwd: string) {
+      dispatch(setSessionCwd(uid, cwd));
     },
 
     onBell(uid: string) {

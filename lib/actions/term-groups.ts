@@ -12,18 +12,47 @@ import {
 import type {ITermState, ITermGroup, HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
 import {getRootGroups} from '../selectors';
-import findBySession from '../utils/term-groups';
+import findBySession, {countPathHorizontalStacks} from '../utils/term-groups';
 
 import {setActiveSession, ptyExitSession, userExitSession} from './sessions';
 
 function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
   return (_activeUid: string | undefined, _profile: string | undefined, url?: string) =>
     (dispatch: HyperDispatch, getState: () => HyperState): void => {
+      const {sessions, termGroups} = getState();
+      let activeUid = _activeUid;
+      if (!activeUid) {
+        if (termGroups.activeRootGroup) {
+          activeUid = termGroups.activeSessions[termGroups.activeRootGroup] || termGroups.activeRootGroup || undefined;
+        } else {
+          activeUid = sessions.activeUid || undefined;
+        }
+      }
+
+      if (direction === 'HORIZONTAL' && activeUid) {
+        let activeGroup = findBySession(termGroups, activeUid);
+        if (!activeGroup && termGroups.termGroups[activeUid]) {
+          activeGroup = termGroups.termGroups[activeUid];
+        }
+        if (activeGroup) {
+          const stacks = countPathHorizontalStacks(activeGroup.uid, termGroups.termGroups);
+          if (stacks >= 11) {
+            return;
+          }
+        }
+      }
       dispatch({
         type: SESSION_REQUEST,
         effect: () => {
-          const {ui, sessions} = getState();
-          const activeUid = _activeUid ? _activeUid : sessions.activeUid;
+          const {ui, sessions, termGroups} = getState();
+          let activeUid = _activeUid;
+          if (!activeUid) {
+            if (termGroups.activeRootGroup) {
+              activeUid = termGroups.activeSessions[termGroups.activeRootGroup] || termGroups.activeRootGroup || undefined;
+            } else {
+              activeUid = sessions.activeUid || undefined;
+            }
+          }
           const activeSession = activeUid ? sessions.sessions[activeUid] : null;
           const cwd = (activeSession && activeSession.cwd) || ui.cwd;
           const profile = _profile ? _profile : 'picker';
@@ -160,12 +189,11 @@ export function userExitTermGroup(uid: string) {
       effect: () => {
         const group = termGroups.termGroups[uid];
         if (Object.keys(termGroups.termGroups).length <= 1) {
-          // Last group — exit the session if there is one, otherwise close the window
+          // Last group — exit the session if there is one, and close the window immediately
           if (group.sessionUid) {
             dispatch(userExitSession(group.sessionUid));
-          } else {
-            window.close();
           }
+          window.close();
           return;
         }
 
