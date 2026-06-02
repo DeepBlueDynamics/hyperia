@@ -131,7 +131,7 @@ const SearchBox = forwardRef<HTMLDivElement, SearchBoxProps>((props, ref) => {
   return (
     <div className="flex-row search-container" ref={ref}>
       <div className="flex-row search-box">
-        <input className="search-input" type="text" onKeyDown={handleChange} ref={inputRef} placeholder="Search" />
+        <input className="search-input" type="text" onKeyDown={handleChange} ref={inputRef} placeholder="Find" />
 
         <SearchButton onClick={toggleCaseSensitive} active={caseSensitive} title="Match Case" {...searchButtonColors}>
           <VscCaseSensitive size="14px" />

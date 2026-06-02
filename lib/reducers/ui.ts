@@ -522,7 +522,16 @@ const reducer: IUiReducer = (state = initial, action) => {
     }
   }
 
-  if (state.cols !== null && state.rows !== null && (state.rows !== state_.rows || state.cols !== state_.cols)) {
+  // Show a resize notification only for genuine window/pane resizes — NOT for
+  // the reflow a font-size change causes. The font badge is already showing
+  // that change, so without this guard one Ctrl+- press pops TWO notifications
+  // (e.g. "13px" and "80x24"). While the font badge is up, skip the resize one.
+  if (
+    state.cols !== null &&
+    state.rows !== null &&
+    (state.rows !== state_.rows || state.cols !== state_.cols) &&
+    !state_.notifications.font
+  ) {
     state_ = state_.merge({notifications: {resize: true}}, {deep: true});
   }
 

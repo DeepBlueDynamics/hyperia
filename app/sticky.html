@@ -30,46 +30,78 @@
   crossorigin="anonymous"
   referrerpolicy="no-referrer"></script>
 <style>
+  :root {
+    --sticky-font-size: 22px;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; }
   body {
     /* color set dynamically by textColorForBg() */
     font-family: 'Cascadia Code', 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
-    font-size: 16px;
+    font-size: var(--sticky-font-size);
     display: flex;
     flex-direction: column;
   }
   .titlebar {
-    height: 22px;
+    min-height: 22px;
+    height: auto;
     display: flex;
     align-items: center;
-    padding: 0 4px 0 8px;
+    padding: 4px 4px 4px 8px;
     -webkit-app-region: drag;
     flex-shrink: 0;
-    font-size: 10px;
+    font-size: var(--sticky-title-font-size, 14px);
     user-select: none;
     background: rgba(0,0,0,0.08);
   }
   .titlebar-text {
-    flex: 1;
+    flex: 0 1 auto;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-family: inherit;
-    font-size: 10px;
+    font-size: var(--sticky-title-font-size, 14px);
     font-weight: bold;
     opacity: 0.7;
+    /* Clickable (copy name) — must NOT be in the window-drag region, or the
+       OS eats single clicks for window-dragging. The spacer below keeps the
+       window draggable. */
+    -webkit-app-region: no-drag;
+    cursor: pointer;
+  }
+  /* Draggable filler between the title and the buttons so the frameless window
+     can still be moved (the title + buttons are all no-drag). */
+  .titlebar-spacer {
+    flex: 1;
+    align-self: stretch;
+    min-width: 16px;
+  }
+  .titlebar-input {
+    flex: 0 1 auto;
+    min-width: 120px;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-family: inherit;
+    font-size: var(--sticky-title-font-size, 14px);
+    font-weight: bold;
+    color: inherit;
+    padding: 0;
+    margin: 0;
+    height: 100%;
+    -webkit-app-region: no-drag;
+    opacity: 0.9;
   }
   .titlebar-btn {
-    width: 18px;
-    height: 18px;
+    width: calc(var(--sticky-title-font-size, 14px) + 8px);
+    height: calc(var(--sticky-title-font-size, 14px) + 8px);
     display: flex;
     align-items: center;
     justify-content: center;
     border-radius: 50%;
     cursor: pointer;
     -webkit-app-region: no-drag;
-    font-size: 13px;
+    font-size: calc(var(--sticky-title-font-size, 14px) + 3px);
     opacity: 0.7;
     transition: opacity 0.15s, background 0.15s;
     z-index: 100;
@@ -79,6 +111,7 @@
   .close-btn { font-weight: bold; }
   .close-btn:hover { background: rgba(180, 0, 0, 0.25); }
   .lines-btn:hover { background: rgba(128, 128, 128, 0.2); }
+  .search-btn:hover { background: rgba(128, 128, 128, 0.2); }
 
   /* Link bar */
   .link-bar {
@@ -132,15 +165,96 @@
     flex-direction: column;
   }
 
-  /* Single scrollbar via textarea only */
-  .note-text {
-    width: 100%;
+  /* Wrapper holding the highlight backdrop, the textarea, and the tick rail
+     in one positioned box so find can light up matches behind the live text
+     (a textarea can't style ranges itself). */
+  .note-find-wrap {
+    position: relative;
     flex: 1;
+    min-height: 0;
+    display: block;
+  }
+  /* Mirror of the note text rendered BEHIND the textarea. Only the <mark>
+     backgrounds are visible (text is transparent); the textarea on top is
+     transparent-background so the highlights show through under the real
+     text. Scrolled in lock-step with the textarea. */
+  .find-highlights {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding-right: 4px;
+    font-family: inherit;
+    font-size: var(--sticky-font-size);
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    tab-size: 2;
+    overflow: hidden;
+    color: transparent;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .find-highlights mark {
+    background: rgba(255, 235, 59, 0.55); /* all matches: yellow */
+    color: transparent;
+    border-radius: 2px;
+  }
+  .find-highlights mark.current {
+    background: rgba(255, 145, 0, 0.9); /* active match: orange */
+  }
+  /* Syntax-highlight mode: the backdrop renders VISIBLE highlight.js HTML
+     (the textarea text on top is made transparent so these colors show). The
+     hljs theme CSS (atom-one-*) styles the .hljs-* spans; base text inherits
+     the note's theme color. */
+  .find-highlights.syntax {
+    color: inherit;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  /* Links underlined while Ctrl/Cmd is held (the text stays transparent in the
+     backdrop; the explicit decoration color makes the underline visible under
+     the real text in the textarea on top). */
+  .find-highlights .ctrl-link {
+    text-decoration: underline;
+    text-decoration-color: #2b7de9;
+    text-decoration-thickness: 1.5px;
+    text-underline-offset: 2px;
+  }
+  /* Scrollbar tick rail (Chrome-style) — shows where matches sit in the full
+     document. Only populated when the note actually overflows (has a scroll). */
+  .find-tickrail {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 6px;
+    height: 100%;
+    pointer-events: none;
+    z-index: 2;
+  }
+  .find-tick {
+    position: absolute;
+    right: 0;
+    width: 6px;
+    height: 2px;
+    background: rgba(255, 200, 0, 0.85);
+    border-radius: 1px;
+  }
+  .find-tick.current {
+    background: rgba(255, 110, 0, 1);
+    height: 3px;
+  }
+
+  .note-text {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
     border: none;
     background: transparent;
     color: inherit;
     font-family: inherit;
-    font-size: 16px;
+    font-size: var(--sticky-font-size);
     resize: none;
     outline: none;
     line-height: 1.5;
@@ -154,21 +268,29 @@
 
   /* Slim color-coded scrollbars */
   .note-text::-webkit-scrollbar,
-  pre::-webkit-scrollbar {
+  pre::-webkit-scrollbar,
+  .results-list::-webkit-scrollbar,
+  .default-view::-webkit-scrollbar {
     width: 6px;
     height: 6px;
   }
   .note-text::-webkit-scrollbar-track,
-  pre::-webkit-scrollbar-track {
+  pre::-webkit-scrollbar-track,
+  .results-list::-webkit-scrollbar-track,
+  .default-view::-webkit-scrollbar-track {
     background: transparent;
   }
   .note-text::-webkit-scrollbar-thumb,
-  pre::-webkit-scrollbar-thumb {
+  pre::-webkit-scrollbar-thumb,
+  .results-list::-webkit-scrollbar-thumb,
+  .default-view::-webkit-scrollbar-thumb {
     background: rgba(128, 128, 128, 0.35);
     border-radius: 3px;
   }
   .note-text::-webkit-scrollbar-thumb:hover,
-  pre::-webkit-scrollbar-thumb:hover {
+  pre::-webkit-scrollbar-thumb:hover,
+  .results-list::-webkit-scrollbar-thumb:hover,
+  .default-view::-webkit-scrollbar-thumb:hover {
     background: rgba(128, 128, 128, 0.55);
   }
 
@@ -176,7 +298,7 @@
     margin: 0;
     flex: 1;
     font-family: inherit;
-    font-size: 15px;
+    font-size: calc(var(--sticky-font-size) - 1px);
     line-height: 1.6;
     tab-size: 4;
     background: transparent !important;
@@ -226,6 +348,122 @@
     border-color: #bbdefb;
     box-shadow: 0 0 0 2px rgba(187, 222, 251, 0.2);
   }
+  /* Scheduling panel overlay */
+  .sched-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.35);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    z-index: 500;
+    padding: 8px;
+    /* The panel sits over the titlebar's drag region; without this the OS
+       drag region punches through and eats clicks on the top-row × (Cancel),
+       exactly like the title-copy bug. Mark the whole modal no-drag. */
+    -webkit-app-region: no-drag;
+  }
+  .sched-panel {
+    width: 100%;
+    max-width: 340px;
+    background: #fbfbf6;
+    color: #1a1a1a;
+    border: 1px solid rgba(0,0,0,0.2);
+    border-radius: 8px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.3);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .sched-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font-weight: bold; font-size: 13px;
+  }
+  .sched-close { cursor: pointer; opacity: 0.6; font-size: 16px; line-height: 1; }
+  .sched-close:hover { opacity: 1; }
+  .sched-row { display: flex; align-items: center; gap: 6px; }
+  .sched-row label { width: 38px; flex-shrink: 0; opacity: 0.65; text-align: right; }
+  .sched-row select, .sched-row input {
+    flex: 1; min-width: 0; height: 26px; padding: 0 6px;
+    border: 1px solid rgba(0,0,0,0.2); border-radius: 4px;
+    background: #fff; color: inherit; font-family: inherit; font-size: 12px;
+  }
+  .sched-row input[type=number] { flex: 0 0 64px; }
+  .sched-pick { cursor: pointer; padding: 3px; border-radius: 4px; }
+  .sched-pick:hover { background: rgba(0,0,0,0.08); }
+  .sched-note {
+    font-size: 11px; opacity: 0.75; background: rgba(255,170,0,0.12);
+    border: 1px solid rgba(255,170,0,0.35); border-radius: 4px; padding: 5px 7px;
+  }
+  .sched-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+  .sched-btn {
+    cursor: pointer; padding: 4px 12px; border-radius: 5px; font-weight: 600;
+    background: #2b7de9; color: #fff;
+  }
+  .sched-btn:hover { background: #1c6fd6; }
+  .sched-btn.ghost { background: transparent; color: #c0392b; border: 1px solid rgba(192,57,43,0.4); font-weight: 500; }
+  .sched-btn.ghost:hover { background: rgba(192,57,43,0.08); }
+  /* Armed (scheduled) note gets a visible border so you know it's "live". */
+  body.sched-armed { box-shadow: inset 0 0 0 2px rgba(255,145,0,0.9); }
+  /* File-bound note: a thin blue accent under the titlebar — edits write to disk. */
+  body.file-bound .titlebar { box-shadow: inset 0 -2px 0 rgba(43,125,233,0.7); }
+
+  .search-opt {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    opacity: 0.8;
+    padding: 1px 2px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .search-opt input { margin: 0; cursor: pointer; }
+  .default-view { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; margin-top: 6px; }
+  .action-dropdown {
+    width: 100%;
+    height: 32px;
+    padding: 0 8px;
+    background: rgba(0,0,0,0.05);
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 6px;
+    color: inherit;
+    font-family: inherit;
+    font-size: 13px;
+    outline: none;
+    cursor: pointer;
+  }
+  .recent-heading {
+    font-size: 11px;
+    font-weight: bold;
+    opacity: 0.5;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 2px;
+  }
+  /* Bar above search results with "open all" actions */
+  .results-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0 8px 0;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  .results-actions .count { font-size: 11px; opacity: 0.55; margin-right: auto; }
+  .results-action-btn {
+    font-size: 11px;
+    padding: 3px 9px;
+    border: 1px solid rgba(0,0,0,0.2);
+    border-radius: 5px;
+    background: rgba(0,0,0,0.04);
+    cursor: pointer;
+    opacity: 0.85;
+    -webkit-app-region: no-drag;
+  }
+  .results-action-btn:hover { opacity: 1; background: rgba(0,0,0,0.08); }
   .results-list {
     flex: 1;
     overflow-y: auto;
@@ -281,17 +519,174 @@
     opacity: 0.5;
   }
 
+  .find-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: rgba(0, 0, 0, 0.06);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+    flex-shrink: 0;
+    font-size: 12px;
+    -webkit-app-region: no-drag;
+  }
+  .find-bar input {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.85);
+    border: 1px solid rgba(0, 0, 0, 0.2);
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-family: inherit;
+    font-size: 12px;
+    color: #000;
+    outline: none;
+    min-width: 80px;
+  }
+  .find-bar .find-count {
+    font-family: 'Cascadia Code', 'JetBrains Mono', monospace;
+    font-size: 11px;
+    opacity: 0.6;
+    min-width: 36px;
+    text-align: center;
+    user-select: none;
+  }
+  .find-bar button {
+    background: transparent;
+    border: 1px solid rgba(0, 0, 0, 0.2);
+    border-radius: 3px;
+    padding: 1px 7px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    color: inherit;
+    opacity: 0.65;
+    line-height: 1.4;
+  }
+  .find-bar button:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.06);
+  }
 </style>
 </head>
 <body>
   <div class="titlebar">
     <span class="titlebar-text" id="titleText"></span>
+    <input type="text" class="titlebar-input" id="titleInput" style="display:none" spellcheck="false" />
+    <span class="titlebar-spacer"></span>
     <span class="titlebar-btn lines-btn" id="linesBtn" style="display:none" title="Toggle line numbers">#</span>
-    <span class="titlebar-btn close-btn" id="closeBtn" title="Close">&times;</span>
+    <span class="titlebar-btn schedule-btn" id="scheduleBtn" title="Schedule this sticky (run on a timer)">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <polyline points="12 7 12 12 15 14" />
+      </svg>
+    </span>
+    <span class="titlebar-btn search-btn" id="searchBtn" title="Find in note (Ctrl+F)">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="11" cy="11" r="7" />
+        <line x1="21" y1="21" x2="16.5" y2="16.5" />
+      </svg>
+    </span>
+    <span class="titlebar-btn file-btn" id="fileBtn" style="display:none" title="Linked to a file — click to open it">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+      </svg>
+    </span>
+    <span class="titlebar-btn close-btn" id="closeBtn" title="Close (saved to closed notes)">
+      <!-- Inline SVG × matching the terminal pane close button: bigger + crisper
+           than the &times; glyph, same crossed-lines shape and currentColor.
+           NOTE: closing a sticky does NOT delete it — it's archived to closed
+           notes (sticky-close marks last_closed_at, keeps the record). -->
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <line x1="18" y1="6" x2="6" y2="18" />
+        <line x1="6" y1="6" x2="18" y2="18" />
+      </svg>
+    </span>
   </div>
-  <div class="link-bar" id="linkBar"></div>
+  <div class="find-bar" id="findBar" style="display:none">
+    <input type="text" id="findInput" placeholder="Find in note…" spellcheck="false" />
+    <span class="find-count" id="findCount">0/0</span>
+    <button id="findPrev" title="Previous match (Shift+Enter)">↑</button>
+    <button id="findNext" title="Next match (Enter)">↓</button>
+    <button id="findClose" title="Close (Esc)">×</button>
+  </div>
   <div class="ai-highlight-banner" id="aiBanner" style="display:none"></div>
   <div class="content" id="content"></div>
+
+  <!-- Scheduling panel — picker-style overlay, opened by the ⏰ titlebar button. -->
+  <div class="sched-overlay" id="schedOverlay" style="display:none">
+    <div class="sched-panel">
+      <div class="sched-head">
+        <span>⏰ Schedule this sticky</span>
+        <span class="sched-close" id="schedCancel" title="Cancel">×</span>
+      </div>
+
+      <div class="sched-row">
+        <label>When</label>
+        <select id="schedWhen">
+          <option value="reminder">Reminder — once, after a delay</option>
+          <option value="at">At — once, at a date/time</option>
+          <option value="cron">Recurring — cron schedule</option>
+        </select>
+      </div>
+
+      <div class="sched-row" id="rowReminder">
+        <label>In</label>
+        <input type="number" id="schedDelay" min="1" value="10" />
+        <select id="schedUnit">
+          <option value="m">minutes</option>
+          <option value="h">hours</option>
+          <option value="d">days</option>
+        </select>
+      </div>
+
+      <div class="sched-row" id="rowAt" style="display:none">
+        <label>At</label>
+        <input type="datetime-local" id="schedAt" />
+      </div>
+
+      <div class="sched-row" id="rowCron" style="display:none">
+        <label>Cron</label>
+        <input type="text" id="schedCron" placeholder="*/15 * * * *" />
+        <select id="schedCronPreset">
+          <option value="">presets…</option>
+          <option value="*/15 * * * *">every 15 min</option>
+          <option value="0 * * * *">hourly</option>
+          <option value="0 9 * * *">daily 9am</option>
+          <option value="0 9 * * 1">Mondays 9am</option>
+        </select>
+      </div>
+
+      <div class="sched-row">
+        <label>Run</label>
+        <select id="schedRunner">
+          <option value="notify">Notification only (no execution)</option>
+          <option value="shell">Hyperia shell — command in a new tab</option>
+          <option value="n8shell">Nemesis8 shell — command in the n8 container</option>
+          <option value="n8agent">Nemesis8 agent — hand the note to the agent</option>
+        </select>
+      </div>
+
+      <div class="sched-row" id="rowDir" style="display:none">
+        <label>Dir</label>
+        <input type="text" id="schedDir" placeholder="working directory" />
+        <span class="sched-pick" id="schedPickDir" title="Pick directory">📁</span>
+      </div>
+
+      <div class="sched-note" id="schedHardNote" style="display:none">
+        ⚡ Scheduling with a runner locks this note read-only (a “hard” sticky) until you unschedule.
+      </div>
+
+      <div class="sched-actions">
+        <span class="sched-btn ghost" id="schedUnschedule" style="display:none">Unschedule</span>
+        <span class="sched-btn" id="schedConfirm">Schedule</span>
+      </div>
+    </div>
+  </div>
 
 <script>
 const { ipcRenderer, clipboard, webFrame } = require('electron');
@@ -306,6 +701,47 @@ const nameParam = params.get('name') || '';
 
 const stickysDir = path.join(os.homedir(), '.hyperia', 'stickys');
 const notesJson = path.join(stickysDir, 'notes.json');
+
+const cfgPath = path.join(os.homedir(), '.hyperia', 'hyperia.json');
+
+let stickyFontSize = 22; // Default to larger 22px
+let stickyTitleFontSize = 14; // Default 14px (was 10 — title was too small)
+try {
+  if (fs.existsSync(cfgPath)) {
+    const configData = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    if (configData && configData.config) {
+      if (configData.config.stickyFontSize) {
+        stickyFontSize = configData.config.stickyFontSize;
+      }
+      if (configData.config.stickyTitleFontSize) {
+        stickyTitleFontSize = configData.config.stickyTitleFontSize;
+      }
+    }
+  }
+} catch (e) {
+  console.error('Failed to load stickyFontSize and stickyTitleFontSize:', e);
+}
+
+const isSearchMode = params.get('mode') === 'search';
+const currentTitleFontSize = isSearchMode ? Math.max(stickyTitleFontSize + 3, 13) : stickyTitleFontSize;
+
+document.documentElement.style.setProperty('--sticky-font-size', `${stickyFontSize}px`);
+document.documentElement.style.setProperty('--sticky-title-font-size', `${currentTitleFontSize}px`);
+
+function saveStickyFontSize(size) {
+  try {
+    let configData = {};
+    if (fs.existsSync(cfgPath)) {
+      configData = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    }
+    if (!configData.config) configData.config = {};
+    configData.config.stickyFontSize = size;
+    fs.writeFileSync(cfgPath, JSON.stringify(configData, null, 2), 'utf8');
+    console.log('Saved stickyFontSize to config:', size);
+  } catch (e) {
+    console.error('Failed to save stickyFontSize:', e);
+  }
+}
 
 const CODE_THEMES = {
   'code:light': { bg: '#f8f8f2', text: '#383a42', css: 'atom-one-light.min.css' },
@@ -331,23 +767,27 @@ window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && isPlus) {
     e.preventDefault();
     try {
-      const currentZoom = webFrame.getZoomFactor();
-      webFrame.setZoomFactor(Math.min(currentZoom + 0.1, 3.0));
+      stickyFontSize = Math.min(stickyFontSize + 2, 48);
+      document.documentElement.style.setProperty('--sticky-font-size', `${stickyFontSize}px`);
+      saveStickyFontSize(stickyFontSize);
     } catch (err) {
       console.error(err);
     }
   } else if ((e.ctrlKey || e.metaKey) && isMinus) {
     e.preventDefault();
     try {
-      const currentZoom = webFrame.getZoomFactor();
-      webFrame.setZoomFactor(Math.max(currentZoom - 0.1, 0.5));
+      stickyFontSize = Math.max(stickyFontSize - 2, 10);
+      document.documentElement.style.setProperty('--sticky-font-size', `${stickyFontSize}px`);
+      saveStickyFontSize(stickyFontSize);
     } catch (err) {
       console.error(err);
     }
   } else if ((e.ctrlKey || e.metaKey) && isZero) {
     e.preventDefault();
     try {
-      webFrame.setZoomFactor(1.0);
+      stickyFontSize = 22;
+      document.documentElement.style.setProperty('--sticky-font-size', `${stickyFontSize}px`);
+      saveStickyFontSize(stickyFontSize);
     } catch (err) {
       console.error(err);
     }
@@ -365,6 +805,34 @@ function applyBgColor(colorOrCode) {
     document.body.style.color = textColorForBg(colorOrCode);
     document.getElementById('hlTheme').href = 'atom-one-light.min.css';
   }
+}
+
+// ── File binding (Aegis-Edit v1) ─────────────────────────────────────────────
+// When a sticky is bound to a file, its body IS the file: loaded on open,
+// written back (debounced) on edit. boundFilePath is the source of truth.
+let boundFilePath = null;
+let fileSaveTimer = null;
+function setFileBound(p) {
+  boundFilePath = p || null;
+  const btn = document.getElementById('fileBtn');
+  if (btn) {
+    btn.style.display = boundFilePath ? '' : 'none';
+    btn.title = boundFilePath ? ('Linked to ' + boundFilePath + ' — click to open it') : '';
+  }
+  document.body.classList.toggle('file-bound', !!boundFilePath);
+}
+function clearFileBound() { setFileBound(null); }
+function saveBoundFileNow() {
+  if (!boundFilePath) return;
+  const ta = document.getElementById('noteText');
+  if (!ta) return;
+  try { fs.writeFileSync(boundFilePath, ta.value, 'utf8'); }
+  catch (e) { console.error('sticky: file save failed:', e && e.message); }
+}
+function scheduleBoundFileSave() {
+  if (!boundFilePath) return;
+  clearTimeout(fileSaveTimer);
+  fileSaveTimer = setTimeout(saveBoundFileNow, 500);
 }
 
 // ── AI highlight ─────────────────────────────────────────────────────────────
@@ -464,108 +932,137 @@ function applyHighlight(content, codeEl) {
   }
 }
 
-// ── Link bar ─────────────────────────────────────────────────────────────────
-const linkBar = document.getElementById('linkBar');
+// ── Inline links (no link bar) ───────────────────────────────────────────────
+// A sticky is a plain text editor. URLs and note refs in the text are NOT
+// listed in any bar — they're followed inline with Ctrl/Cmd+click, like a code
+// editor. Plain click still just places the cursor so you can edit normally.
 const URL_RE = /https?:\/\/[^\s"'<>)\]]+/g;
-// [From: note-name-or-id] and app://sticky/note-id
-const NOTE_FROM_RE = /\[From:\s*([^\]]+)\]/g;
+const NOTE_FROM_RE = /\[From:\s*([^\]]+)\]/g;      // [From: note-name-or-id]
 const NOTE_URL_RE  = /app:\/\/sticky\/([^\s"'<>)\]]+)/g;
 
-function addLinkRow(icon, label, title, onLabelClick, actions) {
-  const row = document.createElement('div');
-  row.className = 'link-row';
-
-  const ic = document.createElement('span');
-  ic.className = 'link-icon';
-  ic.textContent = icon;
-  row.appendChild(ic);
-
-  const lbl = document.createElement('span');
-  lbl.className = 'link-label';
-  lbl.textContent = label;
-  lbl.title = title || label;
-  lbl.addEventListener('click', onLabelClick);
-  row.appendChild(lbl);
-
-  for (const {text, title: aTitle, onClick, disabled} of actions) {
-    const btn = document.createElement('span');
-    btn.className = 'link-action' + (disabled ? ' disabled' : '');
-    btn.textContent = text;
-    btn.title = aTitle;
-    if (!disabled) btn.addEventListener('click', onClick);
-    row.appendChild(btn);
+// What clickable token (if any) spans character offset `pos` in `text`.
+// Returns {kind:'url'|'note', value} or null.
+function linkTokenAt(text, pos) {
+  const tries = [
+    { re: URL_RE, kind: 'url', cap: 0 },
+    { re: NOTE_URL_RE, kind: 'note', cap: 1 },
+    { re: NOTE_FROM_RE, kind: 'note', cap: 1 }
+  ];
+  for (const {re, kind, cap} of tries) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const start = m.index, end = start + m[0].length;
+      if (pos >= start && pos <= end) {
+        return { kind, value: (cap ? m[cap] : m[0]).trim() };
+      }
+    }
   }
-
-  linkBar.appendChild(row);
-  linkBar.classList.add('visible');
+  return null;
 }
 
-function addSourceLink(filePath) {
-  const parts = filePath.replace(/\\/g, '/').split('/');
-  const label = parts.length > 1
-    ? parts.slice(-2).join('/')
-    : parts[parts.length - 1];
-
-  addLinkRow('📄', label, filePath,
-    () => ipcRenderer.send('sticky-open-file', filePath),
-    []
-  );
+// All [start,end) ranges of clickable tokens (URLs + note-refs) in `text`,
+// sorted by start. Used to underline links while Ctrl/Cmd is held.
+function allLinkRanges(text) {
+  const ranges = [];
+  for (const re of [URL_RE, NOTE_FROM_RE, NOTE_URL_RE]) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) ranges.push([m.index, m.index + m[0].length]);
+  }
+  ranges.sort((a, b) => a[0] - b[0]);
+  return ranges;
 }
 
-function addWebLinks(text) {
-  const matches = [...new Set((text.match(URL_RE) || []))].slice(0, 3);
-  for (const url of matches) {
-    const short = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    addLinkRow('🔗', short, url,
-      () => ipcRenderer.send('sticky-open-external', url),
-      [
-        { text: '↗', title: 'Open in browser',   onClick: () => ipcRenderer.send('sticky-open-external', url) },
-        { text: '⬜', title: 'Open in web pane', onClick: () => ipcRenderer.send('sticky-open-web-pane', url) }
-      ]
-    );
-  }
-}
-
-function addNoteLinks(text) {
-  const seen = new Set();
-  // [From: note-name] pattern
-  NOTE_FROM_RE.lastIndex = 0;
-  let m;
-  while ((m = NOTE_FROM_RE.exec(text)) !== null) {
-    const ref = m[1].trim();
-    if (seen.has(ref)) continue;
-    seen.add(ref);
-    addLinkRow('📝', ref, `Open note: ${ref}`,
-      () => ipcRenderer.send('sticky-open-note', ref),
-      []
-    );
-  }
-  // app://sticky/id pattern
-  NOTE_URL_RE.lastIndex = 0;
-  while ((m = NOTE_URL_RE.exec(text)) !== null) {
-    const id = m[1].trim();
-    if (seen.has(id)) continue;
-    seen.add(id);
-    addLinkRow('📝', id, `Open note: ${id}`,
-      () => ipcRenderer.send('sticky-open-note', id),
-      []
-    );
-  }
+// Open whatever link sits under the textarea's caret. Returns true if one was
+// followed. Caller gates this on Ctrl/Cmd being held.
+function followLinkInTextarea(textarea) {
+  const tok = linkTokenAt(textarea.value, textarea.selectionStart);
+  if (!tok) return false;
+  if (tok.kind === 'url') ipcRenderer.send('sticky-open-external', tok.value);
+  else ipcRenderer.send('sticky-open-note', tok.value);
+  return true;
 }
 
 ipcRenderer.on('sticky-set-highlight', (_e, mode) => {
   highlightMode = mode;
   const codeEl = document.getElementById('codeBlock')?.querySelector('code');
   if (codeEl) {
+    // Code/file note: highlight the read-only <pre><code> directly.
     const raw = codeEl.dataset.raw || codeEl.textContent;
     codeEl.dataset.raw = raw;
     applyHighlight(raw, codeEl);
+  } else {
+    // Regular text note: live highlight via the backdrop behind the textarea.
+    setSyntax(mode !== 'off');
+    // Persist so the note reopens with syntax in the same state.
+    const note = findNote(noteId) || { id: noteId, name: displayName };
+    note.syntax = (mode !== 'off');
+    note.saved_at = new Date().toISOString();
+    saveNote(note);
   }
 });
 
+// ── Live syntax highlight for editable text notes (hljs backdrop) ─────────────
+// A <textarea> can't style ranges, so when syntax is ON we make the textarea
+// text transparent and render highlight.js HTML into the backdrop behind it
+// (the same layer Find + Ctrl-underline use). The caret stays visible.
+let syntaxOn = false;
+let syntaxTimer = null;
+function renderSyntax() {
+  const ta = document.getElementById('noteText');
+  const bd = document.getElementById('findHighlights');
+  if (!ta || !bd || !window.hljs) return;
+  bd.innerHTML = window.hljs.highlightAuto(ta.value).value + '\n';
+  bd.scrollTop = ta.scrollTop;
+  bd.scrollLeft = ta.scrollLeft;
+}
+function setSyntax(on) {
+  syntaxOn = on;
+  const ta = document.getElementById('noteText');
+  const bd = document.getElementById('findHighlights');
+  if (!ta || !bd) return;
+  if (on) {
+    bd.classList.add('syntax');
+    if (window.hljs) {
+      ta.style.color = 'transparent';
+      ta.style.caretColor = getComputedStyle(document.body).color || '#000';
+      renderSyntax();
+    } else {
+      // highlight.js (CDN) hasn't finished loading — keep the text VISIBLE so
+      // the note is never blank, and retry once the script arrives.
+      setTimeout(() => { if (syntaxOn) setSyntax(true); }, 200);
+    }
+  } else {
+    bd.classList.remove('syntax');
+    ta.style.color = '';
+    ta.style.caretColor = '';
+    bd.innerHTML = '';
+  }
+}
+function scheduleSyntax() {
+  if (!syntaxOn) return;
+  clearTimeout(syntaxTimer);
+  syntaxTimer = setTimeout(renderSyntax, 150);
+}
+// Restore the backdrop's default content after Find / Ctrl-underline cleared it.
+function restoreBackdrop() {
+  const bd = document.getElementById('findHighlights');
+  if (!bd) return;
+  if (syntaxOn) renderSyntax();
+  else bd.innerHTML = '';
+}
+
 function readNotes() {
-  try { return JSON.parse(fs.readFileSync(notesJson, 'utf8')); }
-  catch { return []; }
+  try {
+    const arr = JSON.parse(fs.readFileSync(notesJson, 'utf8'));
+    if (Array.isArray(arr)) {
+      return arr.filter(n => n && typeof n === 'object' && typeof n.id === 'string');
+    }
+    return [];
+  } catch (e) {
+    return [];
+  }
 }
 function writeNotes(notes) {
   try {
@@ -589,12 +1086,26 @@ const content = document.getElementById('content');
 const closeBtn = document.getElementById('closeBtn');
 const linesBtn = document.getElementById('linesBtn');
 
+const titlebar = document.querySelector('.titlebar');
+if (titlebar) {
+  titlebar.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+}
+
 const saved = noteId ? findNote(noteId) : null;
 let bgColor = (saved && saved.color) || params.get('color') || '#fff9c4';
 let displayName = (saved && saved.name) || nameParam || noteId;
 
 applyBgColor(bgColor);
 titleText.textContent = displayName;
+
+// Re-arm live syntax highlight if this text note had it on when it was closed.
+if (saved && saved.syntax) {
+  highlightMode = 'static';
+  setSyntax(true);
+}
 
 function setColor(color) {
   bgColor = color;
@@ -611,8 +1122,51 @@ document.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   const textarea = document.getElementById('noteText');
   const hasSelection = textarea && textarea.selectionStart !== textarea.selectionEnd;
-  ipcRenderer.send('sticky-context-menu', noteId, hasSelection, bgColor);
+  ipcRenderer.send('sticky-context-menu', noteId, hasSelection, bgColor, !!boundFilePath);
 });
+
+// File linking — main read the file and is handing us its content.
+ipcRenderer.on('sticky-bind-file', (_e, info) => {
+  try {
+    const ta = document.getElementById('noteText');
+    if (ta && info && typeof info.content === 'string') {
+      ta.value = info.content;
+      scheduleSyntax();
+    }
+    if (info && info.name && typeof titleText !== 'undefined' && titleText) {
+      displayName = info.name;
+      titleText.textContent = displayName;
+    }
+    setFileBound(info && info.path);
+  } catch (err) {
+    console.error('sticky: link apply failed:', err);
+  }
+});
+ipcRenderer.on('sticky-unbind-file', () => { clearFileBound(); });
+// The linked file changed on disk (another editor / an agent via apply_text_edits).
+// Refresh the textarea — but skip if it already matches (our own save echoing back),
+// which prevents a write↔watch loop.
+ipcRenderer.on('sticky-file-changed', (_e, info) => {
+  try {
+    if (!info || typeof info.content !== 'string') return;
+    const ta = document.getElementById('noteText');
+    if (!ta || ta.value === info.content) return;
+    const pos = ta.selectionStart;
+    ta.value = info.content;
+    try { ta.setSelectionRange(Math.min(pos, ta.value.length), Math.min(pos, ta.value.length)); } catch (e) {}
+    scheduleSyntax();
+  } catch (err) {
+    console.error('sticky: file-changed apply failed:', err);
+  }
+});
+// Click the file badge to open the bound file in the OS editor.
+{
+  const fb = document.getElementById('fileBtn');
+  if (fb) fb.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (boundFilePath) ipcRenderer.send('sticky-open-file', boundFilePath);
+  });
+}
 
 // Handle actions dispatched from the native menu
 ipcRenderer.on('sticky-set-color', (_e, color) => {
@@ -622,16 +1176,193 @@ ipcRenderer.on('sticky-copy-all', () => {
   const el = document.getElementById('noteText');
   if (el) clipboard.writeText(el.value);
 });
-ipcRenderer.on('sticky-rename', () => {
-  const newName = prompt('Rename note:', displayName);
-  if (newName && newName.trim()) {
-    displayName = newName.trim();
+// Hover → solidify (main sets opacity to 1.0 while hovered, dims on leave
+// unless the window is focused/clicked).
+document.body.addEventListener('mouseenter', () => ipcRenderer.send('sticky-hover', true));
+document.body.addEventListener('mouseleave', () => ipcRenderer.send('sticky-hover', false));
+
+// ── Scheduling panel ─────────────────────────────────────────────────────────
+{
+  const $ = (id) => document.getElementById(id);
+  const overlay = $('schedOverlay');
+  const scheduleBtn = $('scheduleBtn');
+
+  function syncRows() {
+    const when = $('schedWhen').value;
+    $('rowReminder').style.display = when === 'reminder' ? '' : 'none';
+    $('rowAt').style.display = when === 'at' ? '' : 'none';
+    $('rowCron').style.display = when === 'cron' ? '' : 'none';
+    const runner = $('schedRunner').value;
+    $('rowDir').style.display = (runner === 'shell' || runner === 'n8shell') ? '' : 'none';
+    $('schedHardNote').style.display = runner === 'notify' ? 'none' : '';
+  }
+
+  function openPanel() {
+    // Prefill from any existing schedule on the note.
+    const saved = noteId ? findNote(noteId) : null;
+    const s = saved && saved.schedule;
+    if (s) {
+      $('schedWhen').value = s.when || 'reminder';
+      if (s.when === 'reminder') { $('schedDelay').value = s.delay || 10; $('schedUnit').value = s.unit || 'm'; }
+      if (s.when === 'at' && s.at) $('schedAt').value = s.at;
+      if (s.when === 'cron') $('schedCron').value = s.cron || '';
+      $('schedRunner').value = s.runner || 'notify';
+      $('schedDir').value = s.dir || '';
+      $('schedUnschedule').style.display = '';
+      $('schedConfirm').textContent = 'Reschedule';
+    } else {
+      $('schedUnschedule').style.display = 'none';
+      $('schedConfirm').textContent = 'Schedule';
+      if (!$('schedAt').value) {
+        const t = new Date(Date.now() + 3600000);
+        $('schedAt').value = new Date(t.getTime() - t.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      }
+    }
+    syncRows();
+    overlay.style.display = '';
+  }
+  function closePanel() { overlay.style.display = 'none'; }
+
+  scheduleBtn && scheduleBtn.addEventListener('click', (e) => { e.stopPropagation(); openPanel(); });
+  $('schedCancel').addEventListener('click', closePanel);
+  // Click the dimmed backdrop (outside the panel) to dismiss.
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closePanel(); });
+  // Escape closes the panel while it's open.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && overlay.style.display !== 'none') { e.preventDefault(); closePanel(); }
+  });
+  $('schedWhen').addEventListener('change', syncRows);
+  $('schedRunner').addEventListener('change', syncRows);
+  $('schedCronPreset').addEventListener('change', (e) => { if (e.target.value) $('schedCron').value = e.target.value; });
+  $('schedPickDir').addEventListener('click', async () => {
+    const dir = await ipcRenderer.invoke('sticky-pick-dir');
+    if (dir) $('schedDir').value = dir;
+  });
+
+  $('schedConfirm').addEventListener('click', () => {
+    const when = $('schedWhen').value;
+    const runner = $('schedRunner').value;
+    const sched = {
+      when, runner,
+      delay: Number($('schedDelay').value) || 10,
+      unit: $('schedUnit').value,
+      at: $('schedAt').value,
+      cron: $('schedCron').value.trim(),
+      dir: $('schedDir').value.trim(),
+      created_at: new Date().toISOString()
+    };
+    ipcRenderer.send('sticky-schedule', noteId, sched);
+    closePanel();
+  });
+
+  $('schedUnschedule').addEventListener('click', () => {
+    ipcRenderer.send('sticky-unschedule', noteId);
+    closePanel();
+  });
+}
+
+// Lock/unlock the note when it becomes a "hard" (scheduled-with-runner) sticky.
+ipcRenderer.on('sticky-lock', (_e, locked) => {
+  const ta = document.getElementById('noteText');
+  if (ta) ta.readOnly = !!locked;
+  document.body.classList.toggle('sched-armed', !!locked);
+});
+// Live refresh when the note text is changed externally (agent / MCP
+// sticky_note_update writes to disk and main sends 'note-updated'). Without
+// this, an open window keeps showing stale content and the update appears to
+// do nothing.
+ipcRenderer.on('note-updated', (_e, payload) => {
+  const text = payload && typeof payload.text === 'string' ? payload.text : '';
+  const ta = document.getElementById('noteText');
+  if (ta) {
+    if (ta.value !== text) ta.value = text;
+    return;
+  }
+  // Code/file-mode note: refresh the highlighted block if present.
+  const code = document.querySelector('pre code');
+  if (code) {
+    code.textContent = text;
+    if (window.hljs) window.hljs.highlightElement(code);
+  }
+});
+const titleInput = document.getElementById('titleInput');
+
+function startRename() {
+  if (isSearchMode || filePath) return;
+  titleText.style.display = 'none';
+  titleInput.style.display = '';
+  titleInput.value = displayName;
+  titleInput.focus();
+  titleInput.select();
+}
+
+function commitRename() {
+  const newName = titleInput.value.trim();
+  titleInput.style.display = 'none';
+  titleText.style.display = '';
+  if (newName && newName !== displayName) {
+    displayName = newName;
     titleText.textContent = displayName;
     const note = findNote(noteId) || { id: noteId, color: bgColor };
     note.name = displayName;
     note.saved_at = new Date().toISOString();
     saveNote(note);
   }
+}
+
+function cancelRename() {
+  titleInput.style.display = 'none';
+  titleText.style.display = '';
+}
+
+titleInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    commitRename();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    cancelRename();
+  }
+});
+
+titleInput.addEventListener('blur', () => {
+  commitRename();
+});
+
+// Single click on the name copies it (like pane band names); double-click
+// renames. A short timer distinguishes the two so a copy doesn't fire on the
+// first click of a rename.
+let titleClickTimer = null;
+titleText.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (titleClickTimer) return;
+  titleClickTimer = setTimeout(() => {
+    titleClickTimer = null;
+    // Linked note → copy the full file path. Otherwise the "<name> (sticky <id>)" ref.
+    let text;
+    if (boundFilePath) {
+      text = boundFilePath;
+    } else {
+      const shortId = (noteId || '').split('-').pop() || '';
+      text = shortId ? `${displayName} (sticky ${shortId})` : displayName;
+    }
+    clipboard.writeText(text);
+    // Brief "Copied" flash in the title.
+    const orig = titleText.textContent;
+    titleText.textContent = 'Copied ✓';
+    setTimeout(() => { titleText.textContent = orig; }, 700);
+  }, 230);
+});
+titleText.addEventListener('dblclick', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  if (titleClickTimer) { clearTimeout(titleClickTimer); titleClickTimer = null; }
+  if (boundFilePath) return; // linked sticky: name follows the file, can't rename
+  startRename();
+});
+
+ipcRenderer.on('sticky-rename', () => {
+  startRename();
 });
 ipcRenderer.on('sticky-delete', () => {
   if (confirm('Delete this note?')) {
@@ -647,81 +1378,184 @@ closeBtn.addEventListener('click', (e) => {
   ipcRenderer.send('sticky-close', noteId);
 });
 
-const isSearchMode = params.get('mode') === 'search';
+// isSearchMode is already declared near the top alongside the font-size
+// config — declaring it here again is a parse-time SyntaxError that aborts
+// the entire <script> block (no listeners attach, no textarea created),
+// which previously made every sticky window render blank and refuse to
+// close.
 
 if (isSearchMode) {
   content.innerHTML = `
     <div class="search-container">
-      <input type="text" id="searchInput" placeholder="Search title or content... (Esc to close)" />
+      <input type="text" id="searchInput" placeholder="search stickys" />
     </div>
+    <label class="search-opt"><input type="checkbox" id="optClear" checked> Clear previous search results</label>
+    <label class="search-opt"><input type="checkbox" id="optReplace"> Replace existing stickys (vs. add to existing)</label>
+    <div id="defaultView" class="default-view"></div>
     <div id="resultsList" class="results-list"></div>
   `;
 
   const searchInput = document.getElementById('searchInput');
   const resultsList = document.getElementById('resultsList');
+  const defaultView = document.getElementById('defaultView');
+  const optClear = document.getElementById('optClear');
+  const optReplace = document.getElementById('optReplace');
+  // Track which notes THIS search window opened, so "Clear previous search
+  // results" can close just those before opening a fresh set.
+  let lastOpenedIds = [];
 
   const allNotes = readNotes().filter(n => n.id !== 'sticky-search-window' && n.text && n.text.trim().length > 0);
 
-  function renderResults(query) {
-    resultsList.innerHTML = '';
-    const filtered = allNotes.filter(n => {
-      const nameMatch = n.name && n.name.toLowerCase().includes(query.toLowerCase());
-      const textMatch = n.text && n.text.toLowerCase().includes(query.toLowerCase());
-      return nameMatch || textMatch;
-    });
+  // Recency = when the note was last open/touched (close time, else save time).
+  const recencyKey = (n) => Date.parse(n.last_closed_at || '') || Date.parse(n.saved_at || '') || 0;
 
-    if (filtered.length === 0) {
-      resultsList.innerHTML = `<div class="no-results">No stickies found</div>`;
-      return;
+  // Build a clickable result row for a note.
+  function makeResultItem(note) {
+    const item = document.createElement('div');
+    item.className = 'result-item';
+    item.style.backgroundColor = note.color && note.color.startsWith('#') ? note.color + '22' : 'rgba(0,0,0,0.03)';
+
+    const header = document.createElement('div');
+    header.className = 'result-item-header';
+    const title = document.createElement('span');
+    title.className = 'result-item-title';
+    title.textContent = note.name || 'Untitled Note';
+    header.appendChild(title);
+    const colorDot = document.createElement('span');
+    colorDot.className = 'result-item-color';
+    colorDot.style.backgroundColor = note.color && note.color.startsWith('#') ? note.color : '#fff9c4';
+    header.appendChild(colorDot);
+    item.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'result-item-body';
+    body.textContent = note.text ? note.text.replace(/\s+/g, ' ').substring(0, 100) : 'Empty note';
+    item.appendChild(body);
+
+    // Single click only OPENS this sticky — never closes others. The user is
+    // in charge of closing. (Bulk add/replace is the "Open all" button.)
+    item.addEventListener('click', () => ipcRenderer.send('sticky-open-note', note.id));
+    return item;
+  }
+
+  // Ids of the current result set — Enter opens them all.
+  let currentMatchIds = [];
+
+  // Summary is generated in the MAIN process (it knows which notes are
+  // currently open = "active" vs merely saved). The search window stays open.
+  function generateSummary() {
+    ipcRenderer.send('generate-summary-sticky');
+  }
+
+  // Open every matching note. Honors the two checkboxes:
+  //  - Replace existing stickys → close ALL currently-open stickys first.
+  //  - Clear previous search results → close just the notes THIS window opened
+  //    on its previous search before opening the new set.
+  // The search window stays open so you can refine and search again.
+  function openMatching(ids) {
+    if (!ids.length) return;
+    if (optReplace.checked) {
+      ipcRenderer.send('open-matching-stickys', ids, true);
+    } else {
+      if (optClear.checked) {
+        for (const id of lastOpenedIds) {
+          if (!ids.includes(id)) ipcRenderer.send('sticky-close', id);
+        }
+      }
+      ipcRenderer.send('open-matching-stickys', ids, false);
     }
+    lastOpenedIds = ids.slice();
+  }
 
-    for (const note of filtered) {
-      const item = document.createElement('div');
-      item.className = 'result-item';
-      item.style.backgroundColor = note.color ? note.color + '22' : 'rgba(0,0,0,0.03)';
+  // Empty-query view: an actions dropdown (Summary) + a short list of recently
+  // opened stickys. Deliberately does NOT list every sticky.
+  function renderDefault() {
+    defaultView.style.display = '';
+    resultsList.style.display = 'none';
+    defaultView.innerHTML = '';
 
-      const header = document.createElement('div');
-      header.className = 'result-item-header';
+    const dd = document.createElement('select');
+    dd.className = 'action-dropdown';
+    dd.innerHTML = '<option value="">⋯ Actions…</option><option value="summary">📋 Generate summary sticky</option>';
+    dd.addEventListener('change', () => {
+      if (dd.value === 'summary') generateSummary();
+      dd.value = '';
+    });
+    defaultView.appendChild(dd);
 
-      const title = document.createElement('span');
-      title.className = 'result-item-title';
-      title.textContent = note.name || 'Untitled Note';
-      header.appendChild(title);
+    const heading = document.createElement('div');
+    heading.className = 'recent-heading';
+    heading.textContent = 'Recently opened';
+    defaultView.appendChild(heading);
 
-      const colorDot = document.createElement('span');
-      colorDot.className = 'result-item-color';
-      colorDot.style.backgroundColor = note.color || '#fff9c4';
-      header.appendChild(colorDot);
-
-      item.appendChild(header);
-
-      const body = document.createElement('div');
-      body.className = 'result-item-body';
-      body.textContent = note.text ? note.text.replace(/\s+/g, ' ').substring(0, 100) : 'Empty note';
-      item.appendChild(body);
-
-      item.addEventListener('click', () => {
-        ipcRenderer.send('sticky-open-note', note.id);
-        ipcRenderer.send('sticky-close', 'sticky-search-window');
-      });
-
-      resultsList.appendChild(item);
+    const recent = [...allNotes].sort((a, b) => recencyKey(b) - recencyKey(a)).slice(0, 10);
+    if (recent.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'no-results';
+      empty.textContent = 'No stickys yet';
+      defaultView.appendChild(empty);
+    } else {
+      const rl = document.createElement('div');
+      rl.className = 'results-list';
+      for (const note of recent) rl.appendChild(makeResultItem(note));
+      defaultView.appendChild(rl);
     }
   }
 
-  searchInput.addEventListener('input', () => {
-    renderResults(searchInput.value);
-  });
+  function renderResults(query) {
+    if (!query.trim()) {
+      currentMatchIds = [];
+      renderDefault();
+      return;
+    }
+    defaultView.style.display = 'none';
+    resultsList.style.display = '';
+    resultsList.innerHTML = '';
+    const q = query.toLowerCase();
+    const filtered = allNotes.filter(n =>
+      (n.name && n.name.toLowerCase().includes(q)) || (n.text && n.text.toLowerCase().includes(q))
+    );
+    currentMatchIds = filtered.map(n => n.id);
+    if (filtered.length === 0) {
+      resultsList.innerHTML = `<div class="no-results">No stickys found</div>`;
+      return;
+    }
 
+    // Actions bar: open every match at once (Enter does the same). Add-vs-
+    // replace is governed by the checkboxes above.
+    const ids = filtered.map(n => n.id);
+    const actions = document.createElement('div');
+    actions.className = 'results-actions';
+    const count = document.createElement('span');
+    count.className = 'count';
+    count.textContent = `${filtered.length} match${filtered.length === 1 ? '' : 'es'}`;
+    actions.appendChild(count);
+
+    const openAllBtn = document.createElement('span');
+    openAllBtn.className = 'results-action-btn';
+    openAllBtn.textContent = 'Open all ↵';
+    openAllBtn.title = 'Open every match (honors the checkboxes above)';
+    openAllBtn.addEventListener('click', () => openMatching(ids));
+    actions.appendChild(openAllBtn);
+
+    resultsList.appendChild(actions);
+
+    for (const note of filtered) resultsList.appendChild(makeResultItem(note));
+  }
+
+  searchInput.addEventListener('input', () => renderResults(searchInput.value));
   searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
       ipcRenderer.send('sticky-close', 'sticky-search-window');
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      openMatching(currentMatchIds); // open all current matches; window stays open
     }
   });
 
   searchInput.focus();
-  renderResults('');
+  renderDefault();
 } else if (filePath) {
   let fileContent = '';
   let fileName = path.basename(filePath);
@@ -731,7 +1565,6 @@ if (isSearchMode) {
 
   titleText.textContent = fileName;
   linesBtn.style.display = '';
-  addSourceLink(filePath);
 
   const langMap = {
     js: 'javascript', ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
@@ -764,47 +1597,125 @@ if (isSearchMode) {
     pre.classList.toggle('with-lines');
   });
 } else {
+  const findWrap = document.createElement('div');
+  findWrap.className = 'note-find-wrap';
+
+  const highlightBackdrop = document.createElement('div');
+  highlightBackdrop.className = 'find-highlights';
+  highlightBackdrop.id = 'findHighlights';
+
   const textarea = document.createElement('textarea');
   textarea.className = 'note-text';
   textarea.id = 'noteText';
   textarea.placeholder = '';
   textarea.value = (saved && saved.text) || '';
   textarea.spellcheck = false;
-  content.appendChild(textarea);
 
-  // Show web links and note references found in initial content
-  addWebLinks(textarea.value);
-  addNoteLinks(textarea.value);
+  // File-bound note: the file on disk is the source of truth. Read it fresh on
+  // open (falls back to the cached note text if the file is missing/unreadable).
+  if (saved && saved.source && saved.source.kind === 'file' && saved.source.path) {
+    try { textarea.value = fs.readFileSync(saved.source.path, 'utf8'); }
+    catch (e) { /* keep cached saved.text; file may have moved */ }
+    setFileBound(saved.source.path);
+  }
 
-  // Rescan links after a pause while typing (debounced)
-  let linkScanTimer;
-  textarea.addEventListener('input', () => {
-    clearTimeout(linkScanTimer);
-    linkScanTimer = setTimeout(() => {
-      linkBar.innerHTML = '';
-      linkBar.classList.remove('visible');
-      addWebLinks(textarea.value);
-      addNoteLinks(textarea.value);
-    }, 800);
+  const tickRail = document.createElement('div');
+  tickRail.className = 'find-tickrail';
+  tickRail.id = 'findTickrail';
+
+  findWrap.appendChild(highlightBackdrop);
+  findWrap.appendChild(textarea);
+  findWrap.appendChild(tickRail);
+  content.appendChild(findWrap);
+
+  // Keep the highlight backdrop scrolled in lock-step with the textarea.
+  textarea.addEventListener('scroll', () => {
+    highlightBackdrop.scrollTop = textarea.scrollTop;
+    highlightBackdrop.scrollLeft = textarea.scrollLeft;
   });
 
-  const forceFocus = () => {
-    textarea.focus();
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  // Inline links: Ctrl/Cmd+click a URL or note-ref to open it. Plain click
+  // places the cursor (normal editing) — the sticky is an editable text area,
+  // so a plain click must not steal the action.
+  textarea.addEventListener('click', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (followLinkInTextarea(textarea)) {
+      e.preventDefault();
+    }
+  });
+  // While Ctrl/Cmd is held: pointer cursor + underline every link in the note
+  // (rendered into the highlight backdrop, which sits behind the textarea).
+  const escBackdrop = (s) => s.replace(/[&<>]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]));
+  let ctrlLinksShown = false;
+  function showCtrlLinks() {
+    // Don't fight the find feature or syntax mode for the backdrop. (In syntax
+    // mode the textarea text is transparent, so underlines would float over
+    // nothing — skip; the colored text is affordance enough.)
+    const fb = document.getElementById('findBar');
+    if (fb && fb.style.display !== 'none') return;
+    if (syntaxOn) return;
+    const text = textarea.value;
+    const ranges = allLinkRanges(text);
+    if (!ranges.length) { highlightBackdrop.innerHTML = ''; return; }
+    let html = '';
+    let pos = 0;
+    for (const [s, e] of ranges) {
+      if (s < pos) continue; // skip overlaps
+      html += escBackdrop(text.slice(pos, s));
+      html += '<span class="ctrl-link">' + escBackdrop(text.slice(s, e)) + '</span>';
+      pos = e;
+    }
+    html += escBackdrop(text.slice(pos)) + '\n';
+    highlightBackdrop.innerHTML = html;
+    highlightBackdrop.scrollTop = textarea.scrollTop;
+    highlightBackdrop.scrollLeft = textarea.scrollLeft;
+  }
+  function hideCtrlLinks() {
+    const fb = document.getElementById('findBar');
+    if (fb && fb.style.display !== 'none') return; // find owns the backdrop
+    restoreBackdrop(); // back to syntax highlight (or empty) instead of blank
+  }
+  textarea.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && !ctrlLinksShown) {
+      ctrlLinksShown = true;
+      textarea.style.cursor = 'pointer';
+      showCtrlLinks();
+    }
+  });
+  const clearCtrl = () => {
+    if (!ctrlLinksShown) return;
+    ctrlLinksShown = false;
+    textarea.style.cursor = '';
+    hideCtrlLinks();
   };
-  forceFocus();
-  setTimeout(forceFocus, 50);
-  setTimeout(forceFocus, 200);
-  setTimeout(forceFocus, 500);
+  textarea.addEventListener('keyup', (e) => { if (!e.ctrlKey && !e.metaKey) clearCtrl(); });
+  textarea.addEventListener('blur', clearCtrl);
 
-  content.addEventListener('click', () => forceFocus());
-  document.body.addEventListener('click', (e) => {
-    if (e.target === document.body) forceFocus();
+  const forceFocus = (setCursorAtEnd = false) => {
+    if (document.activeElement !== textarea) {
+      textarea.focus();
+      if (setCursorAtEnd) {
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      }
+    }
+  };
+  forceFocus(true);
+  setTimeout(() => forceFocus(true), 50);
+  setTimeout(() => forceFocus(true), 200);
+  setTimeout(() => forceFocus(true), 500);
+
+  content.addEventListener('click', (e) => {
+    if (e.target !== textarea) forceFocus(false);
   });
-  window.addEventListener('focus', forceFocus);
+  document.body.addEventListener('click', (e) => {
+    if (e.target === document.body) forceFocus(false);
+  });
+  window.addEventListener('focus', () => forceFocus(false));
 
   let saveTimer;
   textarea.addEventListener('input', () => {
+    scheduleSyntax(); // re-render the syntax backdrop (no-op unless syntax is on)
+    scheduleBoundFileSave(); // if file-bound, debounced write-through to disk
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       if (!noteId) return;
@@ -815,6 +1726,195 @@ if (isSearchMode) {
       existing.saved_at = new Date().toISOString();
       saveNote(existing);
     }, 500);
+  });
+
+  // Restore the live note text refresh path through the syntax renderer.
+  ipcRenderer.on('note-updated', () => { if (syntaxOn) scheduleSyntax(); });
+}
+
+// ─── Find in note (Ctrl+F) ──────────────────────────────────────────────
+// Activates only when there's a real textarea (skipped for file-mode code
+// notes and the search-stickys window). Case-insensitive, wraps around.
+{
+  const findBar = document.getElementById('findBar');
+  const findInput = document.getElementById('findInput');
+  const findCount = document.getElementById('findCount');
+  let findMatches = [];
+  let findIndex = -1;
+
+  function getNoteTextarea() {
+    return document.getElementById('noteText');
+  }
+
+  function escapeFindHtml(s) {
+    return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  }
+
+  // Render every match as a <mark> in the backdrop behind the textarea. The
+  // active match gets .current (orange); the rest are yellow. Text in the
+  // backdrop is transparent — only the highlight rectangles show, under the
+  // textarea's real (opaque) text.
+  function renderFindHighlights() {
+    const ta = getNoteTextarea();
+    const bd = document.getElementById('findHighlights');
+    if (!ta || !bd) return;
+    if (!findMatches.length || !findInput.value) {
+      bd.innerHTML = '';
+      return;
+    }
+    const text = ta.value;
+    const qlen = findInput.value.length;
+    let html = '';
+    let pos = 0;
+    findMatches.forEach((start, idx) => {
+      html += escapeFindHtml(text.slice(pos, start));
+      const cls = idx === findIndex ? ' class="current"' : '';
+      html += `<mark${cls}>` + escapeFindHtml(text.slice(start, start + qlen)) + '</mark>';
+      pos = start + qlen;
+    });
+    html += escapeFindHtml(text.slice(pos)) + '\n';
+    bd.innerHTML = html;
+    bd.scrollTop = ta.scrollTop;
+    bd.scrollLeft = ta.scrollLeft;
+  }
+
+  // Chrome-style scrollbar ticks. Only drawn when the note actually overflows
+  // (has a scroll); otherwise the rail stays empty.
+  function renderFindTicks() {
+    const ta = getNoteTextarea();
+    const bd = document.getElementById('findHighlights');
+    const rail = document.getElementById('findTickrail');
+    if (!ta || !bd || !rail) return;
+    rail.innerHTML = '';
+    if (!findMatches.length) return;
+    if (ta.scrollHeight <= ta.clientHeight + 1) return; // no scroll → no ticks
+    const railH = ta.clientHeight;
+    const fullH = bd.scrollHeight || ta.scrollHeight;
+    const marks = bd.querySelectorAll('mark');
+    marks.forEach((m, idx) => {
+      const tick = document.createElement('div');
+      tick.className = 'find-tick' + (idx === findIndex ? ' current' : '');
+      tick.style.top = `${(m.offsetTop / fullH) * railH}px`;
+      rail.appendChild(tick);
+    });
+  }
+
+  function updateFindCount() {
+    findCount.textContent = findMatches.length ? `${findIndex + 1}/${findMatches.length}` : '0/0';
+  }
+
+  // Scroll the textarea so the active match is roughly centered, then refresh
+  // the highlights (to move .current) and the ticks.
+  function scrollToCurrentMatch() {
+    const ta = getNoteTextarea();
+    if (!ta || findIndex < 0) return;
+    const start = findMatches[findIndex];
+    const linesBefore = ta.value.substring(0, start).split('\n').length;
+    const lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 22;
+    ta.scrollTop = Math.max(0, linesBefore * lineHeight - ta.clientHeight / 2);
+  }
+
+  function refreshFind() {
+    updateFindCount();
+    renderFindHighlights();
+    renderFindTicks();
+  }
+
+  function findCompute() {
+    const ta = getNoteTextarea();
+    findMatches = [];
+    findIndex = -1;
+    const q = findInput.value;
+    if (ta && q) {
+      const hay = ta.value.toLowerCase();
+      const needle = q.toLowerCase();
+      let i = hay.indexOf(needle);
+      while (i !== -1) {
+        findMatches.push(i);
+        i = hay.indexOf(needle, i + 1);
+      }
+      if (findMatches.length) findIndex = 0;
+    }
+    if (findIndex >= 0) scrollToCurrentMatch();
+    refreshFind();
+  }
+  function findNext() {
+    if (!findMatches.length) return;
+    findIndex = (findIndex + 1) % findMatches.length;
+    scrollToCurrentMatch();
+    refreshFind();
+  }
+  function findPrev() {
+    if (!findMatches.length) return;
+    findIndex = (findIndex - 1 + findMatches.length) % findMatches.length;
+    scrollToCurrentMatch();
+    refreshFind();
+  }
+  function openFind() {
+    const ta = getNoteTextarea();
+    if (!ta) return;
+    // In syntax mode the textarea text is transparent; make it visible while
+    // finding so the match highlights read against actual text.
+    if (typeof syntaxOn !== 'undefined' && syntaxOn) ta.style.color = '';
+    findBar.style.display = '';
+    findInput.value = '';
+    findMatches = [];
+    findIndex = -1;
+    refreshFind();
+    findInput.focus();
+  }
+  function closeFind() {
+    findBar.style.display = 'none';
+    findMatches = [];
+    findIndex = -1;
+    const rail = document.getElementById('findTickrail');
+    if (rail) rail.innerHTML = '';
+    const ta = getNoteTextarea();
+    // Restore syntax mode (transparent text + highlighted backdrop) if it was on.
+    if (typeof syntaxOn !== 'undefined' && syntaxOn && ta) ta.style.color = 'transparent';
+    if (typeof restoreBackdrop === 'function') restoreBackdrop();
+    else { const bd = document.getElementById('findHighlights'); if (bd) bd.innerHTML = ''; }
+    if (ta) ta.focus();
+  }
+
+  findInput.addEventListener('input', findCompute);
+  findInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.shiftKey) findPrev();
+      else findNext();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeFind();
+    }
+  });
+  document.getElementById('findPrev').addEventListener('click', findPrev);
+  document.getElementById('findNext').addEventListener('click', findNext);
+  document.getElementById('findClose').addEventListener('click', closeFind);
+
+  // Top-right search button in the titlebar — toggles the find bar. Hidden in
+  // search-mode and file/code notes (no editable textarea to search).
+  const searchBtn = document.getElementById('searchBtn');
+  if (searchBtn) {
+    if (isSearchMode || filePath) {
+      searchBtn.style.display = 'none';
+    } else {
+      searchBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (findBar.style.display === 'none') openFind();
+        else closeFind();
+      });
+    }
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !e.shiftKey) {
+      // Skip in the search-stickys window — that has its own Cmd+F-ish input.
+      if (isSearchMode) return;
+      e.preventDefault();
+      openFind();
+    }
   });
 }
 </script>

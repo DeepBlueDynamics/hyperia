@@ -15,6 +15,7 @@ import {
   SESSION_SEARCH,
   SESSION_SET_DESCRIPTION
 } from '../../typings/constants/sessions';
+import {RESTORE_LAYOUT_STATE} from '../../typings/constants/term-groups';
 import type {sessionState, session, Mutable, ISessionReducer} from '../../typings/hyper';
 import {decorateSessionsReducer} from '../utils/plugins';
 
@@ -63,13 +64,27 @@ function nextTabName(): string {
   return name;
 }
 
+// Emojis sprinkled on every auto-generated shell name. Same curated set the
+// tab-name generator uses for visual continuity. We keep them downstream-
+// friendly: plain Unicode, no ZWJ-combined or skin-tone variants that other
+// applications (sticky notes, log lines, exported markdown) may strip.
+const SHELL_NAME_EMOJIS = [
+  '🦦', '🐙', '🦄', '🐉', '🦖', '🦣', '🤖', '👽', '🪼', '🐛', '🦞', '🦡',
+  '🦩', '🐼', '🦥', '🐨', '👻', '👺', '🦑', '🧟', '👾', '🌪️', '⚡', '🌀',
+  '🌮', '🧇', '🍩', '🥑', '🥦', '🧄', '🥐', '🥨', '🧀', '🍌', '🍍', '🥒',
+  '🥓', '🍜', '🧆', '🫖', '🎈', '💥', '🚀', '🧨', '🌵', '🍢', '🌭', '🥿',
+  '🪗', '🪃', '🍭', '🪩', '🍬', '🧁'
+];
+
 function nextShellName(): string {
-  return uniqueNamesGenerator({
+  const base = uniqueNamesGenerator({
     dictionaries: [adjectives, animals],
     separator: ' ',
     style: 'capital',
     length: 2
   });
+  const emoji = SHELL_NAME_EMOJIS[Math.floor(Math.random() * SHELL_NAME_EMOJIS.length)];
+  return `${base} ${emoji}`;
 }
 
 const initialState: sessionState = Immutable<Mutable<sessionState>>({
@@ -106,6 +121,19 @@ function deleteSession(state: sessionState, uid: string) {
 const reducer: ISessionReducer = (state = initialState, action) => {
   switch (action.type) {
     case SESSION_ADD: {
+      const act = action as any;
+      if (act.isRestore && state.sessions[act.uid]) {
+        // Merge process fields into existing restored session
+        return state.updateIn(['sessions', act.uid], (s) =>
+          (s as any).merge({
+            cols: act.cols ?? s.cols,
+            rows: act.rows ?? s.rows,
+            pid: act.pid ?? s.pid,
+            shell: act.shell ? act.shell.split('/').pop() : s.shell
+          })
+        );
+      }
+
       const inheritedTabName =
         (action.splitDirection || !action.isNewGroup) && action.activeUid
           ? state.sessions[action.activeUid]?.description ||
@@ -130,6 +158,33 @@ const reducer: ISessionReducer = (state = initialState, action) => {
           shellName: nextShellName()
         })
       );
+    }
+
+    case RESTORE_LAYOUT_STATE: {
+      const {savedState} = action as any;
+      const restoredSessions: Record<string, any> = {};
+      if (savedState.sessions) {
+        Object.keys(savedState.sessions).forEach((uid) => {
+          const s = savedState.sessions[uid];
+          restoredSessions[uid] = Session({
+            uid,
+            title: s.tabName || s.title || '',
+            tabName: s.tabName || s.title || '',
+            description: s.description || '',
+            cols: s.cols || null,
+            rows: s.rows || null,
+            shell: s.shell || null,
+            pid: s.pid || null,
+            profile: s.profile || '',
+            cwd: s.cwd || '',
+            shellName: s.shellName || nextShellName(),
+            lastCommand: s.lastCommand || ''
+          });
+        });
+      }
+      return state
+        .set('sessions', Immutable(restoredSessions))
+        .set('activeUid', savedState.activeUid || null);
     }
 
     case SESSION_SET_ACTIVE:

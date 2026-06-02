@@ -63,6 +63,12 @@ export interface TermGroupSetTabNameAction {
   tabName: string;
 }
 
+export const RESTORE_LAYOUT_STATE = 'RESTORE_LAYOUT_STATE';
+export interface RestoreLayoutStateAction {
+  type: typeof RESTORE_LAYOUT_STATE;
+  savedState: any;
+}
+
 export type TermGroupActions =
   | TermGroupRequestAction
   | TermGroupExitAction
@@ -73,4 +79,5 @@ export type TermGroupActions =
   | TermGroupAddWebTabAction
   | TermGroupActivateWebTabAction
   | TermGroupSetWebNameAction
-  | TermGroupSetTabNameAction;
+  | TermGroupSetTabNameAction
+  | RestoreLayoutStateAction;

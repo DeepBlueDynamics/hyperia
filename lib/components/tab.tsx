@@ -118,8 +118,17 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
       );
       menu.append(
         new MenuItem({
-          label: `Copy ID (${props.uid.substring(0, 8)}...)`,
-          click: () => void clipboard.writeText(props.uid)
+          // Copy the visible tab name + a short ID suffix + kind. The agent
+          // (or human paster) gets the human label first; the parenthetical
+          // disambiguates two tabs with the same name and signals "this is
+          // a tab, not a pane". Raw UUIDs were unhelpful: nobody recognizes
+          // them and they paste as line noise.
+          label: 'Copy tab name + ID',
+          click: () => {
+            const name = (pendingName ?? (tabName || description || props.text) ?? 'Tab').trim();
+            const shortId = props.uid.replace(/-/g, '').slice(0, 8);
+            void clipboard.writeText(`${name} (tab ${shortId})`);
+          }
         })
       );
       menu.append(new MenuItem({type: 'separator'}));
@@ -212,7 +221,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
               <span className="tab_textContent">
                 <span className="tab_webIcon">{isWebPane ? '🌐' : null}</span>
                 {isWebPane ? (
-                  <span className={`tab_webUrl ${isActive ? 'tab_webUrlScroll' : ''}`} title={webUrl}>
+                  <span className="tab_webUrl" title={webUrl}>
                     {displayText}
                   </span>
                 ) : (
@@ -391,6 +400,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
 
         .tab_webUrl {
           overflow: hidden;
+          text-overflow: ellipsis;
           white-space: nowrap;
           font-size: 11px;
           opacity: 0.75;

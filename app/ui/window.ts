@@ -1,4 +1,4 @@
-import {existsSync} from 'fs';
+import {existsSync, readFileSync, writeFileSync} from 'fs';
 import {isAbsolute, normalize, sep} from 'path';
 import {URL, fileURLToPath} from 'url';
 
@@ -32,7 +32,7 @@ import {
 } from '../bridge';
 import {execCommand} from '../commands';
 import {getDefaultProfile} from '../config';
-import {icon, homeDirectory} from '../config/paths';
+import {icon, homeDirectory, cfgPath} from '../config/paths';
 import fetchNotifications from '../notifications';
 import notify from '../notify';
 import {decorateSessionOptions, decorateSessionClass} from '../plugins';
@@ -161,19 +161,37 @@ export function newWindow(
     window.show();
     updateBackgroundColor();
 
-    // If no callback is passed to createWindow,
-    // a new session will be created by default.
-    if (!fn) {
-      fn = (win: BrowserWindow) => {
-        win.rpc.emit('termgroup add req', {});
-      };
+    let hasRestored = false;
+    try {
+      if (existsSync(cfgPath)) {
+        const currentConfig = JSON.parse(readFileSync(cfgPath, 'utf8'));
+        if (currentConfig.savedLayoutState) {
+          console.log('[window] Found savedLayoutState in config, triggering restore...');
+          rpc.emit('restore-layout-state', currentConfig.savedLayoutState);
+          delete currentConfig.savedLayoutState;
+          writeFileSync(cfgPath, JSON.stringify(currentConfig, null, 2), 'utf8');
+          hasRestored = true;
+        }
+      }
+    } catch (e) {
+      console.error('[window] Error reading/deleting savedLayoutState during init:', e);
     }
 
-    // app.windowCallback is the createWindow callback
-    // that can be set before the 'ready' app event
-    // and createWindow definition. It's executed in place of
-    // the callback passed as parameter, and deleted right after.
-    (app.windowCallback || fn)(window);
+    if (!hasRestored) {
+      // If no callback is passed to createWindow,
+      // a new session will be created by default.
+      if (!fn) {
+        fn = (win: BrowserWindow) => {
+          win.rpc.emit('termgroup add req', {});
+        };
+      }
+
+      // app.windowCallback is the createWindow callback
+      // that can be set before the 'ready' app event
+      // and createWindow definition. It's executed in place of
+      // the callback passed as parameter, and deleted right after.
+      (app.windowCallback || fn)(window);
+    }
     app.windowCallback = undefined;
     fetchNotifications(window);
     // auto updates
@@ -185,7 +203,7 @@ export function newWindow(
   });
 
   function createSession(extraOptions: sessionExtraOptions = {}) {
-    const uid = uuidv4();
+    const uid = extraOptions.uid || uuidv4();
     const extraOptionsFiltered: sessionExtraOptions = {};
     Object.keys(extraOptions).forEach((key) => {
       if (extraOptions[key] !== undefined) extraOptionsFiltered[key] = extraOptions[key];
@@ -267,7 +285,9 @@ export function newWindow(
       groupUid: extraOptions.groupUid,
       url: extraOptions.url,
       cwd: options.cwd,
-      isNewGroup: extraOptions.isNewGroup
+      isNewGroup: extraOptions.isNewGroup,
+      isRestore: extraOptions.isRestore,
+      lastCommand: extraOptions.lastCommand
     });
 
     // Register with sidecar bridge for agent control
@@ -450,7 +470,11 @@ export function newWindow(
     const position = window.getPosition();
     rpc.emit('move', {bounds: {x: position[0], y: position[1]}});
   });
+  let isClosingAndWaitingForSave = false;
   window.on('close', (e) => {
+    if (isClosingAndWaitingForSave) {
+      return;
+    }
     const tabCount = (window as any).tabCount || 1;
     const paneCount = (window as any).paneCount || 1;
     if (tabCount > 1 || paneCount > 1) {
@@ -475,7 +499,28 @@ export function newWindow(
         return;
       }
     }
-    deleteSessions();
+    e.preventDefault();
+    isClosingAndWaitingForSave = true;
+    rpc.emit('get-layout-state-req');
+  });
+
+  rpc.on('layout-state-reply', (layoutState) => {
+    try {
+      let currentConfig: any = {};
+      if (existsSync(cfgPath)) {
+        currentConfig = JSON.parse(readFileSync(cfgPath, 'utf8'));
+      }
+      currentConfig.savedLayoutState = layoutState;
+      writeFileSync(cfgPath, JSON.stringify(currentConfig, null, 2), 'utf8');
+      console.log('[window] Successfully saved layout state to hyperia.json');
+    } catch (err) {
+      console.error('[window] Failed to write layout state to hyperia.json:', err);
+    }
+
+    if (isClosingAndWaitingForSave) {
+      deleteSessions();
+      window.destroy();
+    }
   });
 
   rpc.on('close', () => {

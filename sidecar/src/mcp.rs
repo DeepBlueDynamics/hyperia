@@ -43,6 +43,8 @@ pub struct RunRequest {
     pub focus: Option<String>,
     /// Pass true to bypass Maximus and receive the full unfiltered output. A [tokenmax:raw] header confirms the bypass.
     pub raw: Option<bool>,
+    /// Acknowledge that you've read the Hyperia anti-pattern warning and intentionally want to run a shell-level backgrounding command (Start-Process, nohup, & at end, tmux). Default false. If false, commands matching those patterns are refused with guidance to use terminal_split / terminal_new_tab instead, which is almost always what you should do in Hyperia.
+    pub force: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -92,9 +94,110 @@ pub struct RenameTabRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ShellSearchRequest {
+    /// Search query (free text; BM25-ranked).
+    pub query: String,
+    /// Restrict to one shell by its paneId (from terminal_status). Omit to search every shell's log.
+    pub pane_id: Option<String>,
+    /// Max hits to return (default 20).
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct StickySearchRequest {
+    /// Search query (free text; BM25-ranked over note name + body).
+    pub query: String,
+    /// Max hits to return (default 20).
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct StickyScheduleRequest {
+    /// Note ID (from sticky_note_list).
+    pub id: String,
+    /// Trigger: "reminder" (delay+unit), "at" (absolute time), or "cron".
+    pub when: Option<String>,
+    /// Runner: "notify", "shell", "n8shell", or "n8agent".
+    pub runner: Option<String>,
+    /// reminder: how many `unit`s from now.
+    pub delay: Option<u64>,
+    /// reminder unit: "m" (minutes), "h" (hours), or "d" (days).
+    pub unit: Option<String>,
+    /// "at": ISO-8601 / datetime-local string (e.g. "2026-06-01T19:30").
+    pub at: Option<String>,
+    /// "cron": 5-field expression (e.g. "*/15 * * * *").
+    pub cron: Option<String>,
+    /// Working directory for shell/n8shell runners.
+    pub dir: Option<String>,
+    /// Pass true to clear the schedule and unlock the note.
+    pub unschedule: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct TabImageRequest {
+    /// Window ID — the `id` field from terminal_status. Omit for focused window.
+    pub window: Option<u32>,
+    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
+    pub tab: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct OpenWebPaneRequest {
     /// Full URL to open (e.g. "https://localhost:3000" or "https://example.com")
     pub url: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WebReloadRequest {
+    /// Window ID — the `id` field from terminal_status. Omit to use the focused window.
+    pub window: Option<u32>,
+    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
+    pub tab: Option<String>,
+    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    pub pane: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WebClickRequest {
+    /// Text to find and click on the page (case-insensitive fuzzy match)
+    pub text: Option<String>,
+    /// CSS selector to click on instead (optional, e.g. "button.login")
+    pub selector: Option<String>,
+    /// Window ID — the `id` field from terminal_status. Omit to use the focused window.
+    pub window: Option<u32>,
+    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
+    pub tab: Option<String>,
+    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    pub pane: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WebEvalRequest {
+    /// JavaScript to run in the web pane. The LAST expression's value is returned
+    /// (must be JSON-serializable). Return a Promise to await async work.
+    pub js: String,
+    /// Window ID — the `id` field from terminal_status. Omit to use the focused window.
+    pub window: Option<u32>,
+    /// Tab name. Omit for active tab in the window.
+    pub tab: Option<String>,
+    /// Pane label / paneId. Omit for first pane.
+    pub pane: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WebMouseRequest {
+    /// X coordinate in CSS pixels, relative to the page viewport (left edge = 0).
+    pub x: f64,
+    /// Y coordinate in CSS pixels, relative to the page viewport (top edge = 0).
+    pub y: f64,
+    /// "move" (just glide the ghost cursor there) or "click" (glide, then click). Default "move".
+    pub action: Option<String>,
+    /// Window ID — the `id` field from terminal_status. Omit to use the focused window.
+    pub window: Option<u32>,
+    /// Tab name. Omit for active tab in the window.
+    pub tab: Option<String>,
+    /// Pane label / paneId. Omit for first pane.
+    pub pane: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -248,6 +351,31 @@ pub struct StickyNoteReadRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct TextEditSpec {
+    /// 0-based line of the edit start.
+    pub start_line: usize,
+    /// Start column, counted in extended grapheme clusters (NOT bytes) — emoji/accents are 1 column.
+    pub start_col: usize,
+    /// 0-based line of the edit end.
+    pub end_line: usize,
+    /// End column (graphemes). For a pure insert, set end == start.
+    pub end_col: usize,
+    /// Replacement text for [start, end). Empty string = pure delete.
+    pub text: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ApplyEditsRequest {
+    /// Absolute path to the UTF-8 text file to edit.
+    pub path: String,
+    /// One or more DISJOINT edits. Applied transactionally, back-to-front, so earlier
+    /// offsets never shift. Overlapping edits are rejected and nothing is written.
+    pub edits: Vec<TextEditSpec>,
+    /// Pass true to compute the result WITHOUT writing the file (dry run / preview).
+    pub preview: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TabSnapshotRequest {
     /// What you're looking for across all panes — Maximus extracts just that. Example: "error messages", "current git status".
     pub focus: Option<String>,
@@ -273,6 +401,9 @@ pub struct SettingsSetRequest {
     /// object, or array. Pass null to remove the key.
     pub value: serde_json::Value,
 }
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct FlushRequest {}
 
 // -- MCP Server --
 
@@ -319,24 +450,171 @@ impl HyperiaMcp {
         }
     }
 
-    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab, \\x03 for Ctrl-C. These are unescaped automatically. Address panes with window/tab/pane. The pane field accepts either a pane label or the paneId from terminal_status; if the label is empty, use paneId. If the human is currently active in the target pane, the keys are queued and the reply tells you so — resend with interrupt=true to send immediately (use this to interrupt a running process).")]
+    // -- Runtime-feedback helpers shared by terminal_run and terminal_keys --
+    //
+    // The point: when a tool call doesn't behave the way the agent expected,
+    // the RESPONSE itself should explain what happened in actionable terms.
+    // Static tool descriptions are read once at registration; the only thing
+    // the calling agent sees on every call is what comes back. So we attach a
+    // small diagnostic envelope when something interesting happens (silent
+    // wait, unsubmitted-looking input buffer, known-TUI target, etc.).
+
+    /// Look up the foreground process name for the target pane via /api/status.
+    /// Returns "" if we can't resolve.
+    async fn pane_process_name(
+        &self,
+        window: Option<u32>,
+        tab: Option<&str>,
+        pane: Option<&str>,
+    ) -> String {
+        let Ok(status_text) = self.get("/api/status").await else { return String::new(); };
+        let Ok(status): Result<serde_json::Value, _> = serde_json::from_str(&status_text) else { return String::new(); };
+        let windows = status["windows"].as_array().cloned().unwrap_or_default();
+        let win_obj = if let Some(wid) = window {
+            windows.iter().find(|w| w["id"].as_u64() == Some(wid as u64)).cloned()
+        } else {
+            windows.iter().find(|w| w["focused"].as_bool() == Some(true)).cloned()
+                .or_else(|| windows.first().cloned())
+        };
+        let Some(win_obj) = win_obj else { return String::new(); };
+        let tabs = win_obj["tabs"].as_array().cloned().unwrap_or_default();
+        let tab_obj = if let Some(tname) = tab {
+            tabs.iter().find(|t| t["name"].as_str() == Some(tname)).cloned()
+        } else {
+            tabs.iter().find(|t| t["active"].as_bool() == Some(true)).cloned()
+                .or_else(|| tabs.first().cloned())
+        };
+        let Some(tab_obj) = tab_obj else { return String::new(); };
+        let panes_arr = tab_obj["panes"].as_array().cloned().unwrap_or_default();
+        let pane_obj = if let Some(p) = pane {
+            // Try label match first, then paneId (or paneId prefix).
+            panes_arr.iter().find(|x| x["label"].as_str() == Some(p))
+                .or_else(|| panes_arr.iter().find(|x| {
+                    x["paneId"].as_str().map(|pid| pid.starts_with(p)).unwrap_or(false)
+                }))
+                .cloned()
+        } else {
+            panes_arr.iter().find(|x| x["active"].as_bool() == Some(true)).cloned()
+                .or_else(|| panes_arr.first().cloned())
+        };
+        let Some(pane_obj) = pane_obj else { return String::new(); };
+        pane_obj["process"].as_str()
+            .filter(|s| !s.is_empty())
+            .or_else(|| pane_obj["shell"].as_str())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// True if `proc_name` looks like an Ink/Node TUI agent (claude code, codex,
+    /// aider, gemini-cli, etc.) — these listen for LF (\n), not CR (\r), for
+    /// submit, and silently absorb a bare CR. Used to attach a clear hint when
+    /// terminal_run's output came back empty.
+    fn is_likely_ink_tui(proc_name: &str) -> bool {
+        let n = proc_name.to_lowercase();
+        // Node-ish runtime + known agent CLI binaries that wrap it.
+        ["node", "claude", "claude-code", "codex", "aider", "gemini", "ollama"]
+            .iter()
+            .any(|needle| n.contains(needle))
+    }
+
+    /// Read the current screen tail and return whether it appears to still hold
+    /// the (unsubmitted) command text. Best-effort heuristic — used as a
+    /// secondary signal alongside "did we receive any new output?".
+    async fn screen_likely_holds_unsubmitted(
+        &self,
+        window: Option<u32>,
+        tab: Option<&str>,
+        pane: Option<&str>,
+        cmd: &str,
+    ) -> bool {
+        let needle = cmd.trim();
+        if needle.is_empty() { return false; }
+        // Use the last 40 chars of the command — multi-line / wrapped inputs
+        // won't appear verbatim, but the tail almost always does.
+        let chars: Vec<char> = needle.chars().collect();
+        let tail: String = chars.iter().rev().take(40).rev().collect();
+        let screen_path = self.pane_path("/api/screen", window, tab, pane);
+        let Ok(screen) = self.get(&screen_path).await else { return false; };
+        // Look at the last ~5 non-empty lines.
+        let last: String = screen
+            .lines()
+            .rev()
+            .filter(|l| !l.trim().is_empty())
+            .take(5)
+            .collect::<Vec<_>>()
+            .join("\n");
+        last.contains(tail.trim())
+    }
+
+    /// Build the human-readable diagnostic line(s) to append to a tool's
+    /// returned text. Empty string when nothing notable happened. The shape is
+    /// intentionally a single tagged line so agents can grep `[hyperia:meta]`
+    /// to extract it.
+    fn build_run_diagnostic(
+        target_process: &str,
+        wait_ms: u64,
+        quiet_silent: bool,
+        screen_held_input: bool,
+        cmd_summary: &str,
+    ) -> String {
+        // Happy path: target produced output. Nothing to say.
+        if !quiet_silent && !screen_held_input { return String::new(); }
+        let mut lines = vec![format!(
+            "[hyperia:meta] target_process={} wait_ms={} quiet_silent={} screen_held_input={}",
+            if target_process.is_empty() { "?" } else { target_process },
+            wait_ms,
+            quiet_silent,
+            screen_held_input,
+        )];
+        if screen_held_input {
+            lines.push(format!(
+                "[hyperia:hint] Your input appears to still be sitting in the target's input buffer ({}…). The submit byte was not accepted as Enter by this process. To submit it now, call terminal_keys with keys=\"\\n\" (LF) against this same pane.",
+                &cmd_summary[..cmd_summary.len().min(50)],
+            ));
+        } else if quiet_silent {
+            lines.push(format!(
+                "[hyperia:hint] No output observed within {}ms. Either the command was silent (e.g. `cd`) and worked, or the target didn't process your input. Confirm with terminal_screen.",
+                wait_ms,
+            ));
+        }
+        if Self::is_likely_ink_tui(target_process) {
+            lines.push(format!(
+                "[hyperia:hint] target_process='{}' is a Node/Ink TUI agent (claude-code, codex, aider, gemini-cli). terminal_run detects these and submits with LF (\\n); if input still didn't take, follow up with terminal_keys keys=\"\\n\".",
+                target_process,
+            ));
+        }
+        lines.join("\n")
+    }
+
+    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab, \\x03 for Ctrl-C. These are unescaped automatically. Address panes with window/tab/pane. The pane field accepts either a pane label or the paneId from terminal_status; if the label is empty, use paneId. If the human is currently active in the target pane, the keys are queued and the reply tells you so — resend with interrupt=true to send immediately (use this to interrupt a running process). The response includes a [hyperia:meta] envelope describing the target process so you can detect Ink/TUI agents that need LF (\\n) instead of CR (\\r) for submit.")]
     async fn terminal_keys(
         &self,
         Parameters(req): Parameters<KeysRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         self.focus_pane(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
-        let keys = unescape_keys(&req.keys);
         let mut path = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
         if req.interrupt.unwrap_or(false) {
             let sep = if path.contains('?') { '&' } else { '?' };
             path.push(sep);
             path.push_str("interrupt=true");
         }
-        let resp = self.post_text(&path, &keys).await?;
-        Ok(CallToolResult::success(vec![Content::text(resp)]))
+        let resp = self.post_text(&path, &req.keys).await?;
+        let target_process = self.pane_process_name(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
+        let mut out = resp;
+        if !target_process.is_empty() {
+            let extra = format!("\n[hyperia:meta] target_process={}", target_process);
+            out.push_str(&extra);
+            if Self::is_likely_ink_tui(&target_process) {
+                out.push_str(&format!(
+                    "\n[hyperia:hint] target_process='{}' is a Node/Ink TUI — it reads LF for submit. If your keys contained \\r and the target didn't react, retry with keys=\"\\n\".",
+                    target_process,
+                ));
+            }
+        }
+        Ok(CallToolResult::success(vec![Content::text(out)]))
     }
 
-    #[tool(description = "Type text into a terminal pane and press Enter. Works for shell commands and interactive programs (Codex, Python REPL, vim, etc.). Set submit=false to type without pressing Enter — useful to let the human review before submitting. Pass focus= to receive only the relevant part of the output — Maximus filters the result so you only see what you asked for. Pass raw=true to bypass Maximus and see the full output.")]
+    #[tool(description = "Type text into a terminal pane and press Enter. Works for shell commands and interactive programs (Codex, Python REPL, vim, etc.). Picks the submit byte per target: CR for shells (PowerShell, bash, cmd), LF for Node/Ink TUI agents (claude-code, codex, aider, gemini-cli) — so neither a phantom continuation prompt nor a silently-absorbed Enter occurs. Set submit=false to type without pressing Enter — useful to let the human review before submitting. Pass focus= to receive only the relevant part of the output — Maximus filters the result so you only see what you asked for. Pass raw=true to bypass Maximus and see the full output. Refuses shell-level backgrounding patterns (Start-Process, nohup, & at end, tmux) and points you to terminal_split / terminal_new_tab; set force=true to bypass. The response includes a [hyperia:meta] envelope when the target didn't appear to respond — telling you whether the input is still sitting unsubmitted and what to do next.")]
     async fn terminal_run(
         &self,
         Parameters(req): Parameters<RunRequest>,
@@ -344,29 +622,80 @@ impl HyperiaMcp {
         self.focus_pane(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
         let submit = req.submit.unwrap_or(true);
         let wait = req.wait_ms.unwrap_or(if submit { 2000 } else { 200 });
-        let cmd = strip_trailing_returns(&req.command);
+        let cmd = strip_trailing_returns(&req.command).to_string();
+
+        // Anti-pattern guardrail. Hyperia is a multi-pane terminal — agents
+        // should split a pane or open a new tab to host long-running tasks
+        // (servers, watchers, REPLs) instead of using shell-level
+        // backgrounding hacks. We bounce the common offenders with a clear
+        // message; the agent can set force=true to override.
+        if !req.force.unwrap_or(false) {
+            if let Some(pat) = looks_like_background_hack(&cmd) {
+                return Ok(CallToolResult::success(vec![Content::text(format!(
+                    "REFUSED ({pat}). Hyperia gives you unlimited panes — don't background processes with shell hacks. Instead:\n  1. terminal_split (or terminal_new_tab) to create a fresh pane\n  2. terminal_run your long-running command in that new pane (it stays visible, the human can see it, you can read its output any time with terminal_screen)\nIf you genuinely need shell backgrounding and not a Hyperia pane, resend with force=true."
+                ))]));
+            }
+        }
+
+        // Resolve the foreground process up front so we can pick the correct
+        // submit byte per target. Shells (pwsh, bash, cmd) take CR (`\r`) as
+        // Enter and treat a trailing LF as a continuation line (PowerShell
+        // shows a phantom `>>`). Node/Ink TUI agents (claude-code, codex,
+        // aider, gemini-cli) take LF (`\n`) and silently absorb a bare CR.
+        // There is no single byte that satisfies both — so we choose.
+        let target_process = self
+            .pane_process_name(req.window, req.tab.as_deref(), req.pane.as_deref())
+            .await;
+        let submit_seq = if Self::is_likely_ink_tui(&target_process) { "\n" } else { "\r" };
 
         if submit {
             // Use type-and-collect: sends the command, streams all PTY output until
             // wait_ms of silence (up to 8s hard cap). Returns full output, not just
             // the visible screen — avoids silent truncation of long command output.
+            // raw=true on the server side bypasses unescape_keys so Windows paths
+            // like `\research` aren't shredded into a CR + `esearch`.
             let base = self.pane_path("/api/type-and-collect", req.window, req.tab.as_deref(), req.pane.as_deref());
             let sep = if base.contains('?') { '&' } else { '?' };
-            let collect_path = format!("{}{sep}quiet_ms={}", base, wait);
+            let collect_path = format!("{}{sep}quiet_ms={}&raw=true", base, wait);
             // Give the HTTP client headroom over the server's quiet window so it doesn't
             // time out before /api/type-and-collect finishes draining PTY output.
             let req_timeout = std::time::Duration::from_millis(wait + 15_000);
             let raw_output = self
-                .post_text_with_timeout(&collect_path, &format!("{}\r", cmd), Some(req_timeout))
+                .post_text_with_timeout(&collect_path, &format!("{}{}", cmd, submit_seq), Some(req_timeout))
                 .await?;
             let max_chars = req.max_output_chars.unwrap_or(12_000);
             let text = clean_terminal_output(&raw_output, max_chars);
-            let out = self.maximus_filter(&text, req.focus.as_deref(), req.raw.unwrap_or(false)).await;
+            let mut out = self.maximus_filter(&text, req.focus.as_deref(), req.raw.unwrap_or(false)).await;
+
+            // --- Runtime feedback envelope ---
+            // The trimmed text (after Maximus + cleaning) is what the agent
+            // actually saw. If it's empty / pure whitespace AND the target's
+            // last screen lines still hold our command tail, the input never
+            // made it past the target's input buffer.
+            let trimmed_visible = text.trim();
+            let quiet_silent = trimmed_visible.is_empty();
+            let screen_held_input = if quiet_silent {
+                self.screen_likely_holds_unsubmitted(
+                    req.window, req.tab.as_deref(), req.pane.as_deref(), &cmd,
+                ).await
+            } else {
+                false
+            };
+            let diag = Self::build_run_diagnostic(
+                &target_process, wait, quiet_silent, screen_held_input, &cmd,
+            );
+            if !diag.is_empty() {
+                if !out.is_empty() && !out.ends_with('\n') { out.push('\n'); }
+                out.push_str(&diag);
+            }
             Ok(CallToolResult::success(vec![Content::text(out)]))
         } else {
-            // submit=false: just type the text without waiting for output
-            let pane_path = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
-            self.post_text(&pane_path, cmd).await?;
+            // submit=false: just type the text without waiting for output. raw=true
+            // for the same reason — preserve Windows backslash-paths verbatim.
+            let base = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
+            let sep = if base.contains('?') { '&' } else { '?' };
+            let pane_path = format!("{}{sep}raw=true", base);
+            self.post_text(&pane_path, &cmd).await?;
             Ok(CallToolResult::success(vec![Content::text(String::from("Typed (not submitted). Press Enter to run."))]))
         }
     }
@@ -385,6 +714,154 @@ impl HyperiaMcp {
     async fn terminal_status(&self) -> Result<CallToolResult, ErrorData> {
         let text = self.get("/api/status").await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(description = "Render a black-and-white schematic image of a tab's pane layout — proportional rectangles for every split, labeled with pane letter, kind, title, and cwd. Returns the PNG as inline image content (multimodal agents can view it directly) plus the saved file path on disk under ~/.hyperia/snapshots/. Much faster to grok than walking terminal_status JSON when you just need to orient yourself. Omit window/tab for the active tab.")]
+    async fn tab_image(
+        &self,
+        Parameters(req): Parameters<TabImageRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // Pull /api/status, then either filter to requested window/tab or pick
+        // the focused one. We assemble a flat list of PaneCells for the
+        // renderer.
+        let status_text = self.get("/api/status").await?;
+        let status: serde_json::Value = serde_json::from_str(&status_text)
+            .map_err(|e| ErrorData::internal_error(format!("status parse: {e}"), None))?;
+        let windows = status["windows"].as_array().cloned().unwrap_or_default();
+        if windows.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "(no windows open)".to_string(),
+            )]));
+        }
+        // Window selection
+        let win = if let Some(wid) = req.window {
+            windows
+                .iter()
+                .find(|w| w["id"].as_u64() == Some(wid as u64))
+                .cloned()
+        } else {
+            // First focused; else first window.
+            windows
+                .iter()
+                .find(|w| w["focused"].as_bool() == Some(true))
+                .cloned()
+                .or_else(|| windows.first().cloned())
+        };
+        let win = win.ok_or_else(|| {
+            ErrorData::invalid_params(
+                format!("No matching window (asked window={:?})", req.window),
+                None,
+            )
+        })?;
+        let tabs = win["tabs"].as_array().cloned().unwrap_or_default();
+        let tab = if let Some(name) = req.tab.as_deref() {
+            tabs.iter()
+                .find(|t| t["name"].as_str() == Some(name))
+                .cloned()
+        } else {
+            tabs.iter()
+                .find(|t| t["active"].as_bool() == Some(true))
+                .cloned()
+                .or_else(|| tabs.first().cloned())
+        };
+        let tab = tab.ok_or_else(|| {
+            ErrorData::invalid_params(
+                format!("No matching tab (window={:?} tab={:?})", req.window, req.tab),
+                None,
+            )
+        })?;
+        let tab_name = tab["name"].as_str().unwrap_or("(untitled)").to_string();
+        let panes_json = tab["panes"].as_array().cloned().unwrap_or_default();
+        // Convert JSON panes into PaneCell.
+        let mut cells: Vec<crate::snapshot_image::PaneCell> = Vec::with_capacity(panes_json.len());
+        // Borrow strings — collect owned then borrow on the fly.
+        struct Owned {
+            label: String,
+            kind: String,
+            title: String,
+            subtitle: String,
+            bsp_x: f32,
+            bsp_y: f32,
+            bsp_w: f32,
+            bsp_h: f32,
+        }
+        let owned: Vec<Owned> = panes_json
+            .iter()
+            .map(|p| Owned {
+                label: p["label"].as_str().unwrap_or("").to_string(),
+                kind: if p["webUrl"].is_string() { "web".into() } else { "shell".into() },
+                title: p["title"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| p["process"].as_str().filter(|s| !s.is_empty()))
+                    .or_else(|| p["shell"].as_str())
+                    .or_else(|| p["webUrl"].as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                subtitle: p["cwd"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| p["webUrl"].as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                bsp_x: p["bspX"].as_f64().unwrap_or(0.0) as f32,
+                bsp_y: p["bspY"].as_f64().unwrap_or(0.0) as f32,
+                bsp_w: p["bspW"].as_f64().unwrap_or(0.0) as f32,
+                bsp_h: p["bspH"].as_f64().unwrap_or(0.0) as f32,
+            })
+            .collect();
+        for o in &owned {
+            cells.push(crate::snapshot_image::PaneCell {
+                label: &o.label,
+                kind: &o.kind,
+                title: &o.title,
+                subtitle: &o.subtitle,
+                bsp_x: o.bsp_x,
+                bsp_y: o.bsp_y,
+                bsp_w: o.bsp_w,
+                bsp_h: o.bsp_h,
+            });
+        }
+
+        let png_bytes = crate::snapshot_image::render_tab_png(&tab_name, &cells);
+
+        // Save to ~/.hyperia/snapshots/<sanitized>-<8charwin>.png. Overwrites
+        // the previous snapshot for the same tab on every call.
+        let home = std::env::var("USERPROFILE")
+            .ok()
+            .or_else(|| std::env::var("HOME").ok())
+            .unwrap_or_else(|| ".".into());
+        let dir = std::path::PathBuf::from(home).join(".hyperia").join("snapshots");
+        let _ = std::fs::create_dir_all(&dir);
+        let safe_name: String = tab_name
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect();
+        let win_id = win["id"].as_u64().unwrap_or(0);
+        let filename = format!("w{}-{}.png", win_id, safe_name);
+        let path = dir.join(&filename);
+        let _ = std::fs::write(&path, &png_bytes);
+
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+        Ok(CallToolResult::success(vec![
+            Content::image(b64, "image/png".to_string()),
+            Content::text(format!(
+                "Saved to: {}\n({} panes, {} bytes)",
+                path.display(),
+                cells.len(),
+                png_bytes.len()
+            )),
+        ]))
+    }
+
+    #[tool(description = "Flush and save the current workspace layout state (windows, tabs, splits, terminal panes, and web panes) to the hyperia.json config file. The saved state can be resumed automatically upon the next launch of Hyperia or edited by other external tools.")]
+    async fn terminal_flush_state(
+        &self,
+        Parameters(req): Parameters<FlushRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let resp = self.post_text("/api/layout/save", "").await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
     #[tool(description = "Split the currently focused pane into two. Direction: 'horizontal' (top/bottom) or 'vertical' (left/right, default). The new panes will be labeled with the next available letters. Use terminal_status after splitting to see the updated labels.")]
@@ -459,6 +936,65 @@ impl HyperiaMcp {
         Parameters(req): Parameters<OpenWebPaneRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let resp = self.post_json("/api/web-pane", &serde_json::json!({"url": req.url})).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Reload a web pane browser page. Address panes with window/tab/pane. The pane field accepts either a pane label or the paneId from terminal_status.")]
+    async fn terminal_web_reload(
+        &self,
+        Parameters(req): Parameters<WebReloadRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let path = self.pane_path("/api/web-pane/reload", req.window, req.tab.as_deref(), req.pane.as_deref());
+        let resp = self.post_text(&path, "").await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Click an element inside a web pane page. You can specify a text query (fuzzy case-insensitive match e.g. 'log in') or a CSS selector (e.g. 'button.submit'). Address panes with window/tab/pane.")]
+    async fn terminal_web_click(
+        &self,
+        Parameters(req): Parameters<WebClickRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let path = self.pane_path("/api/web-pane/click", req.window, req.tab.as_deref(), req.pane.as_deref());
+        let body = serde_json::json!({
+            "text": req.text,
+            "selector": req.selector,
+        });
+        let resp = self.post_json(&path, &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Read the CURRENT page of a web pane as clean reader-mode MARKDOWN. Returns JSON {success, url, title, markdown}: `url` is the LIVE location.href (the opened URL in terminal_status goes stale after the user navigates — this is the real one), `title` is document.title, `markdown` is the page's main content converted from the ALREADY-RENDERED DOM (post-JS, logged-in/cookie state applied) by grub's converter — nav/footer/ads stripped. Strictly better than re-crawling the URL, which would re-fetch a possibly bot-blocked or logged-out version. Use this to see what page the user is on and extract its content (recipe, article, docs, search results). Address panes with window/tab/pane.")]
+    async fn web_pane_content(
+        &self,
+        Parameters(req): Parameters<WebReloadRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let path = self.pane_path("/api/web-pane/content", req.window, req.tab.as_deref(), req.pane.as_deref());
+        let resp = self.post_text(&path, "").await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Run arbitrary JavaScript inside a web pane and return its result. The code runs in the page's context (full DOM access), with a user-gesture so gesture-gated APIs work. The value of the LAST expression is returned as JSON {success, value}; return a Promise to await async work. Use this to scrape structured data, fill forms, read computed state, drive a SPA — anything the page's own JS could do. Address panes with window/tab/pane.")]
+    async fn web_pane_eval(
+        &self,
+        Parameters(req): Parameters<WebEvalRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let path = self.pane_path("/api/web-pane/eval", req.window, req.tab.as_deref(), req.pane.as_deref());
+        let resp = self.post_json(&path, &serde_json::json!({"js": req.js})).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Move or click at a pixel coordinate in a web pane, with a 👻 ghost cursor that visibly GLIDES to the spot so the human can watch you act. action='move' just glides the ghost there; action='click' glides then fires the full pointer/mouse event sequence on the element at (x,y). Coordinates are CSS pixels from the top-left of the page viewport (use web_pane_content / web_pane_eval with getBoundingClientRect to find them). Returns JSON {success, action, x, y, target, text}. Address panes with window/tab/pane.")]
+    async fn web_pane_mouse(
+        &self,
+        Parameters(req): Parameters<WebMouseRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let path = self.pane_path("/api/web-pane/mouse", req.window, req.tab.as_deref(), req.pane.as_deref());
+        let body = serde_json::json!({
+            "x": req.x,
+            "y": req.y,
+            "action": req.action.unwrap_or_else(|| "move".into()),
+        });
+        let resp = self.post_json(&path, &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -925,6 +1461,77 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(actions.join("\n"))]))
     }
 
+    #[tool(description = "BM25 full-text search across sticky notes. Ranks every note by relevance to your query (name + body). Returns JSON {hits:[{id, name, preview, score}]}. Use sticky_note_read with a returned id to get the full note. Faster + more precise than listing all notes and scanning.")]
+    async fn sticky_note_search(
+        &self,
+        Parameters(req): Parameters<StickySearchRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut path = format!("/api/search/sticky?q={}", urlencoding::encode(&req.query));
+        if let Some(l) = req.limit {
+            path.push_str(&format!("&limit={}", l));
+        }
+        let resp = self.get(&path).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "BM25 full-text search across shell logs — the searchable history of everything that scrolled through your terminal panes (commands + output), kept per shell beyond the visible screen. Omit pane_id to search every shell; pass a paneId (from terminal_status) to search just one. Returns JSON {hits:[{session_uid, line_number, text, score}]}. Use this to find 'where did I see that error', 'what was that command', etc. instead of scrolling.")]
+    async fn shell_log_search(
+        &self,
+        Parameters(req): Parameters<ShellSearchRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut path = format!("/api/search/shell?q={}", urlencoding::encode(&req.query));
+        if let Some(pid) = req.pane_id.as_deref() {
+            path.push_str(&format!("&uid={}", urlencoding::encode(pid)));
+        }
+        if let Some(l) = req.limit {
+            path.push_str(&format!("&limit={}", l));
+        }
+        let resp = self.get(&path).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Schedule a sticky note to run on a timer (Hyperia owns the timer + runners; the schedule survives restart). when='reminder' fires once after delay+unit (m/h/d); when='at' fires once at an ISO/datetime-local time; when='cron' fires on a 5-field cron expression. runner='notify' just shows a notification; 'shell' runs the note's text in a new Hyperia tab (in `dir` if given); 'n8shell' runs it in the nemesis8 container; 'n8agent' hands the note to the nemesis8 agent. Any runner other than notify LOCKS the note read-only (a 'hard' sticky) until unscheduled. Omit the schedule fields / pass unschedule=true to clear.")]
+    async fn sticky_note_schedule(
+        &self,
+        Parameters(req): Parameters<StickyScheduleRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = if req.unschedule.unwrap_or(false) {
+            serde_json::json!({"schedule": serde_json::Value::Null})
+        } else {
+            serde_json::json!({
+                "when": req.when.unwrap_or_else(|| "reminder".into()),
+                "runner": req.runner.unwrap_or_else(|| "notify".into()),
+                "delay": req.delay,
+                "unit": req.unit,
+                "at": req.at,
+                "cron": req.cron,
+                "dir": req.dir,
+            })
+        };
+        let resp = self.post_json(&format!("/api/notes/{}/schedule", req.id), &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Grapheme-safe, transactional file editor (Aegis-Edit / LOPT+BFTP). Apply one or more DISJOINT edits to a UTF-8 text file by (line, column) where columns are extended grapheme clusters — so it can NEVER split a multibyte codepoint or emoji the way a byte-offset edit can. Coordinates are 0-based; for a pure insert set end==start; empty `text` is a pure delete. Multiple edits are validated up front (overlaps rejected → file untouched) and applied back-to-front so earlier offsets don't shift. Pass preview=true to get the resulting content WITHOUT writing. Returns JSON {ok, path, lines, bytes, applied, preview}. Prefer this over file_write for in-place edits to existing files.")]
+    async fn apply_text_edits(
+        &self,
+        Parameters(req): Parameters<ApplyEditsRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({
+            "path": req.path,
+            "edits": req.edits.iter().map(|e| serde_json::json!({
+                "start_line": e.start_line,
+                "start_col": e.start_col,
+                "end_line": e.end_line,
+                "end_col": e.end_col,
+                "text": e.text,
+            })).collect::<Vec<_>>(),
+            "preview": req.preview.unwrap_or(false),
+        });
+        let resp = self.post_json("/api/edit/apply", &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
     #[tool(description = "List all sticky notes. Returns id, name, text preview, color, and position for each note.")]
     async fn sticky_note_list(&self) -> Result<CallToolResult, ErrorData> {
         let resp = self.get("/api/notes").await?;
@@ -1075,6 +1682,44 @@ fn clean_terminal_output(raw: &str, max_chars: usize) -> String {
 /// Convert literal escape sequences (\n, \r, \t) to actual control characters.
 /// Strip trailing newline / carriage-return sequences that agents append.
 /// Handles real chars (\r, \n) and escape literals (\\n, \\r, /n, /r).
+/// Detect shell-level backgrounding hacks (Start-Process, nohup, & at end,
+/// tmux). Returns the matched pattern name for the agent-facing message.
+/// Conservative on purpose: we only flag the small set of patterns we
+/// actually want to redirect into terminal_split / terminal_new_tab.
+fn looks_like_background_hack(cmd: &str) -> Option<&'static str> {
+    let trimmed = cmd.trim();
+    let lower = trimmed.to_lowercase();
+    // PowerShell: Start-Process (case-insensitive; sometimes with backtick-newline)
+    if lower.contains("start-process") {
+        return Some("Start-Process");
+    }
+    // Posix shell: leading `nohup `
+    if lower.starts_with("nohup ") || lower.contains(" nohup ") {
+        return Some("nohup");
+    }
+    // tmux session start (`tmux new`, `tmux new-session`, `tmux attach` in scripts)
+    if lower.starts_with("tmux ") || lower.contains(" tmux ") {
+        return Some("tmux");
+    }
+    // GNU screen
+    if lower.starts_with("screen -") || lower.contains(" screen -") {
+        return Some("screen");
+    }
+    // Trailing ` &` — but NOT `&&` (logical-and) and NOT `&>` (stderr redirect).
+    // Look at the *last* non-whitespace char and what precedes it.
+    let bytes = trimmed.as_bytes();
+    if let Some(&last) = bytes.last() {
+        if last == b'&' {
+            // Exclude `&&` (which has a second & one step back).
+            let second_to_last = bytes.get(bytes.len().saturating_sub(2)).copied();
+            if second_to_last != Some(b'&') {
+                return Some("trailing &");
+            }
+        }
+    }
+    None
+}
+
 fn strip_trailing_returns(s: &str) -> &str {
     let mut s = s.trim_end();
     loop {
@@ -1096,7 +1741,9 @@ fn unescape_keys(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '\\' {
+        if c == '\n' {
+            out.push('\r');
+        } else if c == '\\' {
             match chars.next() {
                 Some('n') => out.push('\r'),
                 Some('r') => out.push('\r'),
@@ -1504,6 +2151,15 @@ impl ServerHandler for HyperiaMcp {
         ServerInfo {
             instructions: Some(
                 "Hyperia MCP server — controls a running Hyperia terminal emulator. \
+                 \n\nCRITICAL — UI-FIRST PRINCIPLE: Hyperia gives you unlimited terminal panes and \
+                 tabs. NEVER use shell-level backgrounding to run servers, watchers, REPLs, or any \
+                 long-running task. That includes: PowerShell `Start-Process`, `nohup`, `tmux`, \
+                 `screen`, and a trailing ` &` in bash. Instead: call `terminal_split` (or \
+                 `terminal_new_tab`) to create a dedicated visible pane, then `terminal_run` the \
+                 process in the foreground inside it. The human can see it, you can read its output \
+                 any time via `terminal_screen`, and closing the pane closes the process. The \
+                 `terminal_run` tool refuses these patterns by default — set `force=true` only if \
+                 you genuinely need OS-level backgrounding and not a Hyperia pane. \
                  \n\nAddressing: Hyperia organizes sessions as windows > tabs > panes. \
                  Call terminal_status to see the full hierarchy. Most tools accept optional \
                  window (id), tab (name), and pane (label) parameters: \

@@ -19,6 +19,7 @@ import * as termGroupActions from './actions/term-groups';
 import * as uiActions from './actions/ui';
 import * as updaterActions from './actions/updater';
 import WebPaneDialog, {showWebPaneDialog} from './components/web-pane-dialog';
+import {activeTerminals} from './components/term';
 import HyperContainer from './containers/hyper';
 import rpc from './rpc';
 import {getRootGroups} from './selectors';
@@ -200,15 +201,51 @@ rpc.on('clone request horizontal', () => {
 });
 
 rpc.on('reset fontSize req', () => {
-  store_.dispatch(uiActions.resetFontSize());
+  const state = store_.getState();
+  const activeTermGroup = state.termGroups.activeTermGroup;
+  const activeGroup = activeTermGroup ? state.termGroups.termGroups[activeTermGroup] : null;
+  const isWebPane = activeGroup && activeGroup.webUrl !== undefined;
+  const isChooserPane = activeGroup && !activeGroup.sessionUid && activeGroup.webUrl === undefined;
+
+  if (isWebPane) {
+    rpc.emit('web-pane-zoom-reset', {uid: activeTermGroup!});
+  } else if (isChooserPane) {
+    rpc.emit('picker-zoom-reset', {uid: activeTermGroup!});
+  } else {
+    store_.dispatch(uiActions.resetFontSize());
+  }
 });
 
 rpc.on('increase fontSize req', () => {
-  store_.dispatch(uiActions.increaseFontSize());
+  const state = store_.getState();
+  const activeTermGroup = state.termGroups.activeTermGroup;
+  const activeGroup = activeTermGroup ? state.termGroups.termGroups[activeTermGroup] : null;
+  const isWebPane = activeGroup && activeGroup.webUrl !== undefined;
+  const isChooserPane = activeGroup && !activeGroup.sessionUid && activeGroup.webUrl === undefined;
+
+  if (isWebPane) {
+    rpc.emit('web-pane-zoom-in', {uid: activeTermGroup!});
+  } else if (isChooserPane) {
+    rpc.emit('picker-zoom-in', {uid: activeTermGroup!});
+  } else {
+    store_.dispatch(uiActions.increaseFontSize());
+  }
 });
 
 rpc.on('decrease fontSize req', () => {
-  store_.dispatch(uiActions.decreaseFontSize());
+  const state = store_.getState();
+  const activeTermGroup = state.termGroups.activeTermGroup;
+  const activeGroup = activeTermGroup ? state.termGroups.termGroups[activeTermGroup] : null;
+  const isWebPane = activeGroup && activeGroup.webUrl !== undefined;
+  const isChooserPane = activeGroup && !activeGroup.sessionUid && activeGroup.webUrl === undefined;
+
+  if (isWebPane) {
+    rpc.emit('web-pane-zoom-out', {uid: activeTermGroup!});
+  } else if (isChooserPane) {
+    rpc.emit('picker-zoom-out', {uid: activeTermGroup!});
+  } else {
+    store_.dispatch(uiActions.decreaseFontSize());
+  }
 });
 
 rpc.on('move left req', () => {
@@ -311,7 +348,7 @@ function collectPaneLayout(
   }
   if (group?.webUrl !== undefined && group?.webUrl !== null) {
     const isAi = group.webUrl.startsWith('ai://');
-    let title = group.tabName || group.webName;
+    let title = group.webName;
     if (!title && group.webUrl) {
       if (isAi) {
         title = 'ask';
@@ -324,7 +361,7 @@ function collectPaneLayout(
       }
     }
     if (!title) {
-      title = isAi ? 'ask' : 'Web pane';
+      title = isAi ? 'ask' : 'Browser';
     }
     const active = group.uid === state.termGroups.activeTermGroup;
     return [{uid: group.uid, splitLabel: '', isWeb: true, isAi, title, url: group.webUrl, active}];
@@ -346,7 +383,7 @@ function collectPaneLayout(
     }
     if (g.webUrl !== undefined && g.webUrl !== null) {
       const isAi = g.webUrl.startsWith('ai://');
-      let title = group?.tabName || g.webName;
+      let title = g.webName;
       if (!title && g.webUrl) {
         if (isAi) {
           title = 'ask';
@@ -359,7 +396,7 @@ function collectPaneLayout(
         }
       }
       if (!title) {
-        title = isAi ? 'ask' : 'Web pane';
+        title = isAi ? 'ask' : 'Browser';
       }
       const active = g.uid === state.termGroups.activeTermGroup;
       return [{uid: g.uid as string, isWeb: true, isAi, title, url: g.webUrl, active}];
@@ -468,4 +505,63 @@ rpc.on('open web pane req', ({url}: {url?: string}) => {
       store_.dispatch(termGroupActions.openWebPaneInNewTab(full) as any);
     });
   }
+});
+
+rpc.on('get-layout-state-req', () => {
+  const {termGroups, sessions} = store_.getState();
+  
+  const serializedSessions: Record<string, any> = {};
+  Object.keys(sessions.sessions).forEach((uid) => {
+    const s = sessions.sessions[uid];
+    if (s) {
+      const activeTerm = activeTerminals.get(uid);
+      const lastCommand = activeTerm ? activeTerm.getCurrentCommandLine() : (s.lastCommand || '');
+      serializedSessions[uid] = {
+        uid: s.uid,
+        title: s.title,
+        tabName: s.tabName,
+        description: s.description,
+        cols: s.cols,
+        rows: s.rows,
+        shell: s.shell,
+        pid: s.pid,
+        profile: s.profile,
+        cwd: s.cwd,
+        shellName: s.shellName,
+        lastCommand
+      };
+    }
+  });
+
+  const serializedTermGroups: Record<string, any> = {};
+  Object.keys(termGroups.termGroups).forEach((uid) => {
+    const g = termGroups.termGroups[uid];
+    if (g) {
+      serializedTermGroups[uid] = {
+        uid: g.uid,
+        sessionUid: g.sessionUid,
+        parentUid: g.parentUid,
+        direction: g.direction,
+        sizes: g.sizes,
+        children: g.children ? g.children.asMutable() : [],
+        webUrl: (g as any).webUrl,
+        webName: (g as any).webName,
+        tabName: g.tabName
+      };
+    }
+  });
+
+  const layoutState = {
+    activeUid: sessions.activeUid,
+    activeRootGroup: termGroups.activeRootGroup,
+    activeSessions: termGroups.activeSessions ? termGroups.activeSessions.asMutable() : {},
+    termGroups: serializedTermGroups,
+    sessions: serializedSessions
+  };
+
+  rpc.emit('layout-state-reply', layoutState);
+});
+
+rpc.on('restore-layout-state', (savedState) => {
+  store_.dispatch(termGroupActions.restoreLayoutState(savedState));
 });

@@ -1,6 +1,6 @@
 [package]
 name = "hyperia-sidecar"
-version = "0.10.31"
+version = "0.10.32"
 edition = "2021"
 description = "Rust sidecar for Hyperia: agent engine, MCP, signaling"
 
@@ -17,6 +17,15 @@ opt-level = "z"
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
+# Local BM25 search engine (lib-only slice) — backs per-shell log search and
+# sticky-note search. Path dep on the sibling crate; no network, no CLI.
+lume = { path = "../lume" }
+# Grapheme-safe line-oriented piece-table editor (LOPT + BFTP). Backs
+# multi-agent / locked-block sticky editing. Sibling crate, lib-only.
+aegis-edit = { path = "../aegis-edit" }
+# HTML → clean reader-mode markdown (grub's converter, pyo3 stripped). Turns a
+# web pane's rendered DOM into markdown for web_pane_content. Sibling crate.
+grub-md = { path = "../grub-md" }
 
 # Claude API + HTTP client
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
@@ -35,6 +44,7 @@ async-stream = "0.3"
 
 # Screenshot rendering
 png = "0.17"
+font8x8 = "0.3"
 
 # Terminal parsing (for screen dumps from Electron)
 vt100 = "0.15"

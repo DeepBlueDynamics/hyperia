@@ -20,7 +20,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Optional
+from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 
@@ -538,6 +538,112 @@ def note_close(id: str) -> str:
     Args:
         id: Note ID from note_list (e.g. "note-1712345678-abc1")."""
     return _post_json("/api/notes/close", {"id": id})
+
+
+# ---------------------------------------------------------------------------
+# Search (lume BM25 — local, ranked)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def sticky_note_search(query: str, limit: Optional[int] = None) -> str:
+    """BM25 full-text search across all sticky notes (name + body), ranked by
+    relevance. Returns JSON {hits:[{id, name, preview, score}]}. Use note_list
+    -> the id to act on a hit. Far more precise than listing every note and
+    scanning.
+
+    Args:
+        query: Free-text search query.
+        limit: Max hits (default 20)."""
+    path = f"/api/search/sticky?q={urllib.parse.quote(query)}"
+    if limit is not None:
+        path += f"&limit={int(limit)}"
+    return _get(path)
+
+
+@mcp.tool()
+def shell_log_search(
+    query: str,
+    pane_id: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> str:
+    """BM25 full-text search across shell logs — the searchable history of
+    everything that scrolled through the terminal panes (commands + output),
+    kept per shell beyond the visible screen. Omit pane_id to search every
+    shell; pass a paneId (from terminal_status) to search just one. Returns
+    JSON {hits:[{session_uid, line_number, text, score}]}. Use this to find
+    'where did I see that error' / 'what was that command' instead of scrolling.
+
+    Args:
+        query: Free-text search query.
+        pane_id: Restrict to one shell by paneId (optional).
+        limit: Max hits (default 20)."""
+    path = f"/api/search/shell?q={urllib.parse.quote(query)}"
+    if pane_id is not None:
+        path += f"&uid={urllib.parse.quote(pane_id)}"
+    if limit is not None:
+        path += f"&limit={int(limit)}"
+    return _get(path)
+
+
+@mcp.tool()
+def apply_text_edits(
+    path: str,
+    edits: list[dict[str, Any]],
+    preview: Optional[bool] = None,
+) -> str:
+    """Grapheme-safe, transactional file editor (Aegis-Edit). Apply one or more
+    DISJOINT edits to a UTF-8 text file addressed by (line, column) where columns
+    are extended grapheme clusters — so it can NEVER split a multibyte codepoint
+    or emoji the way a byte-offset edit can. Coordinates are 0-based; for a pure
+    insert set end == start; empty text is a pure delete. Edits are validated up
+    front (overlaps rejected -> file untouched) and applied back-to-front so
+    earlier offsets never shift. Returns JSON {ok, path, lines, bytes, applied,
+    wrote, preview}. Prefer over file_write for in-place edits to existing files.
+
+    Args:
+        path: Absolute path to the UTF-8 text file.
+        edits: List of {start_line, start_col, end_line, end_col, text}.
+        preview: True to compute the result WITHOUT writing (dry run)."""
+    body: dict[str, Any] = {"path": path, "edits": edits, "preview": bool(preview)}
+    return _post_json("/api/edit/apply", body)
+
+
+@mcp.tool()
+def sticky_note_schedule(
+    id: str,
+    when: Optional[str] = None,
+    runner: Optional[str] = None,
+    delay: Optional[int] = None,
+    unit: Optional[str] = None,
+    at: Optional[str] = None,
+    cron: Optional[str] = None,
+    dir: Optional[str] = None,
+    unschedule: bool = False,
+) -> str:
+    """Schedule a sticky note to run on a timer. Hyperia owns the timer and the
+    schedule survives restart.
+
+    Args:
+        id: Note ID (from note_list).
+        when: "reminder" (delay+unit), "at" (absolute time), or "cron".
+        runner: "notify" (notification only), "shell" (run the note text in a
+                new Hyperia tab), "n8shell" (run in the nemesis8 container), or
+                "n8agent" (hand the note to the nemesis8 agent). Any runner
+                other than notify LOCKS the note read-only until unscheduled.
+        delay: reminder — how many `unit`s from now.
+        unit: reminder unit "m"|"h"|"d".
+        at: "at" — ISO/datetime-local time, e.g. "2026-06-01T19:30".
+        cron: 5-field cron expression, e.g. "*/15 * * * *".
+        dir: working directory for shell/n8shell runners.
+        unschedule: pass True to clear the schedule and unlock the note."""
+    if unschedule:
+        return _post_json(f"/api/notes/{id}/schedule", {"schedule": None})
+    body = {
+        "when": when or "reminder",
+        "runner": runner or "notify",
+        "delay": delay, "unit": unit, "at": at, "cron": cron, "dir": dir,
+    }
+    return _post_json(f"/api/notes/{id}/schedule", body)
 
 
 # ---------------------------------------------------------------------------

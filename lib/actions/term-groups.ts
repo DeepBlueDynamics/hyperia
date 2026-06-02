@@ -7,7 +7,8 @@ import {
   TERM_GROUP_EXIT_ACTIVE,
   TERM_GROUP_SET_WEB_URL,
   TERM_GROUP_ADD_WEB_TAB,
-  TERM_GROUP_ACTIVATE_WEB_TAB
+  TERM_GROUP_ACTIVATE_WEB_TAB,
+  RESTORE_LAYOUT_STATE
 } from '../../typings/constants/term-groups';
 import type {ITermState, ITermGroup, HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
@@ -55,7 +56,24 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
           }
           const activeSession = activeUid ? sessions.sessions[activeUid] : null;
           const cwd = (activeSession && activeSession.cwd) || ui.cwd;
-          const profile = _profile ? _profile : 'picker';
+          // Is the pane we're splitting FROM a web pane? (No shell to inherit.)
+          let activeGroup = activeUid ? findBySession(termGroups, activeUid) : null;
+          if (!activeGroup && activeUid && termGroups.termGroups[activeUid]) {
+            activeGroup = termGroups.termGroups[activeUid];
+          }
+          const isWebSource = !!(activeGroup && (activeGroup as any).webUrl !== undefined && (activeGroup as any).webUrl !== null);
+          // Profile selection:
+          //  - Explicit `_profile` (agent terminal_split, or a chosen profile)
+          //    always wins.
+          //  - Split DOWN (HORIZONTAL) shows the pane-type PICKER.
+          //  - Split RIGHT (VERTICAL) inherits the source pane's shell profile —
+          //    a quick duplicate beside it — EXCEPT from a web pane, which has no
+          //    shell to inherit, so it shows the picker too.
+          const profile = _profile
+            ? _profile
+            : direction === 'HORIZONTAL' || isWebSource
+              ? 'picker'
+              : (activeSession && activeSession.profile) || 'picker';
           rpc.emit('new', {
             splitDirection: direction,
             cwd,
@@ -86,9 +104,9 @@ export function requestTermGroup(_activeUid: string | undefined, _profile: strin
       effect: () => {
         const {ui, sessions} = getState();
         const activeUid = _activeUid ? _activeUid : sessions.activeUid;
-        const activeSession = activeUid ? sessions.sessions[activeUid] : null;
+        const activeSession = activeUid && sessions.sessions[activeUid] ? sessions.sessions[activeUid] : null;
         const cwd = (activeSession && activeSession.cwd) || ui.cwd;
-        const profile = _profile ? _profile : activeUid ? sessions.sessions[activeUid].profile : window.profileName;
+        const profile = _profile ? _profile : activeSession ? activeSession.profile : window.profileName || 'default';
         rpc.emit('new', {
           isNewGroup: true,
           cwd,
@@ -266,5 +284,29 @@ export function exitActiveTermGroup() {
         dispatch(userExitTermGroup(uid));
       }
     });
+  };
+}
+
+export function restoreLayoutState(savedState: any) {
+  return (dispatch: HyperDispatch) => {
+    dispatch({
+      type: RESTORE_LAYOUT_STATE,
+      savedState
+    });
+
+    if (savedState.sessions) {
+      Object.keys(savedState.sessions).forEach((uid) => {
+        const session = savedState.sessions[uid];
+        if (session && !session.url) {
+          rpc.emit('new', {
+            uid,
+            cwd: session.cwd,
+            profile: session.profile,
+            isRestore: true,
+            lastCommand: session.lastCommand
+          });
+        }
+      });
+    }
   };
 }

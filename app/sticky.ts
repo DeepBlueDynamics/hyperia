@@ -1,11 +1,13 @@
 // Sticky note windows — frameless, always-on-top, colored floating notes.
 // Loads static sticky.html from app dir. Persists to ~/.hyperia/stickys/notes.json.
 
-import {readFileSync, writeFileSync, mkdirSync} from 'fs';
+import {readFileSync, writeFileSync, mkdirSync, watchFile, unwatchFile} from 'fs';
 import {homedir} from 'os';
-import {join, resolve} from 'path';
+import {join, resolve, basename} from 'path';
 
-import {BrowserWindow, ipcMain, Menu, screen, app, nativeImage, shell} from 'electron';
+import {BrowserWindow, ipcMain, Menu, screen, app, nativeImage, shell, dialog, Notification} from 'electron';
+
+import {exec} from 'child_process';
 
 import isDev from 'electron-is-dev';
 
@@ -249,6 +251,35 @@ function stickysDir(): string {
   return dir;
 }
 
+function getStickyDefaultSize(): {width: number; height: number} {
+  try {
+    return JSON.parse(readFileSync(join(stickysDir(), 'defaults.json'), 'utf8'));
+  } catch {
+    return {width: 280, height: 220};
+  }
+}
+
+function saveStickyDefaultSize(width: number, height: number) {
+  try {
+    writeFileSync(join(stickysDir(), 'defaults.json'), JSON.stringify({width, height}), 'utf8');
+  } catch (e) {
+    console.error('Failed to save sticky defaults:', e);
+  }
+}
+
+type StickySchedule = {
+  when: 'reminder' | 'at' | 'cron';
+  runner: 'notify' | 'shell' | 'n8shell' | 'n8agent';
+  delay?: number; // reminder: count
+  unit?: 'm' | 'h' | 'd'; // reminder unit
+  at?: string; // 'at': datetime-local string
+  cron?: string;
+  dir?: string;
+  created_at?: string;
+  fire_at?: number; // computed epoch ms for one-shot schedules
+  last_run?: string;
+};
+
 type NoteData = {
   id: string;
   name?: string;
@@ -261,11 +292,24 @@ type NoteData = {
   height?: number;
   saved_at?: string;
   last_closed_at?: string;
+  schedule?: StickySchedule | null;
+  // Bind a normal (editable) sticky to a file on disk. When set, the note's
+  // body IS the file: loaded from disk on open, written back (debounced) on
+  // edit. Distinct from `filePath` above, which is the read-only drag-in viewer.
+  source?: {kind: 'file'; path: string} | null;
+  // true while a window is open for this note. Set true when opened, false
+  // ONLY on explicit close. An app quit (taskkill) leaves it true, so
+  // "active" notes reopen on next launch.
+  open?: boolean;
 };
 
 function readAllNotes(): NoteData[] {
   try {
-    return JSON.parse(readFileSync(join(stickysDir(), 'notes.json'), 'utf8')) as NoteData[];
+    const arr = JSON.parse(readFileSync(join(stickysDir(), 'notes.json'), 'utf8'));
+    if (Array.isArray(arr)) {
+      return arr.filter((n) => n && typeof n === 'object' && typeof n.id === 'string') as NoteData[];
+    }
+    return [];
   } catch {
     return [];
   }
@@ -302,7 +346,36 @@ function updateNote(id: string, text: string): boolean {
   if (win && !win.isDestroyed()) {
     win.webContents.send('note-updated', {id, text});
   }
+  // updateNote is the EXTERNAL path (agent / MCP sticky_note_update). If you're
+  // not already looking at the note, ping you that it changed — clicking the
+  // notification opens it. Skipped when the note window is focused (you can
+  // see the live update) and rate-limited so a streaming agent isn't spammy.
+  const focused = win && !win.isDestroyed() && win.isFocused();
+  if (!focused) notifyStickyUpdated(note);
   return true;
+}
+
+const lastStickyNotify = new Map<string, number>();
+function notifyStickyUpdated(note: NoteData): void {
+  if (!Notification.isSupported()) return;
+  const now = Date.now();
+  const last = lastStickyNotify.get(note.id) || 0;
+  if (now - last < 30000) return; // at most one ping per note per 30s
+  lastStickyNotify.set(note.id, now);
+  const n = new Notification({
+    title: `📝 ${note.name || 'Sticky'} updated`,
+    body: (note.text || '').replace(/\s+/g, ' ').slice(0, 140)
+  });
+  n.on('click', () => {
+    const w = stickyWindows.get(note.id);
+    if (w && !w.isDestroyed()) {
+      w.show();
+      w.focus();
+    } else {
+      createStickyNote({id: note.id});
+    }
+  });
+  n.show();
 }
 
 function deleteNote(id: string): boolean {
@@ -311,6 +384,88 @@ function deleteNote(id: string): boolean {
   if (next.length === notes.length) return false;
   writeAllNotes(next);
   return true;
+}
+
+// ── File binding (Aegis-Edit v1: a sticky is a live view of a file on disk) ────
+// v1 save semantics: the open sticky owns the file; edits debounced-write the
+// whole file from the renderer. (v2 will diff + route through apply_text_edits
+// for multi-agent / locked-block editing.)
+function bindStickyFile(noteId: string, sender: Electron.WebContents): void {
+  const win = BrowserWindow.fromWebContents(sender);
+  const opts: Electron.OpenDialogOptions = {
+    title: 'Link sticky to file',
+    properties: ['openFile'],
+    filters: [
+      {name: 'Text & code', extensions: ['txt', 'md', 'markdown', 'rs', 'ts', 'tsx', 'js', 'jsx', 'json', 'py', 'sh', 'toml', 'yaml', 'yml', 'html', 'css']},
+      {name: 'All files', extensions: ['*']}
+    ]
+  };
+  // Modal to the sticky window when we can resolve it, else a free dialog.
+  const dlg = win ? dialog.showOpenDialog(win, opts) : dialog.showOpenDialog(opts);
+  dlg
+    .then((res) => {
+      try {
+        if (res.canceled || !res.filePaths.length) return;
+        const filePath = res.filePaths[0];
+        let content = '';
+        try {
+          content = readFileSync(filePath, 'utf8');
+        } catch (e) {
+          console.error(`sticky: could not read ${filePath}:`, (e as Error).message);
+          return;
+        }
+        const name = basename(filePath);
+        upsertNote({id: noteId, source: {kind: 'file', path: filePath}, text: content, name});
+        if (!sender.isDestroyed()) sender.send('sticky-bind-file', {path: filePath, content, name});
+        startFileWatch(noteId, filePath); // live-refresh on external edits
+
+      } catch (e) {
+        console.error('sticky: link handler error:', e);
+      }
+    })
+    .catch((e) => console.error('sticky: link dialog error:', e));
+}
+
+function unbindStickyFile(noteId: string, sender: Electron.WebContents): void {
+  upsertNote({id: noteId, source: null});
+  stopFileWatch(noteId);
+  sender.send('sticky-unbind-file');
+}
+
+function bindOpenFile(noteId: string): void {
+  const note = getNote(noteId);
+  if (note?.source?.path) void shell.openPath(note.source.path);
+}
+
+// Watch a linked file so external edits (another editor, an agent via
+// apply_text_edits) refresh the open sticky live. We POLL (watchFile) rather
+// than fs.watch on purpose: apply_text_edits writes atomically (temp + rename),
+// and fs.watch on Windows loses the file when it's replaced by a rename, so it
+// never fires. Polling stat() on the path survives the swap. The renderer
+// ignores a push whose content already matches its textarea, so the sticky's
+// OWN writes don't echo back into a loop.
+const fileWatchPaths = new Map<string, string>();
+function startFileWatch(noteId: string, filePath: string): void {
+  stopFileWatch(noteId);
+  fileWatchPaths.set(noteId, filePath);
+  watchFile(filePath, {interval: 600}, (curr, prev) => {
+    if (curr.mtimeMs === prev.mtimeMs) return; // no real change
+    const win = stickyWindows.get(noteId);
+    if (!win || win.isDestroyed()) return;
+    try {
+      const content = readFileSync(filePath, 'utf8');
+      win.webContents.send('sticky-file-changed', {content});
+    } catch {
+      /* file removed mid-edit; ignore this tick */
+    }
+  });
+}
+function stopFileWatch(noteId: string): void {
+  const p = fileWatchPaths.get(noteId);
+  if (p) {
+    unwatchFile(p);
+    fileWatchPaths.delete(noteId);
+  }
 }
 
 function createStickyNote(
@@ -329,15 +484,6 @@ function createStickyNote(
   const cursor = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursor);
 
-  // Slim default — compact sticky size
-  const width = options.width || 280;
-  const height = options.height || 220;
-
-  const x =
-    options.x ?? Math.round(display.workArea.x + display.workArea.width / 2 - width / 2 + Math.random() * 60 - 30);
-  const y =
-    options.y ?? Math.round(display.workArea.y + display.workArea.height / 2 - height / 2 + Math.random() * 60 - 30);
-
   // Determine or generate note ID
   const noteId = options.id || `note-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -351,6 +497,27 @@ function createStickyNote(
 
   // Generate a random name (or use existing)
   const savedNote = options.id ? getNote(options.id) : undefined;
+
+  // Resolve default size
+  const defaultSize = getStickyDefaultSize();
+  const width = options.width || savedNote?.width || defaultSize.width;
+  const height = options.height || savedNote?.height || defaultSize.height;
+
+  const x =
+    options.x ??
+    savedNote?.x ??
+    Math.max(
+      display.workArea.x,
+      Math.min(Math.round(cursor.x - width / 2), display.workArea.x + display.workArea.width - width)
+    );
+  const y =
+    options.y ??
+    savedNote?.y ??
+    Math.max(
+      display.workArea.y,
+      Math.min(Math.round(cursor.y - height / 2), display.workArea.y + display.workArea.height - height)
+    );
+
   const displayName = options.name || savedNote?.name || generateNoteName();
 
   // Pick color (use saved if restoring, else cycle)
@@ -391,7 +558,8 @@ function createStickyNote(
     }
   });
 
-  // Persist initial record for notes
+  // Persist initial record for notes. Mark open=true so this note reopens on
+  // next launch if Hyperia is quit while it's showing.
   if (!options.filePath && noteId !== 'sticky-search-window') {
     const current = getNote(noteId) || {
       id: noteId,
@@ -403,7 +571,7 @@ function createStickyNote(
       width,
       height
     };
-    upsertNote({...current, name: displayName, x, y, width, height, color: colorHex});
+    upsertNote({...current, name: displayName, x, y, width, height, color: colorHex, open: true});
   }
 
   stickyWindows.set(noteId, win);
@@ -425,6 +593,11 @@ function createStickyNote(
     win.focus();
     win.webContents.focus();
 
+    // Linked note → watch its file so external edits refresh it live.
+    if (savedNote?.source?.kind === 'file' && savedNote.source.path) {
+      startFileWatch(noteId, savedNote.source.path);
+    }
+
     // DevTools on the first sticky for diagnostics
     if (devToolsFirst) {
       devToolsFirst = false;
@@ -439,13 +612,40 @@ function createStickyNote(
     const note = getNote(noteId);
     if (note) {
       upsertNote({...note, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height});
+      saveStickyDefaultSize(bounds.width, bounds.height);
     }
   };
   win.on('moved', saveGeom);
   win.on('resized', saveGeom);
 
+  // Opacity: solid (1.0) whenever the sticky is FOCUSED (clicked — stays solid
+  // no matter where the cursor goes, until you click away) OR HOVERED (mouse
+  // over it). Dimmed (0.78) otherwise, so you can see what's behind it.
+  // Hover state arrives from the renderer via 'sticky-hover' (body mouseenter/
+  // leave); focus state from the window's own focus/blur.
+  const applyStickyOpacity = () => {
+    if (win.isDestroyed()) return;
+    const solid = (win as any)._focused || (win as any)._hovered;
+    win.setOpacity(solid ? 1.0 : 0.78);
+  };
+  (win as any)._focused = true; // created focused
+  (win as any)._hovered = false;
+  win.on('focus', () => {
+    (win as any)._focused = true;
+    applyStickyOpacity();
+    // Raise above sibling stickys (they're all alwaysOnTop, so a click focuses
+    // but doesn't reorder within that layer — moveTop brings the clicked one
+    // to the front).
+    if (!win.isDestroyed()) win.moveTop();
+  });
+  win.on('blur', () => {
+    (win as any)._focused = false;
+    applyStickyOpacity();
+  });
+
   win.on('closed', () => {
     stickyWindows.delete(noteId);
+    stopFileWatch(noteId);
   });
 
   return win;
@@ -474,12 +674,73 @@ export function initSticky() {
   ipcMain.on('sticky-close', (_event, noteId: string) => {
     const win = stickyWindows.get(noteId);
     if (win && !win.isDestroyed()) {
-      // Mark as closed in metadata but keep the record
+      // Mark as closed (and not-open) in metadata but keep the record.
       const note = getNote(noteId);
       if (note) {
-        upsertNote({...note, last_closed_at: new Date().toISOString()});
+        upsertNote({...note, last_closed_at: new Date().toISOString(), open: false});
       }
       win.close();
+    }
+  });
+
+  // Hide/show — temporarily hide sticky WINDOWS without closing/archiving them
+  // (the note stays "open", just off-screen; show-all brings them back). Distinct
+  // from sticky-close, which archives the note to closed-notes.
+  ipcMain.on('hide-all-stickys', () => hideAllStickys());
+  ipcMain.on('show-all-stickys', () => showAllStickys());
+  ipcMain.on('hide-sticky', (_event, noteId: string) => hideSticky(noteId));
+  ipcMain.on('hide-other-stickys', (_event, noteId: string) => hideAllStickys(noteId));
+
+  // Open every note in `ids`. replace=true closes all currently-open note
+  // windows (archives them) first; replace=false adds the matches alongside
+  // whatever is already open.
+  ipcMain.on('open-matching-stickys', (_event, ids: string[], replace: boolean) => {
+    if (replace) {
+      for (const [id, win] of stickyWindows.entries()) {
+        if (id === SEARCH_WIN_ID) continue;
+        if (!win.isDestroyed()) {
+          const note = getNote(id);
+          if (note) upsertNote({...note, last_closed_at: new Date().toISOString()});
+          win.close();
+        }
+      }
+    }
+    for (const id of Array.isArray(ids) ? ids : []) {
+      if (id !== SEARCH_WIN_ID) createStickyNote({id});
+    }
+  });
+
+  // Generate a "Stickys Summary" note. Built in the main process because only
+  // here do we know which notes are currently OPEN (active) vs merely saved.
+  ipcMain.on('generate-summary-sticky', () => {
+    createStickyNote({text: buildStickysSummary()});
+  });
+
+  // Directory picker for the scheduling panel.
+  ipcMain.handle('sticky-pick-dir', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const res = await dialog.showOpenDialog(win as BrowserWindow, {properties: ['openDirectory']});
+    return res.canceled || !res.filePaths.length ? null : res.filePaths[0];
+  });
+
+  // Schedule / unschedule a sticky (from the GUI panel or MCP).
+  ipcMain.on('sticky-schedule', (_event, noteId: string, sched: StickySchedule) => {
+    scheduleSticky(noteId, sched);
+  });
+  ipcMain.on('sticky-unschedule', (_event, noteId: string) => {
+    unscheduleSticky(noteId);
+  });
+
+  // Start the scheduler poll loop + re-arm any schedules persisted on disk.
+  startScheduler();
+
+  // Hover state from renderer (body mouseenter/leave) — solidify on hover.
+  ipcMain.on('sticky-hover', (event, hovering: boolean) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) {
+      (win as any)._hovered = hovering;
+      const solid = (win as any)._focused || (win as any)._hovered;
+      win.setOpacity(solid ? 1.0 : 0.78);
     }
   });
 
@@ -492,7 +753,9 @@ export function initSticky() {
   });
 
   // Native context menu — can extend beyond window bounds
-  ipcMain.on('sticky-context-menu', (event, noteId: string, hasSelection: boolean, currentColor: string) => {
+  ipcMain.on(
+    'sticky-context-menu',
+    (event, noteId: string, hasSelection: boolean, _currentColor: string, isFileBound?: boolean) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) return;
 
@@ -539,27 +802,35 @@ export function initSticky() {
           ...codeThemes
         ]
       },
-      ...(currentColor?.startsWith('code:')
-        ? [
-            {
-              label: 'Highlight',
-              submenu: [
-                {
-                  label: 'Auto (highlight.js)',
-                  click: () => event.sender.send('sticky-set-highlight', 'static')
-                },
-                {
-                  label: 'AI Highlight',
-                  click: () => event.sender.send('sticky-set-highlight', 'agent')
-                },
-                {
-                  label: 'Off',
-                  click: () => event.sender.send('sticky-set-highlight', 'off')
-                }
-              ]
-            } as Electron.MenuItemConstructorOptions
-          ]
-        : []),
+      // Highlight is offered on every note now — code/file notes highlight the
+      // read-only <pre>, text notes use the live hljs backdrop behind the
+      // textarea. (`currentColor` no longer gates it.)
+      {
+        label: 'Syntax Highlight',
+        submenu: [
+          {
+            label: 'Auto (highlight.js)',
+            click: () => event.sender.send('sticky-set-highlight', 'static')
+          },
+          {
+            label: 'AI Highlight',
+            click: () => event.sender.send('sticky-set-highlight', 'agent')
+          },
+          {
+            label: 'Off',
+            click: () => event.sender.send('sticky-set-highlight', 'off')
+          }
+        ]
+      },
+      {type: 'separator'},
+      // File binding: a normal sticky can become a live view of a file on disk.
+      // Edits write back (debounced). Distinct from the read-only drag-in viewer.
+      ...(isFileBound
+        ? ([
+            {label: 'Open File in OS Editor', click: () => bindOpenFile(noteId)},
+            {label: 'Unlink File', click: () => unbindStickyFile(noteId, event.sender)}
+          ] as Electron.MenuItemConstructorOptions[])
+        : ([{label: 'Link to File…', click: () => bindStickyFile(noteId, event.sender)}] as Electron.MenuItemConstructorOptions[])),
       {type: 'separator'},
       {
         label: 'Cut',
@@ -580,10 +851,55 @@ export function initSticky() {
         click: () => event.sender.send('sticky-copy-all')
       },
       {type: 'separator'},
+      {label: 'New Sticky', click: () => createStickyNote({})},
       {
-        label: 'Rename...',
+        label: 'Clone This Sticky',
+        click: () => {
+          const n = getNote(noteId);
+          createStickyNote({
+            text: n?.text,
+            color: n?.color,
+            width: n?.width,
+            height: n?.height,
+            name: n?.name ? `${n.name} (copy)` : undefined
+          });
+        }
+      },
+      {
+        label: 'Search Stickys...',
+        click: () => {
+          createStickyNote({
+            id: 'sticky-search-window',
+            name: '🔍 Search Stickys',
+            color: '#ffffff',
+            width: 400,
+            height: 500
+          });
+        }
+      },
+      {
+        // A linked sticky's name IS its file's basename — renaming the sticky
+        // would just diverge from the file, so it's disabled while linked.
+        label: isFileBound ? 'Rename… (linked to file)' : 'Rename...',
+        enabled: !isFileBound,
         click: () => event.sender.send('sticky-rename')
       },
+      {type: 'separator'},
+      {
+        label: 'Hide This',
+        click: () => {
+          if (!win.isDestroyed()) win.hide();
+        }
+      },
+      // Only offer "Hide Others" if there's another visible sticky to hide.
+      ...(otherStickysVisible(noteId)
+        ? [{label: 'Hide Other Stickys', click: () => hideAllStickys(noteId)}]
+        : []),
+      // "Active" = currently-open notes (not closed/archived). Only show "Hide"
+      // when something is visible, "Show" when something is hidden.
+      ...(anyStickyVisible() ? [{label: 'Hide Active Stickys', click: () => hideAllStickys()}] : []),
+      ...(anyStickyHidden() ? [{label: 'Show Active Stickys', click: () => showAllStickys()}] : []),
+      {type: 'separator'},
       {
         label: 'Delete',
         click: () => event.sender.send('sticky-delete')
@@ -626,21 +942,18 @@ export function initSticky() {
     // handled by win.on('moved'/'resized') above
   });
 
-  // Restore notes that were open last time (skip ones explicitly closed)
-  const notes = readAllNotes();
-  for (const note of notes) {
-    if (note.filePath) continue; // file mode notes aren't restored
-    if (note.text && note.text.trim().length > 0) {
-      // Only restore notes with content and not marked as closed recently
-      const lastClosed = note.last_closed_at ? Date.parse(note.last_closed_at) : 0;
-      const lastSaved = note.saved_at ? Date.parse(note.saved_at) : 0;
-      // Skip notes closed AFTER their last save (user explicitly closed)
-      if (lastClosed > lastSaved) continue;
-
-      // Don't auto-restore on startup — too aggressive
-      // Just keep the record so next time user creates a note with same ID it restores
+  // Reopen the notes that were ACTIVE (open) when Hyperia last quit. The `open`
+  // flag is set true when a window opens and false ONLY on explicit close, so
+  // an app quit (taskkill) leaves active notes flagged open → they reopen here.
+  // Deferred a tick so the windows mount after the app is ready.
+  setTimeout(() => {
+    for (const note of readAllNotes()) {
+      if (note.id === SEARCH_WIN_ID || note.filePath) continue;
+      if (note.open && !stickyWindows.has(note.id)) {
+        createStickyNote({id: note.id});
+      }
     }
-  }
+  }, 400);
 }
 
 export function closeStickyNote(noteId: string): boolean {
@@ -648,12 +961,285 @@ export function closeStickyNote(noteId: string): boolean {
   if (win && !win.isDestroyed()) {
     const note = getNote(noteId);
     if (note) {
-      upsertNote({...note, last_closed_at: new Date().toISOString()});
+      upsertNote({...note, last_closed_at: new Date().toISOString(), open: false});
     }
     win.close();
     return true;
   }
   return false;
+}
+
+// --- Hide/show sticky windows (off-screen, not closed/archived) ---
+// The search-stickys utility window is excluded — it's a tool, not a note.
+const SEARCH_WIN_ID = 'sticky-search-window';
+
+function hideAllStickys(exceptId?: string): void {
+  for (const [id, win] of stickyWindows.entries()) {
+    if (id === SEARCH_WIN_ID) continue;
+    if (exceptId && id === exceptId) continue;
+    if (!win.isDestroyed() && win.isVisible()) win.hide();
+  }
+}
+
+function showAllStickys(): void {
+  for (const [id, win] of stickyWindows.entries()) {
+    if (id === SEARCH_WIN_ID) continue;
+    if (!win.isDestroyed() && !win.isVisible()) win.showInactive();
+  }
+}
+
+function hideSticky(noteId: string): void {
+  const win = stickyWindows.get(noteId);
+  if (win && !win.isDestroyed()) win.hide();
+}
+
+/** True if at least one note window (not the search tool) is currently shown. */
+export function anyStickyVisible(): boolean {
+  for (const [id, win] of stickyWindows.entries()) {
+    if (id === SEARCH_WIN_ID) continue;
+    if (!win.isDestroyed() && win.isVisible()) return true;
+  }
+  return false;
+}
+
+/** True if at least one note window exists but is hidden. */
+export function anyStickyHidden(): boolean {
+  for (const [id, win] of stickyWindows.entries()) {
+    if (id === SEARCH_WIN_ID) continue;
+    if (!win.isDestroyed() && !win.isVisible()) return true;
+  }
+  return false;
+}
+
+// ── Scheduling engine ────────────────────────────────────────────────────────
+// Schedules live on the note record (notes.json `schedule` field) so they
+// survive restart. A single poll loop fires due one-shots and matching cron
+// minutes. A scheduled note with a runner (anything but 'notify') is "hard":
+// locked read-only until unscheduled.
+const SIDECAR = 'http://localhost:9800';
+
+function computeFireAt(s: StickySchedule): number | undefined {
+  if (s.when === 'reminder') {
+    const mult = s.unit === 'h' ? 3600000 : s.unit === 'd' ? 86400000 : 60000;
+    return Date.now() + (s.delay || 0) * mult;
+  }
+  if (s.when === 'at' && s.at) {
+    const t = Date.parse(s.at);
+    return isNaN(t) ? undefined : t;
+  }
+  return undefined; // cron has no single fire_at
+}
+
+function lockNote(noteId: string, locked: boolean): void {
+  const win = stickyWindows.get(noteId);
+  if (win && !win.isDestroyed()) win.webContents.send('sticky-lock', locked);
+}
+
+export function scheduleSticky(noteId: string, sched: StickySchedule): void {
+  const note = getNote(noteId);
+  if (!note) return;
+  const s: StickySchedule = {...sched};
+  s.fire_at = computeFireAt(s);
+  upsertNote({...note, schedule: s});
+  // Runner != notify → "hard" sticky (lock content until unscheduled).
+  lockNote(noteId, s.runner !== 'notify');
+  startScheduler(); // ensure the loop is running (e.g. MCP before initSticky ran)
+}
+
+export function unscheduleSticky(noteId: string): void {
+  const note = getNote(noteId);
+  if (!note) return;
+  upsertNote({...note, schedule: null});
+  lockNote(noteId, false);
+}
+
+function cronMatches(expr: string, d: Date): boolean {
+  // Minimal 5-field cron: min hour dom mon dow. Supports *, */n, and exact.
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+  const fields = [d.getMinutes(), d.getHours(), d.getDate(), d.getMonth() + 1, d.getDay()];
+  return parts.every((p, i) => {
+    const v = fields[i];
+    if (p === '*') return true;
+    const step = p.match(/^\*\/(\d+)$/);
+    if (step) return v % Number(step[1]) === 0;
+    return p.split(',').some((n) => Number(n) === v);
+  });
+}
+
+async function fireSchedule(note: NoteData): Promise<void> {
+  const s = note.schedule;
+  if (!s) return;
+  const title = note.name || 'Sticky';
+  const body = (note.text || '').slice(0, 140);
+  // Always notify so there's a visible signal a schedule fired. Clicking the
+  // notification opens/focuses the note (reopening it if it was closed).
+  if (Notification.isSupported()) {
+    const n = new Notification({title: `⏰ ${title}`, body: body || 'Scheduled sticky fired'});
+    n.on('click', () => {
+      const w = stickyWindows.get(note.id);
+      if (w && !w.isDestroyed()) {
+        w.show();
+        w.focus();
+      } else {
+        createStickyNote({id: note.id});
+      }
+    });
+    n.show();
+  }
+  // Bring the sticky up — reopen it if it was closed. So a reminder/notify
+  // schedule always pops the note in front, not just an OS notification.
+  const win = stickyWindows.get(note.id);
+  if (win && !win.isDestroyed()) {
+    win.show();
+    win.focus();
+  } else {
+    createStickyNote({id: note.id});
+  }
+  const cmd = note.text || '';
+  try {
+    if (s.runner === 'shell') {
+      // Run the note's ```run``` block(s) and APPEND the output back into the
+      // note. The rest of the note content is preserved.
+      runStickyAndAppend(note.id, s.dir);
+    } else if (s.runner === 'n8shell') {
+      const full = s.dir ? `cd "${s.dir}"; ${cmd}` : cmd;
+      await fetch(`${SIDECAR}/api/pane/new`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({profile: 'n8', command: full})
+      });
+    } else if (s.runner === 'n8agent') {
+      // Hand the note to the nemesis8 agent shell to act on.
+      await fetch(`${SIDECAR}/api/notes/${note.id}/agent-run`, {method: 'POST'}).catch(() => {});
+    }
+  } catch (e) {
+    console.error('[sticky] schedule runner failed:', e);
+  }
+}
+
+// Extract the command(s) inside ```run … ``` fenced block(s). Falls back to the
+// whole note text if there's no run block.
+function extractRunCommands(text: string): string {
+  const re = /```run\s*\n([\s\S]*?)```/gi;
+  const blocks: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) blocks.push(m[1].trim());
+  return blocks.length ? blocks.join('\n') : text.trim();
+}
+
+// Run a sticky's ```run``` block in a shell and append the captured output to
+// the note as a ```result``` block. The note content (incl. the run block) is
+// preserved — output is added below it.
+function runStickyAndAppend(noteId: string, dir?: string): void {
+  const note = getNote(noteId);
+  if (!note) return;
+  const command = extractRunCommands(note.text || '');
+  if (!command.trim()) return;
+  const shellBin = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
+  exec(
+    command,
+    {cwd: dir || undefined, shell: shellBin, windowsHide: true, timeout: 120000, maxBuffer: 4 * 1024 * 1024},
+    (err, stdout, stderr) => {
+      let out = `${stdout || ''}${stderr || ''}`.trim();
+      if (!out && err) out = String(err.message || err);
+      const stamp = new Date().toLocaleString();
+      const fresh = getNote(noteId);
+      const base = (fresh ? fresh.text : note.text) || '';
+      const appended = `${base}\n\n\`\`\`result ${stamp}\n${out.slice(0, 6000)}\n\`\`\``;
+      updateNote(noteId, appended);
+    }
+  );
+}
+
+let schedulerStarted = false;
+function startScheduler(): void {
+  if (schedulerStarted) return;
+  schedulerStarted = true;
+  // Re-lock any "hard" notes whose windows are open at startup.
+  for (const note of readAllNotes()) {
+    if (note.schedule && note.schedule.runner !== 'notify') lockNote(note.id, true);
+  }
+  let lastCronMinute = -1;
+  setInterval(() => {
+    const now = new Date();
+    const nowMs = now.getTime();
+    const minute = Math.floor(nowMs / 60000);
+    const cronTick = minute !== lastCronMinute;
+    if (cronTick) lastCronMinute = minute;
+    for (const note of readAllNotes()) {
+      const s = note.schedule;
+      if (!s) continue;
+      if (s.when === 'cron') {
+        if (cronTick && s.cron && cronMatches(s.cron, now)) {
+          upsertNote({...note, schedule: {...s, last_run: now.toISOString()}});
+          void fireSchedule(note);
+        }
+      } else if (s.fire_at && nowMs >= s.fire_at) {
+        // One-shot: clear the schedule + unlock after firing.
+        upsertNote({...note, schedule: null});
+        lockNote(note.id, false);
+        void fireSchedule(note);
+      }
+    }
+  }, 15000);
+}
+
+/** True if any visible note window other than `exceptId` exists. */
+function otherStickysVisible(exceptId: string): boolean {
+  for (const [id, win] of stickyWindows.entries()) {
+    if (id === SEARCH_WIN_ID || id === exceptId) continue;
+    if (!win.isDestroyed() && win.isVisible()) return true;
+  }
+  return false;
+}
+
+// Gnosis-style "Stickys Summary" text: a header box (generated time + active/
+// saved counts), an ACTIVE list (currently-open windows) and a SAVED list
+// (everything else, recent first, capped), each as [From: name] links. Built
+// in main because only here is the open-window set known.
+function buildStickysSummary(): string {
+  const all = readAllNotes().filter((n) => n.text && n.text.trim().length > 0);
+  const openIds = new Set(
+    [...stickyWindows.keys()].filter((id) => id !== SEARCH_WIN_ID)
+  );
+  const recency = (n: NoteData) =>
+    Date.parse(n.last_closed_at || '') || Date.parse(n.saved_at || '') || 0;
+  const active = all.filter((n) => openIds.has(n.id)).sort((a, b) => recency(b) - recency(a));
+  const saved = all.filter((n) => !openIds.has(n.id)).sort((a, b) => recency(b) - recency(a));
+
+  const now = new Date();
+  const ts =
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-` +
+    `${String(now.getDate()).padStart(2, '0')} ${now.toTimeString().slice(0, 8)}`;
+  const bar = '─'.repeat(38);
+  const padRow = (s: string) => '│ ' + s + ' '.repeat(Math.max(0, bar.length - 1 - s.length)) + '│';
+  const title = 'Stickys Summary';
+  const tp = Math.floor((bar.length - title.length) / 2);
+  const preview = (n: NoteData) => (n.text || '').replace(/\s+/g, ' ').slice(0, 80);
+
+  const lines: string[] = [
+    '┌' + bar + '┐',
+    '│' + ' '.repeat(tp) + title + ' '.repeat(bar.length - tp - title.length) + '│',
+    '├' + bar + '┤',
+    padRow('Generated: ' + ts),
+    padRow(`Active: ${active.length}   Saved: ${saved.length}`),
+    '└' + bar + '┘',
+    ''
+  ];
+  if (active.length) {
+    lines.push(`🟢 ACTIVE STICKYS (${active.length}):`);
+    for (const n of active) lines.push(`- [From: ${n.name || n.id}] — ${preview(n)}`);
+    lines.push('');
+  }
+  if (saved.length) {
+    lines.push(`💾 SAVED STICKYS (${saved.length}):`);
+    for (const n of saved.slice(0, 20)) lines.push(`- [From: ${n.name || n.id}] — ${preview(n)}`);
+    if (saved.length > 20) lines.push(`… and ${saved.length - 20} more saved stickys`);
+    lines.push('');
+  }
+  lines.push('💡 Ctrl/Cmd+click a [From: name] link to open that sticky.');
+  return lines.join('\n');
 }
 
 export function deleteStickyNote(noteId: string): boolean {

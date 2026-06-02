@@ -14,7 +14,7 @@ import WebSocket from 'ws';
 
 import {getProfiles, getConfig} from './config';
 import type Session from './session';
-import {createStickyNote, closeStickyNote, deleteStickyNote, updateStickyNote} from './sticky';
+import {createStickyNote, closeStickyNote, deleteStickyNote, updateStickyNote, scheduleSticky, unscheduleSticky} from './sticky';
 
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
@@ -308,6 +308,22 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'SaveLayoutState': {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      const windows: any[] = Array.from((app as any).getWindows?.() || []);
+      if (windows.length > 0) {
+        for (const w of windows) {
+          if (w && w.rpc) {
+            w.rpc.emit('get-layout-state-req', undefined);
+          }
+        }
+        sendResult(seq, 'ok');
+      } else {
+        sendResult(seq, 'No windows available');
+      }
+      break;
+    }
+
     case 'Screen': {
       sendResult(seq, 'Screen reads handled sidecar-side');
       break;
@@ -552,6 +568,161 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'WebPaneReload': {
+      const uid = msg.uid as string | undefined;
+      if (uid) {
+        const tracked = trackedSessions.get(uid);
+        const win = tracked ? getHyperiaWindowById(tracked.windowId) : null;
+        if (win && (win as any).rpc) {
+          (win as any).rpc.emit('web-pane-reload', uid);
+        } else {
+          // Broadcast to all windows
+          const windows: BrowserWindow[] = Array.from((app as any).getWindows?.() || []);
+          for (const w of windows) {
+            if (w && (w as any).rpc) {
+              (w as any).rpc.emit('web-pane-reload', uid);
+            }
+          }
+        }
+        sendResult(seq, 'ok');
+      } else {
+        sendResult(seq, 'No uid provided');
+      }
+      break;
+    }
+
+    case 'WebPaneContent': {
+      // Read the CURRENT page (live URL + title + visible text) from a web pane's
+      // webview. Mirrors WebPaneClick: ask the renderer, await the result.
+      const uid = msg.uid as string | undefined;
+      if (!uid) {
+        sendResult(seq, JSON.stringify({ success: false, error: 'No uid provided' }));
+        break;
+      }
+      const tracked = trackedSessions.get(uid);
+      const win = tracked ? getHyperiaWindowById(tracked.windowId) : getFocusedHyperiaWindow();
+      if (win && (win as any).rpc) {
+        const timeout = setTimeout(() => {
+          (win as any).rpc.emitter.off('web-pane-read-result', onResult);
+          sendResult(seq, JSON.stringify({ success: false, error: 'Timeout waiting for page content' }));
+        }, 8000);
+
+        const onResult = (res: any) => {
+          if (res && res.uid === uid) {
+            clearTimeout(timeout);
+            (win as any).rpc.emitter.off('web-pane-read-result', onResult);
+            sendResult(seq, JSON.stringify(res.result));
+          }
+        };
+
+        (win as any).rpc.emitter.on('web-pane-read-result', onResult);
+        (win as any).rpc.emit('web-pane-read', { uid });
+      } else {
+        sendResult(seq, JSON.stringify({ success: false, error: 'No matching window or RPC connection found' }));
+      }
+      break;
+    }
+
+    case 'WebPaneEval': {
+      // Inject + run arbitrary JS in a web pane, return its serializable value.
+      const uid = msg.uid as string | undefined;
+      const js = msg.js as string | undefined;
+      if (!uid || !js) {
+        sendResult(seq, JSON.stringify({ success: false, error: 'uid and js are required' }));
+        break;
+      }
+      const tracked = trackedSessions.get(uid);
+      const win = tracked ? getHyperiaWindowById(tracked.windowId) : getFocusedHyperiaWindow();
+      if (win && (win as any).rpc) {
+        const timeout = setTimeout(() => {
+          (win as any).rpc.emitter.off('web-pane-eval-result', onResult);
+          sendResult(seq, JSON.stringify({ success: false, error: 'Timeout waiting for eval result' }));
+        }, 15000);
+        const onResult = (res: any) => {
+          if (res && res.uid === uid) {
+            clearTimeout(timeout);
+            (win as any).rpc.emitter.off('web-pane-eval-result', onResult);
+            sendResult(seq, JSON.stringify(res.result));
+          }
+        };
+        (win as any).rpc.emitter.on('web-pane-eval-result', onResult);
+        (win as any).rpc.emit('web-pane-eval', { uid, js });
+      } else {
+        sendResult(seq, JSON.stringify({ success: false, error: 'No matching window or RPC connection found' }));
+      }
+      break;
+    }
+
+    case 'WebPaneMouse': {
+      // Move / click at a pixel coordinate, with the 👻 ghost cursor.
+      const uid = msg.uid as string | undefined;
+      if (!uid) {
+        sendResult(seq, JSON.stringify({ success: false, error: 'No uid provided' }));
+        break;
+      }
+      const x = Number(msg.x) || 0;
+      const y = Number(msg.y) || 0;
+      const action = (msg.action as string) === 'click' ? 'click' : 'move';
+      const tracked = trackedSessions.get(uid);
+      const win = tracked ? getHyperiaWindowById(tracked.windowId) : getFocusedHyperiaWindow();
+      if (win && (win as any).rpc) {
+        const timeout = setTimeout(() => {
+          (win as any).rpc.emitter.off('web-pane-mouse-result', onResult);
+          sendResult(seq, JSON.stringify({ success: false, error: 'Timeout waiting for mouse result' }));
+        }, 8000);
+        const onResult = (res: any) => {
+          if (res && res.uid === uid) {
+            clearTimeout(timeout);
+            (win as any).rpc.emitter.off('web-pane-mouse-result', onResult);
+            sendResult(seq, JSON.stringify(res.result));
+          }
+        };
+        (win as any).rpc.emitter.on('web-pane-mouse-result', onResult);
+        (win as any).rpc.emit('web-pane-mouse', { uid, x, y, action });
+      } else {
+        sendResult(seq, JSON.stringify({ success: false, error: 'No matching window or RPC connection found' }));
+      }
+      break;
+    }
+
+    case 'WebPaneClick': {
+      const uid = msg.uid as string | undefined;
+      const text = msg.text as string | undefined;
+      const selector = msg.selector as string | undefined;
+      if (!uid) {
+        sendResult(seq, JSON.stringify({ success: false, error: 'No uid provided' }));
+        break;
+      }
+      if (!text && !selector) {
+        sendResult(seq, JSON.stringify({ success: false, error: 'Either text or selector is required' }));
+        break;
+      }
+
+      // Find target window
+      const tracked = trackedSessions.get(uid);
+      const win = tracked ? getHyperiaWindowById(tracked.windowId) : getFocusedHyperiaWindow();
+      if (win && (win as any).rpc) {
+        const timeout = setTimeout(() => {
+          (win as any).rpc.emitter.off('web-pane-click-result', onResult);
+          sendResult(seq, JSON.stringify({ success: false, error: 'Timeout waiting for click result' }));
+        }, 8000);
+
+        const onResult = (res: any) => {
+          if (res && res.uid === uid) {
+            clearTimeout(timeout);
+            (win as any).rpc.emitter.off('web-pane-click-result', onResult);
+            sendResult(seq, JSON.stringify(res.result));
+          }
+        };
+
+        (win as any).rpc.emitter.on('web-pane-click-result', onResult);
+        (win as any).rpc.emit('web-pane-click', { uid, text, selector });
+      } else {
+        sendResult(seq, JSON.stringify({ success: false, error: 'No matching window or RPC connection found' }));
+      }
+      break;
+    }
+
     case 'NoteCreate': {
       const text = msg.text as string | undefined;
       const color = msg.color as string | undefined;
@@ -580,6 +751,18 @@ function handleCommand(msg: Record<string, unknown>) {
       const text = msg.text as string;
       const updated = updateStickyNote(noteId, text);
       sendResult(seq, updated ? 'ok' : 'Note not found');
+      break;
+    }
+
+    case 'NoteSchedule': {
+      const noteId = msg.id as string;
+      const sched = msg.schedule as any;
+      if (sched) {
+        scheduleSticky(noteId, sched);
+      } else {
+        unscheduleSticky(noteId);
+      }
+      sendResult(seq, 'ok');
       break;
     }
 

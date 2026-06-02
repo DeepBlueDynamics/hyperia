@@ -3,6 +3,7 @@ import type {BrowserWindow, MenuItemConstructorOptions} from 'electron';
 
 import {execCommand} from '../commands';
 import {getDecoratedKeymaps} from '../plugins';
+import {anyStickyVisible, anyStickyHidden} from '../sticky';
 
 const separator: MenuItemConstructorOptions = {type: 'separator'};
 
@@ -54,10 +55,18 @@ const contextMenuTemplate = (
   menu.push(separator);
   menu.push({label: 'New Stickys', click: () => ipcMain.emit('new-sticky', {})});
   menu.push({label: 'Search Stickys', click: () => ipcMain.emit('search-stickies')});
+  // "Active" = currently-open notes. Only offer Hide when something's visible,
+  // Show when something's hidden — no point showing both (or either) otherwise.
+  if (anyStickyVisible()) {
+    menu.push({label: 'Hide Active Stickys', click: () => ipcMain.emit('hide-all-stickys')});
+  }
+  if (anyStickyHidden()) {
+    menu.push({label: 'Show Active Stickys', click: () => ipcMain.emit('show-all-stickys')});
+  }
 
   menu.push(separator);
   menu.push({label: 'Clear Buffer', accelerator: commandKeys['editor:clearBuffer'], click: cmd('editor:clearBuffer')});
-  menu.push({label: 'Search', accelerator: commandKeys['editor:search'], click: cmd('editor:search')});
+  menu.push({label: 'Find', accelerator: commandKeys['editor:search'], click: cmd('editor:search')});
 
   return menu;
 };

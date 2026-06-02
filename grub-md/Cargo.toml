@@ -1,0 +1,19 @@
+[package]
+name = "grub-md"
+version = "0.1.0"
+edition = "2021"
+description = "grub_md: HTML → clean reader-mode markdown converter. Vendored from nuts.services/grubcrawler/grub_md and stripped of its PyO3 binding so it links as a normal Rust lib. The same converter grub uses on fetched HTML — Hyperia points it at the already-rendered DOM of a web pane (outerHTML)."
+
+[lib]
+name = "grub_md"
+
+[dependencies]
+scraper = "0.21"
+ego-tree = "0.9"
+url = "2"
+regex = "1"
+once_cell = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1

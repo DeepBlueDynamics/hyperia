@@ -50,7 +50,7 @@ const WebPaneDialog = () => {
   return (
     <div className="wpd_backdrop" onMouseDown={cancel}>
       <div className="wpd_dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="wpd_title">Open Web Pane</div>
+        <div className="wpd_title">Open Browser</div>
         <div className="wpd_row">
           <svg className="wpd_globe" viewBox="0 0 16 16" width="16" height="16" fill="none">
             <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.2" />

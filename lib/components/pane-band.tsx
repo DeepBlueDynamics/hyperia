@@ -17,7 +17,8 @@ type PaneBandProps = {
   height?: 'normal' | 'compact'; // maps to var(--band-height) | var(--band-height-compact)
   isSplitRightDisabled?: boolean;
   isSplitDownDisabled?: boolean;
-  paneName?: string; // Explicit string to copy to clipboard
+  paneName?: string; // Optional override for the visible name used in click-to-copy
+  paneId?: string; // Underlying UID — used ONLY to append a short suffix to the copied string for disambiguation
 };
 
 const getTextFromNode = (node: React.ReactNode): string => {
@@ -64,7 +65,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       height = 'compact',
       isSplitRightDisabled = false,
       isSplitDownDisabled = false,
-      paneName
+      paneName,
+      paneId
     },
     ref
   ) => {
@@ -84,8 +86,16 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
 
     const handleNameClick = (e: React.MouseEvent) => {
       e.stopPropagation();
-      const textToCopy = paneName || getTextFromNode(label) || 'Pane';
-      const cleanText = textToCopy.trim();
+      // Prefer the visible label text (what the user actually sees) and only
+      // fall back to an explicit override or a generic placeholder. If we
+      // know the underlying UID, append a short suffix so two panes with
+      // the same name remain distinguishable. Shape:
+      //   `<name> (pane <8charHex>)`
+      // Pasting that anywhere reads as the human name first; the parenthetical
+      // tells the reader (or an agent) the kind and gives a stable handle.
+      const name = (getTextFromNode(label) || paneName || 'Pane').trim();
+      const shortId = paneId ? paneId.replace(/-/g, '').slice(0, 8) : '';
+      const cleanText = shortId ? `${name} (pane ${shortId})` : name;
       if (cleanText) {
         navigator.clipboard.writeText(cleanText)
           .then(() => {
@@ -146,27 +156,30 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               gap: 'var(--space-6)',
               fontSize: '11px',
               fontWeight: 500,
-              flexShrink: 0,
+              flexShrink: 1,
+              minWidth: 0,
               cursor: 'pointer',
               position: 'relative',
               padding: '2px var(--space-4)',
               borderRadius: 'var(--radius-4)',
               transition: 'background 0.15s ease',
+              overflowX: 'auto',
+              whiteSpace: 'nowrap'
             }}
-            title="Click to copy name"
+            title="Click to copy name (scroll to view full)"
           >
             {!isPlaceholder && resolvedIcon && (
-              <span style={{display: 'flex', alignItems: 'center'}}>{resolvedIcon}</span>
+              <span style={{display: 'flex', alignItems: 'center', flexShrink: 0}}>{resolvedIcon}</span>
             )}
             {isPlaceholder ? (
-              <span style={{color: 'var(--text-tertiary)', fontStyle: 'italic', fontWeight: 400}}>{label}</span>
+              <span style={{color: 'var(--text-tertiary)', fontStyle: 'italic', fontWeight: 400, whiteSpace: 'nowrap', flexShrink: 0}}>{label}</span>
             ) : (
-              <span style={{display: 'inline-flex', alignItems: 'center', gap: 'var(--space-4)'}}>
+              <span style={{display: 'inline-flex', alignItems: 'center', gap: 'var(--space-4)', whiteSpace: 'nowrap', flexShrink: 0}}>
                 {label}
                 {profileChip}
               </span>
             )}
-            {copied && <div className="pane-band-copied-badge">Copied!</div>}
+            {copied && <div className="pane-band-copied-badge">Copied (pane)</div>}
           </div>
 
           {/* Nav Cluster */}
@@ -423,9 +436,17 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             display: block;
           }
 
-          .pane-band-name-cluster:hover {
-            background: rgba(255, 255, 255, 0.08) !important;
-          }
+           .pane-band-name-cluster {
+             scrollbar-width: none !important;
+           }
+
+           .pane-band-name-cluster::-webkit-scrollbar {
+             display: none !important;
+           }
+
+           .pane-band-name-cluster:hover {
+             background: rgba(255, 255, 255, 0.08) !important;
+           }
 
           .pane-band-copied-badge {
             position: absolute;

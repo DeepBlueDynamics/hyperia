@@ -8,8 +8,10 @@ mod ghost;
 mod logs;
 mod mcp;
 mod process;
+mod lume_store;
 mod screen;
 mod settings;
+mod snapshot_image;
 mod telemetry;
 
 use axum::extract::{Path, Query, State};
@@ -64,6 +66,14 @@ struct PaneAddress {
     /// keys immediately — used to interrupt a running process (e.g. Ctrl-C)
     /// even while the human is active in the pane. Ignored by other routes.
     interrupt: Option<bool>,
+    /// When true on /api/type or /api/type-and-collect, send the request
+    /// body verbatim — DO NOT unescape `\r`, `\n`, `\t`, `\x..` etc. This
+    /// is required for `terminal_run`, whose payload is a normal shell
+    /// command string that may contain Windows paths like `\research` —
+    /// the default unescape behavior would turn `\r` into a literal CR
+    /// and shred the path. `terminal_keys` keeps raw=false (default) so
+    /// `\x03` still maps to Ctrl-C.
+    raw: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -82,6 +92,98 @@ struct FsDirsQuery {
 /// live in Rust (fsnav), not in the renderer.
 async fn get_fs_dirs(Query(q): Query<FsDirsQuery>) -> Json<crate::fsnav::DirListing> {
     Json(crate::fsnav::list_dirs(q.path.as_deref()))
+}
+
+#[derive(serde::Deserialize)]
+struct TabImageQuery {
+    window: Option<u32>,
+    tab: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct SearchQuery {
+    q: String,
+    /// For shell search: restrict to one session uid. Omit to search all shells.
+    uid: Option<String>,
+    limit: Option<usize>,
+}
+
+/// BM25 search across per-shell logs (lume). `uid` restricts to one shell.
+async fn get_search_shell(
+    State(state): State<AppState>,
+    Query(q): Query<SearchQuery>,
+) -> Json<serde_json::Value> {
+    let limit = q.limit.unwrap_or(20).clamp(1, 200);
+    let hits = state.bridge.lume().search_shell(q.uid.as_deref(), &q.q, limit).await;
+    Json(serde_json::json!({ "query": q.q, "hits": hits }))
+}
+
+/// BM25 search across sticky notes (lume, reads notes.json fresh).
+async fn get_search_sticky(
+    State(state): State<AppState>,
+    Query(q): Query<SearchQuery>,
+) -> Json<serde_json::Value> {
+    let limit = q.limit.unwrap_or(20).clamp(1, 200);
+    let hits = state.bridge.lume().search_stickies(&q.q, limit).await;
+    Json(serde_json::json!({ "query": q.q, "hits": hits }))
+}
+
+/// Render the requested tab's layout as a B&W PNG. Same data path as the MCP
+/// `tab_image` tool, exposed over HTTP so a human can open it in the browser
+/// for visual debugging. Returns image/png bytes (no JSON wrapper).
+async fn get_tab_image(
+    State(state): State<AppState>,
+    Query(q): Query<TabImageQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let status = state.bridge.get_status().await;
+    let windows = status["windows"].as_array().cloned().unwrap_or_default();
+    let win = if let Some(wid) = q.window {
+        windows.iter().find(|w| w["id"].as_u64() == Some(wid as u64)).cloned()
+    } else {
+        windows.iter().find(|w| w["focused"].as_bool() == Some(true)).cloned()
+            .or_else(|| windows.first().cloned())
+    };
+    let Some(win) = win else {
+        return (StatusCode::NOT_FOUND, "no matching window").into_response();
+    };
+    let tabs = win["tabs"].as_array().cloned().unwrap_or_default();
+    let tab = if let Some(name) = q.tab.as_deref() {
+        tabs.iter().find(|t| t["name"].as_str() == Some(name)).cloned()
+    } else {
+        tabs.iter().find(|t| t["active"].as_bool() == Some(true)).cloned()
+            .or_else(|| tabs.first().cloned())
+    };
+    let Some(tab) = tab else {
+        return (StatusCode::NOT_FOUND, "no matching tab").into_response();
+    };
+    let tab_name = tab["name"].as_str().unwrap_or("(untitled)").to_string();
+    let panes_json = tab["panes"].as_array().cloned().unwrap_or_default();
+    struct Owned {
+        label: String, kind: String, title: String, subtitle: String,
+        x: f32, y: f32, w: f32, h: f32,
+    }
+    let owned: Vec<Owned> = panes_json.iter().map(|p| Owned {
+        label: p["label"].as_str().unwrap_or("").to_string(),
+        kind: "shell".to_string(),
+        title: p["title"].as_str().filter(|s| !s.is_empty())
+            .or_else(|| p["process"].as_str().filter(|s| !s.is_empty()))
+            .or_else(|| p["shell"].as_str())
+            .unwrap_or("").to_string(),
+        subtitle: p["cwd"].as_str().filter(|s| !s.is_empty()).unwrap_or("").to_string(),
+        x: p["bspX"].as_f64().unwrap_or(0.0) as f32,
+        y: p["bspY"].as_f64().unwrap_or(0.0) as f32,
+        w: p["bspW"].as_f64().unwrap_or(0.0) as f32,
+        h: p["bspH"].as_f64().unwrap_or(0.0) as f32,
+    }).collect();
+    let cells: Vec<crate::snapshot_image::PaneCell> = owned.iter().map(|o| {
+        crate::snapshot_image::PaneCell {
+            label: &o.label, kind: &o.kind, title: &o.title, subtitle: &o.subtitle,
+            bsp_x: o.x, bsp_y: o.y, bsp_w: o.w, bsp_h: o.h,
+        }
+    }).collect();
+    let png = crate::snapshot_image::render_tab_png(&tab_name, &cells);
+    ([("content-type", "image/png")], png).into_response()
 }
 
 /// Serve the Hyperia Python MCP tool file. Nemesis8 fetches this at container startup.
@@ -122,51 +224,15 @@ async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(state.bridge.get_status().await)
 }
 
-fn load_lockout_config() -> (bool, u64) {
-    let home = if cfg!(windows) {
-        std::env::var("USERPROFILE").ok()
-    } else {
-        std::env::var("HOME").ok()
-    };
-    let Some(h) = home else {
-        return (true, 15);
-    };
-    let path = std::path::PathBuf::from(h).join(".hyperia").join("hyperia.json");
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return (true, 15);
-    };
-    let Ok(json): Result<serde_json::Value, _> = serde_json::from_str(&content) else {
-        return (true, 15);
-    };
-    let cfg = &json["config"]["lockout"];
-    let enabled = cfg["enabled"].as_bool().unwrap_or(true);
-    let duration = cfg["duration_secs"].as_u64().unwrap_or(15);
-    (enabled, duration)
-}
-
-async fn check_human_activity_lockout(
-    state: &AppState,
-    uid: &str,
-) -> Result<(), (StatusCode, String)> {
-    let (enabled, duration_secs) = load_lockout_config();
-    if !enabled {
-        return Ok(());
-    }
-
-    if let Some(elapsed) = state.bridge.get_last_tab_activity(uid).await {
-        if elapsed < std::time::Duration::from_secs(duration_secs) {
-            let secs = elapsed.as_secs();
-            return Err((
-                StatusCode::CONFLICT,
-                format!(
-                    "Error: Human activity detected in this tab. The human was active {} seconds ago (activity decays over {} seconds). To avoid conflict, terminal interactions are temporarily blocked. Human actions have priority.",
-                    secs, duration_secs
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
+// (Removed: load_lockout_config + check_human_activity_lockout.) The
+// server used to hard-block agent calls when "human activity" was recent
+// in a pane and reply with an error code. That was wrong on two axes:
+// (1) the other caller might be another agent, not a human, so the
+//     "human priority" framing was bogus;
+// (2) blocking with an error trained agents to give up instead of
+//     deciding for themselves whether to defer or proceed.
+// Recency is still observable: terminal_status exposes per-pane
+// userActiveSecsAgo so callers that care can read it and decide.
 
 async fn get_screen(State(state): State<AppState>, Query(addr): Query<PaneAddress>) -> (StatusCode, String) {
     let Some(uid) = state
@@ -192,9 +258,7 @@ If the pane label is empty, use paneId.",
             addr.window, addr.tab, addr.pane, session_count
         ));
     };
-    if let Err(err) = check_human_activity_lockout(&state, &uid).await {
-        return err;
-    }
+    // No human-activity gate: reading the screen never stomps on input.
     let screen = state.bridge.get_screen_text_by_uid(&uid).await;
     if let Some((tab, pane, win)) = state.bridge.pane_address_for_log(&uid).await {
         tracing::info!(
@@ -271,7 +335,9 @@ fn unescape_keys(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '\\' {
+        if c == '\n' {
+            out.push('\r');
+        } else if c == '\\' {
             match chars.next() {
                 Some('n') => out.push('\r'),
                 Some('r') => out.push('\r'),
@@ -396,7 +462,11 @@ async fn post_type(
     if body.is_empty() {
         return (StatusCode::BAD_REQUEST, "Empty body".into());
     }
-    let keys = body;
+    // raw=true sends the body byte-for-byte. raw=false (default) treats the
+    // body as containing escape sequences (\x03 → Ctrl-C etc.). terminal_run
+    // uses raw=true so Windows paths like `\research` aren't shredded by the
+    // `\r` → CR rule; terminal_keys uses raw=false so \x.. still works.
+    let keys = if addr.raw.unwrap_or(false) { body.clone() } else { unescape_keys(&body) };
     let uid = match state
         .bridge
         .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
@@ -456,18 +526,22 @@ async fn post_type_and_collect(
             );
         }
     };
-    if let Err(err) = check_human_activity_lockout(&state, &uid).await {
-        return err;
-    }
+    // No activity gate: another caller (human OR agent) being active is not
+    // grounds to refuse this call. Agents can see per-pane userActiveSecsAgo
+    // via terminal_status and decide for themselves whether to defer/warn.
     let quiet_ms = addr.quiet_ms.unwrap_or(400).clamp(100, 10_000);
+    // raw=true: send body verbatim (no \r/\n/\x.. interpretation). Needed
+    // for terminal_run so Windows paths with `\research`, `\new`, `\test`
+    // aren't shredded by the unescape rule.
+    let keys = if addr.raw.unwrap_or(false) { body.clone() } else { unescape_keys(&body) };
     let log_addr = state.bridge.pane_address_for_log(&uid).await;
     if let Some((tab, pane, win)) = &log_addr {
         tracing::info!(
             "type-and-collect ▶ win={} tab={:?} pane={} quiet_ms={} bytes_in={} preview={:?}",
-            win, tab, pane, quiet_ms, body.len(), &body[..body.len().min(120)]
+            win, tab, pane, quiet_ms, keys.len(), &keys[..keys.len().min(120)]
         );
     }
-    let output = state.bridge.type_and_collect(&uid, &body, quiet_ms).await;
+    let output = state.bridge.type_and_collect(&uid, &keys, quiet_ms).await;
     if let Some((tab, pane, win)) = &log_addr {
         tracing::info!(
             "type-and-collect ◀ win={} tab={:?} pane={} bytes_out={}",
@@ -481,11 +555,9 @@ async fn post_split(
     State(state): State<AppState>,
     body: String,
 ) -> (StatusCode, String) {
-    if let Some(uid) = state.bridge.resolve_pane_uid(None, None, None).await {
-        if let Err(err) = check_human_activity_lockout(&state, &uid).await {
-            return err;
-        }
-    }
+    // No human-activity lockout: a split creates a NEW pane; it doesn't
+    // stomp on whatever the human is typing in the active pane. Blocking
+    // it just made splits silently fail with 409 while the user was busy.
     let direction = if body.is_empty() {
         "vertical".to_string()
     } else {
@@ -507,10 +579,10 @@ async fn post_focus(
 ) -> (StatusCode, String) {
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
 
+    // No human-activity lockout: focus is purely visual — it shifts which
+    // pane is active, it doesn't send any input to the pane. Blocking it
+    // confused agents into thinking they couldn't even orient themselves.
     if let Some(uid) = parsed["sessionUid"].as_str() {
-        if let Err(err) = check_human_activity_lockout(&state, uid).await {
-            return err;
-        }
         let cmd = serde_json::json!({"type": "Focus", "uid": uid});
         match state.bridge.send_command(cmd).await {
             Ok(r) => (StatusCode::OK, r),
@@ -529,9 +601,6 @@ async fn post_focus(
             Some(u) => u,
             None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
         };
-        if let Err(err) = check_human_activity_lockout(&state, &uid).await {
-            return err;
-        }
         let cmd = serde_json::json!({"type": "Focus", "uid": uid});
         match state.bridge.send_command(cmd).await {
             Ok(r) => (StatusCode::OK, r),
@@ -546,15 +615,8 @@ async fn post_close(State(state): State<AppState>, body: String) -> (StatusCode,
     let uid = serde_json::from_str::<serde_json::Value>(&body)
         .ok()
         .and_then(|v| v["uid"].as_str().map(|s| s.to_string()));
-    let resolved_uid = match &uid {
-        Some(u) => Some(u.clone()),
-        None => state.bridge.resolve_pane_uid(None, None, None).await,
-    };
-    if let Some(u) = resolved_uid {
-        if let Err(err) = check_human_activity_lockout(&state, &u).await {
-            return err;
-        }
-    }
+    // No activity gate on close either: agents can check userActiveSecsAgo
+    // via terminal_status if they care to warn before tearing down a pane.
     let mut cmd = serde_json::json!({"type": "Close"});
     if let Some(uid) = uid {
         cmd["uid"] = serde_json::Value::String(uid);
@@ -649,6 +711,14 @@ async fn post_new_window(State(state): State<AppState>) -> (StatusCode, String) 
     }
 }
 
+async fn post_layout_save(State(state): State<AppState>) -> (StatusCode, String) {
+    let cmd = serde_json::json!({"type": "SaveLayoutState"});
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
 async fn post_open_web_pane(State(state): State<AppState>, body: String) -> (StatusCode, String) {
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let url = match parsed["url"].as_str() {
@@ -656,6 +726,150 @@ async fn post_open_web_pane(State(state): State<AppState>, body: String) -> (Sta
         _ => return (StatusCode::BAD_REQUEST, "url is required".into()),
     };
     let cmd = serde_json::json!({"type": "OpenWebPane", "url": url});
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn post_web_pane_reload(
+    State(state): State<AppState>,
+    Query(addr): Query<PaneAddress>,
+) -> (StatusCode, String) {
+    let uid = match state
+        .bridge
+        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .await
+    {
+        Some(u) => u,
+        None => {
+            return (StatusCode::NOT_FOUND, "No web pane found at that address".into());
+        }
+    };
+    let cmd = serde_json::json!({"type": "WebPaneReload", "uid": uid});
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn post_web_pane_content(
+    State(state): State<AppState>,
+    Query(addr): Query<PaneAddress>,
+) -> (StatusCode, String) {
+    let uid = match state
+        .bridge
+        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .await
+    {
+        Some(u) => u,
+        None => {
+            return (StatusCode::NOT_FOUND, "No web pane found at that address".into());
+        }
+    };
+    let cmd = serde_json::json!({"type": "WebPaneContent", "uid": uid});
+    let raw = match state.bridge.send_command(cmd).await {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    // The renderer returns {success, url, title, html}. Convert the rendered DOM
+    // to clean reader-mode markdown with grub's converter (no external re-fetch).
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    if parsed.get("success").and_then(|v| v.as_bool()) != Some(true) {
+        return (StatusCode::OK, raw); // pass through the error shape unchanged
+    }
+    let url = parsed["url"].as_str().unwrap_or("");
+    let title = parsed["title"].as_str().unwrap_or("");
+    let html = parsed["html"].as_str().unwrap_or("");
+    let markdown = grub_md::to_markdown(html, url);
+    let out = serde_json::json!({
+        "success": true,
+        "url": url,
+        "title": title,
+        "markdown": markdown,
+    });
+    (StatusCode::OK, out.to_string())
+}
+
+async fn post_web_pane_click(
+    State(state): State<AppState>,
+    Query(addr): Query<PaneAddress>,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let text = parsed["text"].as_str().map(|s| s.to_string());
+    let selector = parsed["selector"].as_str().map(|s| s.to_string());
+
+    if text.is_none() && selector.is_none() {
+        return (StatusCode::BAD_REQUEST, "Either text or selector is required".into());
+    }
+
+    let uid = match state
+        .bridge
+        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .await
+    {
+        Some(u) => u,
+        None => {
+            return (StatusCode::NOT_FOUND, "No web pane found at that address".into());
+        }
+    };
+
+    let cmd = serde_json::json!({
+        "type": "WebPaneClick",
+        "uid": uid,
+        "text": text,
+        "selector": selector
+    });
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn post_web_pane_eval(
+    State(state): State<AppState>,
+    Query(addr): Query<PaneAddress>,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let js = parsed["js"].as_str().unwrap_or("").to_string();
+    if js.is_empty() {
+        return (StatusCode::BAD_REQUEST, "'js' is required".into());
+    }
+    let uid = match state
+        .bridge
+        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .await
+    {
+        Some(u) => u,
+        None => return (StatusCode::NOT_FOUND, "No web pane found at that address".into()),
+    };
+    let cmd = serde_json::json!({"type": "WebPaneEval", "uid": uid, "js": js});
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn post_web_pane_mouse(
+    State(state): State<AppState>,
+    Query(addr): Query<PaneAddress>,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let x = parsed["x"].as_f64().unwrap_or(0.0);
+    let y = parsed["y"].as_f64().unwrap_or(0.0);
+    let action = parsed["action"].as_str().unwrap_or("move").to_string();
+    let uid = match state
+        .bridge
+        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .await
+    {
+        Some(u) => u,
+        None => return (StatusCode::NOT_FOUND, "No web pane found at that address".into()),
+    };
+    let cmd = serde_json::json!({"type": "WebPaneMouse", "uid": uid, "x": x, "y": y, "action": action});
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
@@ -882,6 +1096,111 @@ async fn patch_note(
         Ok(_) => (StatusCode::OK, serde_json::json!({"ok": true}).to_string()),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
     }
+}
+
+/// Schedule (or with body {"schedule":null} unschedule) a sticky. The schedule
+/// object is forwarded verbatim to Electron, which owns the timer + runners.
+async fn post_note_schedule(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    // Accept either the bare schedule object or {"schedule": {...}}.
+    let schedule = if parsed.get("schedule").is_some() {
+        parsed["schedule"].clone()
+    } else {
+        parsed
+    };
+    let cmd = serde_json::json!({"type": "NoteSchedule", "id": id, "schedule": schedule});
+    match state.bridge.send_command(cmd).await {
+        Ok(_) => (StatusCode::OK, serde_json::json!({"ok": true}).to_string()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+/// Grapheme-safe transactional file edit, backed by the aegis-edit module.
+/// Body: { path, edits: [{start_line,start_col,end_line,end_col,text}], preview? }.
+/// Reads the file → LOPT Document → applies disjoint edits back-to-front → writes
+/// atomically (temp + rename). On any validation error nothing is written.
+async fn post_edit_apply(body: String) -> (StatusCode, String) {
+    use aegis_edit::{Document, TextEdit};
+    let err = |code: StatusCode, msg: String| (code, serde_json::json!({"ok": false, "error": msg}).to_string());
+
+    let parsed: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::BAD_REQUEST, format!("bad JSON: {e}")),
+    };
+    let path = parsed["path"].as_str().unwrap_or("").to_string();
+    if path.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "'path' is required".into());
+    }
+    let preview = parsed["preview"].as_bool().unwrap_or(false);
+
+    let edits_json = parsed["edits"].as_array().cloned().unwrap_or_default();
+    if edits_json.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "'edits' must be a non-empty array".into());
+    }
+    let edits: Vec<TextEdit> = edits_json
+        .iter()
+        .map(|e| TextEdit {
+            start_line: e["start_line"].as_u64().unwrap_or(0) as usize,
+            start_col: e["start_col"].as_u64().unwrap_or(0) as usize,
+            end_line: e["end_line"].as_u64().unwrap_or(0) as usize,
+            end_col: e["end_col"].as_u64().unwrap_or(0) as usize,
+            text: e["text"].as_str().unwrap_or("").to_string(),
+        })
+        .collect();
+    let applied = edits.len();
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::NOT_FOUND, format!("read {path}: {e}")),
+    };
+
+    let mut doc = Document::new(content);
+    if let Err(e) = doc.apply_transactional_edits(edits) {
+        // Validation failure → file untouched (transactional rollback property).
+        return err(StatusCode::UNPROCESSABLE_ENTITY, e.to_string());
+    }
+    let new_content = doc.render();
+    let lines = doc.line_count();
+    let bytes = new_content.len();
+
+    if !preview {
+        // Atomic write: temp file in the same dir + rename (Rust's fs::rename
+        // overwrites the destination on Windows via MoveFileEx REPLACE_EXISTING).
+        let p = std::path::Path::new(&path);
+        let tmp = p.with_extension(format!("aegistmp{}", std::process::id()));
+        if let Err(e) = std::fs::write(&tmp, new_content.as_bytes()) {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, format!("write tmp: {e}"));
+        }
+        if let Err(e) = std::fs::rename(&tmp, p) {
+            let _ = std::fs::remove_file(&tmp);
+            return err(StatusCode::INTERNAL_SERVER_ERROR, format!("rename: {e}"));
+        }
+    }
+
+    // Bound the echoed preview so a huge file doesn't flood the response.
+    let preview_str = if new_content.chars().count() > 4000 {
+        new_content.chars().take(4000).collect::<String>() + "\n…[truncated]"
+    } else {
+        new_content.clone()
+    };
+
+    (
+        StatusCode::OK,
+        serde_json::json!({
+            "ok": true,
+            "path": path,
+            "lines": lines,
+            "bytes": bytes,
+            "applied": applied,
+            "wrote": !preview,
+            "preview": preview_str,
+        })
+        .to_string(),
+    )
 }
 
 async fn delete_note(
@@ -1149,6 +1468,9 @@ async fn main() -> anyhow::Result<()> {
     let telem = telemetry::TelemetryStore::new();
     let dash_state = dashboard::DashboardState::new(telem.clone());
     let state = AppState { bridge, log_buffer, telemetry: telem };
+    // Grab lume handles before `state` is moved into the router below.
+    let lume_for_flush = state.bridge.lume();
+    let lume_for_shutdown = state.bridge.lume();
 
     let app = axum::Router::new()
         .route("/health", axum::routing::get(|| async { "ok" }))
@@ -1160,6 +1482,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/status", axum::routing::get(get_status))
         .route("/api/screen", axum::routing::get(get_screen))
         .route("/api/fs/dirs", axum::routing::get(get_fs_dirs))
+        .route("/api/tab/image", axum::routing::get(get_tab_image))
+        .route("/api/search/shell", axum::routing::get(get_search_shell))
+        .route("/api/search/sticky", axum::routing::get(get_search_sticky))
+        .route("/api/edit/apply", axum::routing::post(post_edit_apply))
         // Write endpoints
         .route("/api/type", axum::routing::post(post_type))
         .route("/api/type-and-collect", axum::routing::post(post_type_and_collect))
@@ -1168,7 +1494,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pane/close", axum::routing::post(post_close))
         .route("/api/pane/new", axum::routing::post(post_new_tab))
         .route("/api/window/new", axum::routing::post(post_new_window))
+        .route("/api/layout/save", axum::routing::post(post_layout_save))
         .route("/api/web-pane", axum::routing::post(post_open_web_pane))
+        .route("/api/web-pane/reload", axum::routing::post(post_web_pane_reload))
+        .route("/api/web-pane/click", axum::routing::post(post_web_pane_click))
+        .route("/api/web-pane/content", axum::routing::post(post_web_pane_content))
+        .route("/api/web-pane/eval", axum::routing::post(post_web_pane_eval))
+        .route("/api/web-pane/mouse", axum::routing::post(post_web_pane_mouse))
         .route("/api/pane/where", axum::routing::get(get_where_pane))
         .route("/api/pane/rename", axum::routing::post(post_rename_tab))
         .route("/api/agent/status", axum::routing::post(post_agent_status))
@@ -1177,6 +1509,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/notes", axum::routing::get(get_notes).post(post_note_create))
         .route("/api/notes/highlight", axum::routing::post(post_notes_highlight))
         .route("/api/notes/{id}", axum::routing::get(get_note).delete(delete_note).patch(patch_note))
+        .route("/api/notes/{id}/schedule", axum::routing::post(post_note_schedule))
         .route("/api/notes/close", axum::routing::post(post_note_close))
         .with_state(state);
 
@@ -1262,7 +1595,28 @@ async fn main() -> anyhow::Result<()> {
     }
     tracing::info!(%addr, "Sidecar HTTP listening");
     eprintln!("[sidecar] HTTP ready on :{}", args.port);
-    if let Err(e) = axum::serve(listener, app).await {
+
+    // Periodically pickle the lume per-shell logs to disk. Hyperia shuts the
+    // sidecar down with `taskkill /F` (uncatchable), so a shutdown-only hook
+    // would lose data — a 45s flush bounds the loss instead. The graceful
+    // ctrl_c path below adds a final flush for the soft-shutdown case.
+    {
+        let lume = lume_for_flush;
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(45));
+            tick.tick().await; // consume the immediate first tick
+            loop {
+                tick.tick().await;
+                lume.persist().await;
+            }
+        });
+    }
+
+    let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        lume_for_shutdown.persist().await;
+    });
+    if let Err(e) = serve.await {
         eprintln!("[sidecar] axum::serve error: {e}");
         std::process::exit(0); // Exit cleanly — Electron will restart if needed
     }

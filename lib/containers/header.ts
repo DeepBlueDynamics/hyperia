@@ -51,6 +51,20 @@ const findActiveLeaf = (
   return findActiveLeaf(termGroups, activeTermGroup, termGroups[children[0]]);
 };
 
+const findAnySessionUid = (
+  termGroups: Record<string, any>,
+  group: any
+): string | undefined => {
+  if (!group) return undefined;
+  if (group.sessionUid) return group.sessionUid;
+  const children = group.children || [];
+  for (const cUid of children) {
+    const sUid = findAnySessionUid(termGroups, termGroups[cUid]);
+    if (sUid) return sUid;
+  }
+  return undefined;
+};
+
 const getTabs = createSelector(
   [
     getSessions,
@@ -66,23 +80,22 @@ const getTabs = createSelector(
   (sessions, rootGroups, activeSessions, activeRootGroup, activityMarkers, bellMarkers, agentStatuses, termGroups, activeTermGroup) =>
     rootGroups.map((t: any): ITab => {
       const activeSessionUid = activeSessions[t.uid];
-      const session = sessions[activeSessionUid];
+      const anySessionUid = activeSessionUid || findAnySessionUid(termGroups, t);
+      const session = anySessionUid ? sessions[anySessionUid] : null;
       const groupTabName = (t as any).tabName as string | null | undefined;
       if (!session) {
         // Web pane tab — derive title from custom name or URL
         const activeLeaf = findActiveLeaf(termGroups, activeTermGroup, t);
         const webUrl = activeLeaf ? activeLeaf.webUrl : (t as any).webUrl;
-        const webName = activeLeaf ? activeLeaf.webName : (t as any).webName;
-        let title = groupTabName || 'Web Pane';
-        if (!groupTabName) {
-          if (webName) {
-            title = webName;
-          } else if (webUrl) {
-            try {
-              title = new URL(webUrl).hostname || webUrl;
-            } catch {
-              title = webUrl;
-            }
+        // The TAB is a project group — its name must NOT track the live page
+        // title (webName). Use the user's group name if set, else a STABLE
+        // hostname; the page title still labels the PANE (web-pane.tsx).
+        let title = groupTabName || 'Browser';
+        if (!groupTabName && webUrl) {
+          try {
+            title = new URL(webUrl).hostname || webUrl;
+          } catch {
+            title = webUrl;
           }
         }
         return {

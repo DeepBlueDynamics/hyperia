@@ -611,10 +611,9 @@ impl ToolRegistry {
         let result = match name {
             "terminal_keys" => {
                 let keys = input["keys"].as_str().unwrap_or("");
-                let keys = unescape_keys(keys);
                 match self.client
                     .post(build_target_url("/api/type-and-collect"))
-                    .body(keys)
+                    .body(keys.to_string())
                     .send()
                     .await
                 {
@@ -953,6 +952,66 @@ impl ToolRegistry {
                     Err(e) => format!("Error: {}", e),
                 };
             }
+            "terminal_web_reload" => {
+                let window = input["window"].as_u64().map(|v| v as u32);
+                let tab = input["tab"].as_str().map(|s| s.to_string());
+                let pane = input["pane"].as_str().map(|s| s.to_string());
+
+                let mut params = Vec::new();
+                if let Some(w) = window {
+                    params.push(format!("window={}", w));
+                }
+                if let Some(t) = tab {
+                    params.push(format!("tab={}", urlencoding::encode(&t)));
+                }
+                if let Some(p) = pane {
+                    params.push(format!("pane={}", urlencoding::encode(&p)));
+                }
+                let query = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+
+                return match self.client
+                    .post(format!("{}/api/web-pane/reload{}", base, query))
+                    .send()
+                    .await
+                {
+                    Ok(resp) => resp.text().await.unwrap_or_else(|e| format!("Error: {}", e)),
+                    Err(e) => format!("Error: {}", e),
+                };
+            }
+            "terminal_web_click" => {
+                let window = input["window"].as_u64().map(|v| v as u32);
+                let tab = input["tab"].as_str().map(|s| s.to_string());
+                let pane = input["pane"].as_str().map(|s| s.to_string());
+                let text = input["text"].as_str().map(|s| s.to_string());
+                let selector = input["selector"].as_str().map(|s| s.to_string());
+
+                let mut params = Vec::new();
+                if let Some(w) = window {
+                    params.push(format!("window={}", w));
+                }
+                if let Some(t) = tab {
+                    params.push(format!("tab={}", urlencoding::encode(&t)));
+                }
+                if let Some(p) = pane {
+                    params.push(format!("pane={}", urlencoding::encode(&p)));
+                }
+                let query = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+
+                let body = serde_json::json!({
+                    "text": text,
+                    "selector": selector,
+                });
+
+                return match self.client
+                    .post(format!("{}/api/web-pane/click{}", base, query))
+                    .json(&body)
+                    .send()
+                    .await
+                {
+                    Ok(resp) => resp.text().await.unwrap_or_else(|e| format!("Error: {}", e)),
+                    Err(e) => format!("Error: {}", e),
+                };
+            }
             "web_fetch" => {
                 let url = input["url"].as_str().unwrap_or("");
                 let method = input["method"].as_str().unwrap_or("GET");
@@ -1184,7 +1243,9 @@ fn unescape_keys(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '\\' {
+        if c == '\n' {
+            out.push('\r');
+        } else if c == '\\' {
             match chars.next() {
                 Some('n') => out.push('\r'),
                 Some('r') => out.push('\r'),
@@ -1982,6 +2043,32 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                     "window": { "type": "integer" },
                     "tab": { "type": "string" },
                     "pane": { "type": "string" }
+                }
+            }
+        },
+        {
+            "name": "terminal_web_reload",
+            "description": "Reload/refresh a web pane page in Hyperia. Address panes with window/tab/pane.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "window": { "type": "integer", "description": "Window id from terminal_status (optional)" },
+                    "tab": { "type": "string", "description": "Tab name from terminal_status (optional)" },
+                    "pane": { "type": "string", "description": "Pane label within the tab, e.g. 'a' or 'b' (optional)" }
+                }
+            }
+        },
+        {
+            "name": "terminal_web_click",
+            "description": "Click an element inside a web pane page. You can specify a text query (fuzzy case-insensitive match e.g. 'log in') or a CSS selector (e.g. 'button.submit'). Address panes with window/tab/pane.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "Text to find and click on the page (case-insensitive fuzzy match)" },
+                    "selector": { "type": "string", "description": "CSS selector to click on instead (optional)" },
+                    "window": { "type": "integer", "description": "Window id from terminal_status (optional)" },
+                    "tab": { "type": "string", "description": "Tab name from terminal_status (optional)" },
+                    "pane": { "type": "string", "description": "Pane label within the tab, e.g. 'a' or 'b' (optional)" }
                 }
             }
         },

@@ -62,6 +62,8 @@ struct BridgeInner {
     focused_window_id: Mutex<Option<u32>>,
     /// Per-session output subscribers: uid → list of senders waiting for PTY bytes
     output_subs: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>,
+    /// Lume-backed per-shell log store (BM25 search + pickle-to-disk).
+    lume: crate::lume_store::LumeStore,
 }
 
 impl Bridge {
@@ -74,8 +76,14 @@ impl Bridge {
                 sessions: Mutex::new(HashMap::new()),
                 focused_window_id: Mutex::new(None),
                 output_subs: Mutex::new(HashMap::new()),
+                lume: crate::lume_store::LumeStore::new(),
             }),
         }
+    }
+
+    /// Access the lume store (per-shell log search, sticky search, persistence).
+    pub fn lume(&self) -> crate::lume_store::LumeStore {
+        self.inner.lume.clone()
     }
 
     /// Whether an Electron client is connected.
@@ -292,8 +300,16 @@ impl Bridge {
         if let Some(label) = pane {
             sorted_panes
                 .into_iter()
-                // Match by split_label first; fall back to matching by session uid (paneId)
-                .find(|(uid, info)| info.split_label == label || uid.as_str() == label)
+                // Match by split_label first; then exact session uid (paneId);
+                // then a paneId PREFIX. The pane-band "copy" produces an 8-char
+                // prefix (e.g. "dbccc3fe"), so agents paste a prefix, not the
+                // full UUID — accept it. Guarded to >=4 chars so a single-char
+                // split label (a/b/c) can't accidentally prefix-match a uid.
+                .find(|(uid, info)| {
+                    info.split_label == label
+                        || uid.as_str() == label
+                        || (label.len() >= 4 && uid.starts_with(label))
+                })
                 .map(|(uid, _)| uid.clone())
         } else {
             sorted_panes
@@ -399,6 +415,12 @@ impl Bridge {
                             "userActiveSecsAgo": user_active_secs_ago,
                             "cwd": info.cwd,
                             "title": info.title,
+                            // BSP bounding box in 0–100 % — lets tab_image
+                            // draw the layout to scale.
+                            "bspX": info.bsp_x,
+                            "bspY": info.bsp_y,
+                            "bspW": info.bsp_w,
+                            "bspH": info.bsp_h,
                         })
                     })
                     .collect();
@@ -579,6 +601,9 @@ impl Bridge {
                             info.screen.process(&bytes);
                         }
                         drop(sessions);
+                        // Append ANSI-stripped text to the lume per-shell log
+                        // (the searchable store of record beyond the screen ring).
+                        self.inner.lume.append_shell_bytes(uid, &bytes).await;
                         // Forward raw bytes to any waiting output subscribers
                         let mut subs = self.inner.output_subs.lock().await;
                         if let Some(txs) = subs.get_mut(uid) {

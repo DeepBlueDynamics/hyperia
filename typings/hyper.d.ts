@@ -42,6 +42,7 @@ export type ITermState = Immutable<{
   termGroups: Mutable<ITermGroups>;
   activeSessions: Record<string, string>;
   activeRootGroup: string | null;
+  activeTermGroup?: string | null;
 }>;
 
 export type cursorShapes = 'BEAM' | 'UNDERLINE' | 'BLOCK';
@@ -136,6 +137,7 @@ export type session = {
   profile: string;
   cwd?: string;
   shellName?: string;
+  lastCommand?: string;
 };
 
 export type sessionState = Immutable<{

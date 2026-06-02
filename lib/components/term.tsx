@@ -33,6 +33,8 @@ import 'xterm/css/xterm.css';
 
 const SearchBox = decorate(_SearchBox, 'SearchBox');
 
+export const activeTerminals = new Map<string, Term>();
+
 const isWindows = ['Windows', 'Win16', 'Win32', 'WinCE'].includes(navigator.platform) || process.platform === 'win32';
 
 // map old hterm constants to xterm.js
@@ -160,6 +162,7 @@ export default class Term extends React.PureComponent<
     navigatorTop: number;
     isGlimmerActive?: boolean;
     isNarrow: boolean;
+    pickerZoom: number;
   }
 > {
   termRef: HTMLElement | null;
@@ -206,7 +209,8 @@ export default class Term extends React.PureComponent<
     navigatorWidth: 280,
     navigatorTop: 38,
     isGlimmerActive: false,
-    isNarrow: false
+    isNarrow: false,
+    pickerZoom: 1.0
   };
 
   labelRef = React.createRef<HTMLDivElement>();
@@ -419,6 +423,11 @@ export default class Term extends React.PureComponent<
 
   componentDidMount() {
     const {props} = this;
+    activeTerminals.set(props.uid, this);
+
+    rpc.on('picker-zoom-in', this.handlePickerZoomIn);
+    rpc.on('picker-zoom-out', this.handlePickerZoomOut);
+    rpc.on('picker-zoom-reset', this.handlePickerZoomReset);
 
     this.termOptions = getTermOptions(props);
     this.term = props.term || new Terminal(this.termOptions);
@@ -894,7 +903,11 @@ export default class Term extends React.PureComponent<
   }
 
   fitResize() {
-    if (!this.termWrapperRef) {
+    // Guard against the early-mount race: a resize/split event can fire
+    // after the wrapper ref attaches but before xterm + the fit addon are
+    // constructed, which would throw "Cannot read properties of undefined
+    // (reading 'refresh')". Match the defensive shape used in forceReflow.
+    if (!this.termWrapperRef || !this.term || !this.fitAddon) {
       return;
     }
     try {
@@ -1180,26 +1193,138 @@ export default class Term extends React.PureComponent<
       });
   };
 
+  getTerminalScreenText = (): string => {
+    if (!this.term) return '';
+    const buffer = this.term.buffer.active;
+    const lines: string[] = [];
+    for (let r = 0; r < buffer.length; r++) {
+      const line = buffer.getLine(r);
+      if (line) {
+        lines.push(line.translateToString(true));
+      }
+    }
+    return lines.join('\n');
+  };
+
+  detectInteractiveProgram = (screenText: string): string | null => {
+    const lower = screenText.toLowerCase();
+    const lines = screenText.split('\n');
+    const last10Lines = lines.slice(-10).join('\n').toLowerCase();
+
+    // Claude Code
+    if (last10Lines.includes('claude') && (last10Lines.includes('❯') || last10Lines.includes('>>') || last10Lines.includes('transmuting'))) {
+      return 'Claude Code';
+    }
+    // Codex
+    if (last10Lines.includes('codex') && (last10Lines.includes('>>') || last10Lines.includes('❯'))) {
+      return 'Codex';
+    }
+    // Python REPL
+    if (last10Lines.includes('>>>') && lower.includes('python')) {
+      return 'Python REPL';
+    }
+    // Node REPL
+    if (last10Lines.includes('> ') && lower.includes('node') && !last10Lines.includes('$')) {
+      return 'Node REPL';
+    }
+    // vim
+    if (lower.includes('-- insert --') || lower.includes('-- normal --') || lower.includes('-- visual --')) {
+      return 'vim';
+    }
+    // less/man
+    const trimmedLast = last10Lines.trim();
+    if (trimmedLast.endsWith(':') && (lower.includes('manual page') || lower.includes('(end)'))) {
+      return 'less/man';
+    }
+    // nemesis8
+    if (last10Lines.includes('nemesis') && last10Lines.includes('>>')) {
+      return 'Nemesis8';
+    }
+
+    return null;
+  };
+
   // The ONLY place that actually changes the shell's directory — on an explicit
   // Go, never on browse. Queued navigation lands here.
   goToNavigatorDir = () => {
     const target = this.state.navigatorCurrentPath;
-    if (target && this.props.onData) {
-      this.props.onData(`cd "${target}"\r`);
-    }
-    if (target && (this.props as any).onCwd) {
-      (this.props as any).onCwd(target);
-    }
-    this.setState(
-      {
-        isDirNavigatorOpen: false
-      },
-      () => {
-        setTimeout(() => {
-          this.focus();
-        }, 50);
+    if (!target || !this.props.onData) return;
+
+    // 1. Extract the full terminal screen text
+    const screenText = this.getTerminalScreenText();
+    const activeProgram = this.detectInteractiveProgram(screenText);
+
+    // 2. Extract active line to check for existing typed prompt entry
+    let hasTypedEntry = false;
+    if (this.term) {
+      const buffer = this.term.buffer.active;
+      const line = buffer.getLine(buffer.baseY + buffer.cursorY);
+      const lineText = line ? line.translateToString(true) : '';
+      
+      const promptSymbols = ['❯', '$', '%', '#', '>'];
+      let promptSymbolIndex = -1;
+      for (const sym of promptSymbols) {
+        const idx = lineText.lastIndexOf(sym);
+        if (idx > promptSymbolIndex) {
+          promptSymbolIndex = idx;
+        }
       }
-    );
+      if (promptSymbolIndex !== -1) {
+        const afterPrompt = lineText.slice(promptSymbolIndex + 1).trim();
+        if (afterPrompt.length > 0) {
+          hasTypedEntry = true;
+        }
+      } else {
+        if (lineText.trim().length > 0) {
+          hasTypedEntry = true;
+        }
+      }
+    }
+
+    const performCd = () => {
+      this.props.onData!(`cd "${target}"\r`);
+      if ((this.props as any).onCwd) {
+        (this.props as any).onCwd(target);
+      }
+      this.setState(
+        {
+          isDirNavigatorOpen: false
+        },
+        () => {
+          setTimeout(() => {
+            this.focus();
+          }, 50);
+        }
+      );
+    };
+
+    if (activeProgram) {
+      console.log(`[navigator] Active program detected: ${activeProgram}. Sending attention message to path...`);
+      this.props.onData(`from hyperia: user wanting to set attention on path: ${target}\r`);
+      this.setState(
+        {
+          isDirNavigatorOpen: false
+        },
+        () => {
+          setTimeout(() => {
+            this.focus();
+          }, 50);
+        }
+      );
+      return;
+    }
+
+    if (hasTypedEntry) {
+      console.log('[navigator] Prompt has typed entry. Hitting Enter first...');
+      this.props.onData('\r');
+      setTimeout(() => {
+        performCd();
+      }, 150);
+      return;
+    }
+
+    // Default case: empty prompt, no program running
+    performCd();
   };
 
   renderNavigatorBreadcrumbs = () => {
@@ -1700,6 +1825,11 @@ export default class Term extends React.PureComponent<
   };
 
   componentWillUnmount() {
+    activeTerminals.delete(this.props.uid);
+    rpc.removeListener('picker-zoom-in', this.handlePickerZoomIn);
+    rpc.removeListener('picker-zoom-out', this.handlePickerZoomOut);
+    rpc.removeListener('picker-zoom-reset', this.handlePickerZoomReset);
+
     window.removeEventListener('resize', this.onWindowResize);
     rpc.removeListener('move', this.onWindowMove);
     if (this.dprMediaQuery && this.dprUpdateHandler) {
@@ -1726,6 +1856,58 @@ export default class Term extends React.PureComponent<
     });
   }
 
+  handlePickerZoomIn = (data: {uid: string}) => {
+    if (data.uid !== this.props.uid) return;
+    this.setState({ pickerZoom: Math.min(this.state.pickerZoom + 0.1, 3.0) });
+  };
+
+  handlePickerZoomOut = (data: {uid: string}) => {
+    if (data.uid !== this.props.uid) return;
+    this.setState({ pickerZoom: Math.max(this.state.pickerZoom - 0.1, 0.5) });
+  };
+
+  handlePickerZoomReset = (data: {uid: string}) => {
+    if (data.uid !== this.props.uid) return;
+    this.setState({ pickerZoom: 1.0 });
+  };
+
+  getCurrentCommandLine(): string {
+    if (!this.term) return '';
+    try {
+      const buffer = this.term.buffer.active;
+      const absoluteCursorY = buffer.baseY + buffer.cursorY;
+      const lines: string[] = [];
+      
+      const startY = Math.max(0, absoluteCursorY - 3);
+      for (let y = absoluteCursorY; y >= startY; y--) {
+        const line = buffer.getLine(y);
+        if (line) {
+          lines.unshift(line.translateToString(true));
+        }
+      }
+      
+      const fullText = lines.join('');
+      const promptSymbols = ['❯', '$', '%', '#', '>'];
+      let lastSymbolIndex = -1;
+      let matchedSymbol = '';
+      
+      for (const sym of promptSymbols) {
+        const idx = fullText.lastIndexOf(sym);
+        if (idx > lastSymbolIndex) {
+          lastSymbolIndex = idx;
+          matchedSymbol = sym;
+        }
+      }
+      
+      if (lastSymbolIndex !== -1) {
+        return fullText.substring(lastSymbolIndex + matchedSymbol.length).trim();
+      }
+    } catch (e) {
+      console.error('Error extracting command line:', e);
+    }
+    return '';
+  }
+
   render() {
     let isSplitDownDisabled = false;
     if (this.props.groupUid && (this.props as any).allTermGroups) {
@@ -1740,26 +1922,41 @@ export default class Term extends React.PureComponent<
     const sessionProfile = (this.props as any).sessionProfile;
     const sessionShellName = (this.props as any).sessionShellName;
     const isPicker = sessionProfile === 'picker';
-    const shellType = isPicker ? 'New Pane' : sessionProfile || 'Shell';
-    const labelText =
-      !isPicker && sessionShellName
-        ? `${shellType} (${sessionShellName})`
-        : isPicker
-          ? 'New Pane'
-          : customTitle &&
-              !['zsh', 'bash', 'sh', 'cmd', 'powershell', 'pwsh', 'wsl', 'node', 'tmux', 'Untitled'].some((t) =>
-                customTitle.toLowerCase().includes(t)
-              ) &&
-              !customTitle.includes('/') &&
-              !customTitle.includes('\\')
-            ? customTitle
-            : `Pane ${splitLabel}`;
+    const shellType = isPicker ? 'Chooser' : sessionProfile || 'Shell';
+    // Priority:
+    //   1. Picker → "Chooser" (with codename if present).
+    //   2. A real OSC title from the process (claude, etc.) — wins over the
+    //      auto-generated codename so `claude` showing up as "claude (opus
+    //      4.7)" overrides "Shell (Whispering Capybara)".
+    //   3. The cute auto-generated codename → "Shell (Whispering Capybara)".
+    //   4. Bare fallback → "Pane a".
+    const JUNK_TITLE_TOKENS = ['zsh', 'bash', 'sh', 'cmd', 'powershell', 'pwsh', 'wsl', 'node', 'tmux', 'Untitled'];
+    const isRealOscTitle =
+      !!customTitle &&
+      !JUNK_TITLE_TOKENS.some((t) => customTitle.toLowerCase().includes(t)) &&
+      !customTitle.includes('/') &&
+      !customTitle.includes('\\');
+    const labelText = isPicker
+      ? (sessionShellName ? `Chooser (${sessionShellName})` : 'Chooser')
+      : isRealOscTitle
+        ? customTitle
+        : sessionShellName
+          ? `${shellType} (${sessionShellName})`
+          : `Pane ${splitLabel}`;
 
-    const labelFull = !isPicker && sessionShellName ? `${sessionShellName} | ${shellType}` : labelText;
-    const labelShort = !isPicker && sessionShellName ? sessionShellName : labelText;
+    const labelFull = isPicker && sessionShellName
+      ? `${sessionShellName} | Chooser`
+      : !isPicker && sessionShellName
+        ? `${sessionShellName} | ${shellType}`
+        : labelText;
+    const labelShort = isPicker && sessionShellName
+      ? sessionShellName
+      : !isPicker && sessionShellName
+        ? sessionShellName
+        : labelText;
 
     const nameLower = (sessionProfile || '').toLowerCase();
-    let icon = '⚡';
+    let icon = isPicker ? '⚙️' : '⚡';
     if (nameLower.includes('powershell') || nameLower.includes('pwsh')) icon = '🐚';
     else if (nameLower.includes('wsl') || nameLower.includes('ubuntu') || nameLower.includes('debian')) icon = '🐧';
     else if (nameLower.includes('bash') || nameLower.includes('git')) icon = '⌥';
@@ -1789,6 +1986,7 @@ export default class Term extends React.PureComponent<
           <PaneBand
             ref={this.labelRef}
             paneType="shell"
+            paneId={this.props.uid}
             tint={isPicker ? 'neutral' : (tint as any)}
             isPlaceholder={isPicker}
             isSplitRightDisabled={this.state.isNarrow}
@@ -2007,6 +2205,7 @@ export default class Term extends React.PureComponent<
         {isPicker ? (
           <div
             className="term_pickerContainer"
+            style={{ zoom: this.state.pickerZoom }}
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();

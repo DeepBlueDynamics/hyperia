@@ -19,9 +19,14 @@ export type Session = {
   url?: string;
   cwd?: string;
   isNewGroup?: boolean;
+  isRestore?: boolean;
+  lastCommand?: string;
 };
 
 export type sessionExtraOptions = {
+  uid?: string;
+  isRestore?: boolean;
+  lastCommand?: string;
   cwd?: string;
   splitDirection?: 'HORIZONTAL' | 'VERTICAL';
   activeUid?: string | null;
@@ -70,16 +75,31 @@ export type MainEvents = {
   }>;
   unmaximize: never;
   'web-pane-reload': string;
+  'web-pane-click-result': {uid: string; result: any};
+  'web-pane-read-result': {uid: string; result: any};
+  'web-pane-eval-result': {uid: string; result: any};
+  'web-pane-mouse-result': {uid: string; result: any};
   'split request vertical': {activeUid?: string | null; profile?: string | null; url?: string};
   'split request horizontal': {activeUid?: string | null; profile?: string | null; url?: string};
   'clone request vertical': any;
   'clone request horizontal': any;
+  'layout-state-reply': any;
+  'web-pane-zoom-in': {uid: string};
+  'web-pane-zoom-out': {uid: string};
+  'web-pane-zoom-reset': {uid: string};
+  'picker-zoom-in': {uid: string};
+  'picker-zoom-out': {uid: string};
+  'picker-zoom-reset': {uid: string};
 };
 
 export type RendererEvents = {
   ready: never;
   'session rename': {uid: string; name: string};
   'session set active': {uid: string};
+  'web-pane-click': {uid: string; text?: string; selector?: string};
+  'web-pane-read': {uid: string};
+  'web-pane-eval': {uid: string; js: string};
+  'web-pane-mouse': {uid: string; x: number; y: number; action?: string};
   'add notification': {text: string; url: string; dismissable: boolean};
   'update available': {releaseNotes: string; releaseName: string; releaseUrl: string; canInstall: boolean};
   'open ssh': ReturnType<typeof parseUrl>;
@@ -127,6 +147,14 @@ export type RendererEvents = {
   'session data send': {uid: string | null; data: string; escaped?: boolean};
   'agent status': {sessionUid?: string; connected: boolean; working?: boolean; label?: string; humanPercent?: number};
   'open web pane req': {url?: string};
+  'get-layout-state-req': never;
+  'restore-layout-state': any;
+  'web-pane-zoom-in': {uid: string};
+  'web-pane-zoom-out': {uid: string};
+  'web-pane-zoom-reset': {uid: string};
+  'picker-zoom-in': {uid: string};
+  'picker-zoom-out': {uid: string};
+  'picker-zoom-reset': {uid: string};
 };
 
 /**

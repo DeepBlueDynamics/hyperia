@@ -29,6 +29,7 @@ interface WebPaneProps {
   onSetUrl?: (url: string) => void;
   allTermGroups?: Record<string, any>;
   webName?: string;
+  onActive?: () => void;
 }
 
 const getSecurityState = (urlStr: string): 'https' | 'http' | 'localhost' | 'error' => {
@@ -71,6 +72,116 @@ const isOAuthUrl = (u: string): boolean => {
     return false;
   }
 };
+
+const clickFnStr = `
+  (function(searchText) {
+    function isVisible(el) {
+      if (!el.getBoundingClientRect) return false;
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return false;
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+      return true;
+    }
+    const cleanSearch = searchText.trim().toLowerCase();
+    if (!cleanSearch) return { success: false, error: 'Empty search text' };
+    const allElements = Array.from(document.querySelectorAll('*'));
+    const matches = [];
+    for (const el of allElements) {
+      if (!isVisible(el)) continue;
+      const text = (el.textContent || '').trim().toLowerCase();
+      if (text.includes(cleanSearch)) {
+        matches.push(el);
+      }
+    }
+    if (matches.length === 0) {
+      return { success: false, error: 'No elements found containing text: ' + searchText };
+    }
+    const interactiveTags = ['button', 'a', 'input', 'select', 'textarea', 'option', 'summary'];
+    function getScore(el) {
+      let score = 0;
+      const tagName = el.tagName.toLowerCase();
+      if (interactiveTags.includes(tagName)) score += 100;
+      if (el.getAttribute('role') === 'button' || el.getAttribute('role') === 'link') score += 100;
+      if (el.onclick || el.getAttribute('onclick')) score += 50;
+      const textLen = (el.textContent || '').trim().length;
+      score -= (textLen - searchText.length) * 0.1;
+      score += el.querySelectorAll('*').length === 0 ? 50 : 0;
+      return score;
+    }
+    matches.sort((a, b) => getScore(b) - getScore(a));
+    const target = matches[0];
+    function triggerMouseEvent(node, eventType) {
+      const clickEvent = new MouseEvent(eventType, {
+        bubbles: true,
+        cancelable: true,
+        view: window
+      });
+      node.dispatchEvent(clickEvent);
+    }
+    try { target.focus(); } catch(e){}
+    triggerMouseEvent(target, 'mouseover');
+    triggerMouseEvent(target, 'mousedown');
+    triggerMouseEvent(target, 'click');
+    triggerMouseEvent(target, 'mouseup');
+    if (typeof target.click === 'function') {
+      target.click();
+    }
+    const rect = target.getBoundingClientRect();
+    return {
+      success: true,
+      tagName: target.tagName,
+      text: target.textContent ? target.textContent.trim().substring(0, 100) : '',
+      rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
+    };
+  })
+`;
+
+// Ghost-cursor mouse driver. Injected into the webview: spawns/moves a 👻 that
+// GLIDES to (x, y) so the human can watch the agent move, then (for 'click')
+// fires the full pointer/mouse event sequence on the element at that point.
+// Returns a Promise so executeJavaScript waits for the glide before clicking.
+const ghostMouseFnStr = `
+  (function(x, y, action) {
+    return new Promise(function(resolve) {
+      try {
+        var ID = '__hyperia_ghost__';
+        var g = document.getElementById(ID);
+        if (!g) {
+          g = document.createElement('div');
+          g.id = ID;
+          g.textContent = '👻';
+          g.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;font-size:30px;line-height:1;pointer-events:none;-webkit-user-select:none;transition:transform .42s cubic-bezier(.22,1,.36,1),opacity .3s;filter:drop-shadow(0 3px 5px rgba(0,0,0,.45));will-change:transform;';
+          (document.body || document.documentElement).appendChild(g);
+        }
+        g.style.opacity = '1';
+        // Anchor so the ghost's "head" hovers just above the target point.
+        g.style.transform = 'translate(' + (x - 8) + 'px,' + (y - 30) + 'px)';
+
+        function finish() {
+          if (action !== 'click') {
+            resolve({ success: true, action: 'move', x: x, y: y });
+            return;
+          }
+          var el = document.elementFromPoint(x, y);
+          try { g.animate([{opacity:1},{opacity:.35},{opacity:1}], {duration:200}); } catch (e) {}
+          if (!el) { resolve({ success: false, error: 'No element at (' + x + ',' + y + ')' }); return; }
+          var opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
+          ['pointerover','mouseover','pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(t) {
+            try { el.dispatchEvent(new MouseEvent(t, opts)); } catch (e) {}
+          });
+          try { if (typeof el.click === 'function') el.click(); } catch (e) {}
+          var label = (el.tagName || '').toLowerCase() + (el.id ? '#' + el.id : '');
+          resolve({ success: true, action: 'click', x: x, y: y, target: label, text: (el.textContent || '').trim().slice(0, 80) });
+        }
+        // Let the glide play out before clicking (purely a nice visual).
+        setTimeout(finish, action === 'click' ? 440 : 0);
+      } catch (e) {
+        resolve({ success: false, error: String(e) });
+      }
+    });
+  })
+`;
 
 const isValidUrl = (urlStr: string): boolean => {
   const trimmed = urlStr.trim();
@@ -116,6 +227,7 @@ interface WebPaneState {
   urlInputVal: string;
   isUrlNavigatorOpen: boolean;
   webHistory: WebHistoryEntry[];
+  saveHistory: boolean;
   navigatorInputVal: string;
   navigatorFocusedIndex: number;
   navigatorError: string | null;
@@ -151,6 +263,7 @@ interface WebPaneState {
   navigatorWidth?: number;
   navigatorTop?: number;
   isNarrow: boolean;
+  pageBgColor?: string | null;
 }
 
 class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
@@ -167,8 +280,19 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   constructor(props: WebPaneProps) {
     super(props);
     let webHistory: WebHistoryEntry[] = [];
+    let saveHistory = true;
+
     try {
-      const saved = localStorage.getItem(`web_pane_history_${props.groupUid}`);
+      const savedSaveHistory = localStorage.getItem('web_pane_save_history');
+      if (savedSaveHistory !== null) {
+        saveHistory = savedSaveHistory === 'true';
+      }
+    } catch (err) {
+      console.error('Failed to load saveHistory option:', err);
+    }
+
+    try {
+      const saved = localStorage.getItem('web_pane_history');
       if (saved) {
         const parsed = JSON.parse(saved) as any[];
         webHistory = parsed.map((item: any): WebHistoryEntry => {
@@ -181,6 +305,21 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             titleAtVisit: item.titleAtVisit as string
           };
         });
+      } else {
+        const paneSaved = localStorage.getItem(`web_pane_history_${props.groupUid}`);
+        if (paneSaved) {
+          const parsed = JSON.parse(paneSaved) as any[];
+          webHistory = parsed.map((item: any): WebHistoryEntry => {
+            if (item.kind) return item as WebHistoryEntry;
+            return {
+              kind: 'url',
+              value: (item.url as string) || '',
+              visitedAt: (item.visitedAt as number) || Date.now(),
+              securityState: item.securityState || 'error',
+              titleAtVisit: item.titleAtVisit as string
+            };
+          });
+        }
       }
     } catch (err) {
       console.error('Failed to load history:', err);
@@ -206,6 +345,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       urlInputVal: '',
       isUrlNavigatorOpen: false,
       webHistory,
+      saveHistory,
       navigatorInputVal: props.url || '',
       navigatorFocusedIndex: -1,
       navigatorError: null,
@@ -224,7 +364,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       navigatorLeft: 8,
       navigatorWidth: 320,
       navigatorTop: 38,
-      isNarrow: false
+      isNarrow: false,
+      pageBgColor: null
     };
   }
 
@@ -719,7 +860,20 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }).catch((err) => console.warn('Failed to stop agent execution:', err));
   };
 
+  toggleSaveHistory = () => {
+    const nextVal = !this.state.saveHistory;
+    this.setState({saveHistory: nextVal});
+    try {
+      localStorage.setItem('web_pane_save_history', String(nextVal));
+    } catch (err) {
+      console.error('Failed to save saveHistory option:', err);
+    }
+  };
+
   addToHistory = (kind: 'url' | 'ai-query', value: string, extra: Partial<WebHistoryEntry> = {}) => {
+    if (!this.state.saveHistory) {
+      return;
+    }
     const newEntry: WebHistoryEntry = {
       kind,
       value,
@@ -739,6 +893,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     });
 
     try {
+      localStorage.setItem('web_pane_history', JSON.stringify(newHistory));
       localStorage.setItem(`web_pane_history_${this.props.groupUid}`, JSON.stringify(newHistory));
     } catch (err) {
       console.error('Failed to persist web pane history:', err);
@@ -760,6 +915,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     });
 
     try {
+      localStorage.setItem('web_pane_history', JSON.stringify(newHistory));
       localStorage.setItem(`web_pane_history_${this.props.groupUid}`, JSON.stringify(newHistory));
     } catch (err) {
       console.error('Failed to persist web pane history:', err);
@@ -772,6 +928,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     });
 
     try {
+      localStorage.removeItem('web_pane_history');
       localStorage.removeItem(`web_pane_history_${this.props.groupUid}`);
     } catch (err) {
       console.error('Failed to clear web pane history:', err);
@@ -808,6 +965,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       this.setState({isEditingUrl: false});
     }
 
+    // Keep the URL navigator dropdown/popup open even if they click off on the guest webview,
+    // so they can use it as a reference and start typing in the browser immediately.
+    /*
     if (
       this.state.isUrlNavigatorOpen &&
       this.urlNavigatorRef.current &&
@@ -817,6 +977,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     ) {
       this.setState({isUrlNavigatorOpen: false});
     }
+    */
   };
 
   isInputUrl = (val: string): boolean => {
@@ -1018,13 +1179,23 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     wv.addEventListener('did-start-loading', () => {
-      this.setState({loading: true, error: null});
+      this.setState({loading: true, error: null, pageBgColor: null});
     });
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-    wv.addEventListener('did-stop-loading', () => {
+    wv.addEventListener('did-stop-loading', async () => {
       this.setState({loading: false});
       this.updateNavigationState();
+      try {
+        const color = await wv.executeJavaScript(
+          "(function(){try{var pick=function(el){if(!el)return '';var c=getComputedStyle(el).backgroundColor;return (c&&c!=='rgba(0, 0, 0, 0)'&&c!=='transparent')?c:'';};return pick(document.body)||pick(document.documentElement)||'#ffffff';}catch(e){return '';}})()"
+        );
+        if (color && color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') {
+          this.setState({pageBgColor: color});
+        }
+      } catch (err) {
+        console.warn('Failed to retrieve page background color:', err);
+      }
     });
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
@@ -1061,6 +1232,20 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     wv.addEventListener('dom-ready', () => {
       this.updateNavigationState();
+      // Slim scrollbars — but only as a DEFAULT the page can override. We prepend
+      // a <style> at the very top of <head> so any scrollbar rules the page ships
+      // (later in the cascade) win; pages that DON'T style their scrollbars get
+      // our slim ones instead of Chromium's chunky default.
+      try {
+        void wv.executeJavaScript(
+          "(function(){try{var ID='__hyperia_slim_sb__';if(document.getElementById(ID))return;" +
+            "var s=document.createElement('style');s.id=ID;" +
+            "s.textContent='::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(128,128,128,.45);border-radius:6px}::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,.7)}';" +
+            "var h=document.head||document.documentElement;h.insertBefore(s,h.firstChild);}catch(e){}})()"
+        );
+      } catch {
+        /* webview not ready */
+      }
       try {
         const wc = wv.getWebContents();
         if (wc) {
@@ -1098,9 +1283,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             }
           });
 
-          wc.on('context-menu', (event: any) => {
+          wc.on('context-menu', (event: any, params: any) => {
             event.preventDefault();
-            this.handleContextMenu(event);
+            this.handleContextMenu(event, params, wc);
           });
 
           wc.on('will-navigate', (event: any, url: string) => {
@@ -1119,6 +1304,19 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         }
       } catch (err) {
         console.warn('Failed to access webContents for zoom/contextmenu:', err);
+      }
+
+      // Retrieve page background color on dom-ready as well
+      try {
+        wv.executeJavaScript(
+          "(function(){try{var pick=function(el){if(!el)return '';var c=getComputedStyle(el).backgroundColor;return (c&&c!=='rgba(0, 0, 0, 0)'&&c!=='transparent')?c:'';};return pick(document.body)||pick(document.documentElement)||'#ffffff';}catch(e){return '';}})()"
+        ).then((color: string) => {
+          if (color && color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') {
+            this.setState({pageBgColor: color});
+          }
+        }).catch(() => {});
+      } catch (err) {
+        // ignore
       }
     });
 
@@ -1153,8 +1351,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         this.setState(
           {
             isUrlNavigatorOpen: true,
-            navigatorInputVal: this.state.activeUrl || this.props.url || '',
-            navigatorFocusedIndex: 0,
+            navigatorInputVal: '',
+            navigatorFocusedIndex: -1,
             navigatorError: null
           },
           () => {
@@ -1178,10 +1376,136 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       }
     };
     rpc.on('web-pane-reload', this._reloadHandler);
+
+    this._clickHandler = (data: {uid: string; text?: string; selector?: string}) => {
+      if (data.uid === this.props.groupUid && this.webviewRef.current) {
+        const wv = this.webviewRef.current;
+        if (data.selector) {
+          const code = `
+            (() => {
+              const el = document.querySelector(${JSON.stringify(data.selector)});
+              if (el) {
+                function triggerMouseEvent(node, eventType) {
+                  const clickEvent = new MouseEvent(eventType, {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window
+                  });
+                  node.dispatchEvent(clickEvent);
+                }
+                try { el.focus(); } catch(e){}
+                triggerMouseEvent(el, 'mouseover');
+                triggerMouseEvent(el, 'mousedown');
+                triggerMouseEvent(el, 'click');
+                triggerMouseEvent(el, 'mouseup');
+                if (typeof el.click === 'function') el.click();
+                return { success: true };
+              }
+              return { success: false, error: 'Selector not found' };
+            })()
+          `;
+          wv.executeJavaScript(code)
+            .then((result: any) => {
+              rpc.emit('web-pane-click-result', {uid: data.uid, result});
+            })
+            .catch((err: any) => {
+              rpc.emit('web-pane-click-result', {uid: data.uid, result: {success: false, error: err.message}});
+            });
+        } else if (data.text) {
+          const code = `
+            (${clickFnStr})(${JSON.stringify(data.text)})
+          `;
+          wv.executeJavaScript(code)
+            .then((result: any) => {
+              rpc.emit('web-pane-click-result', {uid: data.uid, result});
+            })
+            .catch((err: any) => {
+              rpc.emit('web-pane-click-result', {uid: data.uid, result: {success: false, error: err.message}});
+            });
+        }
+      }
+    };
+    rpc.on('web-pane-click', this._clickHandler);
+
+    // Read the CURRENT page: live URL + title + visible text. Lets the agent
+    // see what page the user actually navigated to (the opened URL goes stale)
+    // and extract its content without re-fetching.
+    this._readHandler = (data: {uid: string}) => {
+      if (data.uid === this.props.groupUid && this.webviewRef.current) {
+        const wv = this.webviewRef.current;
+        const code = `
+          (() => {
+            try {
+              return {
+                success: true,
+                url: location.href,
+                title: document.title,
+                // The RENDERED DOM (post-JS, authed). The sidecar runs grub_md on
+                // this to produce clean reader-mode markdown — no external re-fetch.
+                html: (document.documentElement ? document.documentElement.outerHTML : '').slice(0, 3000000)
+              };
+            } catch (e) { return { success: false, error: String(e) }; }
+          })()
+        `;
+        wv.executeJavaScript(code)
+          .then((result: any) => {
+            rpc.emit('web-pane-read-result', {uid: data.uid, result});
+          })
+          .catch((err: any) => {
+            rpc.emit('web-pane-read-result', {uid: data.uid, result: {success: false, error: err.message}});
+          });
+      }
+    };
+    rpc.on('web-pane-read', this._readHandler);
+
+    // Inject + run arbitrary JS in the page, return its (serializable) value.
+    this._evalHandler = (data: {uid: string; js: string}) => {
+      if (data.uid === this.props.groupUid && this.webviewRef.current) {
+        const wv = this.webviewRef.current;
+        // userGesture=true so gesture-gated APIs (focus, play, clipboard) work.
+        wv.executeJavaScript(data.js, true)
+          .then((value: any) => {
+            rpc.emit('web-pane-eval-result', {uid: data.uid, result: {success: true, value}});
+          })
+          .catch((err: any) => {
+            rpc.emit('web-pane-eval-result', {uid: data.uid, result: {success: false, error: err.message}});
+          });
+      }
+    };
+    rpc.on('web-pane-eval', this._evalHandler);
+
+    // Move / click at a pixel coordinate, with the 👻 ghost cursor gliding there
+    // so the human can watch the agent act on the page.
+    this._mouseHandler = (data: {uid: string; x: number; y: number; action?: string}) => {
+      if (data.uid === this.props.groupUid && this.webviewRef.current) {
+        const wv = this.webviewRef.current;
+        const x = Number(data.x) || 0;
+        const y = Number(data.y) || 0;
+        const action = data.action === 'click' ? 'click' : 'move';
+        const code = `(${ghostMouseFnStr})(${x}, ${y}, ${JSON.stringify(action)})`;
+        wv.executeJavaScript(code)
+          .then((result: any) => {
+            rpc.emit('web-pane-mouse-result', {uid: data.uid, result});
+          })
+          .catch((err: any) => {
+            rpc.emit('web-pane-mouse-result', {uid: data.uid, result: {success: false, error: err.message}});
+          });
+      }
+    };
+    rpc.on('web-pane-mouse', this._mouseHandler);
+
+    rpc.on('web-pane-zoom-in', this.handleZoomIn);
+    rpc.on('web-pane-zoom-out', this.handleZoomOut);
+    rpc.on('web-pane-zoom-reset', this.handleZoomReset);
+
     this.checkAndTriggerInitialAiChat();
   }
 
   componentWillUnmount() {
+    rpc.removeListener('web-pane-zoom-in', this.handleZoomIn);
+    rpc.removeListener('web-pane-zoom-out', this.handleZoomOut);
+    rpc.removeListener('web-pane-zoom-reset', this.handleZoomReset);
+
     this.resizeObserver?.disconnect();
     document.removeEventListener('mousedown', this.handleOutsideClick);
     if (this._windowKeydownHandler) {
@@ -1189,6 +1513,18 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
     if (this._reloadHandler) {
       rpc.removeListener('web-pane-reload', this._reloadHandler);
+    }
+    if (this._clickHandler) {
+      rpc.removeListener('web-pane-click', this._clickHandler);
+    }
+    if (this._readHandler) {
+      rpc.removeListener('web-pane-read', this._readHandler);
+    }
+    if (this._evalHandler) {
+      rpc.removeListener('web-pane-eval', this._evalHandler);
+    }
+    if (this._mouseHandler) {
+      rpc.removeListener('web-pane-mouse', this._mouseHandler);
     }
     // Return keyboard focus to the active terminal after the web pane is removed.
     // The webview captures focus while mounted; without this the xterm textarea
@@ -1202,10 +1538,52 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     });
   }
 
-  _reloadHandler: ((uid: string) => void) | null = null;
+  handleZoomIn = (data: {uid: string}) => {
+    if (data.uid !== this.props.groupUid) return;
+    const wv = this.webviewRef.current;
+    if (wv) {
+      try {
+        const currentZoom = wv.getZoomFactor();
+        wv.setZoomFactor(Math.min(currentZoom + 0.1, 3.0));
+      } catch (err) {
+        console.error('Failed to zoom in:', err);
+      }
+    }
+  };
 
-  handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
+  handleZoomOut = (data: {uid: string}) => {
+    if (data.uid !== this.props.groupUid) return;
+    const wv = this.webviewRef.current;
+    if (wv) {
+      try {
+        const currentZoom = wv.getZoomFactor();
+        wv.setZoomFactor(Math.max(currentZoom - 0.1, 0.5));
+      } catch (err) {
+        console.error('Failed to zoom out:', err);
+      }
+    }
+  };
+
+  handleZoomReset = (data: {uid: string}) => {
+    if (data.uid !== this.props.groupUid) return;
+    const wv = this.webviewRef.current;
+    if (wv) {
+      try {
+        wv.setZoomFactor(1.0);
+      } catch (err) {
+        console.error('Failed to reset zoom:', err);
+      }
+    }
+  };
+
+  _reloadHandler: ((uid: string) => void) | null = null;
+  _clickHandler: ((data: {uid: string; text?: string; selector?: string}) => void) | null = null;
+  _readHandler: ((data: {uid: string}) => void) | null = null;
+  _evalHandler: ((data: {uid: string; js: string}) => void) | null = null;
+  _mouseHandler: ((data: {uid: string; x: number; y: number; action?: string}) => void) | null = null;
+
+  handleContextMenu = (e: React.MouseEvent | any, params?: any, wc?: any) => {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
     /* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
     const remote = require('@electron/remote');
     const {Menu, MenuItem} = remote;
@@ -1218,10 +1596,26 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         }
       })
     );
+    // Inspect: dock DevTools at the bottom of THIS pane (splits down) and, when
+    // we have the right-click coordinates, jump straight to that element.
+    if (wc) {
+      menu.append(new MenuItem({type: 'separator'}));
+      menu.append(
+        new MenuItem({
+          label: 'Inspect',
+          click: () => {
+            try {
+              if (!wc.isDevToolsOpened()) wc.openDevTools({mode: 'bottom'});
+              if (params && typeof params.x === 'number') wc.inspectElement(params.x, params.y);
+            } catch (err) {
+              console.error('Inspect failed:', err);
+            }
+          }
+        })
+      );
+    }
     menu.append(new MenuItem({type: 'separator'}));
     menu.append(new MenuItem({label: 'New Note', click: () => void ipcMain.emit('new-sticky', {})}));
-    // Always show — shell pane handles the no-token case via bootstub.
-    menu.append(new MenuItem({label: 'Ask Hyperia', click: () => void ipcMain.emit('open-ghost')}));
     menu.append(new MenuItem({type: 'separator'}));
     menu.append(new MenuItem({label: 'Close Tab', click: () => this.props.onClose?.()}));
     menu.popup();
@@ -1252,7 +1646,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         accelerator: 'Ctrl+Shift+|',
         enabled: !this.state.isNarrow,
         click: () => {
-          rpc.emit('split request vertical', {activeUid: this.props.sessionUid || this.props.groupUid});
+          rpc.emit('split request vertical', {activeUid: this.props.sessionUid || this.props.groupUid, profile: 'picker'});
         }
       })
     );
@@ -1302,7 +1696,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       new MenuItem({
         label: 'Rename Pane',
         click: () => {
-          const val = prompt('Enter pane name:', this.props.splitLabel ? `Pane ${this.props.splitLabel}` : 'Web pane');
+          const val = prompt('Enter pane name:', this.props.splitLabel ? `Pane ${this.props.splitLabel}` : 'Browser');
           if (val && (this.props as any).onSetTitle) {
             (this.props as any).onSetTitle(val.trim());
           }
@@ -1364,15 +1758,21 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
 
     // Parse standard URL for breadcrumbs
-    let protocol = 'https:';
+    let protocol = 'https';
     let hostname = 'about:blank';
     let pathname = '';
+    let port = '';
+    let search = '';
+    let hash = '';
     let showHops = false;
     try {
       const parsed = new URL(/^https?:\/\//i.test(currentUrl) ? currentUrl : 'https://' + currentUrl);
-      protocol = parsed.protocol;
+      protocol = parsed.protocol.replace(':', '');
       hostname = parsed.hostname;
+      port = parsed.port;
       pathname = parsed.pathname;
+      search = parsed.search;
+      hash = parsed.hash;
       showHops = true;
     } catch (e) {
       // invalid URL, ignore
@@ -1400,18 +1800,66 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       );
     }
 
-    const paths = pathname.split('/').filter(Boolean);
-    const handleHostClick = () => {
-      this.navigateWebview(`${protocol}//${hostname}`);
-      this.setState({isUrlNavigatorOpen: false});
-    };
+    const rootUrl = `${protocol}://${hostname}${port ? `:${port}` : ''}`;
+    const hops: {
+      name: string;
+      url: string;
+      title: string;
+    }[] = [];
+
+    // Protocol hop
+    hops.push({
+      name: protocol,
+      url: rootUrl,
+      title: `Go to ${rootUrl}`
+    });
+
+    // Domain/Host hop
+    hops.push({
+      name: hostname,
+      url: rootUrl,
+      title: `Go to ${rootUrl}`
+    });
+
+    // Port hop (if any)
+    if (port) {
+      hops.push({
+        name: port,
+        url: `${protocol}://${hostname}:${port}`,
+        title: `Go to ${protocol}://${hostname}:${port}`
+      });
+    }
+
+    // Path segments
+    const pathSegments = pathname.split('/').filter(Boolean);
+    let currentAccumPath = '';
+    pathSegments.forEach((seg) => {
+      currentAccumPath += '/' + seg;
+      hops.push({
+        name: seg,
+        url: `${protocol}://${hostname}${port ? `:${port}` : ''}${currentAccumPath}`,
+        title: `Go to ${protocol}://${hostname}${port ? `:${port}` : ''}${currentAccumPath}`
+      });
+    });
+
+    // Append search/hash to the very last hop
+    if (search || hash) {
+      const suffix = `${search}${hash}`;
+      if (hops.length > 0) {
+        const lastHop = hops[hops.length - 1];
+        lastHop.url += suffix;
+        lastHop.title += suffix;
+        lastHop.name += suffix;
+      }
+    }
 
     return (
       <div
+        className="web_navigatorBreadcrumbs"
         style={{
           display: 'flex',
-          alignItems: 'center',
           flexWrap: 'wrap',
+          alignItems: 'center',
           gap: 'var(--space-4)',
           padding: 'var(--space-8) var(--space-12)',
           borderBottom: '0.5px solid var(--border-neutral)',
@@ -1422,30 +1870,50 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           userSelect: 'none'
         }}
       >
-        <i className="ti ti-world" style={{color: 'var(--info-text)', marginRight: 'var(--space-4)'}} />
-        <span style={{color: 'var(--text-tertiary)'}}>{protocol}//</span>
         <span
-          onClick={handleHostClick}
-          style={{cursor: 'pointer', color: 'var(--text-primary)', fontWeight: 500}}
-          title={`Go to ${protocol}//${hostname}`}
+          onClick={() => {
+            this.navigateWebview(rootUrl);
+            this.setState({isUrlNavigatorOpen: false});
+          }}
+          style={{cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: 'var(--text-secondary)'}}
+          title={`Go to root site: ${rootUrl}`}
         >
-          {hostname}
+          <i className="ti ti-world" style={{fontSize: '13px'}} aria-hidden="true" />
         </span>
-        {paths.map((p, idx) => {
-          const subpath = `${protocol}//${hostname}/${paths.slice(0, idx + 1).join('/')}`;
+        {hops.map((hop, index) => {
+          const isLast = index === hops.length - 1;
           return (
-            <React.Fragment key={idx}>
-              <span style={{color: 'var(--text-tertiary)'}}>/</span>
-              <span
-                onClick={() => {
-                  this.navigateWebview(subpath);
-                  this.setState({isUrlNavigatorOpen: false});
-                }}
-                style={{cursor: 'pointer', color: 'var(--text-secondary)'}}
-                title={`Go to ${subpath}`}
-              >
-                {p}
-              </span>
+            <React.Fragment key={index}>
+              <span style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>/</span>
+              {isLast ? (
+                <span
+                  style={{
+                    fontSize: '11px',
+                    color: 'var(--text-primary)',
+                    fontWeight: 500,
+                    fontFamily: 'var(--font-mono)'
+                  }}
+                >
+                  {hop.name}
+                </span>
+              ) : (
+                <span
+                  onClick={() => {
+                    this.navigateWebview(hop.url);
+                    this.setState({isUrlNavigatorOpen: false});
+                  }}
+                  style={{
+                    fontSize: '11px',
+                    color: 'var(--text-secondary)',
+                    fontFamily: 'var(--font-mono)',
+                    cursor: 'pointer'
+                  }}
+                  className="web_breadcrumbHop"
+                  title={hop.title}
+                >
+                  {hop.name}
+                </span>
+              )}
             </React.Fragment>
           );
         })}
@@ -1653,10 +2121,72 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             color: statusColor,
             fontFamily: 'var(--font-sans)',
             userSelect: 'none',
-            borderTop: '0.5px solid rgba(255, 255, 255, 0.03)'
+            borderTop: '0.5px solid rgba(255, 255, 255, 0.03)',
+            gap: 'var(--space-12)'
           }}
         >
           <span>{statusText}</span>
+
+          <div
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', marginRight: '12px'}}
+            title={this.state.saveHistory ? "History saving is enabled" : "History saving is disabled (Private mode)"}
+          >
+            <span style={{fontSize: '9px', color: 'var(--text-secondary)'}}>Save History</span>
+            <label
+              className="web_historyToggle"
+              style={{
+                position: 'relative',
+                display: 'inline-block',
+                width: '24px',
+                height: '13px',
+                cursor: 'pointer',
+                userSelect: 'none',
+                margin: 0
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={this.state.saveHistory}
+                onChange={this.toggleSaveHistory}
+                style={{
+                  opacity: 0,
+                  width: 0,
+                  height: 0,
+                  margin: 0,
+                  position: 'absolute'
+                }}
+              />
+              <span
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  backgroundColor: this.state.saveHistory ? 'var(--text-info, #007aff)' : 'var(--bg-tertiary, #3e3e3f)',
+                  borderRadius: '13px',
+                  transition: 'background-color 0.2s ease-in-out'
+                }}
+              />
+              <span
+                style={{
+                  position: 'absolute',
+                  content: '""',
+                  height: '9px',
+                  width: '9px',
+                  left: this.state.saveHistory ? '13px' : '2px',
+                  bottom: '2px',
+                  backgroundColor: '#ffffff',
+                  borderRadius: '50%',
+                  transition: 'left 0.2s ease-in-out',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.2)'
+                }}
+              />
+            </label>
+          </div>
+
           <span style={{color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>
             Esc to close
           </span>
@@ -1691,7 +2221,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             : splitLabel === 'd'
               ? 'danger'
               : 'info';
-    const labelText = isAi ? 'ask' : (this.props as any).webName || (splitLabel ? `Pane ${splitLabel}` : 'Web pane');
+    const labelText = isAi ? 'ask' : (this.props as any).webName || (splitLabel ? `Pane ${splitLabel}` : 'Browser');
 
     return (
       <div
@@ -1699,13 +2229,17 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         className="web_fit"
         onKeyDown={this.handleKeyDown}
         onContextMenu={this.handleContextMenu}
-        onMouseDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          this.props.onActive?.();
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {showStrip && (
           <PaneBand
             ref={this.labelRef}
             paneType={isAi ? 'ai' : 'web'}
+            paneId={this.props.groupUid}
             tint={tint as any}
             label={labelText}
             isSplitRightDisabled={this.state.isNarrow}
@@ -1802,6 +2336,29 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     </div>
                   </span>
                 )}
+                {!isAi && (
+                  <span
+                    className="term_controlIcon term_tooltipTrigger"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const url = this.state.activeUrl || this.props.url || '';
+                      if (url) {
+                        const { shell } = require('electron');
+                        void shell.openExternal(url);
+                      }
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <i className="ti ti-external-link" style={{fontSize: '14px'}} aria-hidden="true" />
+                    <div className="term_tooltip" style={{minWidth: '160px'}}>
+                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Open in system browser</div>
+                    </div>
+                  </span>
+                )}
               </div>
             }
             locationBar={
@@ -1816,20 +2373,27 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                   let navigatorTop = 38;
                   if (isOpen) {
                     const el = this.urlBarRef.current;
-                    if (el) {
+                    const wrapper = this.webWrapperRef.current;
+                    if (el && wrapper) {
                       const rect = el.getBoundingClientRect();
-                      const parentRect = el.parentElement?.getBoundingClientRect();
-                      if (parentRect) {
-                        navigatorLeft = rect.left - parentRect.left;
-                        navigatorTop = rect.bottom - parentRect.top + 4;
+                      const parentRect = wrapper.getBoundingClientRect();
+                      navigatorLeft = rect.left - parentRect.left;
+                      navigatorTop = rect.bottom - parentRect.top + 4;
+                      const widthToUse = Math.max(rect.width, 320);
+                      navigatorWidth = widthToUse;
+                      if (navigatorLeft + widthToUse > parentRect.width) {
+                        // Right-justify and extend left
+                        navigatorLeft = (rect.right - parentRect.left) - widthToUse;
+                        if (navigatorLeft < 8) {
+                          navigatorLeft = 8;
+                        }
                       }
-                      navigatorWidth = rect.width;
                     }
                   }
                   this.setState(
                     {
                       isUrlNavigatorOpen: isOpen,
-                      navigatorInputVal: isAi ? '' : this.state.activeUrl || this.props.url || '',
+                      navigatorInputVal: '',
                       navigatorFocusedIndex: -1,
                       navigatorError: null,
                       navigatorLeft,
@@ -1913,7 +2477,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 </span>
               </div>
             }
-            onSplitRight={() => rpc.emit('split request vertical', {activeUid: this.props.sessionUid || this.props.groupUid})}
+            onSplitRight={() => rpc.emit('split request vertical', {activeUid: this.props.sessionUid || this.props.groupUid, profile: 'picker'})}
             onSplitDown={() => rpc.emit('split request horizontal', {activeUid: this.props.sessionUid || this.props.groupUid})}
             onClose={() => {
               if (hasSession) {
@@ -2921,7 +3485,17 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 ref={this.webviewRef}
                 src={url}
                 useragent={BROWSER_UA}
-                style={{flex: 1, display: error ? 'none' : 'flex', border: 'none', outline: 'none'}}
+                style={{
+                  flex: 1,
+                  display: error ? 'none' : 'flex',
+                  border: 'none',
+                  outline: 'none',
+                  // Default WHITE, not transparent — a transparent <webview> paints
+                  // BLACK between repaints, so pages that don't expose a sampleable
+                  // body bg (HN's legacy bgcolor, etc.) render black-on-black /
+                  // flash. White is the safe ground; real dark pages paint over it.
+                  backgroundColor: this.state.pageBgColor || '#ffffff'
+                }}
               />
               /* eslint-enable react/no-unknown-property */
             );
@@ -3393,6 +3967,9 @@ const mapDispatchToProps = (dispatch: HyperDispatch, ownProps: WebPaneProps) => 
   },
   onSetUrl(url: string) {
     dispatch({type: 'TERM_GROUP_SET_WEB_URL', uid: ownProps.groupUid, url} as any);
+  },
+  onActive() {
+    dispatch({type: 'TERM_GROUP_SET_ACTIVE', uid: ownProps.groupUid} as any);
   }
 });
 

@@ -12,7 +12,8 @@ import {
   TERM_GROUP_ADD_WEB_TAB,
   TERM_GROUP_ACTIVATE_WEB_TAB,
   TERM_GROUP_SET_WEB_NAME,
-  TERM_GROUP_SET_TAB_NAME
+  TERM_GROUP_SET_TAB_NAME,
+  RESTORE_LAYOUT_STATE
 } from '../../typings/constants/term-groups';
 import type {ITermGroup, ITermState, ITermGroups, ITermGroupReducer, Mutable} from '../../typings/hyper';
 import {decorateTermGroupsReducer} from '../utils/plugins';
@@ -54,7 +55,10 @@ const setActiveGroup = (state: ITermState, action: {uid: string}) => {
 
   const childGroup = findBySession(state, action.uid)!;
   const rootGroup = findRootGroup(state.termGroups, childGroup.uid);
-  return state.set('activeRootGroup', rootGroup.uid).setIn(['activeSessions', rootGroup.uid], action.uid);
+  return state
+    .set('activeRootGroup', rootGroup.uid)
+    .setIn(['activeSessions', rootGroup.uid], action.uid)
+    .set('activeTermGroup', childGroup.uid);
 };
 
 // Reduce existing sizes to fit a new split:
@@ -223,6 +227,10 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
   const act = action as any;
   switch (act.type) {
     case SESSION_ADD: {
+      if (act.isRestore) {
+        return state;
+      }
+
       if (act.groupUid) {
         state = state
           .setIn(['termGroups', act.groupUid, 'sessionUid'], act.uid)
@@ -248,6 +256,13 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
         .setIn(['activeSessions', uid], act.uid)
         .set('activeRootGroup', uid);
     }
+    case RESTORE_LAYOUT_STATE: {
+      const {savedState} = act;
+      return state
+        .set('termGroups', Immutable(savedState.termGroups))
+        .set('activeSessions', Immutable(savedState.activeSessions))
+        .set('activeRootGroup', savedState.activeRootGroup);
+    }
     case SESSION_SET_ACTIVE:
       return setActiveGroup(state, act);
     case TERM_GROUP_RESIZE:
@@ -258,10 +273,15 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
     case TERM_GROUP_SET_WEB_URL: {
       const {uid, url} = act;
       if (url !== null && url !== undefined) {
-        return state
+        const rootGroup = state.termGroups[uid] ? findRootGroup(state.termGroups, uid) : null;
+        let nextState = state
           .setIn(['termGroups', uid, 'webUrl'], url)
           .setIn(['termGroups', uid, 'sessionUid'], null)
-          .set('activeSessions', state.activeSessions.without(uid));
+          .set('activeTermGroup', uid);
+        if (rootGroup) {
+          nextState = nextState.setIn(['activeSessions', rootGroup.uid], null as any);
+        }
+        return nextState;
       }
       return state.setIn(['termGroups', uid, 'webUrl'], url);
     }
@@ -295,6 +315,15 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       }
       if (!groupUid) return state;
       return state.setIn(['termGroups', groupUid, 'tabName'], tabName);
+    }
+    case 'TERM_GROUP_SET_ACTIVE': {
+      const {uid} = act;
+      if (!state.termGroups[uid]) return state;
+      const rootGroup = findRootGroup(state.termGroups, uid);
+      return state
+        .set('activeRootGroup', rootGroup.uid)
+        .set('activeTermGroup', uid)
+        .setIn(['activeSessions', rootGroup.uid], null as any);
     }
     case TERM_GROUP_REORDER: {
       const {fromUid, toIndex} = act;

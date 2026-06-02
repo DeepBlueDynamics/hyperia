@@ -1,4 +1,4 @@
-import {existsSync} from 'fs';
+import {existsSync, readFileSync} from 'fs';
 
 import {app} from 'electron';
 
@@ -16,6 +16,7 @@ import {getColorMap} from './utils/colors';
 const watchers: Function[] = [];
 let cfg: parsedConfig = {} as any;
 let _watcher: chokidar.FSWatcher;
+let lastRawConfig = '';
 
 export const getDeprecatedCSS = (config: configOptions) => {
   const deprecated: string[] = [];
@@ -48,6 +49,17 @@ const _watch = () => {
   const onChange = () => {
     // Need to wait 100ms to ensure that write is complete
     setTimeout(() => {
+      try {
+        if (existsSync(cfgPath)) {
+          const raw = readFileSync(cfgPath, 'utf8');
+          if (raw === lastRawConfig) {
+            return;
+          }
+          lastRawConfig = raw;
+        }
+      } catch (err) {
+        // ignore
+      }
       cfg = _import();
       notify('Configuration updated', 'Hyper configuration reloaded!');
       watchers.forEach((fn) => {
@@ -158,6 +170,13 @@ export const getKeymaps = () => {
 
 export const setup = () => {
   cfg = _import();
+  try {
+    if (existsSync(cfgPath)) {
+      lastRawConfig = readFileSync(cfgPath, 'utf8');
+    }
+  } catch (err) {
+    // ignore
+  }
   // Replace static default profiles with system-detected shells
   const detected = detectProfiles();
   if (detected.length > 0) {

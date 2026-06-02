@@ -24,6 +24,8 @@ import findBySession from '../utils/term-groups';
 
 export function addSession(data: Session) {
   const {uid, shell, pid, cols = null, rows = null, splitDirection, activeUid, profile, groupUid, url, cwd, isNewGroup} = data;
+  const isRestore = (data as any).isRestore;
+  const lastCommand = (data as any).lastCommand;
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     const {sessions} = getState();
     const resolvedActiveUid = activeUid ? activeUid : sessions.activeUid;
@@ -42,8 +44,20 @@ export function addSession(data: Session) {
       groupUid,
       url,
       cwd,
-      isNewGroup
+      isNewGroup,
+      isRestore,
+      lastCommand
     });
+
+    if (isRestore && lastCommand) {
+      setTimeout(() => {
+        const state = getState();
+        if (state.sessions.sessions[uid]) {
+          console.log(`[sessions] Pre-populating terminal buffer for restored session ${uid} with command: ${lastCommand}`);
+          rpc.emit('data', { uid, data: lastCommand });
+        }
+      }, 500);
+    }
     // Keep split panes attached to the parent tab's existing name when syncing
     // the tab label back to the main process / sidecar.
     const newSession = getState().sessions.sessions[uid];
