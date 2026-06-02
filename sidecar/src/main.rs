@@ -1013,6 +1013,22 @@ async fn post_note_close(
     }
 }
 
+async fn post_note_open(
+    State(state): State<AppState>,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let id = parsed["id"].as_str().unwrap_or("").to_string();
+    if id.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Missing note id".into());
+    }
+    let cmd = serde_json::json!({"type": "NoteOpen", "id": id});
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
 async fn get_note(Path(id): Path<String>) -> (StatusCode, String) {
     let home = if cfg!(windows) {
         std::env::var("USERPROFILE").ok()
@@ -1511,6 +1527,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/notes/{id}", axum::routing::get(get_note).delete(delete_note).patch(patch_note))
         .route("/api/notes/{id}/schedule", axum::routing::post(post_note_schedule))
         .route("/api/notes/close", axum::routing::post(post_note_close))
+        .route("/api/notes/open", axum::routing::post(post_note_open))
         .with_state(state);
 
     // Dashboard routes with their own state

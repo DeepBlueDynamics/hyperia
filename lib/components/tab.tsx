@@ -7,6 +7,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [pendingName, setPendingName] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const renamingRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -128,6 +129,8 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
             const name = (pendingName ?? (tabName || description || props.text) ?? 'Tab').trim();
             const shortId = props.uid.replace(/-/g, '').slice(0, 8);
             void clipboard.writeText(`${name} (tab ${shortId})`);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1000);
           }
         })
       );
@@ -163,7 +166,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
 
   const isFirstRun = !defaultProfile;
   // Optimistically show pendingName to avoid any flicker while Redux propagates.
-  const displayText = isFirstRun ? 'untitled' : pendingName ?? (tabName || description || props.text);
+  const displayText = copied ? 'Copied ✓' : isFirstRun ? 'untitled' : pendingName ?? (tabName || description || props.text);
 
   // Agent dot color
   const agentDotColor = agentStatus?.working

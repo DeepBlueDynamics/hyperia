@@ -97,13 +97,16 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       const shortId = paneId ? paneId.replace(/-/g, '').slice(0, 8) : '';
       const cleanText = shortId ? `${name} (pane ${shortId})` : name;
       if (cleanText) {
-        navigator.clipboard.writeText(cleanText)
-          .then(() => {
-            setCopied(true);
-          })
-          .catch((err) => {
-            console.error('Failed to copy pane name to clipboard:', err);
-          });
+        // Use Electron's clipboard, not navigator.clipboard — the latter fails
+        // silently in this (non-secure-context) renderer, so the "Copied" badge
+        // never showed even though the click registered.
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          require('electron').clipboard.writeText(cleanText);
+          setCopied(true);
+        } catch (err) {
+          console.error('Failed to copy pane name to clipboard:', err);
+        }
       }
     };
 

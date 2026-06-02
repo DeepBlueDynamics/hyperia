@@ -2232,7 +2232,7 @@ export default class Term extends React.PureComponent<
                   fontFamily: 'var(--font-sans)'
                 }}
               >
-                Pick a shell or enter a URL
+                Initialize the pane
               </div>
 
               <div style={{display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '280px'}}>

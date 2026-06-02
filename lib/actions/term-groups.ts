@@ -56,24 +56,11 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
           }
           const activeSession = activeUid ? sessions.sessions[activeUid] : null;
           const cwd = (activeSession && activeSession.cwd) || ui.cwd;
-          // Is the pane we're splitting FROM a web pane? (No shell to inherit.)
-          let activeGroup = activeUid ? findBySession(termGroups, activeUid) : null;
-          if (!activeGroup && activeUid && termGroups.termGroups[activeUid]) {
-            activeGroup = termGroups.termGroups[activeUid];
-          }
-          const isWebSource = !!(activeGroup && (activeGroup as any).webUrl !== undefined && (activeGroup as any).webUrl !== null);
-          // Profile selection:
-          //  - Explicit `_profile` (agent terminal_split, or a chosen profile)
-          //    always wins.
-          //  - Split DOWN (HORIZONTAL) shows the pane-type PICKER.
-          //  - Split RIGHT (VERTICAL) inherits the source pane's shell profile —
-          //    a quick duplicate beside it — EXCEPT from a web pane, which has no
-          //    shell to inherit, so it shows the picker too.
-          const profile = _profile
-            ? _profile
-            : direction === 'HORIZONTAL' || isWebSource
-              ? 'picker'
-              : (activeSession && activeSession.profile) || 'picker';
+          // UI-initiated splits ALWAYS show the pane-type PICKER — you pick what
+          // goes in the new pane (both directions, any source). An explicit
+          // `_profile` still wins: agent terminal_split passes a real profile so
+          // it lands on a PTY, the AI split passes 'Web Pane', etc.
+          const profile = _profile ? _profile : 'picker';
           rpc.emit('new', {
             splitDirection: direction,
             cwd,

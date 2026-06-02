@@ -307,6 +307,12 @@ pub struct NoteCloseRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct NoteOpenRequest {
+    /// Note ID from sticky_note_list output.
+    pub id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct WherePaneRequest {
     /// Label of the reference pane (e.g. "a")
     pub a: String,
@@ -1555,6 +1561,16 @@ impl HyperiaMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let body = serde_json::json!({"id": req.id});
         let resp = self.post_json("/api/notes/close", &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Open (show) a sticky note window by its ID — brings an existing or closed note onto the screen and raises it. Use sticky_note_list to get IDs.")]
+    async fn sticky_note_open(
+        &self,
+        Parameters(req): Parameters<NoteOpenRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"id": req.id});
+        let resp = self.post_json("/api/notes/open", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 

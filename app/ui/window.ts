@@ -502,6 +502,16 @@ export function newWindow(
     e.preventDefault();
     isClosingAndWaitingForSave = true;
     rpc.emit('get-layout-state-req');
+    // Failsafe: the close used to hang waiting for the renderer's
+    // 'layout-state-reply' — if that never arrived the window stayed open and
+    // you had to click close a SECOND time. Saving layout is best-effort; close
+    // the window regardless after a short grace period.
+    setTimeout(() => {
+      if (isClosingAndWaitingForSave && !window.isDestroyed()) {
+        deleteSessions();
+        window.destroy();
+      }
+    }, 600);
   });
 
   rpc.on('layout-state-reply', (layoutState) => {
@@ -594,7 +604,24 @@ export function newWindow(
   // Route them to the system browser instead.
   window.webContents.on('did-attach-webview', (_event, webviewContents) => {
     webviewContents.setWindowOpenHandler(({url}) => {
-      void shell.openExternal(url);
+      // OAuth / login popups can't run inside an embedded browser — hand those
+      // to the system browser.
+      const isOAuth =
+        /^https?:\/\/(accounts\.google\.|login\.microsoftonline\.|appleid\.apple\.|github\.com\/login|login\.yahoo\.|(www\.)?facebook\.com\/(login|dialog)|api\.twitter\.com\/oauth)/i.test(
+          url
+        );
+      if (isOAuth) {
+        void shell.openExternal(url);
+        return {action: 'deny'};
+      }
+      // Everything else (target="_blank", window.open) was being dumped to the
+      // external browser, so those links looked un-clickable in the pane. Open
+      // them IN this pane instead.
+      try {
+        void webviewContents.loadURL(url);
+      } catch {
+        void shell.openExternal(url);
+      }
       return {action: 'deny'};
     });
   });

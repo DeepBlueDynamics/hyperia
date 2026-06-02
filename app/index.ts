@@ -329,6 +329,18 @@ app.on('second-instance', () => {
 
 // eslint-disable-next-line @typescript-eslint/no-misused-promises
 app.on('ready', () => {
+  // Windows routes notification-toast clicks by AppUserModelID. Without this,
+  // clicking a sticky-updated / reminder toast never fires the Notification
+  // 'click' handler (so the sticky never opens). Must be set before any
+  // Notification is shown.
+  if (process.platform === 'win32') {
+    try {
+      app.setAppUserModelId('com.deepbluedynamics.hyperia');
+    } catch {
+      /* non-fatal */
+    }
+  }
+
   // System tray icon
   initTray();
 

@@ -739,6 +739,13 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'NoteOpen': {
+      const noteId = msg.id as string;
+      const win = createStickyNote({id: noteId});
+      sendResult(seq, win ? 'ok' : 'Note not found');
+      break;
+    }
+
     case 'NoteDelete': {
       const noteId = msg.id as string;
       const deleted = deleteStickyNote(noteId);

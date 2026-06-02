@@ -492,6 +492,19 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
     this.props.onSetUrl?.(targetUrl);
     this.addToHistory('url', targetUrl);
+    // Navigate the webview DIRECTLY too — clicking a URL-picker history row only
+    // went through the redux/prop round-trip, which could be a no-op (the src
+    // didn't always change), so the click appeared to do nothing.
+    if (!targetUrl.startsWith('ai://')) {
+      try {
+        const wv: any = this.webviewRef.current;
+        if (wv && typeof wv.loadURL === 'function') {
+          void wv.loadURL(/^[a-z]+:\/\//i.test(targetUrl) ? targetUrl : 'https://' + targetUrl);
+        }
+      } catch {
+        /* webview not ready */
+      }
+    }
   };
 
   runAiChat = async (conversationId: string, userText: string) => {
@@ -1247,7 +1260,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         /* webview not ready */
       }
       try {
-        const wc = wv.getWebContents();
+        // <webview>.getWebContents() was REMOVED in modern Electron (that's why the
+        // right-click menu + link handlers silently never attached). Resolve the
+        // guest webContents via its id through @electron/remote instead.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const remote = require('@electron/remote');
+        const wc = remote.webContents.fromId(wv.getWebContentsId());
         if (wc) {
           wc.removeAllListeners('before-input-event');
           wc.on('before-input-event', (event: any, input: any) => {
@@ -1795,7 +1813,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           }}
         >
           <i className="ti ti-world" style={{color: 'var(--info-text)', marginRight: '4px'}} />
-          <span style={{color: 'var(--text-primary)'}}>{currentUrl}</span>
+          <span style={{color: 'var(--text-primary)', wordBreak: 'break-all', overflowWrap: 'anywhere', minWidth: 0}}>
+            {currentUrl}
+          </span>
         </div>
       );
     }
@@ -1814,23 +1834,24 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       title: `Go to ${rootUrl}`
     });
 
-    // Domain/Host hop
-    hops.push({
-      name: hostname,
-      url: rootUrl,
-      title: `Go to ${rootUrl}`
-    });
+    // Hostname REVERSED into filesystem order — news.ycombinator.com → com /
+    // ycombinator / news. TLD first (the "website type"), then the domain name,
+    // then the sub-domain(s). All host hops navigate to the site root.
+    const hostParts = hostname.split('.').filter(Boolean);
+    for (let i = hostParts.length - 1; i >= 0; i--) {
+      hops.push({name: hostParts[i], url: rootUrl, title: `Go to ${rootUrl}`});
+    }
 
     // Port hop (if any)
     if (port) {
       hops.push({
-        name: port,
+        name: `:${port}`,
         url: `${protocol}://${hostname}:${port}`,
         title: `Go to ${protocol}://${hostname}:${port}`
       });
     }
 
-    // Path segments
+    // Path segments — directories, then the end file. Each navigates to its prefix.
     const pathSegments = pathname.split('/').filter(Boolean);
     let currentAccumPath = '';
     pathSegments.forEach((seg) => {
@@ -1842,14 +1863,21 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       });
     });
 
-    // Append search/hash to the very last hop
-    if (search || hash) {
-      const suffix = `${search}${hash}`;
-      if (hops.length > 0) {
-        const lastHop = hops[hops.length - 1];
-        lastHop.url += suffix;
-        lastHop.title += suffix;
-        lastHop.name += suffix;
+    // Fragment (#…) as its own end segment.
+    if (hash) {
+      hops.push({name: hash, url: currentUrl, title: `Fragment ${hash}`});
+    }
+
+    // Query VARIABLES — list the KEYS only (the values are noise and they're what
+    // overflowed the bar). Rendered after a "?" as a dimmed, non-navigable group.
+    const varKeys: string[] = [];
+    if (search) {
+      try {
+        for (const k of new URLSearchParams(search).keys()) {
+          if (k && !varKeys.includes(k)) varKeys.push(k);
+        }
+      } catch (e) {
+        /* malformed query string — skip */
       }
     }
 
@@ -1867,7 +1895,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           fontSize: '11px',
           color: 'var(--text-secondary)',
           fontFamily: 'var(--font-mono)',
-          userSelect: 'none'
+          userSelect: 'none',
+          maxWidth: '100%',
+          boxSizing: 'border-box',
+          overflowX: 'hidden'
         }}
       >
         <span
@@ -1891,7 +1922,13 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     fontSize: '11px',
                     color: 'var(--text-primary)',
                     fontWeight: 500,
-                    fontFamily: 'var(--font-mono)'
+                    fontFamily: 'var(--font-mono)',
+                    // The last hop carries the (often huge) query string — let it
+                    // wrap mid-token instead of spanning off the page.
+                    wordBreak: 'break-all',
+                    overflowWrap: 'anywhere',
+                    minWidth: 0,
+                    maxWidth: '100%'
                   }}
                 >
                   {hop.name}
@@ -1906,7 +1943,11 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     fontSize: '11px',
                     color: 'var(--text-secondary)',
                     fontFamily: 'var(--font-mono)',
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    wordBreak: 'break-all',
+                    overflowWrap: 'anywhere',
+                    minWidth: 0,
+                    maxWidth: '100%'
                   }}
                   className="web_breadcrumbHop"
                   title={hop.title}
@@ -1917,6 +1958,31 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             </React.Fragment>
           );
         })}
+        {varKeys.length > 0 && (
+          <React.Fragment>
+            <span style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginLeft: '2px'}}>?</span>
+            {varKeys.map((k, vi) => (
+              <React.Fragment key={'var-' + vi}>
+                {vi > 0 && (
+                  <span style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', opacity: 0.6}}>·</span>
+                )}
+                <span
+                  title={`Query variable: ${k}`}
+                  style={{
+                    fontSize: '11px',
+                    color: 'var(--text-tertiary)',
+                    fontFamily: 'var(--font-mono)',
+                    opacity: 0.75,
+                    wordBreak: 'break-all',
+                    minWidth: 0
+                  }}
+                >
+                  {k}
+                </span>
+              </React.Fragment>
+            ))}
+          </React.Fragment>
+        )}
       </div>
     );
   };
@@ -2858,9 +2924,19 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                               }}
                             >
                               {item.titleAtVisit ? (
-                                <span style={{display: 'inline-flex', alignItems: 'center', gap: 'var(--space-6)'}}>
-                                  <span style={{fontWeight: 600}}>{highlightMatch(item.titleAtVisit, query)}</span>
-                                  <span style={{color: 'var(--text-tertiary)', fontSize: '10px'}}>{highlightMatch(item.value, query)}</span>
+                                <span style={{display: 'flex', alignItems: 'center', gap: 'var(--space-6)', minWidth: 0, maxWidth: '100%', overflow: 'hidden'}}>
+                                  <span
+                                    title={item.titleAtVisit}
+                                    style={{fontWeight: 600, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0}}
+                                  >
+                                    {highlightMatch(item.titleAtVisit, query)}
+                                  </span>
+                                  <span
+                                    title={item.value}
+                                    style={{color: 'var(--text-tertiary)', fontSize: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1}}
+                                  >
+                                    {highlightMatch(item.value, query)}
+                                  </span>
                                 </span>
                               ) : (
                                 highlightMatch(item.value, query)
