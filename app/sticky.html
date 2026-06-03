@@ -330,9 +330,13 @@
   .search-container {
     padding: 6px 0 10px 0;
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   #searchInput {
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     height: 36px;
     padding: 0 12px;
     background: rgba(0,0,0,0.05);
@@ -348,6 +352,24 @@
     border-color: #bbdefb;
     box-shadow: 0 0 0 2px rgba(187, 222, 251, 0.2);
   }
+  .search-refresh-btn {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.05);
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    user-select: none;
+    transition: background 0.15s, transform 0.2s;
+  }
+  .search-refresh-btn:hover { background: rgba(0,0,0,0.1); }
+  .search-refresh-btn:active { transform: rotate(180deg); }
   /* Scheduling panel overlay */
   .sched-overlay {
     position: absolute;
@@ -706,16 +728,23 @@ const cfgPath = path.join(os.homedir(), '.hyperia', 'hyperia.json');
 
 let stickyFontSize = 22; // Default to larger 22px
 let stickyTitleFontSize = 14; // Default 14px (was 10 — title was too small)
+const stickyDefaultsPath = path.join(stickysDir, 'defaults.json');
 try {
-  if (fs.existsSync(cfgPath)) {
+  // Font size lives in the sticky-local defaults file, NOT hyperia.json — writing
+  // it to the main config tripped Hyperia's config watcher ("config reloaded")
+  // on every zoom. Read defaults.json first; fall back to the old config location
+  // once (migration) for anyone whose size is still stored there.
+  let d = {};
+  if (fs.existsSync(stickyDefaultsPath)) {
+    try { d = JSON.parse(fs.readFileSync(stickyDefaultsPath, 'utf8')) || {}; } catch (_) { d = {}; }
+  }
+  if (typeof d.fontSize === 'number') stickyFontSize = d.fontSize;
+  if (typeof d.titleFontSize === 'number') stickyTitleFontSize = d.titleFontSize;
+  if (d.fontSize == null && fs.existsSync(cfgPath)) {
     const configData = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     if (configData && configData.config) {
-      if (configData.config.stickyFontSize) {
-        stickyFontSize = configData.config.stickyFontSize;
-      }
-      if (configData.config.stickyTitleFontSize) {
-        stickyTitleFontSize = configData.config.stickyTitleFontSize;
-      }
+      if (configData.config.stickyFontSize) stickyFontSize = configData.config.stickyFontSize;
+      if (configData.config.stickyTitleFontSize) stickyTitleFontSize = configData.config.stickyTitleFontSize;
     }
   }
 } catch (e) {
@@ -729,15 +758,15 @@ document.documentElement.style.setProperty('--sticky-font-size', `${stickyFontSi
 document.documentElement.style.setProperty('--sticky-title-font-size', `${currentTitleFontSize}px`);
 
 function saveStickyFontSize(size) {
+  // Persist to the sticky-local defaults file (merged so width/height/titleFontSize
+  // survive). NOT hyperia.json — that would fire the global config reload.
   try {
-    let configData = {};
-    if (fs.existsSync(cfgPath)) {
-      configData = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    let d = {};
+    if (fs.existsSync(stickyDefaultsPath)) {
+      try { d = JSON.parse(fs.readFileSync(stickyDefaultsPath, 'utf8')) || {}; } catch (_) { d = {}; }
     }
-    if (!configData.config) configData.config = {};
-    configData.config.stickyFontSize = size;
-    fs.writeFileSync(cfgPath, JSON.stringify(configData, null, 2), 'utf8');
-    console.log('Saved stickyFontSize to config:', size);
+    d.fontSize = size;
+    fs.writeFileSync(stickyDefaultsPath, JSON.stringify(d), 'utf8');
   } catch (e) {
     console.error('Failed to save stickyFontSize:', e);
   }
@@ -760,6 +789,12 @@ function textColorForBg(hex) {
 
 // Global zoom key handler for stickies
 window.addEventListener('keydown', (e) => {
+  // Ctrl/Cmd+Shift+T → toggle global see-through mode for ALL stickys.
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'T' || e.key === 't')) {
+    e.preventDefault();
+    ipcRenderer.send('sticky-toggle-seethrough');
+    return;
+  }
   const isPlus = e.key === '=' || e.key === '+';
   const isMinus = e.key === '-';
   const isZero = e.key === '0';
@@ -1178,8 +1213,8 @@ ipcRenderer.on('sticky-copy-all', () => {
 });
 // Hover → solidify (main sets opacity to 1.0 while hovered, dims on leave
 // unless the window is focused/clicked).
-document.body.addEventListener('mouseenter', () => ipcRenderer.send('sticky-hover', true));
-document.body.addEventListener('mouseleave', () => ipcRenderer.send('sticky-hover', false));
+// (Per-sticky hover opacity removed — transparency is now a single global
+// "See through" toggle handled in the main process.)
 
 // ── Scheduling panel ─────────────────────────────────────────────────────────
 {
@@ -1388,6 +1423,7 @@ if (isSearchMode) {
   content.innerHTML = `
     <div class="search-container">
       <input type="text" id="searchInput" placeholder="search stickys" />
+      <span class="search-refresh-btn" id="searchRefresh" title="Refresh sticky list">⟳</span>
     </div>
     <label class="search-opt"><input type="checkbox" id="optClear" checked> Clear previous search results</label>
     <label class="search-opt"><input type="checkbox" id="optReplace"> Replace existing stickys (vs. add to existing)</label>
@@ -1404,7 +1440,7 @@ if (isSearchMode) {
   // results" can close just those before opening a fresh set.
   let lastOpenedIds = [];
 
-  const allNotes = readNotes().filter(n => n.id !== 'sticky-search-window' && n.text && n.text.trim().length > 0);
+  let allNotes = readNotes().filter(n => n.id !== 'sticky-search-window' && n.text && n.text.trim().length > 0);
 
   // Recency = when the note was last open/touched (close time, else save time).
   const recencyKey = (n) => Date.parse(n.last_closed_at || '') || Date.parse(n.saved_at || '') || 0;
@@ -1541,6 +1577,17 @@ if (isSearchMode) {
     resultsList.appendChild(actions);
 
     for (const note of filtered) resultsList.appendChild(makeResultItem(note));
+  }
+
+  // Refresh: re-read notes.json from disk and re-render the current view, so
+  // notes created/edited/closed after this window opened show up without
+  // reopening search.
+  const refreshBtn = document.getElementById('searchRefresh');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+      allNotes = readNotes().filter(n => n.id !== 'sticky-search-window' && n.text && n.text.trim().length > 0);
+      renderResults(searchInput.value);
+    });
   }
 
   searchInput.addEventListener('input', () => renderResults(searchInput.value));

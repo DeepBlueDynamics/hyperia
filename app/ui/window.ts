@@ -603,6 +603,80 @@ export function newWindow(
   // popup windows (OAuth flows, target="_blank" links) as new BrowserWindows.
   // Route them to the system browser instead.
   window.webContents.on('did-attach-webview', (_event, webviewContents) => {
+    // Let the renderer reach this guest via @electron/remote too (zoom keys etc.).
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      require('@electron/remote/main').enable(webviewContents);
+    } catch (err) {
+      console.error('[ctxmenu] remote.enable(guest) failed:', err);
+    }
+    // Right-click menu for web panes, built in MAIN with the guest webContents
+    // directly. (The renderer tried to reach it via @electron/remote's
+    // webContents.fromId, which silently returned nothing — so there was no
+    // in-page menu at all.) inspectElement docks DevTools at the bottom.
+    webviewContents.on('context-menu', (_e: any, params: any) => {
+      const wc: any = webviewContents;
+      const items: Electron.MenuItemConstructorOptions[] = [
+        {label: 'Back', enabled: wc.canGoBack(), click: () => wc.goBack()},
+        {label: 'Forward', enabled: wc.canGoForward(), click: () => wc.goForward()},
+        {label: 'Reload', click: () => wc.reload()},
+        {type: 'separator'}
+      ];
+      if (params.linkURL) {
+        items.push(
+          {label: 'Copy Link', click: () => require('electron').clipboard.writeText(params.linkURL)},
+          {label: 'Open Link in Browser', click: () => void shell.openExternal(params.linkURL)},
+          {type: 'separator'}
+        );
+      }
+      items.push(
+        {label: 'Copy', role: 'copy', enabled: !!params.editFlags?.canCopy},
+        {label: 'Paste', role: 'paste', enabled: !!params.editFlags?.canPaste},
+        {label: 'Select All', role: 'selectAll'},
+        {type: 'separator'},
+        {
+          label: 'Find in page',
+          accelerator: 'CmdOrCtrl+F',
+          click: () => {
+            // The guest webContents id matches what the renderer's
+            // <webview>.getWebContentsId() returns, so the right web pane can
+            // open its find bar.
+            try {
+              window.webContents.send('web-pane-find', (webviewContents as any).id);
+            } catch (err) {
+              console.error('web-pane-find send failed:', err);
+            }
+          }
+        },
+        {type: 'separator'},
+        {
+          label: 'Inspect',
+          click: () => {
+            try {
+              // A <webview> guest has no window chrome to dock into, so
+              // {mode:'bottom'} silently no-ops. Detach opens a real DevTools
+              // window for the guest, which works. Open first, then inspect the
+              // clicked element once DevTools is up.
+              if (!wc.isDevToolsOpened()) {
+                wc.openDevTools({mode: 'detach'});
+                wc.once('devtools-opened', () => {
+                  try {
+                    wc.inspectElement(params.x, params.y);
+                  } catch (err) {
+                    console.error('inspectElement failed:', err);
+                  }
+                });
+              } else {
+                wc.inspectElement(params.x, params.y);
+              }
+            } catch (err) {
+              console.error('Inspect failed:', err);
+            }
+          }
+        }
+      );
+      Menu.buildFromTemplate(items).popup({window});
+    });
     webviewContents.setWindowOpenHandler(({url}) => {
       // OAuth / login popups can't run inside an embedded browser — hand those
       // to the system browser.
@@ -614,12 +688,14 @@ export function newWindow(
         void shell.openExternal(url);
         return {action: 'deny'};
       }
-      // Everything else (target="_blank", window.open) was being dumped to the
-      // external browser, so those links looked un-clickable in the pane. Open
-      // them IN this pane instead.
+      // target="_blank" / window.open wants a new "tab" — but Hyperia has split
+      // panes, not browser tabs. So tell the renderer to split DOWN and open the
+      // link in a fresh web pane below the current one. (The guest webContents id
+      // routes it to the right pane.)
       try {
-        void webviewContents.loadURL(url);
-      } catch {
+        window.webContents.send('web-pane-open-split', (webviewContents as any).id, url);
+      } catch (err) {
+        console.error('web-pane-open-split send failed:', err);
         void shell.openExternal(url);
       }
       return {action: 'deny'};

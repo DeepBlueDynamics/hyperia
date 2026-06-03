@@ -168,16 +168,33 @@ const NOTE_EMOJIS = [
   '🎨'
 ];
 
+// Strip a leading emoji/symbol prefix so "🐸 Jolly Turtle" and "Jolly Turtle"
+// count as the SAME base name for uniqueness — the emoji is decorative, not
+// part of the note's identity.
+function noteNameBase(name: string): string {
+  return (name || '').replace(/^[^\sA-Za-z0-9]+\s*/, '').trim().toLowerCase();
+}
+
+// 56 adjectives × 62 animals = 3,472 base names. With dozens of notes the
+// birthday-paradox makes plain random collide often (that's how two
+// "Jolly Turtle" happened) — so reroll until the base name is unused.
 function generateNoteName(): string {
+  const taken = new Set(readAllNotes().map((n) => noteNameBase(n.name || '')));
+  for (let attempt = 0; attempt < 300; attempt++) {
+    const adj = NOTE_ADJECTIVES[Math.floor(Math.random() * NOTE_ADJECTIVES.length)];
+    const animal = NOTE_ANIMALS[Math.floor(Math.random() * NOTE_ANIMALS.length)];
+    const base = `${adj} ${animal}`;
+    if (taken.has(base.toLowerCase())) continue; // collision → reroll
+    if (Math.random() < 1 / 3) {
+      const emoji = NOTE_EMOJIS[Math.floor(Math.random() * NOTE_EMOJIS.length)];
+      return `${emoji} ${base}`;
+    }
+    return base;
+  }
+  // Exhausted (>3k notes) — guarantee uniqueness with a numeric suffix.
   const adj = NOTE_ADJECTIVES[Math.floor(Math.random() * NOTE_ADJECTIVES.length)];
   const animal = NOTE_ANIMALS[Math.floor(Math.random() * NOTE_ANIMALS.length)];
-  const name = `${adj} ${animal}`;
-  // 1/3 chance of an emoji prefix
-  if (Math.random() < 1 / 3) {
-    const emoji = NOTE_EMOJIS[Math.floor(Math.random() * NOTE_EMOJIS.length)];
-    return `${emoji} ${name}`;
-  }
-  return name;
+  return `${adj} ${animal} ${readAllNotes().length + 1}`;
 }
 
 type StickyColor = {bg: string; text: string; name: string};
@@ -253,18 +270,77 @@ function stickysDir(): string {
 
 function getStickyDefaultSize(): {width: number; height: number} {
   try {
-    return JSON.parse(readFileSync(join(stickysDir(), 'defaults.json'), 'utf8'));
+    const d = JSON.parse(readFileSync(join(stickysDir(), 'defaults.json'), 'utf8'));
+    return {width: d.width || 280, height: d.height || 220};
   } catch {
     return {width: 280, height: 220};
   }
 }
 
 function saveStickyDefaultSize(width: number, height: number) {
+  // Merge — defaults.json also holds the renderer-owned fontSize/titleFontSize,
+  // so overwriting with just {width,height} would wipe the user's font size.
   try {
-    writeFileSync(join(stickysDir(), 'defaults.json'), JSON.stringify({width, height}), 'utf8');
+    const p = join(stickysDir(), 'defaults.json');
+    let d: Record<string, unknown> = {};
+    try {
+      d = JSON.parse(readFileSync(p, 'utf8')) || {};
+    } catch {
+      d = {};
+    }
+    d.width = width;
+    d.height = height;
+    writeFileSync(p, JSON.stringify(d), 'utf8');
   } catch (e) {
     console.error('Failed to save sticky defaults:', e);
   }
+}
+
+// ── Global "see through" mode ───────────────────────────────────────────────
+// ONE toggle for ALL stickys: either every sticky is semi-transparent or none
+// is. No per-sticky focus/hover opacity. Persisted in defaults.json.
+const STICKY_SEETHROUGH_OPACITY = 0.6;
+let stickySeeThrough = false;
+
+function loadStickySeeThrough(): boolean {
+  try {
+    return !!JSON.parse(readFileSync(join(stickysDir(), 'defaults.json'), 'utf8')).seeThrough;
+  } catch {
+    return false;
+  }
+}
+
+function saveStickySeeThrough(on: boolean) {
+  try {
+    const p = join(stickysDir(), 'defaults.json');
+    let d: Record<string, unknown> = {};
+    try {
+      d = JSON.parse(readFileSync(p, 'utf8')) || {};
+    } catch {
+      d = {};
+    }
+    d.seeThrough = on;
+    writeFileSync(p, JSON.stringify(d), 'utf8');
+  } catch (e) {
+    console.error('Failed to save sticky seeThrough:', e);
+  }
+}
+
+function stickyOpacityNow(): number {
+  return stickySeeThrough ? STICKY_SEETHROUGH_OPACITY : 1.0;
+}
+
+function applyStickySeeThrough() {
+  const op = stickyOpacityNow();
+  for (const [, win] of stickyWindows) {
+    if (!win.isDestroyed()) win.setOpacity(op);
+  }
+}
+
+function toggleStickySeeThrough() {
+  stickySeeThrough = !stickySeeThrough;
+  saveStickySeeThrough(stickySeeThrough);
+  applyStickySeeThrough();
 }
 
 type StickySchedule = {
@@ -324,7 +400,17 @@ function writeAllNotes(notes: NoteData[]) {
 }
 
 function getNote(id: string): NoteData | undefined {
-  return readAllNotes().find((n) => n.id === id);
+  const notes = readAllNotes();
+  // Exact id wins; otherwise accept the short suffix users quote (e.g. "6r7t"
+  // for "note-<ts>-6r7t"), case-insensitively.
+  const exact = notes.find((n) => n.id === id);
+  if (exact) return exact;
+  const idl = id.toLowerCase();
+  const suffix = '-' + idl;
+  return notes.find((n) => {
+    const nid = n.id.toLowerCase();
+    return nid === idl || nid.endsWith(suffix);
+  });
 }
 
 function upsertNote(note: NoteData) {
@@ -498,25 +584,27 @@ function createStickyNote(
   // Generate a random name (or use existing)
   const savedNote = options.id ? getNote(options.id) : undefined;
 
-  // Resolve default size
+  // Resolve default size (explicit > persisted manual size > default).
   const defaultSize = getStickyDefaultSize();
-  const width = options.width || savedNote?.width || defaultSize.width;
-  const height = options.height || savedNote?.height || defaultSize.height;
+  let width = options.width || savedNote?.width || defaultSize.width;
+  let height = options.height || savedNote?.height || defaultSize.height;
 
-  const x =
-    options.x ??
-    savedNote?.x ??
-    Math.max(
-      display.workArea.x,
-      Math.min(Math.round(cursor.x - width / 2), display.workArea.x + display.workArea.width - width)
-    );
-  const y =
-    options.y ??
-    savedNote?.y ??
-    Math.max(
-      display.workArea.y,
-      Math.min(Math.round(cursor.y - height / 2), display.workArea.y + display.workArea.height - height)
-    );
+  // Candidate position: explicit > persisted > centered on the cursor.
+  const hasPlacedPos =
+    options.x != null || options.y != null || savedNote?.x != null || savedNote?.y != null;
+  let x = options.x ?? savedNote?.x ?? Math.round(cursor.x - width / 2);
+  let y = options.y ?? savedNote?.y ?? Math.round(cursor.y - height / 2);
+
+  // Clamp size AND position to the work area of the monitor the note actually
+  // lives on (multi-monitor: the display nearest the note's own position, not
+  // the primary or the cursor's). Without this a tall persisted height — e.g. a
+  // note saved at 1928px — restores past the bottom of a portrait monitor.
+  const targetDisplay = hasPlacedPos ? screen.getDisplayNearestPoint({x, y}) : display;
+  const wa = targetDisplay.workArea;
+  width = Math.min(width, wa.width);
+  height = Math.min(height, wa.height);
+  x = Math.max(wa.x, Math.min(x, wa.x + wa.width - width));
+  y = Math.max(wa.y, Math.min(y, wa.y + wa.height - height));
 
   const displayName = options.name || savedNote?.name || generateNoteName();
 
@@ -569,7 +657,10 @@ function createStickyNote(
       x,
       y,
       width,
-      height
+      height,
+      // Stamp creation time on genuinely-new notes (this fallback only runs when
+      // getNote returned nothing). Existing notes keep their original created_at.
+      created_at: new Date().toISOString()
     };
     upsertNote({...current, name: displayName, x, y, width, height, color: colorHex, open: true});
   }
@@ -606,8 +697,17 @@ function createStickyNote(
   });
 
   // Persist geometry on move/resize
+  // Ignore geometry events fired during creation/show. On a scaled monitor the
+  // OS emits spurious resize/move while it lays the window out, and persisting
+  // those bounds made notes grow a little EVERY restart (a feedback loop). Arm
+  // only after the window has settled; after that, real user drags persist.
+  let geomReady = false;
+  setTimeout(() => {
+    geomReady = true;
+  }, 1200);
   const saveGeom = () => {
-    if (options.filePath || noteId === 'sticky-search-window') return; // file mode and search window don't persist note data
+    if (!geomReady) return;
+    if (options.filePath || noteId === 'sticky-search-window') return; // file mode + search window don't persist
     const bounds = win.getBounds();
     const note = getNote(noteId);
     if (note) {
@@ -618,29 +718,14 @@ function createStickyNote(
   win.on('moved', saveGeom);
   win.on('resized', saveGeom);
 
-  // Opacity: solid (1.0) whenever the sticky is FOCUSED (clicked — stays solid
-  // no matter where the cursor goes, until you click away) OR HOVERED (mouse
-  // over it). Dimmed (0.78) otherwise, so you can see what's behind it.
-  // Hover state arrives from the renderer via 'sticky-hover' (body mouseenter/
-  // leave); focus state from the window's own focus/blur.
-  const applyStickyOpacity = () => {
-    if (win.isDestroyed()) return;
-    const solid = (win as any)._focused || (win as any)._hovered;
-    win.setOpacity(solid ? 1.0 : 0.78);
-  };
-  (win as any)._focused = true; // created focused
-  (win as any)._hovered = false;
+  // Opacity is GLOBAL: every sticky honors the single "See through" toggle, with
+  // no per-sticky focus/hover behavior. Apply the current mode on creation.
+  if (!win.isDestroyed()) win.setOpacity(stickyOpacityNow());
   win.on('focus', () => {
-    (win as any)._focused = true;
-    applyStickyOpacity();
     // Raise above sibling stickys (they're all alwaysOnTop, so a click focuses
     // but doesn't reorder within that layer — moveTop brings the clicked one
     // to the front).
     if (!win.isDestroyed()) win.moveTop();
-  });
-  win.on('blur', () => {
-    (win as any)._focused = false;
-    applyStickyOpacity();
   });
 
   win.on('closed', () => {
@@ -734,14 +819,12 @@ export function initSticky() {
   // Start the scheduler poll loop + re-arm any schedules persisted on disk.
   startScheduler();
 
-  // Hover state from renderer (body mouseenter/leave) — solidify on hover.
-  ipcMain.on('sticky-hover', (event, hovering: boolean) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (win && !win.isDestroyed()) {
-      (win as any)._hovered = hovering;
-      const solid = (win as any)._focused || (win as any)._hovered;
-      win.setOpacity(solid ? 1.0 : 0.78);
-    }
+  // Restore the global see-through mode, then keep it in sync as stickys open.
+  stickySeeThrough = loadStickySeeThrough();
+
+  // Toggle see-through for ALL stickys (right-click menu item + Ctrl+Shift+T).
+  ipcMain.on('sticky-toggle-seethrough', () => {
+    toggleStickySeeThrough();
   });
 
   // Color change from renderer — update window backgroundColor (hex only, not code:* tokens)
@@ -821,6 +904,18 @@ export function initSticky() {
             click: () => event.sender.send('sticky-set-highlight', 'off')
           }
         ]
+      },
+      {type: 'separator'},
+      {
+        label: 'See Through',
+        type: 'checkbox',
+        checked: stickySeeThrough,
+        accelerator: 'CommandOrControl+Shift+T',
+        // Label only — the real key handling lives in the sticky renderer, so
+        // don't also register it here (would double-toggle).
+        registerAccelerator: false,
+        // Global toggle — flips transparency for EVERY sticky, not just this one.
+        click: () => toggleStickySeeThrough()
       },
       {type: 'separator'},
       // File binding: a normal sticky can become a live view of a file on disk.
@@ -1096,7 +1191,7 @@ async function fireSchedule(note: NoteData): Promise<void> {
   } else {
     createStickyNote({id: note.id});
   }
-  const cmd = note.text || '';
+  const cmd = extractRunCommands(note.text || '');
   try {
     if (s.runner === 'shell') {
       // Run the note's ```run``` block(s) and APPEND the output back into the

@@ -21,17 +21,15 @@ import rpc from '../rpc';
 import terms from '../terms';
 import processClipboard from '../utils/paste';
 import {translatePath} from '../utils/path-translate';
-import {decorate} from '../utils/plugins';
 import {countPathHorizontalStacks} from '../utils/term-groups';
 
 import {PaneBand} from './pane-band';
-import _SearchBox from './searchBox';
+import UrlPicker from './url-picker';
+import FindBar from './find-bar';
 
 const path = require('path');
 
 import 'xterm/css/xterm.css';
-
-const SearchBox = decorate(_SearchBox, 'SearchBox');
 
 export const activeTerminals = new Map<string, Term>();
 
@@ -162,7 +160,9 @@ export default class Term extends React.PureComponent<
     navigatorTop: number;
     isGlimmerActive?: boolean;
     isNarrow: boolean;
+    paneWidth: number;
     pickerZoom: number;
+    findText: string;
   }
 > {
   termRef: HTMLElement | null;
@@ -210,6 +210,8 @@ export default class Term extends React.PureComponent<
     navigatorTop: 38,
     isGlimmerActive: false,
     isNarrow: false,
+    paneWidth: 999,
+    findText: '',
     pickerZoom: 1.0
   };
 
@@ -218,6 +220,7 @@ export default class Term extends React.PureComponent<
   dirNavigatorRef = React.createRef<HTMLDivElement>();
   pathBarRef = React.createRef<HTMLDivElement>();
   navigatorSearchInputRef = React.createRef<HTMLInputElement>();
+  findInputRef = React.createRef<HTMLInputElement>();
   termOuterRef = React.createRef<HTMLDivElement>();
 
   handleOutsideClick = (e: MouseEvent) => {
@@ -349,8 +352,8 @@ export default class Term extends React.PureComponent<
     menu.popup();
   };
 
-  submitUrl = () => {
-    const trimmed = (this.state.urlInput || '').trim();
+  submitUrl = (override?: string) => {
+    const trimmed = (override !== undefined ? override : this.state.urlInput || '').trim();
     if (!trimmed) return;
 
     const isValidUrl = (str: string): boolean => {
@@ -732,10 +735,12 @@ export default class Term extends React.PureComponent<
       this.resizeObserver = new ResizeObserver((entries) => {
         const entry = entries[0];
         if (entry) {
-          const width = entry.contentRect.width;
-          const isNarrow = width < 380;
-          if (isNarrow !== this.state.isNarrow) {
-            this.setState({isNarrow});
+          const width = Math.round(entry.contentRect.width);
+          // Same collapse contract as the web pane: isNarrow (split actions)
+          // flips at <400; the dir bar floors/hides off paneWidth in render.
+          const isNarrow = width < 400;
+          if (isNarrow !== this.state.isNarrow || width !== this.state.paneWidth) {
+            this.setState({isNarrow, paneWidth: width});
           }
         }
         if (this.termWrapperRef) {
@@ -870,28 +875,57 @@ export default class Term extends React.PureComponent<
   }
 
   searchNext = (searchTerm: string) => {
-    this.searchAddon.findNext(searchTerm, {
-      ...this.state.searchOptions,
-      decorations: this.searchDecorations
-    });
+    if (!searchTerm) return;
+    try {
+      this.searchAddon.findNext(searchTerm, {
+        ...this.state.searchOptions,
+        decorations: this.searchDecorations
+      });
+    } catch (err) {
+      console.error('search next failed:', err);
+    }
   };
 
   searchPrevious = (searchTerm: string) => {
-    this.searchAddon.findPrevious(searchTerm, {
-      ...this.state.searchOptions,
-      decorations: this.searchDecorations
-    });
+    if (!searchTerm) return;
+    try {
+      this.searchAddon.findPrevious(searchTerm, {
+        ...this.state.searchOptions,
+        decorations: this.searchDecorations
+      });
+    } catch (err) {
+      console.error('search prev failed:', err);
+    }
   };
 
   closeSearchBox = () => {
-    this.props.onCloseSearch();
-    this.searchAddon.clearDecorations();
-    this.searchAddon.clearActiveDecoration();
+    // Each addon call is guarded: closing the box after a search was throwing
+    // an Electron error when a decoration/term was already torn down.
+    try {
+      this.props.onCloseSearch();
+    } catch (err) {
+      console.error('onCloseSearch failed:', err);
+    }
+    try {
+      this.searchAddon.clearDecorations();
+    } catch {
+      /* addon may be disposed */
+    }
+    try {
+      this.searchAddon.clearActiveDecoration();
+    } catch {
+      /* addon may be disposed */
+    }
     this.setState((state) => ({
       ...state,
-      searchResults: undefined
+      searchResults: undefined,
+      findText: ''
     }));
-    this.term.focus();
+    try {
+      this.term?.focus();
+    } catch {
+      /* term may be disposed */
+    }
   };
 
   resize(cols: number, rows: number) {
@@ -1186,11 +1220,111 @@ export default class Term extends React.PureComponent<
       .then((r) => r.json())
       .then((data: {path: string; parent: string | null; dirs: (string | SubdirInfo)[]}) => {
         this.setState({navigatorCurrentPath: data.path, navigatorDirs: data.dirs});
+        // Navigating into a folder (row/breadcrumb click) blurs the search input;
+        // re-focus it so the user can keep typing to filter immediately.
+        if (this.state.isDirNavigatorOpen) {
+          setTimeout(() => this.navigatorSearchInputRef.current?.focus(), 0);
+        }
       })
       .catch((err) => {
         console.error('Failed to load directory listing:', err);
         this.setState({navigatorDirs: [] as (string | SubdirInfo)[]});
       });
+  };
+
+  // ── Recent-directory history (cross-pane, persisted) ─────────────────────
+  private static DIR_HISTORY_KEY = 'hyperia_dir_history';
+
+  private normDir = (s: string): string => s.replace(/[\\/]+$/, '').toLowerCase();
+
+  loadDirHistory = (): string[] => {
+    try {
+      const raw = localStorage.getItem(Term.DIR_HISTORY_KEY);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr.filter((x: unknown): x is string => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  };
+
+  recordDirHistory = (p: string): void => {
+    const path = (p || '').replace(/[\\/]+$/, '').trim() || p.trim();
+    if (!path) return;
+    try {
+      const key = this.normDir(path);
+      const prev = this.loadDirHistory().filter((x) => this.normDir(x) !== key);
+      const next = [path, ...prev].slice(0, 30);
+      localStorage.setItem(Term.DIR_HISTORY_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore quota / unavailable */
+    }
+  };
+
+  // A single horizontal row of quick-jump buttons under the directory list:
+  // HOME first (accent color), then most-recent dirs (excluding home + the
+  // currently-browsed path). Clicking browses there (ctrl-enter still cds).
+  renderNavigatorRecent = () => {
+    const home = (process.env.USERPROFILE || process.env.HOME || '').replace(/[\\/]+$/, '');
+    const current = this.normDir(this.state.navigatorCurrentPath || '');
+    const recents = this.loadDirHistory().filter(
+      (p) => this.normDir(p) !== current && (!home || this.normDir(p) !== this.normDir(home))
+    );
+
+    const items: {path: string; accent: boolean}[] = [];
+    if (home) items.push({path: home, accent: true});
+    recents.slice(0, 12).forEach((p) => items.push({path: p, accent: false}));
+    if (items.length === 0) return null;
+
+    return (
+      <div
+        style={{
+          borderTop: '0.5px solid var(--border-neutral)',
+          padding: 'var(--space-6) var(--space-8)'
+        }}
+      >
+        <div
+          style={{
+            fontSize: '9px',
+            color: 'var(--text-tertiary)',
+            fontFamily: 'var(--font-sans)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em',
+            marginBottom: 'var(--space-4)',
+            paddingLeft: 'var(--space-4)'
+          }}
+        >
+          recent
+        </div>
+        <div
+          className="term_navigatorRecentRow"
+          style={{display: 'flex', gap: 'var(--space-6)', overflowX: 'auto', paddingBottom: '2px'}}
+        >
+          {items.map(({path, accent}) => (
+            <span
+              key={path}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => this.loadNavigatorDirs(path)}
+              title={accent ? `Home — ${path}` : path}
+              style={{
+                cursor: 'pointer',
+                flexShrink: 0,
+                whiteSpace: 'nowrap',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '10px',
+                padding: '2px var(--space-6)',
+                borderRadius: 'var(--radius-3)',
+                border: '0.5px solid var(--border-neutral)',
+                color: accent ? 'var(--info-text)' : 'var(--text-secondary)',
+                background: accent ? 'var(--info-bg)' : 'var(--bg-primary)'
+              }}
+            >
+              {path}
+            </span>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   getTerminalScreenText = (): string => {
@@ -1365,6 +1499,7 @@ export default class Term extends React.PureComponent<
         }}
       >
         <span
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => handleHopClick(rootPath)}
           style={{cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: 'var(--text-secondary)'}}
           title="Root directory"
@@ -1373,9 +1508,15 @@ export default class Term extends React.PureComponent<
         </span>
         {hops.map((hop, index) => {
           const isLast = index === hops.length - 1;
+          // Windows: the separator is "\", and there is NO separator before the
+          // drive (it reads "C: \ Users", not "\ C: \ Users"). Unix: "/" before
+          // every hop, including root.
+          const showSep = isWindows ? index > 0 : true;
           return (
             <React.Fragment key={hop.path}>
-              <span style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>/</span>
+              {showSep && (
+                <span style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>{sep}</span>
+              )}
               {isLast ? (
                 <span
                   style={{
@@ -1389,6 +1530,7 @@ export default class Term extends React.PureComponent<
                 </span>
               ) : (
                 <span
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => handleHopClick(hop.path)}
                   style={{
                     fontSize: '11px',
@@ -1411,24 +1553,24 @@ export default class Term extends React.PureComponent<
           onClick={this.goToNavigatorDir}
           onMouseDown={(e) => e.preventDefault()}
           className="term_navigatorGo"
-          title="cd to this directory"
+          title="cd to this directory (Ctrl+Enter)"
           style={{
             marginLeft: 'auto',
             cursor: 'pointer',
             display: 'inline-flex',
             alignItems: 'center',
             gap: 'var(--space-4)',
-            fontSize: '11px',
+            fontSize: '10px',
             fontWeight: 600,
             fontFamily: 'var(--font-mono)',
             color: 'var(--text-info)',
             border: '0.5px solid var(--border-neutral)',
             borderRadius: 'var(--radius-3)',
-            padding: '1px var(--space-8)'
+            padding: '1px var(--space-6)',
+            whiteSpace: 'nowrap'
           }}
         >
-          Go
-          <i className="ti ti-arrow-right" style={{fontSize: '12px'}} aria-hidden="true" />
+          ctrl-enter
         </span>
       </div>
     );
@@ -1495,6 +1637,7 @@ export default class Term extends React.PureComponent<
           return (
             <div
               key={dirName}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => handleRowClick(dirName)}
               className={`term_navigatorDirRow ${showFocus ? 'term_navigatorDirRow_focused' : ''}`}
               style={{
@@ -1714,11 +1857,12 @@ export default class Term extends React.PureComponent<
             borderRadius: 'var(--radius-3)',
             padding: '1px var(--space-6)',
             background: 'var(--bg-secondary)',
-            userSelect: 'none'
+            userSelect: 'none',
+            whiteSpace: 'nowrap'
           }}
-          title="cd to current browsed path"
+          title="cd to current browsed path (Ctrl+Enter)"
         >
-          Go
+          ctrl-enter
         </span>
       </div>
     );
@@ -1744,6 +1888,9 @@ export default class Term extends React.PureComponent<
     const sessionCwd = (this.props as any).sessionCwd;
     const prevSessionCwd = (prevProps as any).sessionCwd;
     if (sessionCwd && sessionCwd !== prevSessionCwd) {
+      // Persist every real cwd the shell lands in to a cross-pane recent list
+      // the directory picker surfaces as quick-jump buttons.
+      this.recordDirHistory(sessionCwd);
       const {cwdHistory, cwdCursor} = this.state;
       if (cwdCursor === -1 || cwdHistory[cwdCursor] !== sessionCwd) {
         const truncated = cwdHistory.slice(0, cwdCursor + 1);
@@ -1786,6 +1933,13 @@ export default class Term extends React.PureComponent<
 
     if (prevProps.search && !this.props.search) {
       this.closeSearchBox();
+    }
+    // Find bar just opened → focus its input (mirrors the web pane).
+    if (!prevProps.search && this.props.search) {
+      setTimeout(() => {
+        this.findInputRef.current?.focus();
+        this.findInputRef.current?.select();
+      }, 50);
     }
 
     // Update only options that have changed.
@@ -1917,6 +2071,18 @@ export default class Term extends React.PureComponent<
       }
     }
 
+    // Identical toolbar-collapse contract to the web pane (see web-pane.tsx):
+    // splits drop below ~400 (and hand their room back to the dir bar); the dir
+    // bar floors at ~11 chars and is hidden entirely below ~320 rather than
+    // shrinking to a stub. End state = title + nav + close.
+    const w = this.state.paneWidth;
+    const hideSplits = w < 400;
+    const showDirBar = w >= 320;
+    // Find-bar match counts (xterm reports a 0-based resultIndex).
+    const sr = this.state.searchResults as {resultIndex: number; resultCount: number} | undefined;
+    const findActive = sr ? sr.resultIndex + 1 : 0;
+    const findTotal = sr ? sr.resultCount : 0;
+
     const splitLabel = this.props.splitLabel;
     const customTitle = (this.props as any).sessionTitle;
     const sessionProfile = (this.props as any).sessionProfile;
@@ -1989,8 +2155,8 @@ export default class Term extends React.PureComponent<
             paneId={this.props.uid}
             tint={isPicker ? 'neutral' : (tint as any)}
             isPlaceholder={isPicker}
-            isSplitRightDisabled={this.state.isNarrow}
-            isSplitDownDisabled={isSplitDownDisabled}
+            isSplitRightDisabled={hideSplits}
+            isSplitDownDisabled={isSplitDownDisabled || hideSplits}
             label={
               this.state.isRenamingLabel ? (
                 <input
@@ -2106,7 +2272,7 @@ export default class Term extends React.PureComponent<
                 </span>
               </div>
             }
-            locationBar={
+            locationBar={showDirBar ? (
               <div
                 ref={this.pathBarRef}
                 className="term_locationBar"
@@ -2123,9 +2289,10 @@ export default class Term extends React.PureComponent<
                   borderRadius: 'var(--radius-3)',
                   padding: '0 var(--space-6)',
                   height: '24px',
+                  // Fill the row; hard floor ~11 chars; hidden (not stubbed)
+                  // below ~320 via showDirBar. Matches the web-pane URL bar.
                   flex: 1,
-                  minWidth: 0,
-                  maxWidth: '560px',
+                  minWidth: '110px',
                   cursor: 'pointer',
                   boxSizing: 'border-box',
                   marginLeft: 'var(--space-4)',
@@ -2157,7 +2324,7 @@ export default class Term extends React.PureComponent<
                     : this.props.sessionCwd || '/'}
                 </span>
               </div>
-            }
+            ) : null}
             onSplitRight={() => rpc.emit('split request vertical', {activeUid: this.props.uid})}
             onSplitDown={() => rpc.emit('split request horizontal', {activeUid: this.props.uid})}
             onClose={() => {
@@ -2198,6 +2365,9 @@ export default class Term extends React.PureComponent<
             {/* Directory list */}
             {this.renderNavigatorDirectoryList()}
 
+            {/* Recent dirs — quick-jump button row */}
+            {this.renderNavigatorRecent()}
+
             {/* Footer */}
             {this.renderNavigatorFooter()}
           </div>
@@ -2235,82 +2405,6 @@ export default class Term extends React.PureComponent<
                 Initialize the pane
               </div>
 
-              <div style={{display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '280px'}}>
-                <div
-                  className={this.state.isGlimmerActive ? 'term_glimmer' : ''}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-8)',
-                    background: 'var(--bg-primary)',
-                    border: '0.5px solid var(--border-neutral)',
-                    borderRadius: 'var(--radius-6)',
-                    padding: '0 var(--space-10)',
-                    height: '36px',
-                    width: '100%',
-                    boxSizing: 'border-box',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <i
-                    className="ti ti-world"
-                    style={{fontSize: '14px', color: 'var(--text-tertiary)', flexShrink: 0}}
-                    aria-hidden="true"
-                  />
-                  <input
-                    type="text"
-                    style={{
-                      flex: 1,
-                      background: 'transparent',
-                      border: 'none',
-                      outline: 'none',
-                      color: 'var(--text-primary)',
-                      fontSize: '11px',
-                      fontFamily: 'var(--font-mono)',
-                      height: '100%',
-                      padding: 0
-                    }}
-                    placeholder="https://…"
-                    value={this.state.urlInput || ''}
-                    onChange={(e) => this.setState({urlInput: e.target.value, urlError: ''})}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        this.submitUrl();
-                      }
-                    }}
-                  />
-                  <span
-                    style={{
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '11px',
-                      padding: 'var(--space-2) var(--space-4)',
-                      border: '0.5px solid var(--border-neutral)',
-                      borderRadius: 'var(--radius-3)',
-                      color: 'var(--text-tertiary)',
-                      userSelect: 'none',
-                      lineHeight: '1.2'
-                    }}
-                  >
-                    ↵
-                  </span>
-                </div>
-                {this.state.urlError && (
-                  <div
-                    style={{
-                      fontSize: '11px',
-                      color: '#ff3b30',
-                      marginTop: 'var(--space-4)',
-                      textAlign: 'left',
-                      fontFamily: 'var(--font-sans)'
-                    }}
-                  >
-                    {this.state.urlError}
-                  </div>
-                )}
-              </div>
-
               <div
                 style={{
                   display: 'flex',
@@ -2322,7 +2416,7 @@ export default class Term extends React.PureComponent<
               >
                 <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
                 <div style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
-                  or pick a shell
+                  pick a shell
                 </div>
                 <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
               </div>
@@ -2437,6 +2531,47 @@ export default class Term extends React.PureComponent<
                   <span>Hyperia Shell</span>
                 </button>
               </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-10)',
+                  width: '100%',
+                  maxWidth: '280px',
+                  marginTop: 'var(--space-4)'
+                }}
+              >
+                <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
+                <div style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
+                  or type a URL
+                </div>
+                <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
+              </div>
+
+              {/* URL picker lives at the bottom — its history dropdown opens
+                  downward into empty space instead of overlapping the grids.
+                  Same widget the web pane uses; opens on click, not on type. */}
+              <div style={{display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '340px'}}>
+                <UrlPicker
+                  value={this.state.urlInput || ''}
+                  onChange={(v) => this.setState({urlInput: v, urlError: ''})}
+                  onNavigate={(url) => this.submitUrl(url)}
+                />
+                {this.state.urlError && (
+                  <div
+                    style={{
+                      fontSize: '11px',
+                      color: '#ff3b30',
+                      marginTop: 'var(--space-4)',
+                      textAlign: 'left',
+                      fontFamily: 'var(--font-sans)'
+                    }}
+                  >
+                    {this.state.urlError}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         ) : (
@@ -2448,46 +2583,22 @@ export default class Term extends React.PureComponent<
 
         {this.props.customChildren}
         {this.props.search ? (
-          <SearchBox
-            next={this.searchNext}
-            prev={this.searchPrevious}
-            close={this.closeSearchBox}
-            caseSensitive={this.state.searchOptions.caseSensitive}
-            wholeWord={this.state.searchOptions.wholeWord}
-            regex={this.state.searchOptions.regex}
-            results={this.state.searchResults}
-            toggleCaseSensitive={() =>
-              this.setState({
-                ...this.state,
-                searchOptions: {
-                  ...this.state.searchOptions,
-                  caseSensitive: !this.state.searchOptions.caseSensitive
-                }
-              })
-            }
-            toggleWholeWord={() =>
-              this.setState({
-                ...this.state,
-                searchOptions: {
-                  ...this.state.searchOptions,
-                  wholeWord: !this.state.searchOptions.wholeWord
-                }
-              })
-            }
-            toggleRegex={() =>
-              this.setState({
-                ...this.state,
-                searchOptions: {
-                  ...this.state.searchOptions,
-                  regex: !this.state.searchOptions.regex
-                }
-              })
-            }
-            selectionColor={this.props.selectionColor}
-            backgroundColor={this.props.backgroundColor}
-            foregroundColor={this.props.foregroundColor}
-            borderColor={this.props.borderColor}
-            font={this.props.uiFontFamily}
+          <FindBar
+            value={this.state.findText}
+            active={findActive}
+            total={findTotal}
+            placeholder="Find"
+            // Sit below the pane band (compact = 34px) like the web pane, instead
+            // of overlapping it. No band shown → default 8px from the top.
+            top={showLabelStrip ? '42px' : '8px'}
+            inputRef={this.findInputRef}
+            onChange={(v) => {
+              this.setState({findText: v});
+              this.searchNext(v);
+            }}
+            onNext={() => this.searchNext(this.state.findText)}
+            onPrev={() => this.searchPrevious(this.state.findText)}
+            onClose={this.closeSearchBox}
           />
         ) : null}
 
@@ -2753,19 +2864,10 @@ export default class Term extends React.PureComponent<
             .term_profileChip {
               display: none !important;
             }
-            .term_locationBar {
-              border-color: transparent !important;
-              background: transparent !important;
-              padding: 0 !important;
-              width: fit-content !important;
-              min-width: unset !important;
-              max-width: unset !important;
-              margin-right: 0 !important;
-              margin-left: 0 !important;
-            }
-            .term_locationBar span {
-              display: none !important;
-            }
+            /* The dir bar no longer collapses to an icon-only stub here — it's
+               kept floored (border + ~11 chars) by inline styles down to ~320px
+               and hidden entirely below that (showDirBar), matching the web
+               pane's URL bar. */
           }
         `}</style>
       </div>

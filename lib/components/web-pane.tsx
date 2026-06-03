@@ -9,13 +9,31 @@ import rpc from '../rpc';
 import {countPathHorizontalStacks} from '../utils/term-groups';
 
 import {PaneBand} from './pane-band';
+import FindBar from './find-bar';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {ipcMain, ipcRenderer} = require('electron');
 
 // Match a real Chrome UA so sites don't block the request
-const BROWSER_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+// Use the REAL Chromium UA, just stripped of the Electron + app product tokens.
+// Keeping the genuine Chrome version keeps the UA consistent with the Sec-CH-UA
+// client hints Chromium emits — a hardcoded/mismatched version trips Cloudflare/
+// Wordfence bot checks, which 403 a site's /wp-content + /wp-includes assets and
+// leave the page rendering bare (e.g. seths.blog).
+const BROWSER_UA = (() => {
+  const FALLBACK =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+  try {
+    let ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    if (!ua) return FALLBACK;
+    // Drop "Electron/x.y.z" and the app product (Hyper/Hyperia/x.y.z).
+    ua = ua.replace(/\s*(?:Electron|Hyper\w*)\/\S+/gi, '');
+    const moz = ua.indexOf('Mozilla/');
+    return (moz > 0 ? ua.slice(moz) : ua).replace(/\s{2,}/g, ' ').trim();
+  } catch {
+    return FALLBACK;
+  }
+})();
 
 interface WebPaneProps {
   url: string;
@@ -59,6 +77,30 @@ const getSecurityState = (urlStr: string): 'https' | 'http' | 'localhost' | 'err
     return 'error';
   } catch (err) {
     return 'error';
+  }
+};
+
+// Normalised key for de-duping history: lowercase scheme+host and strip trailing
+// slashes off the path — so "x.com", "x.com/", and "https://x.com/" collapse to
+// a single entry. Query + hash are kept (different ?q= are different pages).
+const normalizeUrlKey = (u: string): string => {
+  try {
+    const parsed = new URL(/^[a-z]+:\/\//i.test(u) ? u : 'https://' + u);
+    const path = parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.protocol}//${parsed.host.toLowerCase()}${path}${parsed.search}${parsed.hash}`;
+  } catch {
+    return u.trim().toLowerCase().replace(/\/+$/, '');
+  }
+};
+
+// The site's own favicon (no third-party lookup). Used in history rows instead
+// of the lock/security glyphs; falls back to a globe if it 404s.
+const faviconForUrl = (u: string): string => {
+  try {
+    const parsed = new URL(/^[a-z]+:\/\//i.test(u) ? u : 'https://' + u);
+    return `${parsed.protocol}//${parsed.host}/favicon.ico`;
+  } catch {
+    return '';
   }
 };
 
@@ -263,7 +305,15 @@ interface WebPaneState {
   navigatorWidth?: number;
   navigatorTop?: number;
   isNarrow: boolean;
+  paneWidth: number;
   pageBgColor?: string | null;
+  // Find-in-page (Ctrl+F) bar.
+  findOpen: boolean;
+  findText: string;
+  findActive: number;
+  findTotal: number;
+  // Which collapsed history roots (e.g. all "google.com/maps" URLs) are expanded.
+  expandedHistoryRoots: {[key: string]: boolean};
 }
 
 class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
@@ -272,9 +322,15 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   urlNavigatorRef = React.createRef<HTMLDivElement>();
   urlBarRef = React.createRef<HTMLDivElement>();
   navigatorInputRef = React.createRef<HTMLInputElement>();
+  findInputRef = React.createRef<HTMLInputElement>();
   webWrapperRef = React.createRef<HTMLDivElement>();
   resizeObserver: any = null;
   _windowKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
+  _findHandler: ((e: any, guestId: number) => void) | null = null;
+  _openSplitHandler: ((e: any, guestId: number, url: string) => void) | null = null;
+  // OAuth hand-off de-bounce: an MS/Google login bounces through many redirects,
+  // each of which would otherwise open its own system-browser tab. Open once.
+  _lastOAuthOpenAt = 0;
   searchAbortCtrl: AbortController | null = null;
 
   constructor(props: WebPaneProps) {
@@ -363,9 +419,15 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       paneHistoryIndex: props.url ? 0 : -1,
       navigatorLeft: 8,
       navigatorWidth: 320,
+      paneWidth: 999,
       navigatorTop: 38,
       isNarrow: false,
-      pageBgColor: null
+      pageBgColor: null,
+      findOpen: false,
+      findText: '',
+      findActive: 0,
+      findTotal: 0,
+      expandedHistoryRoots: {}
     };
   }
 
@@ -883,6 +945,250 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
   };
 
+  // Group key: scheme://host/<first-path-segment>. Collapses e.g. every
+  // google.com/maps/@lat,lng,zoom URL under one "google.com/maps" root, so a
+  // session that spammed many URLs (Maps, search) becomes one expandable entry.
+  historyRootKey = (value: string): string => {
+    try {
+      const u = new URL(/^[a-z]+:\/\//i.test(value) ? value : 'https://' + value);
+      const seg = u.pathname.split('/').filter(Boolean)[0] || '';
+      return `${u.protocol}//${u.host}${seg ? '/' + seg : ''}`.toLowerCase();
+    } catch {
+      return value.toLowerCase();
+    }
+  };
+
+  highlightHistory = (text: string, q: string): React.ReactNode => {
+    if (!q) return <span>{text}</span>;
+    const idx = text.toLowerCase().indexOf(q.toLowerCase());
+    if (idx === -1) return <span>{text}</span>;
+    return (
+      <span>
+        {text.substring(0, idx)}
+        <span style={{textDecoration: 'underline', textUnderlineOffset: '2px'}}>{text.substring(idx, idx + q.length)}</span>
+        {text.substring(idx + q.length)}
+      </span>
+    );
+  };
+
+  // Flatten history into visible rows: URL entries sharing a root collapse into
+  // one 'root' row; its children appear only when that root is expanded (or when
+  // a search query is active, so matches are always visible).
+  getHistoryVisibleRows = (
+    query: string
+  ): Array<
+    {type: 'single' | 'child'; item: WebHistoryEntry} | {type: 'root'; key: string; label: string; entries: WebHistoryEntry[]}
+  > => {
+    const filtered = query
+      ? this.state.webHistory.filter(
+          (item) =>
+            item.value.toLowerCase().includes(query) || (item.titleAtVisit && item.titleAtVisit.toLowerCase().includes(query))
+        )
+      : this.state.webHistory;
+    const order: string[] = [];
+    const groups: {[k: string]: WebHistoryEntry[]} = {};
+    for (const item of filtered) {
+      // AI queries never group — each is its own row.
+      const key = item.kind === 'url' ? this.historyRootKey(item.value) : `__solo__${item.value}-${item.visitedAt}`;
+      if (!groups[key]) {
+        groups[key] = [];
+        order.push(key);
+      }
+      groups[key].push(item);
+    }
+    const rows: Array<
+      {type: 'single' | 'child'; item: WebHistoryEntry} | {type: 'root'; key: string; label: string; entries: WebHistoryEntry[]}
+    > = [];
+    for (const key of order) {
+      const entries = groups[key];
+      if (entries.length === 1) {
+        rows.push({type: 'single', item: entries[0]});
+      } else {
+        rows.push({type: 'root', key, label: key.replace(/^https?:\/\//, ''), entries});
+        if (this.state.expandedHistoryRoots[key] || !!query) {
+          for (const item of entries) rows.push({type: 'child', item});
+        }
+      }
+    }
+    return rows;
+  };
+
+  renderHistoryRootRow = (
+    row: {key: string; label: string; entries: WebHistoryEntry[]},
+    index: number
+  ): React.ReactNode => {
+    const isFocused = index === this.state.navigatorFocusedIndex;
+    const expanded = !!this.state.expandedHistoryRoots[row.key];
+    const sample = row.entries[0];
+    return (
+      <div
+        key={`root-${row.key}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          this.setState((s) => ({
+            expandedHistoryRoots: {...s.expandedHistoryRoots, [row.key]: !s.expandedHistoryRoots[row.key]}
+          }));
+        }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '6px 12px',
+          cursor: 'pointer',
+          background: isFocused ? 'var(--info-bg)' : undefined
+        }}
+        className={isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow'}
+      >
+        <i
+          className={expanded ? 'ti ti-chevron-down' : 'ti ti-chevron-right'}
+          style={{fontSize: '12px', color: 'var(--text-tertiary)', flexShrink: 0}}
+          aria-hidden="true"
+        />
+        <span style={{position: 'relative', width: '14px', height: '14px', flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}>
+          <i className="ti ti-world" style={{fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--text-tertiary)'}} aria-hidden="true" />
+          <img
+            src={faviconForUrl(sample.value)}
+            width={14}
+            height={14}
+            alt=""
+            style={{position: 'absolute', inset: 0, borderRadius: '2px', objectFit: 'contain'}}
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = 'none';
+            }}
+          />
+        </span>
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '11px',
+            fontWeight: 600,
+            color: isFocused ? 'var(--info-text)' : 'var(--text-primary)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            flex: 1
+          }}
+        >
+          {row.label}
+        </span>
+        <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)', flexShrink: 0, marginRight: 'var(--space-6)'}}>
+          {row.entries.length}
+        </span>
+      </div>
+    );
+  };
+
+  renderHistoryRow = (item: WebHistoryEntry, index: number, query: string, indent = false): React.ReactNode => {
+    const isFocused = index === this.state.navigatorFocusedIndex;
+    const isAiRow = item.kind === 'ai-query';
+    return (
+      <div
+        key={`${item.value}-${item.visitedAt}`}
+        onClick={(e) => {
+          if (isAiRow) {
+            const conversationId = item.conversationId || `conv-${Date.now()}`;
+            if (e.shiftKey) {
+              const newConvId = `conv-${Date.now()}`;
+              this.createConversation(newConvId, item.value);
+              const isCurrentPaneEmpty = !this.props.url || this.props.url === 'about:blank' || this.props.url === '';
+              if (isCurrentPaneEmpty) {
+                this.navigateWebview(`ai://${newConvId}`);
+              } else {
+                rpc.emit('split request vertical', {
+                  activeUid: this.props.sessionUid || this.props.groupUid,
+                  profile: 'Web Pane',
+                  url: `ai://${newConvId}`
+                });
+              }
+            } else {
+              this.navigateWebview(`ai://${conversationId}`);
+            }
+            this.setState({isUrlNavigatorOpen: false});
+          } else {
+            this.navigateWebview(item.value);
+            this.setState({isUrlNavigatorOpen: false});
+          }
+        }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: indent ? '5px 12px 5px 32px' : '6px 12px',
+          cursor: 'pointer',
+          background: isFocused ? 'var(--info-bg)' : undefined,
+          transition: 'background 0.1s ease'
+        }}
+        className={isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow'}
+      >
+        {isAiRow ? (
+          <i className="ti ti-sparkles" style={{fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--color-ai-purple, #7F77DD)', flexShrink: 0}} />
+        ) : (
+          <span style={{position: 'relative', width: '14px', height: '14px', flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}>
+            <i className="ti ti-world" style={{fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--text-tertiary)'}} aria-hidden="true" />
+            <img
+              src={faviconForUrl(item.value)}
+              width={14}
+              height={14}
+              alt=""
+              style={{position: 'absolute', inset: 0, borderRadius: '2px', objectFit: 'contain'}}
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = 'none';
+              }}
+            />
+          </span>
+        )}
+        <span
+          style={{
+            fontFamily: isAiRow ? 'var(--font-sans)' : 'var(--font-mono)',
+            fontSize: '11px',
+            color: isFocused ? (isAiRow ? 'var(--color-ai-purple, #7F77DD)' : 'var(--info-text)') : 'var(--text-primary)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            userSelect: 'none',
+            flex: 1
+          }}
+        >
+          {item.titleAtVisit ? (
+            <span style={{display: 'flex', alignItems: 'center', gap: 'var(--space-6)', minWidth: 0, maxWidth: '100%', overflow: 'hidden'}}>
+              <span title={item.titleAtVisit} style={{fontWeight: 600, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0}}>
+                {this.highlightHistory(item.titleAtVisit, query)}
+              </span>
+              <span title={item.value} style={{color: 'var(--text-tertiary)', fontSize: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1}}>
+                {this.highlightHistory(item.value, query)}
+              </span>
+            </span>
+          ) : (
+            this.highlightHistory(item.value, query)
+          )}
+        </span>
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            this.removeHistoryEntry(item.kind, item.value, item.visitedAt);
+          }}
+          className="web-navigator-row-delete"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '18px',
+            height: '18px',
+            borderRadius: '50%',
+            color: 'var(--text-tertiary)',
+            cursor: 'pointer',
+            transition: 'background 0.15s, color 0.15s',
+            marginLeft: 'var(--space-6)',
+            flexShrink: 0
+          }}
+          title="Delete from history"
+        >
+          <i className="ti ti-x" style={{fontSize: '10px'}} aria-hidden="true" />
+        </div>
+      </div>
+    );
+  };
+
   addToHistory = (kind: 'url' | 'ai-query', value: string, extra: Partial<WebHistoryEntry> = {}) => {
     if (!this.state.saveHistory) {
       return;
@@ -898,7 +1204,13 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       newEntry.securityState = getSecurityState(value);
     }
 
-    const filtered = this.state.webHistory.filter((item) => !(item.kind === kind && item.value === value));
+    // De-dupe on a NORMALIZED key so "x.com" and "x.com/" don't both linger.
+    const key = kind === 'url' ? normalizeUrlKey(value) : value;
+    const filtered = this.state.webHistory.filter((item) => {
+      if (item.kind !== kind) return true;
+      const itemKey = kind === 'url' ? normalizeUrlKey(item.value) : item.value;
+      return itemKey !== key;
+    });
     const newHistory = [newEntry, ...filtered].slice(0, 200);
 
     this.setState({
@@ -978,9 +1290,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       this.setState({isEditingUrl: false});
     }
 
-    // Keep the URL navigator dropdown/popup open even if they click off on the guest webview,
-    // so they can use it as a reference and start typing in the browser immediately.
-    /*
+    // Click anywhere outside the dropdown and the URL bar → close it. (Clicks
+    // INSIDE the guest <webview> don't reach this document, so those are handled
+    // separately by the guest 'focus' listener in dom-ready.)
     if (
       this.state.isUrlNavigatorOpen &&
       this.urlNavigatorRef.current &&
@@ -990,7 +1302,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     ) {
       this.setState({isUrlNavigatorOpen: false});
     }
-    */
   };
 
   isInputUrl = (val: string): boolean => {
@@ -1161,10 +1472,13 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       this.resizeObserver = new ResizeObserver((entries) => {
         const entry = entries[0];
         if (entry) {
-          const width = entry.contentRect.width;
-          const isNarrow = width < 380;
-          if (isNarrow !== this.state.isNarrow) {
-            this.setState({isNarrow});
+          const width = Math.round(entry.contentRect.width);
+          // isNarrow gates split actions (keyboard + menu); it matches the width
+          // where the toolbar hides the split buttons (hideSplits in render), so
+          // you can't split via shortcut when the bar has no split buttons.
+          const isNarrow = width < 400;
+          if (isNarrow !== this.state.isNarrow || width !== this.state.paneWidth) {
+            this.setState({isNarrow, paneWidth: width});
           }
         }
       });
@@ -1189,6 +1503,14 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     if (!this.webviewRef.current) return;
     const wv = this.webviewRef.current;
+
+    // Belt-and-suspenders: ensure the guest can request popups so the main
+    // process window-open handler fires for target="_blank" (→ split + open).
+    try {
+      wv.setAttribute('allowpopups', 'true');
+    } catch {
+      /* webview not ready */
+    }
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     wv.addEventListener('did-start-loading', () => {
@@ -1243,6 +1565,15 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     wv.addEventListener('did-navigate', handleNavigation);
     wv.addEventListener('did-navigate-in-page', handleNavigation);
 
+    // Find-in-page match counts come back here.
+    wv.addEventListener('found-in-page', (e: any) => {
+      const r = e?.result || {};
+      this.setState({
+        findActive: typeof r.activeMatchOrdinal === 'number' ? r.activeMatchOrdinal : 0,
+        findTotal: typeof r.matches === 'number' ? r.matches : 0
+      });
+    });
+
     wv.addEventListener('dom-ready', () => {
       this.updateNavigationState();
       // Slim scrollbars — but only as a DEFAULT the page can override. We prepend
@@ -1274,6 +1605,20 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
               const isMinus = input.key === '-';
               const isZero = input.key === '0';
 
+              // Ctrl/Cmd+F → open the find bar (the guest has focus, so this is
+              // the only place the keystroke is observable).
+              if ((input.control || input.meta) && input.key.toLowerCase() === 'f') {
+                event.preventDefault();
+                this.openFind();
+                return;
+              }
+              // Esc closes the find bar if it's open.
+              if (input.key === 'Escape' && this.state.findOpen) {
+                event.preventDefault();
+                this.closeFind();
+                return;
+              }
+
               if ((input.control || input.meta) && isPlus) {
                 event.preventDefault();
                 try {
@@ -1301,22 +1646,39 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             }
           });
 
-          wc.on('context-menu', (event: any, params: any) => {
-            event.preventDefault();
-            this.handleContextMenu(event, params, wc);
+          // NOTE: the right-click menu is built in the MAIN process via
+          // window.webContents 'did-attach-webview' → guest 'context-menu'
+          // (app/ui/window.ts). Registering a second context-menu handler here
+          // popped a competing menu, so the renderer path is intentionally gone.
+
+          // dom-ready fires on EVERY page load and re-runs this block on the same
+          // (stable-id) guest webContents, so without removing first these
+          // listeners accumulate — N copies of will-navigate → N browser tabs
+          // opened for one OAuth redirect. Clear before re-adding.
+          wc.removeAllListeners('focus');
+          wc.removeAllListeners('will-navigate');
+          wc.removeAllListeners('will-redirect');
+
+          // Clicking into the guest page focuses its webContents but never fires
+          // a mousedown in THIS document — so the outside-click handler can't see
+          // it. Close the URL navigator when the page takes focus.
+          wc.on('focus', () => {
+            if (this.state.isUrlNavigatorOpen) {
+              this.setState({isUrlNavigatorOpen: false});
+            }
           });
 
           wc.on('will-navigate', (event: any, url: string) => {
             if (isOAuthUrl(url)) {
               event.preventDefault();
-              void shell.openExternal(url);
+              this.openOAuthExternal(url);
             }
           });
 
           wc.on('will-redirect', (event: any, url: string) => {
             if (isOAuthUrl(url)) {
               event.preventDefault();
-              void shell.openExternal(url);
+              this.openOAuthExternal(url);
             }
           });
         }
@@ -1363,6 +1725,22 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     // Listen for Ctrl+L shortcut
     this._windowKeydownHandler = (e: KeyboardEvent) => {
+      // Esc closes the URL navigator even when focus has left the input (e.g.
+      // the user tabbed/clicked away but the dropdown is still up).
+      if (e.key === 'Escape' && this.state.isUrlNavigatorOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.setState({isUrlNavigatorOpen: false});
+        return;
+      }
+      // Ctrl/Cmd+F → find-in-page (when the toolbar/chrome has focus; the guest
+      // page is handled separately via before-input-event).
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        e.stopPropagation();
+        this.openFind();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
         e.preventDefault();
         e.stopPropagation();
@@ -1394,6 +1772,36 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       }
     };
     rpc.on('web-pane-reload', this._reloadHandler);
+
+    // Right-click → "Find in page" (main process sends the guest's webContents
+    // id; only the matching pane opens its find bar).
+    this._findHandler = (_e: any, guestId: number) => {
+      try {
+        if (this.webviewRef.current && this.webviewRef.current.getWebContentsId() === guestId) {
+          this.openFind();
+        }
+      } catch {
+        /* webview not ready */
+      }
+    };
+    ipcRenderer.on('web-pane-find', this._findHandler);
+
+    // target="_blank" / window.open from the guest → split DOWN and open the
+    // link in a new web pane below this one (we have panes, not browser tabs).
+    this._openSplitHandler = (_e: any, guestId: number, url: string) => {
+      try {
+        if (this.webviewRef.current && this.webviewRef.current.getWebContentsId() === guestId) {
+          rpc.emit('split request horizontal', {
+            activeUid: this.props.sessionUid || this.props.groupUid,
+            profile: 'Web Pane',
+            url
+          });
+        }
+      } catch (err) {
+        console.error('web-pane-open-split failed:', err);
+      }
+    };
+    ipcRenderer.on('web-pane-open-split', this._openSplitHandler);
 
     this._clickHandler = (data: {uid: string; text?: string; selector?: string}) => {
       if (data.uid === this.props.groupUid && this.webviewRef.current) {
@@ -1529,6 +1937,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (this._windowKeydownHandler) {
       window.removeEventListener('keydown', this._windowKeydownHandler);
     }
+    if (this._findHandler) {
+      ipcRenderer.removeListener('web-pane-find', this._findHandler);
+    }
+    if (this._openSplitHandler) {
+      ipcRenderer.removeListener('web-pane-open-split', this._openSplitHandler);
+    }
     if (this._reloadHandler) {
       rpc.removeListener('web-pane-reload', this._reloadHandler);
     }
@@ -1599,6 +2013,112 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   _readHandler: ((data: {uid: string}) => void) | null = null;
   _evalHandler: ((data: {uid: string; js: string}) => void) | null = null;
   _mouseHandler: ((data: {uid: string; x: number; y: number; action?: string}) => void) | null = null;
+
+  // Hand an OAuth URL to the system browser, but only ONCE per flow. A single
+  // sign-in bounces through many redirects (login → authorize → consent → …),
+  // each matching isOAuthUrl; without this guard every hop opened a new tab.
+  openOAuthExternal = (url: string): void => {
+    const now = Date.now();
+    if (now - this._lastOAuthOpenAt < 8000) return;
+    this._lastOAuthOpenAt = now;
+    void shell.openExternal(url);
+  };
+
+  // ── Find-in-page (Ctrl+F) ────────────────────────────────────────────────
+  openFind = (): void => {
+    this.setState({findOpen: true}, () => {
+      const el = this.findInputRef.current;
+      if (el) {
+        el.focus();
+        el.select();
+      }
+      // Re-run the search if there's already a query (re-opening).
+      if (this.state.findText) this.doFind(this.state.findText, true);
+    });
+  };
+
+  closeFind = (): void => {
+    const wv: any = this.webviewRef.current;
+    try {
+      wv?.stopFindInPage?.('clearSelection');
+    } catch {
+      /* webview not ready */
+    }
+    this.setState({findOpen: false, findActive: 0, findTotal: 0});
+  };
+
+  doFind = (text: string, forward = true): void => {
+    const wv: any = this.webviewRef.current;
+    if (!wv) return;
+    if (!text) {
+      try {
+        wv.stopFindInPage('clearSelection');
+      } catch {
+        /* ignore */
+      }
+      this.setState({findActive: 0, findTotal: 0});
+      return;
+    }
+    try {
+      // findNext:false starts a fresh search; the 'found-in-page' event updates
+      // the match counts.
+      wv.findInPage(text, {forward, findNext: false});
+    } catch (err) {
+      console.error('findInPage failed:', err);
+    }
+  };
+
+  findStep = (forward: boolean): void => {
+    const wv: any = this.webviewRef.current;
+    const text = this.state.findText;
+    if (!wv || !text) return;
+    try {
+      wv.findInPage(text, {forward, findNext: true});
+    } catch (err) {
+      console.error('findInPage step failed:', err);
+    }
+  };
+
+  // Create a new sticky note from the current page: title + URL + the selected
+  // text (or a trimmed extract of the main content). Sent to the main process,
+  // which owns sticky windows.
+  newStickyFromPage = (): void => {
+    const wv: any = this.webviewRef.current;
+    const fallbackTitle = (this.props as any).webName || this.state.activeUrl || this.props.url || 'Page';
+    const fallbackUrl = this.state.activeUrl || this.props.url || '';
+    const send = (text: string) => {
+      try {
+        ipcRenderer.send('new-sticky', {text});
+      } catch (err) {
+        console.error('new-sticky send failed:', err);
+      }
+    };
+    if (!wv) {
+      send(`# ${fallbackTitle}\n${fallbackUrl}`);
+      return;
+    }
+    const js =
+      '(() => { try {' +
+      ' var sel = (window.getSelection && window.getSelection().toString().trim()) || "";' +
+      ' var title = document.title || location.href;' +
+      ' var url = location.href;' +
+      ' var body = sel;' +
+      ' if (!body) { var el = document.querySelector("article") || document.querySelector("main") || document.body;' +
+      ' body = (el && el.innerText ? el.innerText : "").replace(/\\n{3,}/g, "\\n\\n").trim().slice(0, 4000); }' +
+      ' return JSON.stringify({title: title, url: url, body: body});' +
+      ' } catch (e) { return JSON.stringify({title: document.title || "", url: location.href, body: ""}); } })()';
+    wv.executeJavaScript(js)
+      .then((res: string) => {
+        try {
+          const {title, url, body} = JSON.parse(res);
+          const text = `# ${title || fallbackTitle}\n${url || fallbackUrl}` + (body ? `\n\n${body}` : '');
+          send(text);
+        } catch {
+          send(`# ${fallbackTitle}\n${fallbackUrl}`);
+        }
+      })
+      .catch(() => send(`# ${fallbackTitle}\n${fallbackUrl}`));
+  };
 
   handleContextMenu = (e: React.MouseEvent | any, params?: any, wc?: any) => {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
@@ -2141,6 +2661,25 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             }}
             placeholder={isAi ? 'Search threads or ask a new question...' : 'Search history or type URL... (Esc to close)'}
             value={this.state.navigatorInputVal}
+            onContextMenu={(e) => {
+              // Right-click the URL/search field → standard edit menu (Paste etc.).
+              e.preventDefault();
+              e.stopPropagation();
+              try {
+                this.navigatorInputRef.current?.focus();
+                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                const {Menu, MenuItem} = require('@electron/remote');
+                const menu = new Menu();
+                menu.append(new MenuItem({role: 'cut'}));
+                menu.append(new MenuItem({role: 'copy'}));
+                menu.append(new MenuItem({role: 'paste'}));
+                menu.append(new MenuItem({type: 'separator'}));
+                menu.append(new MenuItem({role: 'selectAll'}));
+                menu.popup();
+              } catch (err) {
+                console.error('URL input context menu failed:', err);
+              }
+            }}
             onChange={(e) => {
               const newVal = e.target.value;
               const newQuery = newVal.toLowerCase();
@@ -2168,11 +2707,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
               borderRadius: 'var(--radius-3)',
               padding: '1px var(--space-6)',
               background: 'var(--bg-secondary)',
-              userSelect: 'none'
+              userSelect: 'none',
+              whiteSpace: 'nowrap'
             }}
-            title="Navigate to URL or search term"
+            title="Navigate (Enter)"
           >
-            Go
+            enter
           </span>
         </div>
 
@@ -2287,7 +2827,35 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             : splitLabel === 'd'
               ? 'danger'
               : 'info';
-    const labelText = isAi ? 'ask' : (this.props as any).webName || (splitLabel ? `Pane ${splitLabel}` : 'Browser');
+    // Cap the toolbar title — page titles run long ("… Recipe From Scratch -
+    // Budget Bytes") and PaneBand renders nowrap + no-shrink, so the full title
+    // spans the whole bar. Trim to a reasonable length with an ellipsis.
+    const rawWebName = (this.props as any).webName as string | undefined;
+    const webNameShort =
+      rawWebName && rawWebName.length > 32 ? `${rawWebName.slice(0, 31).trimEnd()}…` : rawWebName;
+    const labelText = isAi ? 'ask' : webNameShort || (splitLabel ? `Pane ${splitLabel}` : 'Browser');
+
+    // ── Toolbar collapse plan ────────────────────────────────────────────────
+    // Priority, widest → narrowest:
+    //   1. URL bar FILLS the row (grows), nav icons + title to its left, splits
+    //      + close on the right.
+    //   2. The moment the splits would crowd the URL bar's ~11-char floor, hide
+    //      BOTH splits (no splitting a pane this small anyway) and give that
+    //      space back to the URL bar.
+    //   3. When even the floored URL bar can't fit, hide the URL bar entirely —
+    //      end state is title + nav buttons + close. Never a sub-"https://" stub.
+    // Nav buttons always stay (they're part of that end state). Thresholds are a
+    // width budget (padding + title + nav + url-floor + splits + close), not
+    // arbitrary — see numbers below.
+    const w = this.state.paneWidth;
+    const showBack = true;
+    const showForward = true;
+    const showReload = !isAi;
+    const showExternal = !isAi;
+    // splits (~60px) crowd the url floor below ~400; url floor (110) itself
+    // stops fitting below ~320 → drop the bar.
+    const hideSplits = w < 400;
+    const showUrlBar = w >= 320;
 
     return (
       <div
@@ -2308,8 +2876,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             paneId={this.props.groupUid}
             tint={tint as any}
             label={labelText}
-            isSplitRightDisabled={this.state.isNarrow}
-            isSplitDownDisabled={isSplitDownDisabled}
+            isSplitRightDisabled={hideSplits}
+            isSplitDownDisabled={isSplitDownDisabled || hideSplits}
             navCluster={
               <div
                 style={{
@@ -2321,6 +2889,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 }}
                 onClick={(e) => e.stopPropagation()}
               >
+                {showBack && (
                 <span
                   className="term_controlIcon term_tooltipTrigger"
                   onClick={this.goBack}
@@ -2347,6 +2916,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     </div>
                   </div>
                 </span>
+                )}
+                {showForward && (
                 <span
                   className="term_controlIcon term_tooltipTrigger"
                   onClick={this.goForward}
@@ -2373,7 +2944,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     </div>
                   </div>
                 </span>
-                {!isAi && (
+                )}
+                {showReload && (
                   <span
                     className="term_controlIcon term_tooltipTrigger"
                     onClick={(e) => {
@@ -2402,7 +2974,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     </div>
                   </span>
                 )}
-                {!isAi && (
+                {showExternal && (
                   <span
                     className="term_controlIcon term_tooltipTrigger"
                     onClick={(e) => {
@@ -2425,12 +2997,60 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     </div>
                   </span>
                 )}
+                {!isAi && (
+                  <span
+                    className="term_controlIcon term_tooltipTrigger"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      this.newStickyFromPage();
+                    }}
+                    style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
+                  >
+                    <i className="ti ti-note" style={{fontSize: '14px'}} aria-hidden="true" />
+                    <div className="term_tooltip" style={{minWidth: '160px'}}>
+                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>New sticky from page</div>
+                      <div style={{fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', marginTop: 'var(--space-2)'}}>
+                        Title + URL + selection/extract
+                      </div>
+                    </div>
+                  </span>
+                )}
               </div>
             }
-            locationBar={
+            locationBar={showUrlBar ? (
               <div
                 ref={this.urlBarRef}
                 className="web_locationBar"
+                onContextMenu={(e) => {
+                  // Right-click the URL bar → Copy URL (this is toolbar chrome,
+                  // not the guest page, so it's a plain renderer menu).
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const currentUrl = this.state.activeUrl || this.props.url || '';
+                  try {
+                    // eslint-disable-next-line @typescript-eslint/no-var-requires
+                    const {Menu, MenuItem} = require('@electron/remote');
+                    // eslint-disable-next-line @typescript-eslint/no-var-requires
+                    const {clipboard} = require('electron');
+                    const menu = new Menu();
+                    menu.append(
+                      new MenuItem({
+                        label: 'Copy URL',
+                        enabled: !!currentUrl,
+                        click: () => {
+                          try {
+                            clipboard.writeText(currentUrl);
+                          } catch (err) {
+                            console.error('Copy URL failed:', err);
+                          }
+                        }
+                      })
+                    );
+                    menu.popup();
+                  } catch (err) {
+                    console.error('URL bar context menu failed:', err);
+                  }
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
                   const isOpen = !this.state.isUrlNavigatorOpen;
@@ -2487,15 +3107,17 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                   borderRadius: 'var(--radius-3)',
                   padding: '0 var(--space-6)',
                   height: '24px',
+                  // Fill the row. Hard floor of ~11 chars ("https://" + a few
+                  // letters); below that the whole bar is hidden (showUrlBar),
+                  // never shrunk to a sub-"https://" stub.
                   flex: 1,
-                  minWidth: 0,
-                  maxWidth: '560px',
+                  minWidth: '110px',
                   cursor: 'pointer',
                   boxSizing: 'border-box',
                   marginLeft: 'var(--space-4)',
                   marginRight: 'var(--space-8)'
                 }}
-                title={isAi ? 'Click to view recent threads' : 'Click to edit URL'}
+                title={isAi ? 'Click to view recent threads' : 'Click to navigate'}
               >
                 {loading && url ? (
                   <span
@@ -2542,7 +3164,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                   })()}
                 </span>
               </div>
-            }
+            ) : null}
             onSplitRight={() => rpc.emit('split request vertical', {activeUid: this.props.sessionUid || this.props.groupUid, profile: 'picker'})}
             onSplitDown={() => rpc.emit('split request horizontal', {activeUid: this.props.sessionUid || this.props.groupUid})}
             onClose={() => {
@@ -2765,13 +3387,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                   );
                 }
 
-                const filtered = query
-                  ? this.state.webHistory.filter(
-                      (item) =>
-                        item.value.toLowerCase().includes(query) ||
-                        (item.titleAtVisit && item.titleAtVisit.toLowerCase().includes(query))
-                    )
-                  : this.state.webHistory;
+                const rows = this.getHistoryVisibleRows(query);
 
                 return (
                   <>
@@ -2797,7 +3413,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                       >
                         BROWSER HISTORY
                       </span>
-                      {filtered.length > 0 && (
+                      {rows.length > 0 && (
                         <span
                           onClick={(e) => {
                             e.stopPropagation();
@@ -2820,7 +3436,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                         </span>
                       )}
                     </div>
-                    {filtered.length === 0 ? (
+                    {rows.length === 0 ? (
                       <div
                         style={{
                           padding: '12px',
@@ -2833,141 +3449,11 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                         No history matches
                       </div>
                     ) : (
-                      filtered.map((item, index) => {
-                        const isFocused = index === this.state.navigatorFocusedIndex;
-                        const isAiRow = item.kind === 'ai-query';
-
-                        const secState = isAiRow ? 'localhost' : item.securityState || getSecurityState(item.value);
-                        const iconClass = isAiRow
-                          ? 'ti ti-sparkles'
-                          : secState === 'https'
-                            ? 'ti ti-lock'
-                            : secState === 'http'
-                              ? 'ti ti-lock-open'
-                              : secState === 'localhost'
-                                ? 'ti ti-flask'
-                                : 'ti ti-alert-triangle';
-                        const iconColor = isAiRow
-                          ? 'var(--color-ai-purple, #7F77DD)'
-                          : secState === 'https'
-                            ? 'var(--success-text)'
-                            : secState === 'http'
-                              ? 'var(--warning-text)'
-                              : secState === 'localhost'
-                                ? 'var(--info-text)'
-                                : 'var(--danger-text)';
-
-                        return (
-                          <div
-                            key={`${item.value}-${item.visitedAt}`}
-                            onClick={(e) => {
-                              if (isAiRow) {
-                                const conversationId = item.conversationId || `conv-${Date.now()}`;
-                                if (e.shiftKey) {
-                                  const newConvId = `conv-${Date.now()}`;
-                                  this.createConversation(newConvId, item.value);
-                                  const isCurrentPaneEmpty =
-                                    !this.props.url || this.props.url === 'about:blank' || this.props.url === '';
-                                  if (isCurrentPaneEmpty) {
-                                    this.navigateWebview(`ai://${newConvId}`);
-                                  } else {
-                                    rpc.emit('split request vertical', {
-                                      activeUid: this.props.sessionUid || this.props.groupUid,
-                                      profile: 'Web Pane',
-                                      url: `ai://${newConvId}`
-                                    });
-                                  }
-                                } else {
-                                  this.navigateWebview(`ai://${conversationId}`);
-                                }
-                                this.setState({isUrlNavigatorOpen: false});
-                              } else {
-                                this.navigateWebview(item.value);
-                                this.setState({isUrlNavigatorOpen: false});
-                              }
-                            }}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '8px',
-                              padding: '6px 12px',
-                              cursor: 'pointer',
-                              background: isFocused ? 'var(--info-bg)' : undefined,
-                              transition: 'background 0.1s ease'
-                            }}
-                            className={isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow'}
-                          >
-                            <i
-                              className={iconClass}
-                              style={{
-                                fontSize: '13px',
-                                color: isFocused
-                                  ? 'var(--info-text)'
-                                  : iconColor,
-                                flexShrink: 0
-                              }}
-                            />
-                            <span
-                              style={{
-                                fontFamily: isAiRow ? 'var(--font-sans)' : 'var(--font-mono)',
-                                fontSize: '11px',
-                                color: isFocused
-                                  ? isAiRow
-                                    ? 'var(--color-ai-purple, #7F77DD)'
-                                    : 'var(--info-text)'
-                                  : 'var(--text-primary)',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                                userSelect: 'none',
-                                flex: 1
-                              }}
-                            >
-                              {item.titleAtVisit ? (
-                                <span style={{display: 'flex', alignItems: 'center', gap: 'var(--space-6)', minWidth: 0, maxWidth: '100%', overflow: 'hidden'}}>
-                                  <span
-                                    title={item.titleAtVisit}
-                                    style={{fontWeight: 600, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0}}
-                                  >
-                                    {highlightMatch(item.titleAtVisit, query)}
-                                  </span>
-                                  <span
-                                    title={item.value}
-                                    style={{color: 'var(--text-tertiary)', fontSize: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1}}
-                                  >
-                                    {highlightMatch(item.value, query)}
-                                  </span>
-                                </span>
-                              ) : (
-                                highlightMatch(item.value, query)
-                              )}
-                            </span>
-                            <div
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                this.removeHistoryEntry(item.kind, item.value, item.visitedAt);
-                              }}
-                              className="web-navigator-row-delete"
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: '18px',
-                                height: '18px',
-                                borderRadius: '50%',
-                                color: 'var(--text-tertiary)',
-                                cursor: 'pointer',
-                                transition: 'background 0.15s, color 0.15s',
-                                marginLeft: 'var(--space-6)',
-                                flexShrink: 0
-                              }}
-                              title="Delete from history"
-                            >
-                              <i className="ti ti-x" style={{fontSize: '10px'}} aria-hidden="true" />
-                            </div>
-                          </div>
-                        );
-                      })
+                      rows.map((row, index) =>
+                        row.type === 'root'
+                          ? this.renderHistoryRootRow(row, index)
+                          : this.renderHistoryRow(row.item, index, query, row.type === 'child')
+                      )
                     )}
                   </>
                 );
@@ -2983,6 +3469,23 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           className={this.state.isUrlNavigatorOpen ? 'web_pane_dimmed' : ''}
           style={{flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden'}}
         >
+          {/* Find-in-page bar (Ctrl+F) — floats top-right over the page. */}
+          {this.state.findOpen && (
+            <FindBar
+              value={this.state.findText}
+              active={this.state.findActive}
+              total={this.state.findTotal}
+              placeholder="Find in page"
+              inputRef={this.findInputRef}
+              onChange={(v) => {
+                this.setState({findText: v});
+                this.doFind(v, true);
+              }}
+              onNext={() => this.findStep(true)}
+              onPrev={() => this.findStep(false)}
+              onClose={this.closeFind}
+            />
+          )}
           {error && url && (
             <div
               style={{
@@ -3561,6 +4064,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 ref={this.webviewRef}
                 src={url}
                 useragent={BROWSER_UA}
+                // Without this, the guest can't request new windows, so
+                // target="_blank"/window.open is silently blocked BEFORE the
+                // main-process window-open handler runs — and the "split down +
+                // open in a new pane" never fires. Enabling it lets that handler
+                // intercept the popup and route it to a split.
+                {...({allowpopups: 'true'} as any)}
                 style={{
                   flex: 1,
                   display: error ? 'none' : 'flex',

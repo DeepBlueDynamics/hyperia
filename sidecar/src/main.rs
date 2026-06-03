@@ -1044,10 +1044,8 @@ async fn get_note(Path(id): Path<String>) -> (StatusCode, String) {
         .join("notes.json");
     match std::fs::read_to_string(&path) {
         Ok(content) => {
-            let note = serde_json::from_str::<Vec<serde_json::Value>>(&content)
-                .unwrap_or_default()
-                .into_iter()
-                .find(|n| n["id"].as_str() == Some(&id));
+            let notes = serde_json::from_str::<Vec<serde_json::Value>>(&content).unwrap_or_default();
+            let note = resolve_note(&notes, &id);
             match note {
                 Some(n) => (StatusCode::OK, serde_json::to_string(&n).unwrap_or_else(|_| "{}".into())),
                 None => (StatusCode::NOT_FOUND, format!("Note {} not found", id)),
@@ -1055,6 +1053,24 @@ async fn get_note(Path(id): Path<String>) -> (StatusCode, String) {
         }
         Err(_) => (StatusCode::NOT_FOUND, format!("Note {} not found", id)),
     }
+}
+
+/// Resolve a note by id, accepting either the full id (`note-<ts>-<suffix>`) or
+/// just the short suffix users actually quote (`6r7t`). Exact match wins; failing
+/// that, match a note whose id ends with `-<id>` (case-insensitive).
+fn resolve_note<'a>(notes: &'a [serde_json::Value], id: &str) -> Option<&'a serde_json::Value> {
+    if let Some(n) = notes.iter().find(|n| n["id"].as_str() == Some(id)) {
+        return Some(n);
+    }
+    let id_l = id.to_lowercase();
+    let suffix = format!("-{}", id_l);
+    notes.iter().find(|n| {
+        n["id"]
+            .as_str()
+            .map(|nid| nid.to_lowercase())
+            .map(|nid| nid == id_l || nid.ends_with(&suffix))
+            .unwrap_or(false)
+    })
 }
 
 async fn patch_note(

@@ -139,7 +139,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           userSelect: 'none'
         }}
       >
-        {/* Left-justified content */}
+        {/* Left-justified content: name, nav, URL bar. URL bar fills the row. */}
         <div
           style={{
             display: 'flex',
@@ -153,37 +153,37 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           <div
             className="pane-band-name-cluster"
             onClick={handleNameClick}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 'var(--space-6)',
-              fontSize: '11px',
-              fontWeight: 500,
-              flexShrink: 1,
-              minWidth: 0,
-              cursor: 'pointer',
-              position: 'relative',
-              padding: '2px var(--space-4)',
-              borderRadius: 'var(--radius-4)',
-              transition: 'background 0.15s ease',
-              overflowX: 'auto',
-              whiteSpace: 'nowrap'
-            }}
-            title="Click to copy name (scroll to view full)"
-          >
-            {!isPlaceholder && resolvedIcon && (
-              <span style={{display: 'flex', alignItems: 'center', flexShrink: 0}}>{resolvedIcon}</span>
-            )}
-            {isPlaceholder ? (
-              <span style={{color: 'var(--text-tertiary)', fontStyle: 'italic', fontWeight: 400, whiteSpace: 'nowrap', flexShrink: 0}}>{label}</span>
-            ) : (
-              <span style={{display: 'inline-flex', alignItems: 'center', gap: 'var(--space-4)', whiteSpace: 'nowrap', flexShrink: 0}}>
-                {label}
-                {profileChip}
-              </span>
-            )}
-            {copied && <div className="pane-band-copied-badge">Copied (pane)</div>}
-          </div>
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 'var(--space-6)',
+            fontSize: '11px',
+            fontWeight: 500,
+            flexShrink: 1,
+            minWidth: 0,
+            cursor: 'pointer',
+            position: 'relative',
+            padding: '2px var(--space-4)',
+            borderRadius: 'var(--radius-4)',
+            transition: 'background 0.15s ease',
+            overflowX: 'auto',
+            whiteSpace: 'nowrap'
+          }}
+          title="Click to copy name (scroll to view full)"
+        >
+          {!isPlaceholder && resolvedIcon && (
+            <span style={{display: 'flex', alignItems: 'center', flexShrink: 0}}>{resolvedIcon}</span>
+          )}
+          {isPlaceholder ? (
+            <span style={{color: 'var(--text-tertiary)', fontStyle: 'italic', fontWeight: 400, whiteSpace: 'nowrap', flexShrink: 0}}>{label}</span>
+          ) : (
+            <span style={{display: 'inline-flex', alignItems: 'center', gap: 'var(--space-4)', whiteSpace: 'nowrap', flexShrink: 0}}>
+              {label}
+              {profileChip}
+            </span>
+          )}
+          {copied && <div className="pane-band-copied-badge">Copied (pane)</div>}
+        </div>
 
           {/* Nav Cluster */}
           {navCluster}
@@ -192,10 +192,10 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           {locationBar}
         </div>
 
-        {/* Controls Cluster */}
+        {/* Controls Cluster — splits + close, anchored to the right. */}
         <div
           className="pane-band-controls-cluster"
-          style={{display: 'flex', alignItems: 'center', gap: 'var(--space-10)'}}
+          style={{display: 'flex', alignItems: 'center', gap: 'var(--space-10)', flexShrink: 0}}
           onClick={(e) => e.stopPropagation()}
         >
           {/* Split Right */}
@@ -309,7 +309,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               e.stopPropagation();
               onClose();
             }}
-            style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
+            style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0}}
           >
             {/* Inline SVG (not the `ti` icon font, which may not be loaded —
                 that's why the close × was invisible while the split controls,
