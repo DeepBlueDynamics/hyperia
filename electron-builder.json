@@ -74,9 +74,7 @@
     "gatekeeperAssess": false,
     "entitlements": "./build/mac/entitlements.plist",
     "entitlementsInherit": "./build/mac/entitlements.plist",
-    "notarize": {
-      "teamId": "XLYLUBT7G2"
-    },
+    "notarize": true,
     "extendInfo": {
       "CFBundleDocumentTypes": [
         {
