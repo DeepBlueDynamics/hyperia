@@ -69,12 +69,14 @@
     },
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "category": "public.app-category.developer-tools",
-    "identity": "Developer ID Application: DeepBlue Dynamics LLC",
+    "identity": "Developer ID Application: DeepBlue Dynamics",
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
     "entitlements": "./build/mac/entitlements.plist",
     "entitlementsInherit": "./build/mac/entitlements.plist",
-    "notarize": false,
+    "notarize": {
+      "teamId": "XLYLUBT7G2"
+    },
     "extendInfo": {
       "CFBundleDocumentTypes": [
         {

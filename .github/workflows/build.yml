@@ -87,14 +87,19 @@ jobs:
 
       - name: Build installer (macOS)
         if: matrix.os == 'macos-latest'
-        # CSC_IDENTITY_AUTO_DISCOVERY=false: CI has no Developer ID cert,
-        # so don't try to sign. The unsigned .dmg is still useful as an
-        # artifact for testing — signed releases happen from a Mac with
-        # the cert set up. See certificate-next-steps-2026-05-13.md.
-        run: npx electron-builder --mac --config.mac.identity=null
+        # Signs with the Developer ID cert from CSC_LINK and notarizes via
+        # Apple's notary service (electron-builder does both in this one step;
+        # mac.notarize.teamId in electron-builder.json triggers notarization).
+        # NOTE secret naming: the cert is CSC_LINK but the p12 password secret
+        # is MAC_CSC_KEY_PASSWORD.
+        run: npx electron-builder --mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Build installer (Linux)
         if: matrix.os == 'ubuntu-latest'
