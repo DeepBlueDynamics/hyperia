@@ -1286,21 +1286,17 @@ impl HyperiaMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let mut cfg = self.read_config().await?;
         
-        let config_obj = cfg["config"].as_object_mut().ok_or_else(|| ErrorData {
-            code: -32603,
-            message: "config key missing or not an object".into(),
-            data: None,
-        })?;
+        let config_obj = cfg["config"]
+            .as_object_mut()
+            .ok_or_else(|| ErrorData::internal_error("config key missing or not an object", None))?;
         
         if !config_obj.contains_key("profiles") {
             config_obj.insert("profiles".to_string(), serde_json::json!([]));
         }
         
-        let profiles = config_obj["profiles"].as_array_mut().ok_or_else(|| ErrorData {
-            code: -32603,
-            message: "config.profiles is not an array".into(),
-            data: None,
-        })?;
+        let profiles = config_obj["profiles"]
+            .as_array_mut()
+            .ok_or_else(|| ErrorData::internal_error("config.profiles is not an array", None))?;
         
         // Remove duplicate if it exists
         profiles.retain(|p| p["name"].as_str() != Some(&req.name));
@@ -1328,11 +1324,9 @@ impl HyperiaMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let mut cfg = self.read_config().await?;
         
-        let profiles = cfg["config"]["profiles"].as_array_mut().ok_or_else(|| ErrorData {
-            code: -32603,
-            message: "config.profiles not found or not an array".into(),
-            data: None,
-        })?;
+        let profiles = cfg["config"]["profiles"]
+            .as_array_mut()
+            .ok_or_else(|| ErrorData::internal_error("config.profiles not found or not an array", None))?;
         
         let original_len = profiles.len();
         profiles.retain(|p| p["name"].as_str() != Some(&req.name));
