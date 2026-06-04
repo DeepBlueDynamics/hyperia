@@ -1049,6 +1049,61 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(info)]))
     }
 
+    #[tool(
+        description = "List Hyperia's higher-level skills: named capability areas (terminal orchestration, web panes, sticky notes, snapshots, settings, file editing, styles, telemetry, diagnostics) and the MCP tools that perform each. Call this to discover what Hyperia can do and which tools to combine for a task, instead of inferring from the flat tool list. No inputs. Returns a JSON array of {name, description, tools}."
+    )]
+    async fn skills(&self) -> Result<CallToolResult, ErrorData> {
+        let skills = serde_json::json!([
+            {
+                "name": "terminal",
+                "description": "Drive terminal panes: open windows/tabs, split panes, run commands, read screens, and send keystrokes. Hyperia gives unlimited visible panes — prefer a dedicated pane over shell backgrounding.",
+                "tools": ["terminal_status", "terminal_new_tab", "terminal_new_window", "terminal_split", "terminal_run", "terminal_keys", "terminal_screen", "terminal_focus", "terminal_rename", "terminal_close"]
+            },
+            {
+                "name": "web",
+                "description": "Open and operate embedded web panes: navigate to a URL, read rendered page content, click, move the mouse, and evaluate JS in the page.",
+                "tools": ["open_web_pane", "web_pane_content", "web_pane_eval", "web_pane_mouse", "terminal_web_click", "terminal_web_reload"]
+            },
+            {
+                "name": "stickies",
+                "description": "Create and manage floating sticky notes, including file-linked code notes with syntax highlighting. Search, read, update, schedule, reopen, and close them.",
+                "tools": ["sticky_note_create", "sticky_note_create_code", "sticky_note_list", "sticky_note_search", "sticky_note_read", "sticky_note_update", "sticky_note_open", "sticky_note_close", "sticky_note_delete", "sticky_note_schedule"]
+            },
+            {
+                "name": "snapshots",
+                "description": "Capture the state of the workspace as text or image: a whole tab's panes, a single pane's screen, or a screenshot, plus where a pane lives.",
+                "tools": ["tab_snapshot", "tab_image", "terminal_screen", "terminal_where_pane"]
+            },
+            {
+                "name": "settings",
+                "description": "Inspect and change Hyperia configuration and shell profiles, and run a readiness check.",
+                "tools": ["settings_get", "settings_set", "settings_list_profiles", "settings_add_profile", "settings_delete_profile", "doctor"]
+            },
+            {
+                "name": "editing",
+                "description": "Apply structured, range-based text edits to files on disk.",
+                "tools": ["apply_text_edits"]
+            },
+            {
+                "name": "styles",
+                "description": "Create, list, and delete reusable visual styles for panes.",
+                "tools": ["style_list", "style_create", "style_delete"]
+            },
+            {
+                "name": "telemetry",
+                "description": "Per-pane metrics and the live dashboard. Toggle capture, snapshot current metrics, record events, and reset.",
+                "tools": ["telemetry_toggle", "telemetry_snapshot", "telemetry_record", "telemetry_reset", "dashboard_widgets"]
+            },
+            {
+                "name": "diagnostics",
+                "description": "Inspect Hyperia itself: version, agent status, sidecar logs, shell log search, shell state, and auto-describe a pane.",
+                "tools": ["hyperia_version", "agent_status", "auto_describe", "sidecar_logs", "shell_log_search", "shell_state"]
+            }
+        ]);
+        let out = serde_json::to_string_pretty(&skills).unwrap_or_else(|_| "[]".to_string());
+        Ok(CallToolResult::success(vec![Content::text(out)]))
+    }
+
     #[tool(description = "Send a keyboard event directly to a Hyperia window's UI layer — bypasses the PTY and hits React/Electron's event system. Use this to send keys like Escape, Ctrl+C, Alt+Up that are handled as UI shortcuts rather than terminal input. keyCode uses Electron key names (e.g. 'Escape', 'c', 'Up'). modifiers is an array like ['ctrl'], ['alt'], ['shift'], ['ctrl','shift'].")]
     async fn terminal_ui_key(
         &self,
@@ -2271,6 +2326,7 @@ impl ServerHandler for HyperiaMcp {
                  - Specify tab to pick a tab by name (e.g. \"Capybara\"). \
                  - Specify pane to pick a split pane by label (\"a\", \"b\", \"c\"). \
                  For a full view of all pane contents, use tab_snapshot. \
+                 \n\nDiscovery: call skills to list Hyperia's capability areas and the tools that perform each. \
                  \n\nTerminal: terminal_keys, terminal_run, terminal_screen, terminal_status, \
                  terminal_split, terminal_focus, terminal_close, terminal_new_tab, terminal_new_window, \
                  terminal_where_pane, tab_snapshot, shell_state, shell_confirm, open_web_pane. \
