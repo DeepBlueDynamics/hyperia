@@ -14,7 +14,7 @@ Built by [Deep Blue Dynamics](https://deepbluedynamics.com).
 
 - **Agent-native MCP server** — 50+ tools exposed over streamable HTTP. Any MCP-capable client (Claude Code, OpenAI Codex, Google Antigravity, and others) can drive the terminal: open tabs, split panes, run commands, read screens, manage sticky notes, and inspect telemetry.
 - **Ghost agent** — A built-in assistant with streaming chat, tool use, and persistent memory. It is aware of what is open, what is running, and what it has done before.
-- **Ferricula memory** — An embedded memory engine. Memories persist, decay, and connect across sessions, backed by BM25 search and a semantic graph.
+- **Local memory & search** — A built-in BM25 index over your shell history and sticky notes, so an agent can search what you actually ran and wrote — not just the visible screen. An optional external memory service (Ferricula) can be attached for cross-session recall.
 - **Per-tab agent status** — Live indicators show which tabs have an agent connected, working, or idle.
 - **Stickys™** — Floating, named, color-coded notes that persist across restarts and are fully controllable from any agent.
 - **Shell profiles** — PowerShell, CMD, WSL, Git Bash, or any custom shell, surfaced in the new-pane chooser.
@@ -130,10 +130,9 @@ Electron (UI + PTY sessions)
                                   ├── HTTP API (terminal, agent, notes, telemetry)
                                   ├── MCP server (streamable HTTP at /mcp, 50+ tools)
                                   ├── Ghost agent (streaming, tool loop)
-                                  ├── Ferricula core (embedded memory engine)
-                                  │     ├── Identity and keypair
-                                  │     ├── Durable store (~/.hyperia/memory/)
-                                  │     └── BM25 search + semantic graph
+                                  ├── lume — local BM25 over shell logs + notes
+                                  │     └── ~/.hyperia/lume/
+                                  ├── Ferricula client (optional external memory service)
                                   └── Telemetry + dashboard
 ```
 
