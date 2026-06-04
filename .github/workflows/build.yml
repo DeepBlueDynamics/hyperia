@@ -80,6 +80,10 @@ jobs:
         run: npx electron-builder --win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Azure Trusted Signing — build/win/sign.js reads AZURE_CLIENT_SECRET
+          # from env (tenant + client ID are hardcoded in sign.js). With this
+          # set, CI produces a SIGNED Windows .exe — no local build + swap.
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
       - name: Build installer (macOS)
         if: matrix.os == 'macos-latest'
