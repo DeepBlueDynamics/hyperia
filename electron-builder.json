@@ -69,7 +69,7 @@
     },
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "category": "public.app-category.developer-tools",
-    "identity": "Developer ID Application: DeepBlue Dynamics",
+    "identity": "DeepBlue Dynamics",
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
     "entitlements": "./build/mac/entitlements.plist",
