@@ -18,8 +18,8 @@ import * as sessionActions from './actions/sessions';
 import * as termGroupActions from './actions/term-groups';
 import * as uiActions from './actions/ui';
 import * as updaterActions from './actions/updater';
-import WebPaneDialog, {showWebPaneDialog} from './components/web-pane-dialog';
 import {activeTerminals} from './components/term';
+import WebPaneDialog, {showWebPaneDialog} from './components/web-pane-dialog';
 import HyperContainer from './containers/hyper';
 import rpc from './rpc';
 import {getRootGroups} from './selectors';
@@ -186,18 +186,42 @@ rpc.on('split request vertical', ({activeUid, profile, url}) => {
 
 rpc.on('clone request vertical', () => {
   const state = store_.getState();
-  const activeUid = state.sessions.activeUid;
-  const activeSession = activeUid ? state.sessions.sessions[activeUid] : null;
-  const profile = activeSession ? activeSession.profile : undefined;
-  store_.dispatch(termGroupActions.requestVerticalSplit(activeUid ?? undefined, profile ?? undefined));
+  const activeTermGroup = state.termGroups.activeTermGroup;
+  const activeGroup = activeTermGroup ? state.termGroups.termGroups[activeTermGroup] : null;
+
+  if (activeGroup && activeGroup.webUrl !== undefined) {
+    store_.dispatch({
+      type: 'TERM_GROUP_SPLIT_WEB',
+      activeUid: activeTermGroup,
+      url: activeGroup.webUrl || '',
+      splitDirection: 'VERTICAL'
+    } as any);
+  } else {
+    const activeUid = state.sessions.activeUid;
+    const activeSession = activeUid ? state.sessions.sessions[activeUid] : null;
+    const profile = activeSession ? activeSession.profile : undefined;
+    store_.dispatch(termGroupActions.requestVerticalSplit(activeUid ?? undefined, profile ?? undefined));
+  }
 });
 
 rpc.on('clone request horizontal', () => {
   const state = store_.getState();
-  const activeUid = state.sessions.activeUid;
-  const activeSession = activeUid ? state.sessions.sessions[activeUid] : null;
-  const profile = activeSession ? activeSession.profile : undefined;
-  store_.dispatch(termGroupActions.requestHorizontalSplit(activeUid ?? undefined, profile ?? undefined));
+  const activeTermGroup = state.termGroups.activeTermGroup;
+  const activeGroup = activeTermGroup ? state.termGroups.termGroups[activeTermGroup] : null;
+
+  if (activeGroup && activeGroup.webUrl !== undefined) {
+    store_.dispatch({
+      type: 'TERM_GROUP_SPLIT_WEB',
+      activeUid: activeTermGroup,
+      url: activeGroup.webUrl || '',
+      splitDirection: 'HORIZONTAL'
+    } as any);
+  } else {
+    const activeUid = state.sessions.activeUid;
+    const activeSession = activeUid ? state.sessions.sessions[activeUid] : null;
+    const profile = activeSession ? activeSession.profile : undefined;
+    store_.dispatch(termGroupActions.requestHorizontalSplit(activeUid ?? undefined, profile ?? undefined));
+  }
 });
 
 rpc.on('reset fontSize req', () => {
@@ -496,6 +520,13 @@ rpc.on('reload', () => {
   plugins.reload();
 });
 
+rpc.on('split web pane req', ({activeUid, url}: {activeUid?: string | null; url?: string}) => {
+  if (url) {
+    const full = /^[a-z]+:\/\//i.test(url) ? url : 'https://' + url;
+    store_.dispatch(termGroupActions.splitWebPaneBelow(activeUid ?? undefined, full) as any);
+  }
+});
+
 rpc.on('open web pane req', ({url}: {url?: string}) => {
   if (url) {
     const full = /^https?:\/\//i.test(url) ? url : 'https://' + url;
@@ -509,13 +540,13 @@ rpc.on('open web pane req', ({url}: {url?: string}) => {
 
 rpc.on('get-layout-state-req', () => {
   const {termGroups, sessions} = store_.getState();
-  
+
   const serializedSessions: Record<string, any> = {};
   Object.keys(sessions.sessions).forEach((uid) => {
     const s = sessions.sessions[uid];
     if (s) {
       const activeTerm = activeTerminals.get(uid);
-      const lastCommand = activeTerm ? activeTerm.getCurrentCommandLine() : (s.lastCommand || '');
+      const lastCommand = activeTerm ? activeTerm.getCurrentCommandLine() : s.lastCommand || '';
       serializedSessions[uid] = {
         uid: s.uid,
         title: s.title,

@@ -2,7 +2,7 @@ import {existsSync, readFileSync, writeFileSync} from 'fs';
 import {isAbsolute, normalize, sep} from 'path';
 import {URL, fileURLToPath} from 'url';
 
-import {app, BrowserWindow, shell, Menu, nativeImage, dialog} from 'electron';
+import {app, BrowserWindow, shell, Menu, nativeImage, dialog, ipcMain} from 'electron';
 import type {BrowserWindowConstructorOptions} from 'electron';
 
 import {enable as remoteEnable} from '@electron/remote/main';
@@ -385,7 +385,7 @@ export function newWindow(
     updateSessionDescription(uid, description);
   });
   rpc.on('session set tab name', ({uid, tabName}: {uid: string; tabName: string}) => {
-    updateSessionTabName(uid, tabName);
+    updateSessionTabName(uid, tabName, true);
   });
   rpc.on(
     'session layout sync',
@@ -431,7 +431,7 @@ export function newWindow(
     Menu.getApplicationMenu()!.popup({x: Math.ceil(x), y: Math.ceil(y)});
   });
   // Update Electron window title + taskbar icon when active session title changes
-  rpc.on('session set xterm title', ({title}: {uid: string; title: string}) => {
+  rpc.on('session set xterm title', ({uid, title, manual}: {uid: string; title: string; manual?: boolean}) => {
     // Only update window chrome — tab names come from renderer via 'session set tab name'
     if (title) {
       window.setTitle(`${title} — Hyperia`);
@@ -450,6 +450,9 @@ export function newWindow(
   });
   rpc.on('split request horizontal', (options: {activeUid?: string | null; profile?: string | null}) => {
     rpc.emit('split request horizontal', options);
+  });
+  rpc.on('split web pane req', (options: {activeUid?: string | null; url?: string}) => {
+    rpc.emit('split web pane req', options);
   });
   rpc.on('clone request vertical', () => {
     rpc.emit('clone request vertical', undefined as any);
@@ -478,12 +481,14 @@ export function newWindow(
     const tabCount = (window as any).tabCount || 1;
     const paneCount = (window as any).paneCount || 1;
     if (tabCount > 1 || paneCount > 1) {
-      const message = tabCount > 1
-        ? `Are you sure you want to close all ${tabCount} tabs?`
-        : `Are you sure you want to close this tab with all ${paneCount} split panes?`;
-      const detail = tabCount > 1
-        ? 'This will close the entire window and terminate all active sessions.'
-        : 'This will close the entire window and terminate all active sessions inside this tab.';
+      const message =
+        tabCount > 1
+          ? `Are you sure you want to close all ${tabCount} tabs?`
+          : `Are you sure you want to close this tab with all ${paneCount} split panes?`;
+      const detail =
+        tabCount > 1
+          ? 'This will close the entire window and terminate all active sessions.'
+          : 'This will close the entire window and terminate all active sessions inside this tab.';
 
       const choice = dialog.showMessageBoxSync(window, {
         type: 'question',
@@ -673,6 +678,15 @@ export function newWindow(
               console.error('Inspect failed:', err);
             }
           }
+        },
+        {type: 'separator'},
+        {
+          label: 'New Stickys',
+          click: () => void ipcMain.emit('new-sticky', {})
+        },
+        {
+          label: 'Search Stickys',
+          click: () => void ipcMain.emit('search-stickies')
         }
       );
       Menu.buildFromTemplate(items).popup({window});

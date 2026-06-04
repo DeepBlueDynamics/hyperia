@@ -48,6 +48,7 @@ interface TrackedSession {
   bspY: number;
   bspW: number;
   bspH: number;
+  manualTitle?: boolean;
 }
 const trackedSessions = new Map<string, TrackedSession>();
 let focusedWindowId: number | null = null; // eslint-disable-line @typescript-eslint/no-unused-vars
@@ -474,6 +475,7 @@ function handleCommand(msg: Record<string, unknown>) {
         for (const [uid, t] of trackedSessions) {
           if (t.rootTabUid === rootTab) {
             t.tabName = name;
+            t.manualTitle = true;
             send({type: 'SessionTabName', uid, tabName: name});
           }
         }
@@ -889,11 +891,18 @@ export function registerSession(
 }
 
 /** Update the tab name for a session (called on xterm title change). */
-export function updateSessionTabName(uid: string, tabName: string) {
+export function updateSessionTabName(uid: string, tabName: string, manual = false) {
   const rootTabUid = trackedSessions.get(uid)?.rootTabUid || uid;
+  const current = trackedSessions.get(uid);
+  if (current && !manual && current.manualTitle) {
+    return;
+  }
   for (const [sessionUid, t] of trackedSessions) {
     if (t.rootTabUid === rootTabUid) {
       t.tabName = tabName;
+      if (manual) {
+        t.manualTitle = true;
+      }
       send({type: 'SessionTabName', uid: sessionUid, tabName});
     }
   }

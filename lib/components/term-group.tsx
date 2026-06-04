@@ -126,10 +126,13 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       groupUid: this.props.termGroup.uid,
       defaultProfile: (this.props as any).defaultProfile,
       profiles: (this.props as any).profiles,
+      env: (this.props as any).env,
       setWebPaneUrl: (this.props as any).setWebPaneUrl,
       onClosePane: (this.props as any).onClosePane,
       sessionProfile: session ? (session as any).profile : undefined,
       sessionTitle: session ? (session as any).title : undefined,
+      sessionTabName: session ? (session as any).tabName : undefined,
+      sessionManualTitle: session ? (session as any).manualTitle : false,
       sessionCwd: session ? (session as any).cwd : undefined,
       sessionShellName: session ? (session as any).shellName : undefined,
       allTermGroups: (this.props as any).parentProps.allTermGroups
@@ -195,29 +198,33 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
     const needLabels = true;
 
     let offset = splitOffset;
-    const groups = childGroups.asMutable().map((child) => {
-      const leafCount = this.countLeaves(child);
-      const label = needLabels ? String.fromCharCode(97 + offset) : undefined;
-      const props = getTermGroupProps(
-        child.uid,
-        this.props.parentProps,
-        Object.assign({}, this.props, {
-          termGroup: child,
-          splitLabel: child.sessionUid ? label : undefined,
-          splitOffset: offset
-        })
-      );
-      offset += leafCount;
+    const groups = childGroups
+      .asMutable()
+      .map((child) => {
+        if (!child) return null;
+        const leafCount = this.countLeaves(child);
+        const label = needLabels ? String.fromCharCode(97 + offset) : undefined;
+        const props = getTermGroupProps(
+          child.uid,
+          this.props.parentProps,
+          Object.assign({}, this.props, {
+            termGroup: child,
+            splitLabel: (child.sessionUid || (child as any).webUrl) ? label : undefined,
+            splitOffset: offset
+          })
+        );
+        offset += leafCount;
 
-      return <DecoratedTermGroup key={child.uid} {...props} />;
-    });
+        return <DecoratedTermGroup key={child.uid} {...props} />;
+      })
+      .filter((g): g is JSX.Element => !!g);
 
     return this.renderSplit(groups);
   }
 }
 
 const mapStateToProps = (state: HyperState, ownProps: TermGroupOwnProps) => ({
-  childGroups: ownProps.termGroup.children.map((uid) => state.termGroups.termGroups[uid])
+  childGroups: ownProps.termGroup.children.map((uid) => state.termGroups.termGroups[uid]).filter(Boolean)
 });
 
 const mapDispatchToProps = (dispatch: HyperDispatch, ownProps: TermGroupOwnProps) => ({

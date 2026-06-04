@@ -4,6 +4,7 @@ import React from 'react';
 import Color from 'color';
 import isEqual from 'lodash/isEqual';
 import pickBy from 'lodash/pickBy';
+import throttle from 'lodash/throttle';
 import {Terminal} from 'xterm';
 import type {ITerminalOptions, IDisposable} from 'xterm';
 import {CanvasAddon} from 'xterm-addon-canvas';
@@ -23,9 +24,9 @@ import processClipboard from '../utils/paste';
 import {translatePath} from '../utils/path-translate';
 import {countPathHorizontalStacks} from '../utils/term-groups';
 
+import FindBar from './find-bar';
 import {PaneBand} from './pane-band';
 import UrlPicker from './url-picker';
-import FindBar from './find-bar';
 
 const path = require('path');
 
@@ -163,6 +164,16 @@ export default class Term extends React.PureComponent<
     paneWidth: number;
     pickerZoom: number;
     findText: string;
+    activeProgram: string | null;
+    customCommandInput: string;
+    newEnvKey: string;
+    newEnvVal: string;
+    isCustomModalOpen: boolean;
+    customKind: 'shell' | 'agent';
+    profileName: string;
+    shellPath: string;
+    shellArgs: string;
+    envVars: {key: string; val: string}[];
   }
 > {
   termRef: HTMLElement | null;
@@ -212,7 +223,17 @@ export default class Term extends React.PureComponent<
     isNarrow: false,
     paneWidth: 999,
     findText: '',
-    pickerZoom: 1.0
+    pickerZoom: 1.0,
+    activeProgram: null as string | null,
+    customCommandInput: '',
+    newEnvKey: '',
+    newEnvVal: '',
+    isCustomModalOpen: false,
+    customKind: 'shell' as 'shell' | 'agent',
+    profileName: '',
+    shellPath: '',
+    shellArgs: '',
+    envVars: [] as {key: string; val: string}[]
   };
 
   labelRef = React.createRef<HTMLDivElement>();
@@ -239,14 +260,17 @@ export default class Term extends React.PureComponent<
     e.stopPropagation();
     const splitLabel = this.props.splitLabel;
     const customTitle = (this.props as any).sessionTitle;
+    const sessionTabName = (this.props as any).sessionTabName;
+    const sessionManualTitle = (this.props as any).sessionManualTitle;
     const isDefaultTitle =
-      !customTitle ||
-      ['zsh', 'bash', 'sh', 'cmd', 'powershell', 'pwsh', 'wsl', 'node', 'tmux', 'Untitled'].some((t) =>
-        customTitle.toLowerCase().includes(t)
-      ) ||
-      customTitle.includes('/') ||
-      customTitle.includes('\\');
-    const labelText = isDefaultTitle ? `Pane ${splitLabel}` : customTitle;
+      !sessionManualTitle &&
+      (!customTitle ||
+        ['zsh', 'bash', 'sh', 'cmd', 'powershell', 'pwsh', 'wsl', 'node', 'tmux', 'Untitled'].some((t) =>
+          customTitle.toLowerCase().includes(t)
+        ) ||
+        customTitle.includes('/') ||
+        customTitle.includes('\\'));
+    const labelText = sessionTabName || (isDefaultTitle ? `Pane ${splitLabel}` : customTitle);
     this.setState({
       isRenamingLabel: true,
       renameLabelValue: labelText
@@ -274,6 +298,7 @@ export default class Term extends React.PureComponent<
       new MenuItem({
         label: 'Split Right',
         accelerator: 'Ctrl+Shift+|',
+        registerAccelerator: false,
         enabled: !this.state.isNarrow,
         click: () => {
           rpc.emit('split request vertical', {activeUid: this.props.uid});
@@ -285,6 +310,7 @@ export default class Term extends React.PureComponent<
       new MenuItem({
         label: 'Split Down',
         accelerator: 'Ctrl+Shift+_',
+        registerAccelerator: false,
         enabled: !isSplitDownDisabled,
         click: () => {
           rpc.emit('split request horizontal', {activeUid: this.props.uid});
@@ -296,6 +322,7 @@ export default class Term extends React.PureComponent<
       new MenuItem({
         label: 'Clone Right',
         accelerator: 'Ctrl+Alt+Shift+|',
+        registerAccelerator: false,
         enabled: !this.state.isNarrow,
         click: () => {
           rpc.emit('split request vertical', {
@@ -310,6 +337,7 @@ export default class Term extends React.PureComponent<
       new MenuItem({
         label: 'Clone Down',
         accelerator: 'Ctrl+Alt+Shift+_',
+        registerAccelerator: false,
         enabled: !isSplitDownDisabled,
         click: () => {
           rpc.emit('split request horizontal', {
@@ -341,6 +369,7 @@ export default class Term extends React.PureComponent<
       new MenuItem({
         label: 'Close Pane',
         accelerator: 'Ctrl+Shift+W',
+        registerAccelerator: false,
         click: () => {
           if (this.props.onClosePane && this.props.groupUid) {
             this.props.onClosePane(this.props.groupUid);
@@ -665,9 +694,20 @@ export default class Term extends React.PureComponent<
       });
     }
 
-    if (props.onData) {
-      this.disposableListeners.push(this.term.onData(props.onData));
-    }
+    this.disposableListeners.push(
+      this.term.onData((data) => {
+        if (props.onData) {
+          props.onData(data);
+        }
+        this.checkActiveProgram();
+      })
+    );
+
+    this.disposableListeners.push(
+      this.term.onLineFeed(() => {
+        this.checkActiveProgram();
+      })
+    );
 
     this.term.onBell(() => {
       this.ringBell();
@@ -697,6 +737,13 @@ export default class Term extends React.PureComponent<
             row: this.term.buffer.active.cursorY
           };
           props.onCursorMove?.(cursorFrame);
+          this.checkActiveProgram();
+        })
+      );
+    } else {
+      this.disposableListeners.push(
+        this.term.onCursorMove(() => {
+          this.checkActiveProgram();
         })
       );
     }
@@ -793,7 +840,7 @@ export default class Term extends React.PureComponent<
       }
 
       const meta = await response.json();
-      if (!meta || !meta.id) {
+      if (!meta?.id) {
         console.error('[term] Invalid AssetMeta returned from sidecar', meta);
         return;
       }
@@ -826,7 +873,7 @@ export default class Term extends React.PureComponent<
     if (!this.props.isTermActive) return;
 
     const formats = clipboard.availableFormats();
-    const hasImage = formats.some(f => f.startsWith('image/')) || !clipboard.readImage().isEmpty();
+    const hasImage = formats.some((f) => f.startsWith('image/')) || !clipboard.readImage().isEmpty();
     if (hasImage) {
       const img = clipboard.readImage();
       if (!img.isEmpty()) {
@@ -860,6 +907,7 @@ export default class Term extends React.PureComponent<
 
   write(data: string | Uint8Array) {
     this.term.write(data);
+    this.checkActiveProgram();
   }
 
   focus = () => {
@@ -969,6 +1017,10 @@ export default class Term extends React.PureComponent<
   }
 
   onWindowResize = () => {
+    if (this.state.isDirNavigatorOpen) {
+      this.setState({isDirNavigatorOpen: false});
+    }
+
     clearTimeout(this.resizeTimeout);
     this.resizeTimeout = setTimeout(() => {
       this.forceReflow();
@@ -1014,9 +1066,11 @@ export default class Term extends React.PureComponent<
     }
     // Intercept Ctrl+O (or Ctrl+Shift+O) to toggle directory navigator
     if (e.ctrlKey && e.key.toUpperCase() === 'O') {
-      e.preventDefault();
-      this.toggleDirNavigator();
-      return false;
+      if (!this.state.activeProgram) {
+        e.preventDefault();
+        this.toggleDirNavigator();
+        return false;
+      }
     }
 
     // If pane is squished/narrow, disable split right and clone right keystrokes completely
@@ -1033,15 +1087,18 @@ export default class Term extends React.PureComponent<
       return false;
     }
 
-    // Intercept Ctrl+Alt+Shift+| and Ctrl+Alt+Shift+_ (or Cmd equivalents on macOS) to prevent xterm from swallowing them
-    if ((e.ctrlKey || e.metaKey) && e.altKey && (e.key === '|' || e.key === '_')) {
-      if (isSplitDownDisabled && e.key === '_') {
+    // Intercept Ctrl+Shift+D, Ctrl+Alt+Shift+D, Ctrl+Shift+|, Ctrl+Alt+Shift+|, Ctrl+Shift+_, Ctrl+Alt+Shift+_ (and Cmd equivalents on macOS) to prevent xterm from swallowing them
+    const isSplitOrCloneKey =
+      (e.ctrlKey || e.metaKey) &&
+      (e.key === '|' || e.key === '\\' || e.key === '_' || e.key === '-' || e.key?.toLowerCase() === 'd');
+
+    if (isSplitOrCloneKey) {
+      if (isSplitDownDisabled && (e.key === '_' || e.key === '-')) {
         e.preventDefault();
         e.stopPropagation();
       }
       return false;
     }
-
 
     // Intercept Ctrl+C (when terminal has a selection) or Ctrl+Shift+C or Cmd+C (on macOS) to copy
     const isCtrlC = e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key?.toLowerCase() === 'c';
@@ -1148,6 +1205,7 @@ export default class Term extends React.PureComponent<
   };
 
   toggleDirNavigator = () => {
+    if (this.state.activeProgram) return;
     const {isDirNavigatorOpen} = this.state;
     const sessionCwd = (this.props as any).sessionCwd;
     // Always open on the pane's CURRENT directory (sessionCwd), not a stale
@@ -1166,8 +1224,17 @@ export default class Term extends React.PureComponent<
           const parentRect = termFit.getBoundingClientRect();
           navigatorLeft = rect.left - parentRect.left;
           navigatorTop = rect.bottom - parentRect.top + 4; // 4px margin below the path bar
+          
+          const widthToUse = Math.min(Math.max(rect.width, 320), parentRect.width - 16);
+          navigatorWidth = widthToUse;
+          if (navigatorLeft + widthToUse > parentRect.width) {
+            // Shift left (right-justify) if it overflows the right edge
+            navigatorLeft = rect.right - parentRect.left - widthToUse;
+            if (navigatorLeft < 8) {
+              navigatorLeft = 8;
+            }
+          }
         }
-        navigatorWidth = rect.width;
       }
 
       this.setState(
@@ -1198,6 +1265,87 @@ export default class Term extends React.PureComponent<
           }, 50);
         }
       );
+    }
+  };
+
+  submitCustomCommand = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const commandLine = this.state.customCommandInput.trim();
+    if (!commandLine) return;
+
+    const profiles = (this.props as any).profiles || [];
+    const defaultProfileName = (this.props as any).defaultProfile;
+    const defaultProfile = profiles.find((p: any) => p.name === defaultProfileName) || profiles[0];
+
+    const shell = defaultProfile?.config?.shell || (process.platform === 'win32' ? 'cmd.exe' : '/bin/bash');
+    const shellLower = shell.toLowerCase();
+    let shellArgs: string[] = [];
+    if (shellLower.includes('cmd.exe')) {
+      shellArgs = ['/c', commandLine];
+    } else if (shellLower.includes('powershell') || shellLower.includes('pwsh')) {
+      shellArgs = ['-Command', commandLine];
+    } else {
+      shellArgs = ['-l', '-c', commandLine];
+    }
+
+    const {groupUid, uid, sessionCwd} = this.props as any;
+    rpc.emit('new', {
+      isNewGroup: false,
+      cwd: sessionCwd || (this.props as any).cwd,
+      activeUid: uid,
+      shell,
+      shellArgs,
+      groupUid
+    });
+  };
+
+  addEnvVar = () => {
+    const key = this.state.newEnvKey.trim();
+    const val = this.state.newEnvVal.trim();
+    if (!key) return;
+
+    const currentEnv = { ...((this.props as any).env || {}) };
+    currentEnv[key] = val;
+
+    ipcRenderer.send('set-config-env', currentEnv);
+    this.setState({ newEnvKey: '', newEnvVal: '' });
+  };
+
+  deleteEnvVar = (key: string) => {
+    const currentEnv = { ...((this.props as any).env || {}) };
+    delete currentEnv[key];
+    ipcRenderer.send('set-config-env', currentEnv);
+  };
+
+  saveCustomProfile = () => {
+    const pName = this.state.profileName.trim();
+    const sPath = this.state.shellPath.trim();
+    if (pName && sPath) {
+      const args = this.state.shellArgs
+        .split(',')
+        .map((a) => a.trim())
+        .filter(Boolean);
+      const envObj: Record<string, string> = {};
+      this.state.envVars.forEach((ev) => {
+        envObj[ev.key] = ev.val;
+      });
+      ipcRenderer.send('add-profile', {
+        name: pName,
+        shell: sPath,
+        shellArgs: args,
+        env: envObj,
+        kind: this.state.customKind
+      });
+      this.setState({
+        isCustomModalOpen: false,
+        customKind: 'shell',
+        profileName: '',
+        shellPath: '',
+        shellArgs: '',
+        envVars: [],
+        newEnvKey: '',
+        newEnvVal: ''
+      });
     }
   };
 
@@ -1298,7 +1446,7 @@ export default class Term extends React.PureComponent<
         </div>
         <div
           className="term_navigatorRecentRow"
-          style={{display: 'flex', gap: 'var(--space-6)', overflowX: 'auto', paddingBottom: '2px'}}
+          style={{display: 'flex', flexWrap: 'wrap', gap: 'var(--space-6)', paddingBottom: '2px'}}
         >
           {items.map(({path, accent}) => (
             <span
@@ -1308,8 +1456,14 @@ export default class Term extends React.PureComponent<
               title={accent ? `Home — ${path}` : path}
               style={{
                 cursor: 'pointer',
-                flexShrink: 0,
+                // Wrap onto new lines when the pane is narrow instead of
+                // side-scrolling; a single over-wide path chip ellipsizes
+                // (full path still on hover via title) rather than overflowing.
+                maxWidth: '100%',
+                minWidth: 0,
                 whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
                 fontFamily: 'var(--font-mono)',
                 fontSize: '10px',
                 padding: '2px var(--space-6)',
@@ -1346,7 +1500,10 @@ export default class Term extends React.PureComponent<
     const last10Lines = lines.slice(-10).join('\n').toLowerCase();
 
     // Claude Code
-    if (last10Lines.includes('claude') && (last10Lines.includes('❯') || last10Lines.includes('>>') || last10Lines.includes('transmuting'))) {
+    if (
+      last10Lines.includes('claude') &&
+      (last10Lines.includes('❯') || last10Lines.includes('>>') || last10Lines.includes('transmuting'))
+    ) {
       return 'Claude Code';
     }
     // Codex
@@ -1378,6 +1535,22 @@ export default class Term extends React.PureComponent<
     return null;
   };
 
+  checkActiveProgram = throttle(() => {
+    if (!this.term) return;
+    let activeProgram: string | null = null;
+    const screenText = this.getTerminalScreenText();
+    const detected = this.detectInteractiveProgram(screenText);
+    if (detected) {
+      activeProgram = detected;
+    } else if (this.term.buffer.active.type === 'alternate') {
+      activeProgram = 'interactive program';
+    }
+
+    if (this.state.activeProgram !== activeProgram) {
+      this.setState({activeProgram});
+    }
+  }, 200);
+
   // The ONLY place that actually changes the shell's directory — on an explicit
   // Go, never on browse. Queued navigation lands here.
   goToNavigatorDir = () => {
@@ -1394,7 +1567,7 @@ export default class Term extends React.PureComponent<
       const buffer = this.term.buffer.active;
       const line = buffer.getLine(buffer.baseY + buffer.cursorY);
       const lineText = line ? line.translateToString(true) : '';
-      
+
       const promptSymbols = ['❯', '$', '%', '#', '>'];
       let promptSymbolIndex = -1;
       for (const sym of promptSymbols) {
@@ -1416,7 +1589,7 @@ export default class Term extends React.PureComponent<
     }
 
     const performCd = () => {
-      this.props.onData!(`cd "${target}"\r`);
+      this.props.onData(`cd "${target}"\r`);
       if ((this.props as any).onCwd) {
         (this.props as any).onCwd(target);
       }
@@ -1515,7 +1688,9 @@ export default class Term extends React.PureComponent<
           return (
             <React.Fragment key={hop.path}>
               {showSep && (
-                <span style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>{sep}</span>
+                <span style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>
+                  {sep}
+                </span>
               )}
               {isLast ? (
                 <span
@@ -1579,12 +1754,13 @@ export default class Term extends React.PureComponent<
   renderNavigatorDirectoryList = () => {
     const {navigatorDirs, navigatorCurrentPath, searchBuffer, focusedIndex} = this.state;
 
-    const filteredDirs = searchBuffer.length > 0
-      ? navigatorDirs.filter(dir => {
-          const name = typeof dir === 'string' ? dir : dir.name;
-          return name.toLowerCase().includes(searchBuffer.toLowerCase());
-        })
-      : navigatorDirs;
+    const filteredDirs =
+      searchBuffer.length > 0
+        ? navigatorDirs.filter((dir) => {
+            const name = typeof dir === 'string' ? dir : dir.name;
+            return name.toLowerCase().includes(searchBuffer.toLowerCase());
+          })
+        : navigatorDirs;
 
     const handleRowClick = (dirName: string) => {
       const targetPath = path.join(navigatorCurrentPath, dirName);
@@ -1625,9 +1801,16 @@ export default class Term extends React.PureComponent<
               const matchedPart = dirName.substring(matchIndex, matchIndex + prefixLower.length);
               const afterPart = dirName.substring(matchIndex + prefixLower.length);
               dirLabelNode = (
-                <span style={{color: showFocus ? 'var(--info-text)' : 'var(--text-primary)', fontWeight: showFocus ? 500 : 'normal'}}>
+                <span
+                  style={{
+                    color: showFocus ? 'var(--info-text)' : 'var(--text-primary)',
+                    fontWeight: showFocus ? 500 : 'normal'
+                  }}
+                >
                   <span>{beforePart}</span>
-                  <span style={{textDecoration: 'underline', textUnderlineOffset: '2px', fontWeight: 'bold'}}>{matchedPart}</span>
+                  <span style={{textDecoration: 'underline', textUnderlineOffset: '2px', fontWeight: 'bold'}}>
+                    {matchedPart}
+                  </span>
                   <span>{afterPart}</span>
                 </span>
               );
@@ -1653,7 +1836,11 @@ export default class Term extends React.PureComponent<
               <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-6)', minWidth: 0, flex: 1}}>
                 <i
                   className="ti ti-folder term_folderIcon"
-                  style={{fontSize: '13px', color: showFocus ? 'var(--info-text)' : 'var(--text-tertiary)', flexShrink: 0}}
+                  style={{
+                    fontSize: '13px',
+                    color: showFocus ? 'var(--info-text)' : 'var(--text-tertiary)',
+                    flexShrink: 0
+                  }}
                   aria-hidden="true"
                 />
                 <span
@@ -1687,7 +1874,11 @@ export default class Term extends React.PureComponent<
               </div>
               <i
                 className="ti ti-chevron-right term_chevronIcon"
-                style={{fontSize: '11px', color: showFocus ? 'var(--info-text)' : 'var(--text-tertiary)', flexShrink: 0}}
+                style={{
+                  fontSize: '11px',
+                  color: showFocus ? 'var(--info-text)' : 'var(--text-tertiary)',
+                  flexShrink: 0
+                }}
                 aria-hidden="true"
               />
             </div>
@@ -1700,14 +1891,15 @@ export default class Term extends React.PureComponent<
   handleSearchInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     const {navigatorDirs} = this.state;
-    
-    const filteredDirs = val.length > 0
-      ? navigatorDirs.filter(dir => {
-          const name = typeof dir === 'string' ? dir : dir.name;
-          return name.toLowerCase().includes(val.toLowerCase());
-        })
-      : navigatorDirs;
-      
+
+    const filteredDirs =
+      val.length > 0
+        ? navigatorDirs.filter((dir) => {
+            const name = typeof dir === 'string' ? dir : dir.name;
+            return name.toLowerCase().includes(val.toLowerCase());
+          })
+        : navigatorDirs;
+
     this.setState({
       searchBuffer: val,
       focusedIndex: filteredDirs.length > 0 ? 0 : -1
@@ -1718,12 +1910,13 @@ export default class Term extends React.PureComponent<
     const {navigatorDirs, searchBuffer, focusedIndex, navigatorCurrentPath} = this.state;
     const key = e.key;
 
-    const filteredDirs = searchBuffer.length > 0
-      ? navigatorDirs.filter(dir => {
-          const name = typeof dir === 'string' ? dir : dir.name;
-          return name.toLowerCase().includes(searchBuffer.toLowerCase());
-        })
-      : navigatorDirs;
+    const filteredDirs =
+      searchBuffer.length > 0
+        ? navigatorDirs.filter((dir) => {
+            const name = typeof dir === 'string' ? dir : dir.name;
+            return name.toLowerCase().includes(searchBuffer.toLowerCase());
+          })
+        : navigatorDirs;
 
     if (key === 'Escape') {
       e.preventDefault();
@@ -1906,6 +2099,11 @@ export default class Term extends React.PureComponent<
           cwdCursor: finalCursor
         });
       }
+
+      // Sync shell CWD changes to directory picker if open and not manually navigated away
+      if (this.state.isDirNavigatorOpen && this.state.navigatorCurrentPath === prevSessionCwd) {
+        this.loadNavigatorDirs(sessionCwd);
+      }
     }
 
     const wasActive = prevState.isDirNavigatorOpen;
@@ -1979,6 +2177,7 @@ export default class Term extends React.PureComponent<
   };
 
   componentWillUnmount() {
+    (this.checkActiveProgram as any).cancel();
     activeTerminals.delete(this.props.uid);
     rpc.removeListener('picker-zoom-in', this.handlePickerZoomIn);
     rpc.removeListener('picker-zoom-out', this.handlePickerZoomOut);
@@ -2012,17 +2211,17 @@ export default class Term extends React.PureComponent<
 
   handlePickerZoomIn = (data: {uid: string}) => {
     if (data.uid !== this.props.uid) return;
-    this.setState({ pickerZoom: Math.min(this.state.pickerZoom + 0.1, 3.0) });
+    this.setState({pickerZoom: Math.min(this.state.pickerZoom + 0.1, 3.0)});
   };
 
   handlePickerZoomOut = (data: {uid: string}) => {
     if (data.uid !== this.props.uid) return;
-    this.setState({ pickerZoom: Math.max(this.state.pickerZoom - 0.1, 0.5) });
+    this.setState({pickerZoom: Math.max(this.state.pickerZoom - 0.1, 0.5)});
   };
 
   handlePickerZoomReset = (data: {uid: string}) => {
     if (data.uid !== this.props.uid) return;
-    this.setState({ pickerZoom: 1.0 });
+    this.setState({pickerZoom: 1.0});
   };
 
   getCurrentCommandLine(): string {
@@ -2031,7 +2230,7 @@ export default class Term extends React.PureComponent<
       const buffer = this.term.buffer.active;
       const absoluteCursorY = buffer.baseY + buffer.cursorY;
       const lines: string[] = [];
-      
+
       const startY = Math.max(0, absoluteCursorY - 3);
       for (let y = absoluteCursorY; y >= startY; y--) {
         const line = buffer.getLine(y);
@@ -2039,12 +2238,12 @@ export default class Term extends React.PureComponent<
           lines.unshift(line.translateToString(true));
         }
       }
-      
+
       const fullText = lines.join('');
       const promptSymbols = ['❯', '$', '%', '#', '>'];
       let lastSymbolIndex = -1;
       let matchedSymbol = '';
-      
+
       for (const sym of promptSymbols) {
         const idx = fullText.lastIndexOf(sym);
         if (idx > lastSymbolIndex) {
@@ -2052,7 +2251,7 @@ export default class Term extends React.PureComponent<
           matchedSymbol = sym;
         }
       }
-      
+
       if (lastSymbolIndex !== -1) {
         return fullText.substring(lastSymbolIndex + matchedSymbol.length).trim();
       }
@@ -2085,6 +2284,8 @@ export default class Term extends React.PureComponent<
 
     const splitLabel = this.props.splitLabel;
     const customTitle = (this.props as any).sessionTitle;
+    const sessionTabName = (this.props as any).sessionTabName;
+    const sessionManualTitle = (this.props as any).sessionManualTitle;
     const sessionProfile = (this.props as any).sessionProfile;
     const sessionShellName = (this.props as any).sessionShellName;
     const isPicker = sessionProfile === 'picker';
@@ -2098,26 +2299,29 @@ export default class Term extends React.PureComponent<
     //   4. Bare fallback → "Pane a".
     const JUNK_TITLE_TOKENS = ['zsh', 'bash', 'sh', 'cmd', 'powershell', 'pwsh', 'wsl', 'node', 'tmux', 'Untitled'];
     const isRealOscTitle =
-      !!customTitle &&
-      !JUNK_TITLE_TOKENS.some((t) => customTitle.toLowerCase().includes(t)) &&
-      !customTitle.includes('/') &&
-      !customTitle.includes('\\');
+      sessionManualTitle ||
+      (!!customTitle &&
+        !JUNK_TITLE_TOKENS.some((t) => customTitle.toLowerCase().includes(t)) &&
+        !customTitle.includes('/') &&
+        !customTitle.includes('\\'));
     const labelText = isPicker
-      ? (sessionShellName ? `Chooser (${sessionShellName})` : 'Chooser')
-      : isRealOscTitle
-        ? customTitle
-        : sessionShellName
-          ? `${shellType} (${sessionShellName})`
-          : `Pane ${splitLabel}`;
+      ? 'new pane'
+      : sessionTabName
+        ? sessionTabName
+        : isRealOscTitle
+          ? customTitle
+          : sessionShellName
+            ? `${shellType} (${sessionShellName})`
+            : `Pane ${splitLabel}`;
 
-    const labelFull = isPicker && sessionShellName
-      ? `${sessionShellName} | Chooser`
+    const labelFull = isPicker
+      ? 'new pane'
       : !isPicker && sessionShellName
         ? `${sessionShellName} | ${shellType}`
         : labelText;
-    const labelShort = isPicker && sessionShellName
-      ? sessionShellName
-      : !isPicker && sessionShellName
+    const labelShort = isPicker
+      ? 'new pane'
+      : sessionShellName
         ? sessionShellName
         : labelText;
 
@@ -2129,15 +2333,34 @@ export default class Term extends React.PureComponent<
     else if (nameLower.includes('cmd') || nameLower.includes('command')) icon = '💻';
     else if (nameLower.includes('claude')) icon = '🤖';
 
+    const getStartIdx = (termGroups: Record<string, any>, groupUid: string): number => {
+      let currentUid = groupUid;
+      while (termGroups[currentUid] && termGroups[currentUid].parentUid) {
+        currentUid = termGroups[currentUid].parentUid;
+      }
+      const hashCode = (str: string): number => {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+          hash = str.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        return Math.abs(hash);
+      };
+      return hashCode(currentUid) % 9;
+    };
+
+    const getPaneTint = (startIdx: number, splitLabel?: string): string => {
+      const paneIdx = splitLabel ? splitLabel.charCodeAt(0) - 97 : 0; // 'a' -> 0, 'b' -> 1...
+      const TINTS = ['success', 'info', 'warning', 'danger'];
+      return TINTS[(startIdx + paneIdx) % TINTS.length];
+    };
+
+    const allTermGroups = (this.props as any).allTermGroups || {};
+    const groupUid = this.props.groupUid || '';
+    const startIdx = getStartIdx(allTermGroups, groupUid);
+
     const tint = isPicker
       ? 'picker'
-      : splitLabel === 'a'
-        ? 'success'
-        : splitLabel === 'b'
-          ? 'info'
-          : splitLabel === 'c'
-            ? 'warning'
-            : 'danger';
+      : getPaneTint(startIdx, splitLabel);
     const showLabelStrip = !!splitLabel || isPicker;
 
     return (
@@ -2272,59 +2495,72 @@ export default class Term extends React.PureComponent<
                 </span>
               </div>
             }
-            locationBar={showDirBar ? (
-              <div
-                ref={this.pathBarRef}
-                className="term_locationBar"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  this.toggleDirNavigator();
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-4)',
-                  background: 'var(--bg-primary)',
-                  border: '0.5px solid var(--border-focus)',
-                  borderRadius: 'var(--radius-3)',
-                  padding: '0 var(--space-6)',
-                  height: '24px',
-                  // Fill the row; hard floor ~11 chars; hidden (not stubbed)
-                  // below ~320 via showDirBar. Matches the web-pane URL bar.
-                  flex: 1,
-                  minWidth: '110px',
-                  cursor: 'pointer',
-                  boxSizing: 'border-box',
-                  marginLeft: 'var(--space-4)',
-                  marginRight: 'var(--space-8)'
-                }}
-                title="Click to browse directories (Ctrl+O)"
-              >
-                <i
-                  className={this.state.isDirNavigatorOpen ? 'ti ti-folder-open' : 'ti ti-folder'}
-                  style={{
-                    fontSize: '12px',
-                    color: 'var(--info-text)',
-                    flexShrink: 0
+            locationBar={
+              showDirBar ? (
+                <div
+                  ref={this.pathBarRef}
+                  className="term_locationBar"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    this.toggleDirNavigator();
                   }}
-                  aria-hidden="true"
-                />
-                <span
                   style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '11px',
-                    color: 'var(--text-primary)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap'
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-4)',
+                    background: 'var(--bg-primary)',
+                    border: '0.5px solid var(--border-focus)',
+                    borderRadius: 'var(--radius-3)',
+                    padding: '0 var(--space-6)',
+                    height: '24px',
+                    // Fill the row; hard floor ~11 chars; hidden (not stubbed)
+                    // below ~320 via showDirBar. Matches the web-pane URL bar.
+                    flex: 1,
+                    minWidth: '110px',
+                    cursor: this.state.activeProgram ? 'not-allowed' : 'pointer',
+                    opacity: this.state.activeProgram ? 0.5 : 1,
+                    boxSizing: 'border-box',
+                    marginLeft: 'var(--space-4)',
+                    marginRight: 'var(--space-8)'
                   }}
+                  title={
+                    this.state.activeProgram
+                      ? `Directory browsing locked while ${this.state.activeProgram} is running`
+                      : 'Click to browse directories (Ctrl+O)'
+                  }
                 >
-                  {this.state.isDirNavigatorOpen
-                    ? this.state.navigatorCurrentPath || '/'
-                    : this.props.sessionCwd || '/'}
-                </span>
-              </div>
-            ) : null}
+                  <i
+                    className={
+                      this.state.activeProgram
+                        ? 'ti ti-lock'
+                        : this.state.isDirNavigatorOpen
+                        ? 'ti ti-folder-open'
+                        : 'ti ti-folder'
+                    }
+                    style={{
+                      fontSize: '12px',
+                      color: 'var(--info-text)',
+                      flexShrink: 0
+                    }}
+                    aria-hidden="true"
+                  />
+                  <span
+                    style={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '11px',
+                      color: 'var(--text-primary)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    {this.state.isDirNavigatorOpen
+                      ? this.state.navigatorCurrentPath || '/'
+                      : this.props.sessionCwd || '/'}
+                  </span>
+                </div>
+              ) : null
+            }
             onSplitRight={() => rpc.emit('split request vertical', {activeUid: this.props.uid})}
             onSplitDown={() => rpc.emit('split request horizontal', {activeUid: this.props.uid})}
             onClose={() => {
@@ -2347,7 +2583,6 @@ export default class Term extends React.PureComponent<
               top: `${this.state.navigatorTop}px`,
               left: `${this.state.navigatorLeft}px`,
               width: `${this.state.navigatorWidth}px`,
-              minWidth: '320px',
               background: 'var(--bg-secondary)',
               border: '0.5px solid var(--border-neutral)',
               borderRadius: '4px',
@@ -2402,7 +2637,7 @@ export default class Term extends React.PureComponent<
                   fontFamily: 'var(--font-sans)'
                 }}
               >
-                Initialize the pane
+                New Terminal Session
               </div>
 
               <div
@@ -2423,7 +2658,16 @@ export default class Term extends React.PureComponent<
 
               <div className="term_pickerGrid_rev">
                 {((this.props as any).profiles || [])
-                  .filter((p: any) => p.name.toLowerCase() !== 'claude code')
+                  .filter((p: any) => {
+                    const n = p.name.toLowerCase();
+                    // Agents live under "pick an agent", not the shell grid:
+                    // built-in agent names + any custom profile saved as kind 'agent'.
+                    return n !== 'claude code' && n !== 'nemesis8' && p.kind !== 'agent';
+                  })
+                  // Stock (system-detected, no `kind`) shells first; user-added
+                  // custom shells (kind:'shell') after. Stable, so each group
+                  // keeps its own order.
+                  .sort((a: any, b: any) => (a.kind ? 1 : 0) - (b.kind ? 1 : 0))
                   .map((p: any) => {
                     const profileNameLower = p.name.toLowerCase();
                     let iconClass = 'ti ti-terminal-2';
@@ -2448,6 +2692,7 @@ export default class Term extends React.PureComponent<
                       <button
                         key={p.name}
                         className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
+                        title={p.kind ? `${displayName} — right-click to delete` : undefined}
                         onClick={() => {
                           const {groupUid, uid, sessionCwd} = this.props as any;
                           rpc.emit('new', {
@@ -2458,6 +2703,17 @@ export default class Term extends React.PureComponent<
                             groupUid
                           });
                         }}
+                        onContextMenu={
+                          p.kind
+                            ? (e) => {
+                                // Custom shells only: right-click to delete.
+                                e.preventDefault();
+                                if (window.confirm(`Delete custom shell "${displayName}"?`)) {
+                                  ipcRenderer.send('remove-profile', p.name);
+                                }
+                              }
+                            : undefined
+                        }
                       >
                         <i className={iconClass} style={{fontSize: '14px'}} aria-hidden="true" />
                         <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
@@ -2469,11 +2725,7 @@ export default class Term extends React.PureComponent<
                 <button
                   className={'term_pickerButton_rev term_pickerButton_custom_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
                   onClick={() => {
-                    try {
-                      ipcRenderer.send('edit-config-external');
-                    } catch (err) {
-                      console.error(err);
-                    }
+                    this.setState({isCustomModalOpen: true, customKind: 'shell'});
                   }}
                 >
                   <i className="ti ti-plus" style={{fontSize: '14px'}} aria-hidden="true" />
@@ -2493,7 +2745,7 @@ export default class Term extends React.PureComponent<
               >
                 <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
                 <div style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
-                  or pick an app
+                  or pick an agent
                 </div>
                 <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
               </div>
@@ -2515,6 +2767,26 @@ export default class Term extends React.PureComponent<
                   <i className="ti ti-sparkles" style={{fontSize: '14px', color: 'var(--info-text)'}} aria-hidden="true" />
                   <span>Claude Code</span>
                 </button>
+                {((this.props as any).profiles || []).some((p: any) => p.name.toLowerCase() === 'nemesis8') && (
+                  <button
+                    className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
+                    onClick={() => {
+                      // Starts in the picked directory, then runs `n8` — its launcher
+                      // comes up and the user picks the agent there.
+                      const {groupUid, uid, sessionCwd} = this.props as any;
+                      rpc.emit('new', {
+                        isNewGroup: false,
+                        cwd: sessionCwd || (this.props as any).cwd,
+                        activeUid: uid,
+                        profile: 'Nemesis8',
+                        groupUid
+                      });
+                    }}
+                  >
+                    <i className="ti ti-robot" style={{fontSize: '14px', color: 'var(--danger-text)'}} aria-hidden="true" />
+                    <span>Nemesis8</span>
+                  </button>
+                )}
                 <button
                   className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
                   onClick={() => {
@@ -2529,6 +2801,45 @@ export default class Term extends React.PureComponent<
                 >
                   <i className="ti ti-robot" style={{fontSize: '14px'}} aria-hidden="true" />
                   <span>Hyperia Shell</span>
+                </button>
+                {/* Custom agents the user saved (kind 'agent') */}
+                {((this.props as any).profiles || [])
+                  .filter((p: any) => p.kind === 'agent')
+                  .map((p: any) => (
+                    <button
+                      key={p.name}
+                      className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
+                      title={`${p.name} — right-click to delete`}
+                      onClick={() => {
+                        const {groupUid, uid, sessionCwd} = this.props as any;
+                        rpc.emit('new', {
+                          isNewGroup: false,
+                          cwd: sessionCwd || (this.props as any).cwd,
+                          activeUid: uid,
+                          profile: p.name,
+                          groupUid
+                        });
+                      }}
+                      onContextMenu={(e) => {
+                        // Custom agents: right-click to delete.
+                        e.preventDefault();
+                        if (window.confirm(`Delete custom agent "${p.name}"?`)) {
+                          ipcRenderer.send('remove-profile', p.name);
+                        }
+                      }}
+                    >
+                      <i className="ti ti-robot" style={{fontSize: '14px'}} aria-hidden="true" />
+                      <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{p.name}</span>
+                    </button>
+                  ))}
+                <button
+                  className={'term_pickerButton_rev term_pickerButton_custom_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
+                  onClick={() => {
+                    this.setState({isCustomModalOpen: true, customKind: 'agent'});
+                  }}
+                >
+                  <i className="ti ti-plus" style={{fontSize: '14px'}} aria-hidden="true" />
+                  <span>Custom…</span>
                 </button>
               </div>
 
@@ -2549,9 +2860,6 @@ export default class Term extends React.PureComponent<
                 <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
               </div>
 
-              {/* URL picker lives at the bottom — its history dropdown opens
-                  downward into empty space instead of overlapping the grids.
-                  Same widget the web pane uses; opens on click, not on type. */}
               <div style={{display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '340px'}}>
                 <UrlPicker
                   value={this.state.urlInput || ''}
@@ -2579,6 +2887,336 @@ export default class Term extends React.PureComponent<
             ref={this.onTermWrapperRef}
             className={'term_fit term_wrapper ' + (this.state.isDirNavigatorOpen ? 'term_dimmed' : '')}
           />
+        )}
+
+        {this.state.isCustomModalOpen && (
+          <div
+            // In-pane, not a full-screen overlay: fills the pane BELOW the pane
+            // band (keeps the "new pane" top bar visible) and covers the picker
+            // buttons + URL bar. Back returns to them.
+            style={{
+              position: 'absolute',
+              top: 'var(--band-height-compact)',
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'var(--bg-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 50,
+              color: 'var(--text-primary)',
+              fontFamily: 'var(--font-sans)',
+              cursor: 'default',
+              padding: 'var(--space-12)',
+              boxSizing: 'border-box',
+              overflowY: 'auto'
+            }}
+            onClick={() => this.setState({isCustomModalOpen: false})}
+          >
+            <div
+              style={{
+                width: '100%',
+                maxWidth: '460px',
+                background: 'var(--bg-secondary)',
+                border: '0.5px solid var(--border-focus)',
+                borderRadius: '6px',
+                padding: '20px',
+                boxShadow: '0 8px 30px rgba(0, 0, 0, 0.5)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '16px'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header — Back returns to the picker buttons + URL bar */}
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                <button
+                  type="button"
+                  onClick={() => this.setState({isCustomModalOpen: false})}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-4)',
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    padding: 0
+                  }}
+                >
+                  <i className="ti ti-arrow-left" style={{fontSize: '14px'}} aria-hidden="true" />
+                  Back
+                </button>
+                <span style={{fontSize: '14px', fontWeight: 600}}>
+                  {this.state.customKind === 'agent' ? 'Create Custom Agent' : 'Create Custom Shell'}
+                </span>
+                <span style={{width: '44px'}} />
+              </div>
+
+              {/* Profile Name */}
+              <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Profile Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. My Shell"
+                  value={this.state.profileName}
+                  onChange={(e) => this.setState({ profileName: e.target.value })}
+                  style={{
+                    background: 'var(--bg-primary)',
+                    border: '0.5px solid var(--border-neutral)',
+                    color: 'var(--text-primary)',
+                    borderRadius: '4px',
+                    padding: '8px 10px',
+                    fontSize: '12px'
+                  }}
+                />
+              </div>
+
+              {/* Shell Executable Path — pick from detected shells, or type/browse a custom one */}
+              <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Shell Path</label>
+                <select
+                  value={this.state.shellPath}
+                  onChange={(e) => this.setState({shellPath: e.target.value})}
+                  style={{
+                    background: 'var(--bg-primary)',
+                    border: '0.5px solid var(--border-neutral)',
+                    color: 'var(--text-primary)',
+                    borderRadius: '4px',
+                    padding: '8px 10px',
+                    fontSize: '12px'
+                  }}
+                >
+                  <option value="">Pick an existing shell… (or enter a path below)</option>
+                  {(() => {
+                    const seen = new Set<string>();
+                    return ((this.props as any).profiles || [])
+                      .filter((p: any) => p?.config?.shell && !seen.has(p.config.shell) && seen.add(p.config.shell))
+                      .map((p: any) => (
+                        <option key={p.name} value={p.config.shell}>
+                          {`${p.name} — ${p.config.shell}`}
+                        </option>
+                      ));
+                  })()}
+                </select>
+                <div style={{display: 'flex', gap: '6px'}}>
+                  <input
+                    type="text"
+                    placeholder="e.g. /bin/bash or C:\Windows\System32\cmd.exe"
+                    value={this.state.shellPath}
+                    onChange={(e) => this.setState({ shellPath: e.target.value })}
+                    style={{
+                      flex: 1,
+                      background: 'var(--bg-primary)',
+                      border: '0.5px solid var(--border-neutral)',
+                      color: 'var(--text-primary)',
+                      borderRadius: '4px',
+                      padding: '8px 10px',
+                      fontSize: '12px',
+                      fontFamily: 'var(--font-mono)'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const res = (await ipcRenderer.invoke('pick-shell-executable')) as any;
+                        if (res) this.setState({ shellPath: res });
+                      } catch (err) {
+                        console.error(err);
+                      }
+                    }}
+                    style={{
+                      background: 'var(--bg-tertiary)',
+                      border: '0.5px solid var(--border-neutral)',
+                      color: 'var(--text-primary)',
+                      borderRadius: '4px',
+                      padding: '0 10px',
+                      fontSize: '12px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Browse…
+                  </button>
+                </div>
+              </div>
+
+              {/* Shell Arguments */}
+              <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Arguments (comma separated)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. --login, -i"
+                  value={this.state.shellArgs}
+                  onChange={(e) => this.setState({ shellArgs: e.target.value })}
+                  style={{
+                    background: 'var(--bg-primary)',
+                    border: '0.5px solid var(--border-neutral)',
+                    color: 'var(--text-primary)',
+                    borderRadius: '4px',
+                    padding: '8px 10px',
+                    fontSize: '12px',
+                    fontFamily: 'var(--font-mono)'
+                  }}
+                />
+              </div>
+
+              {/* Environment Variables */}
+              <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Environment Variables</label>
+                <div
+                  style={{
+                    background: 'var(--bg-primary)',
+                    border: '0.5px solid var(--border-neutral)',
+                    borderRadius: '6px',
+                    padding: '10px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px'
+                  }}
+                >
+                  {/* Env list */}
+                  <div style={{maxHeight: '80px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                    {this.state.envVars.length === 0 ? (
+                      <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontStyle: 'italic'}}>No environment variables added.</span>
+                    ) : (
+                      this.state.envVars.map((v, i) => (
+                        <div
+                          key={i}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            background: 'var(--bg-secondary)',
+                            borderRadius: '4px',
+                            padding: '3px 8px',
+                            fontSize: '11px',
+                            fontFamily: 'var(--font-mono)'
+                          }}
+                        >
+                          <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                            <span style={{color: 'var(--info-text)'}}>{v.key}</span>={v.val}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => this.setState({ envVars: this.state.envVars.filter((_, idx) => idx !== i) })}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              color: 'var(--danger-text)',
+                              cursor: 'pointer',
+                              fontSize: '14px'
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Add inline form */}
+                  <div style={{display: 'flex', gap: '6px'}}>
+                    <input
+                      type="text"
+                      placeholder="KEY"
+                      value={this.state.newEnvKey}
+                      onChange={(e) => this.setState({ newEnvKey: e.target.value.replace(/[^a-zA-Z0-9_]/g, '') })}
+                      style={{
+                        flex: 1,
+                        background: 'var(--bg-secondary)',
+                        border: '0.5px solid var(--border-neutral)',
+                        color: 'var(--text-primary)',
+                        borderRadius: '4px',
+                        padding: '6px 8px',
+                        fontSize: '10px',
+                        fontFamily: 'var(--font-mono)'
+                      }}
+                    />
+                    <input
+                      type="text"
+                      placeholder="VALUE"
+                      value={this.state.newEnvVal}
+                      onChange={(e) => this.setState({ newEnvVal: e.target.value })}
+                      style={{
+                        flex: 1.5,
+                        background: 'var(--bg-secondary)',
+                        border: '0.5px solid var(--border-neutral)',
+                        color: 'var(--text-primary)',
+                        borderRadius: '4px',
+                        padding: '6px 8px',
+                        fontSize: '10px',
+                        fontFamily: 'var(--font-mono)'
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const k = this.state.newEnvKey.trim();
+                        const v = this.state.newEnvVal.trim();
+                        if (k) {
+                          this.setState({
+                            envVars: [...this.state.envVars.filter(item => item.key !== k), {key: k, val: v}],
+                            newEnvKey: '',
+                            newEnvVal: ''
+                          });
+                        }
+                      }}
+                      style={{
+                        background: 'var(--info-text)',
+                        color: 'var(--bg-primary)',
+                        border: 'none',
+                        borderRadius: '4px',
+                        padding: '0 10px',
+                        fontSize: '10px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div style={{display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px'}}>
+                <button
+                  type="button"
+                  onClick={() => this.setState({ isCustomModalOpen: false })}
+                  style={{
+                    background: 'var(--bg-primary)',
+                    border: '0.5px solid var(--border-neutral)',
+                    color: 'var(--text-secondary)',
+                    borderRadius: '4px',
+                    padding: '8px 14px',
+                    fontSize: '12px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!this.state.profileName.trim() || !this.state.shellPath.trim()}
+                  onClick={this.saveCustomProfile}
+                  style={{
+                    background: (this.state.profileName.trim() && this.state.shellPath.trim()) ? 'var(--info-text)' : 'var(--border-neutral)',
+                    color: 'var(--bg-primary)',
+                    border: 'none',
+                    borderRadius: '4px',
+                    padding: '8px 14px',
+                    fontSize: '12px',
+                    cursor: (this.state.profileName.trim() && this.state.shellPath.trim()) ? 'pointer' : 'default',
+                    opacity: (this.state.profileName.trim() && this.state.shellPath.trim()) ? 1 : 0.6
+                  }}
+                >
+                  Save Profile
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {this.props.customChildren}
@@ -2651,10 +3289,13 @@ export default class Term extends React.PureComponent<
 
           .term_pickerGrid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            /* Auto-fill up to 4 across when wide (max-width ~560 fits 4×110+gaps),
+               and squish down to fewer columns as the pane narrows instead of
+               forcing a fixed column count. */
+            grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
             gap: 6px;
             width: 100%;
-            max-width: 520px;
+            max-width: 560px;
             margin-bottom: 16px;
           }
 

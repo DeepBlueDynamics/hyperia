@@ -27,10 +27,8 @@ const getDecoratedConfigWithRetry = async () => {
 };
 
 const checkForUpdates = async () => {
-  const config = await getDecoratedConfigWithRetry();
-  if (!config.disableAutoUpdates) {
-    autoUpdater.checkForUpdates();
-  }
+  // Disable Vercel standard Hyper update checks as they overwrite Hyperia.
+  return;
 };
 
 let isInit = false;

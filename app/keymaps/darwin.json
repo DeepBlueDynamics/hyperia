@@ -30,9 +30,15 @@
   "tab:jump:prefix": "command",
   "pane:next": "command+]",
   "pane:prev": "command+[",
-  "pane:splitRight": "command+shift+|",
+  "pane:splitRight": [
+    "command+shift+d",
+    "command+shift+|"
+  ],
   "pane:splitDown": "command+shift+_",
-  "pane:cloneRight": "command+alt+shift+|",
+  "pane:cloneRight": [
+    "command+alt+shift+d",
+    "command+alt+shift+|"
+  ],
   "pane:cloneDown": "command+alt+shift+_",
   "pane:close": "command+w",
   "editor:undo": "command+z",

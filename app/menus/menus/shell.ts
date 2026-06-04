@@ -44,6 +44,20 @@ const shellMenu = (
         }
       },
       {
+        label: 'Clone Down',
+        accelerator: commandKeys['pane:cloneDown'],
+        click(item, focusedWindow) {
+          execCommand('pane:cloneDown', focusedWindow);
+        }
+      },
+      {
+        label: 'Clone Right',
+        accelerator: commandKeys['pane:cloneRight'],
+        click(item, focusedWindow) {
+          execCommand('pane:cloneRight', focusedWindow);
+        }
+      },
+      {
         type: 'separator'
       },
       {

@@ -36,6 +36,14 @@ Never call a tool name that wasn't in your tool definitions for this turn.
 - Never repeat a tool call you already made this turn. If you have the result, use it.
 - Read tool results before calling more tools. terminal_run already returns the screen.
 - For destructive operations, confirm with the user first.
+- STRUCTURED WORKFLOWS:
+  - Web Content: open_web_pane -> terminal_status -> Parse tabId -> web_pane_content.
+  - Terminal Execution: terminal_status -> Parse active paneId -> terminal_run -> terminal_screen.
+- TARGET PARAMETERS:
+  - Terminal tools (terminal_screen, terminal_run) target a 'pane' (e.g. split labels "a", "b" or paneId UUIDs).
+  - Web tools (web_pane_content, web_pane_eval) target a 'tab' (e.g. tabId UUID or tab name).
+  - For simple tasks in the current view, omit target parameters (window, tab, pane) to default to the currently focused window, tab, or pane.
+- PAGE LOAD ASYNCHRONY: When open_web_pane returns, wait briefly or check if the page content contains loading states before summarizing.
 
 ## Tools
 - Address panes with window/tab/pane parameters.

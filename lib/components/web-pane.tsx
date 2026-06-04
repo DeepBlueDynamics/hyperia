@@ -1,15 +1,15 @@
+import {shell} from 'electron';
 import React from 'react';
 
-import {shell} from 'electron';
 import {connect} from 'react-redux';
 
 import type {HyperDispatch} from '../../typings/hyper';
-import {clearWebPane, userExitTermGroup} from '../actions/term-groups';
+import {clearWebPane, userExitTermGroup, splitWebPane} from '../actions/term-groups';
 import rpc from '../rpc';
 import {countPathHorizontalStacks} from '../utils/term-groups';
 
-import {PaneBand} from './pane-band';
 import FindBar from './find-bar';
+import {PaneBand} from './pane-band';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {ipcMain, ipcRenderer} = require('electron');
@@ -48,6 +48,7 @@ interface WebPaneProps {
   allTermGroups?: Record<string, any>;
   webName?: string;
   onActive?: () => void;
+  onSplitWebPane?: (url: string, direction: 'HORIZONTAL' | 'VERTICAL') => void;
 }
 
 const getSecurityState = (urlStr: string): 'https' | 'http' | 'localhost' | 'error' => {
@@ -104,7 +105,8 @@ const faviconForUrl = (u: string): string => {
   }
 };
 
-const OAUTH_HOST_RE = /(^|\.)(accounts\.google\.com|appleid\.apple\.com|login\.microsoftonline\.com|login\.live\.com|github\.com\/login\/oauth|gitlab\.com\/users\/sign_in)/i;
+const OAUTH_HOST_RE =
+  /(^|\.)(accounts\.google\.com|appleid\.apple\.com|login\.microsoftonline\.com|login\.live\.com|github\.com\/login\/oauth|gitlab\.com\/users\/sign_in)/i;
 const isOAuthUrl = (u: string): boolean => {
   if (!u) return false;
   try {
@@ -965,7 +967,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     return (
       <span>
         {text.substring(0, idx)}
-        <span style={{textDecoration: 'underline', textUnderlineOffset: '2px'}}>{text.substring(idx, idx + q.length)}</span>
+        <span style={{textDecoration: 'underline', textUnderlineOffset: '2px'}}>
+          {text.substring(idx, idx + q.length)}
+        </span>
         {text.substring(idx + q.length)}
       </span>
     );
@@ -977,12 +981,14 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   getHistoryVisibleRows = (
     query: string
   ): Array<
-    {type: 'single' | 'child'; item: WebHistoryEntry} | {type: 'root'; key: string; label: string; entries: WebHistoryEntry[]}
+    | {type: 'single' | 'child'; item: WebHistoryEntry}
+    | {type: 'root'; key: string; label: string; entries: WebHistoryEntry[]}
   > => {
     const filtered = query
       ? this.state.webHistory.filter(
           (item) =>
-            item.value.toLowerCase().includes(query) || (item.titleAtVisit && item.titleAtVisit.toLowerCase().includes(query))
+            item.value.toLowerCase().includes(query) ||
+            (item.titleAtVisit && item.titleAtVisit.toLowerCase().includes(query))
         )
       : this.state.webHistory;
     const order: string[] = [];
@@ -997,7 +1003,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       groups[key].push(item);
     }
     const rows: Array<
-      {type: 'single' | 'child'; item: WebHistoryEntry} | {type: 'root'; key: string; label: string; entries: WebHistoryEntry[]}
+      | {type: 'single' | 'child'; item: WebHistoryEntry}
+      | {type: 'root'; key: string; label: string; entries: WebHistoryEntry[]}
     > = [];
     for (const key of order) {
       const entries = groups[key];
@@ -1044,8 +1051,22 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           style={{fontSize: '12px', color: 'var(--text-tertiary)', flexShrink: 0}}
           aria-hidden="true"
         />
-        <span style={{position: 'relative', width: '14px', height: '14px', flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}>
-          <i className="ti ti-world" style={{fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--text-tertiary)'}} aria-hidden="true" />
+        <span
+          style={{
+            position: 'relative',
+            width: '14px',
+            height: '14px',
+            flexShrink: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+        >
+          <i
+            className="ti ti-world"
+            style={{fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--text-tertiary)'}}
+            aria-hidden="true"
+          />
           <img
             src={faviconForUrl(sample.value)}
             width={14}
@@ -1071,7 +1092,15 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         >
           {row.label}
         </span>
-        <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)', flexShrink: 0, marginRight: 'var(--space-6)'}}>
+        <span
+          style={{
+            fontSize: '10px',
+            color: 'var(--text-tertiary)',
+            fontFamily: 'var(--font-sans)',
+            flexShrink: 0,
+            marginRight: 'var(--space-6)'
+          }}
+        >
           {row.entries.length}
         </span>
       </div>
@@ -1121,10 +1150,31 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         className={isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow'}
       >
         {isAiRow ? (
-          <i className="ti ti-sparkles" style={{fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--color-ai-purple, #7F77DD)', flexShrink: 0}} />
+          <i
+            className="ti ti-sparkles"
+            style={{
+              fontSize: '13px',
+              color: isFocused ? 'var(--info-text)' : 'var(--color-ai-purple, #7F77DD)',
+              flexShrink: 0
+            }}
+          />
         ) : (
-          <span style={{position: 'relative', width: '14px', height: '14px', flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}>
-            <i className="ti ti-world" style={{fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--text-tertiary)'}} aria-hidden="true" />
+          <span
+            style={{
+              position: 'relative',
+              width: '14px',
+              height: '14px',
+              flexShrink: 0,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            <i
+              className="ti ti-world"
+              style={{fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--text-tertiary)'}}
+              aria-hidden="true"
+            />
             <img
               src={faviconForUrl(item.value)}
               width={14}
@@ -1141,7 +1191,11 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           style={{
             fontFamily: isAiRow ? 'var(--font-sans)' : 'var(--font-mono)',
             fontSize: '11px',
-            color: isFocused ? (isAiRow ? 'var(--color-ai-purple, #7F77DD)' : 'var(--info-text)') : 'var(--text-primary)',
+            color: isFocused
+              ? isAiRow
+                ? 'var(--color-ai-purple, #7F77DD)'
+                : 'var(--info-text)'
+              : 'var(--text-primary)',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -1150,11 +1204,41 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           }}
         >
           {item.titleAtVisit ? (
-            <span style={{display: 'flex', alignItems: 'center', gap: 'var(--space-6)', minWidth: 0, maxWidth: '100%', overflow: 'hidden'}}>
-              <span title={item.titleAtVisit} style={{fontWeight: 600, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0}}>
+            <span
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 'var(--space-6)',
+                minWidth: 0,
+                maxWidth: '100%',
+                overflow: 'hidden'
+              }}
+            >
+              <span
+                title={item.titleAtVisit}
+                style={{
+                  fontWeight: 600,
+                  maxWidth: '45%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0
+                }}
+              >
                 {this.highlightHistory(item.titleAtVisit, query)}
               </span>
-              <span title={item.value} style={{color: 'var(--text-tertiary)', fontSize: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1}}>
+              <span
+                title={item.value}
+                style={{
+                  color: 'var(--text-tertiary)',
+                  fontSize: '10px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  minWidth: 0,
+                  flex: 1
+                }}
+              >
                 {this.highlightHistory(item.value, query)}
               </span>
             </span>
@@ -1585,7 +1669,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           "(function(){try{var ID='__hyperia_slim_sb__';if(document.getElementById(ID))return;" +
             "var s=document.createElement('style');s.id=ID;" +
             "s.textContent='::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(128,128,128,.45);border-radius:6px}::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,.7)}';" +
-            "var h=document.head||document.documentElement;h.insertBefore(s,h.firstChild);}catch(e){}})()"
+            'var h=document.head||document.documentElement;h.insertBefore(s,h.firstChild);}catch(e){}})()'
         );
       } catch {
         /* webview not ready */
@@ -1643,6 +1727,76 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                   console.error('Failed to reset zoom:', err);
                 }
               }
+
+              const keyLower = input.key.toLowerCase();
+
+              // Ctrl+Shift+D / Ctrl+Shift+| -> Split Right (vertical split)
+              if ((input.control || input.meta) && input.shift && (keyLower === 'd' || input.key === '|')) {
+                event.preventDefault();
+                rpc.emit('split request vertical', {activeUid: this.props.sessionUid || this.props.groupUid});
+                return;
+              }
+
+              // Ctrl+Shift+_ / Ctrl+Shift+- -> Split Down (horizontal split)
+              if ((input.control || input.meta) && input.shift && (input.key === '_' || input.key === '-')) {
+                event.preventDefault();
+                rpc.emit('split request horizontal', {activeUid: this.props.sessionUid || this.props.groupUid});
+                return;
+              }
+
+              // Ctrl+Alt+Shift+D / Ctrl+Alt+Shift+| -> Clone Right
+              if ((input.control || input.meta) && input.alt && input.shift && (keyLower === 'd' || input.key === '|')) {
+                event.preventDefault();
+                this.props.onSplitWebPane?.(this.state.activeUrl || this.props.url || '', 'VERTICAL');
+                return;
+              }
+
+              // Ctrl+Alt+Shift+_ / Ctrl+Alt+Shift+- -> Clone Down
+              if ((input.control || input.meta) && input.alt && input.shift && (input.key === '_' || input.key === '-')) {
+                event.preventDefault();
+                this.props.onSplitWebPane?.(this.state.activeUrl || this.props.url || '', 'HORIZONTAL');
+                return;
+              }
+
+              // Ctrl+Shift+W -> Close Pane
+              if ((input.control || input.meta) && input.shift && keyLower === 'w') {
+                event.preventDefault();
+                if (this.props.hasSession) {
+                  this.props.onClose?.();
+                } else {
+                  (this.props as any).onClosePane();
+                }
+                return;
+              }
+
+              // Ctrl+Shift+T -> new tab/term group
+              if ((input.control || input.meta) && input.shift && keyLower === 't') {
+                event.preventDefault();
+                (rpc.emitter.emit as any)('termgroup add req', {activeUid: this.props.sessionUid || this.props.groupUid});
+                return;
+              }
+
+              // Ctrl+Tab -> Next tab
+              if ((input.control || input.meta) && !input.shift && input.key === 'Tab') {
+                event.preventDefault();
+                (rpc.emitter.emit as any)('move right req');
+                return;
+              }
+
+              // Ctrl+Shift+Tab -> Prev tab
+              if ((input.control || input.meta) && input.shift && input.key === 'Tab') {
+                event.preventDefault();
+                (rpc.emitter.emit as any)('move left req');
+                return;
+              }
+
+              // Ctrl+1 through Ctrl+9 -> Jump to tab index
+              if ((input.control || input.meta) && /^[1-9]$/.test(input.key)) {
+                event.preventDefault();
+                const index = parseInt(input.key, 10) - 1;
+                (rpc.emitter.emit as any)('move jump req', index);
+                return;
+              }
             }
           });
 
@@ -1661,11 +1815,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
           // Clicking into the guest page focuses its webContents but never fires
           // a mousedown in THIS document — so the outside-click handler can't see
-          // it. Close the URL navigator when the page takes focus.
+          // it. Close the URL navigator and activate this pane when the page takes focus.
           wc.on('focus', () => {
             if (this.state.isUrlNavigatorOpen) {
               this.setState({isUrlNavigatorOpen: false});
             }
+            this.props.onActive?.();
           });
 
           wc.on('will-navigate', (event: any, url: string) => {
@@ -1690,11 +1845,13 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       try {
         wv.executeJavaScript(
           "(function(){try{var pick=function(el){if(!el)return '';var c=getComputedStyle(el).backgroundColor;return (c&&c!=='rgba(0, 0, 0, 0)'&&c!=='transparent')?c:'';};return pick(document.body)||pick(document.documentElement)||'#ffffff';}catch(e){return '';}})()"
-        ).then((color: string) => {
-          if (color && color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') {
-            this.setState({pageBgColor: color});
-          }
-        }).catch(() => {});
+        )
+          .then((color: string) => {
+            if (color && color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') {
+              this.setState({pageBgColor: color});
+            }
+          })
+          .catch(() => {});
       } catch (err) {
         // ignore
       }
@@ -1709,7 +1866,11 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     wv.addEventListener('will-navigate', (e: any) => {
       const url = (e?.url as string) || '';
       if (isOAuthUrl(url)) {
-        try { wv.stop(); } catch { /* ignore — webview may not be ready */ }
+        try {
+          wv.stop();
+        } catch {
+          /* ignore — webview may not be ready */
+        }
         void shell.openExternal(url);
       }
     });
@@ -1763,6 +1924,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       }
     };
     window.addEventListener('keydown', this._windowKeydownHandler);
+    window.addEventListener('resize', this.onWindowResize);
 
     // Listen for reload requests from the tab right-click menu
     this._reloadHandler = (uid: string) => {
@@ -1791,9 +1953,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     this._openSplitHandler = (_e: any, guestId: number, url: string) => {
       try {
         if (this.webviewRef.current && this.webviewRef.current.getWebContentsId() === guestId) {
-          rpc.emit('split request horizontal', {
+          // Dedicated web-split: makes a clean web pane below (no shell/session),
+          // not the terminal-split path that dragged a phantom shell pane along.
+          rpc.emit('split web pane req', {
             activeUid: this.props.sessionUid || this.props.groupUid,
-            profile: 'Web Pane',
             url
           });
         }
@@ -1937,6 +2100,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (this._windowKeydownHandler) {
       window.removeEventListener('keydown', this._windowKeydownHandler);
     }
+    window.removeEventListener('resize', this.onWindowResize);
     if (this._findHandler) {
       ipcRenderer.removeListener('web-pane-find', this._findHandler);
     }
@@ -1969,6 +2133,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       }
     });
   }
+
+  onWindowResize = () => {
+    if (this.state.isUrlNavigatorOpen) {
+      this.setState({isUrlNavigatorOpen: false});
+    }
+  };
 
   handleZoomIn = (data: {uid: string}) => {
     if (data.uid !== this.props.groupUid) return;
@@ -2153,7 +2323,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       );
     }
     menu.append(new MenuItem({type: 'separator'}));
-    menu.append(new MenuItem({label: 'New Note', click: () => void ipcMain.emit('new-sticky', {})}));
+    menu.append(new MenuItem({label: 'New Stickys', click: () => void ipcMain.emit('new-sticky', {})}));
+    menu.append(new MenuItem({label: 'Search Stickys', click: () => void ipcMain.emit('search-stickies')}));
     menu.append(new MenuItem({type: 'separator'}));
     menu.append(new MenuItem({label: 'Close Tab', click: () => this.props.onClose?.()}));
     menu.popup();
@@ -2163,6 +2334,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   handlePaneBandContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    this.props.onActive?.();
 
     let isSplitDownDisabled = false;
     const {groupUid, allTermGroups} = this.props as any;
@@ -2182,9 +2354,13 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       new MenuItem({
         label: 'Split Right',
         accelerator: 'Ctrl+Shift+|',
+        registerAccelerator: false,
         enabled: !this.state.isNarrow,
         click: () => {
-          rpc.emit('split request vertical', {activeUid: this.props.sessionUid || this.props.groupUid, profile: 'picker'});
+          rpc.emit('split request vertical', {
+            activeUid: this.props.sessionUid || this.props.groupUid,
+            profile: 'picker'
+          });
         }
       })
     );
@@ -2193,6 +2369,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       new MenuItem({
         label: 'Split Down',
         accelerator: 'Ctrl+Shift+_',
+        registerAccelerator: false,
         enabled: !isSplitDownDisabled,
         click: () => {
           rpc.emit('split request horizontal', {activeUid: this.props.sessionUid || this.props.groupUid});
@@ -2204,12 +2381,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       new MenuItem({
         label: 'Clone Right',
         accelerator: 'Ctrl+Alt+Shift+|',
+        registerAccelerator: false,
         enabled: !this.state.isNarrow,
         click: () => {
-          rpc.emit('split request vertical', {
-            activeUid: this.props.sessionUid || this.props.groupUid,
-            profile: (this.props as any).defaultProfile || undefined
-          });
+          this.props.onSplitWebPane?.(this.state.activeUrl || this.props.url || '', 'VERTICAL');
         }
       })
     );
@@ -2218,12 +2393,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       new MenuItem({
         label: 'Clone Down',
         accelerator: 'Ctrl+Alt+Shift+_',
+        registerAccelerator: false,
         enabled: !isSplitDownDisabled,
         click: () => {
-          rpc.emit('split request horizontal', {
-            activeUid: this.props.sessionUid || this.props.groupUid,
-            profile: (this.props as any).defaultProfile || undefined
-          });
+          this.props.onSplitWebPane?.(this.state.activeUrl || this.props.url || '', 'HORIZONTAL');
         }
       })
     );
@@ -2248,6 +2421,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       new MenuItem({
         label: 'Close Pane',
         accelerator: 'Ctrl+Shift+W',
+        registerAccelerator: false,
         click: () => {
           if (this.props.hasSession) {
             this.props.onClose?.();
@@ -2480,11 +2654,29 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         })}
         {varKeys.length > 0 && (
           <React.Fragment>
-            <span style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', marginLeft: '2px'}}>?</span>
+            <span
+              style={{
+                fontSize: '11px',
+                color: 'var(--text-tertiary)',
+                fontFamily: 'var(--font-mono)',
+                marginLeft: '2px'
+              }}
+            >
+              ?
+            </span>
             {varKeys.map((k, vi) => (
               <React.Fragment key={'var-' + vi}>
                 {vi > 0 && (
-                  <span style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', opacity: 0.6}}>·</span>
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      color: 'var(--text-tertiary)',
+                      fontFamily: 'var(--font-mono)',
+                      opacity: 0.6
+                    }}
+                  >
+                    ·
+                  </span>
                 )}
                 <span
                   title={`Query variable: ${k}`}
@@ -2565,9 +2757,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           const conversationId = item.conversationId || `conv-${Date.now()}`;
           this.navigateWebview(`ai://${conversationId}`);
         } else {
-          const val = (item as any).value || (item as any).title;
-          if ((item as any).id) {
-            this.navigateWebview(`ai://${(item as any).id}`);
+          const val = item.value || item.title;
+          if (item.id) {
+            this.navigateWebview(`ai://${item.id}`);
           } else {
             this.navigateWebview(val);
           }
@@ -2659,7 +2851,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
               height: '24px',
               padding: 0
             }}
-            placeholder={isAi ? 'Search threads or ask a new question...' : 'Search history or type URL... (Esc to close)'}
+            placeholder={
+              isAi ? 'Search threads or ask a new question...' : 'Search history or type URL... (Esc to close)'
+            }
             value={this.state.navigatorInputVal}
             onContextMenu={(e) => {
               // Right-click the URL/search field → standard edit menu (Paste etc.).
@@ -2737,7 +2931,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             onClick={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
             style={{display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', marginRight: '12px'}}
-            title={this.state.saveHistory ? "History saving is enabled" : "History saving is disabled (Private mode)"}
+            title={this.state.saveHistory ? 'History saving is enabled' : 'History saving is disabled (Private mode)'}
           >
             <span style={{fontSize: '9px', color: 'var(--text-secondary)'}}>Save History</span>
             <label
@@ -2793,9 +2987,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             </label>
           </div>
 
-          <span style={{color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>
-            Esc to close
-          </span>
+          <span style={{color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>Esc to close</span>
         </div>
       </div>
     );
@@ -2816,23 +3008,39 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     const splitLabel = (this.props as any).splitLabel;
     const showStrip = !!splitLabel || hasSession;
     const isAi = url && url.startsWith('ai://');
+    const getStartIdx = (termGroups: Record<string, any>, groupUid: string): number => {
+      let currentUid = groupUid;
+      while (termGroups[currentUid] && termGroups[currentUid].parentUid) {
+        currentUid = termGroups[currentUid].parentUid;
+      }
+      const hashCode = (str: string): number => {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+          hash = str.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        return Math.abs(hash);
+      };
+      return hashCode(currentUid) % 9;
+    };
+
+    const getPaneTint = (startIdx: number, splitLabel?: string): string => {
+      const paneIdx = splitLabel ? splitLabel.charCodeAt(0) - 97 : 0; // 'a' -> 0, 'b' -> 1...
+      const TINTS = ['success', 'info', 'warning', 'danger'];
+      return TINTS[(startIdx + paneIdx) % TINTS.length];
+    };
+
+    const resolvedAllTermGroups = allTermGroups || {};
+    const resolvedGroupUid = groupUid || '';
+    const startIdx = getStartIdx(resolvedAllTermGroups, resolvedGroupUid);
+
     const tint = isAi
       ? 'ai'
-      : splitLabel === 'a'
-        ? 'success'
-        : splitLabel === 'b'
-          ? 'info'
-          : splitLabel === 'c'
-            ? 'warning'
-            : splitLabel === 'd'
-              ? 'danger'
-              : 'info';
+      : getPaneTint(startIdx, splitLabel);
     // Cap the toolbar title — page titles run long ("… Recipe From Scratch -
     // Budget Bytes") and PaneBand renders nowrap + no-shrink, so the full title
     // spans the whole bar. Trim to a reasonable length with an ellipsis.
     const rawWebName = (this.props as any).webName as string | undefined;
-    const webNameShort =
-      rawWebName && rawWebName.length > 32 ? `${rawWebName.slice(0, 31).trimEnd()}…` : rawWebName;
+    const webNameShort = rawWebName && rawWebName.length > 32 ? `${rawWebName.slice(0, 31).trimEnd()}…` : rawWebName;
     const labelText = isAi ? 'ask' : webNameShort || (splitLabel ? `Pane ${splitLabel}` : 'Browser');
 
     // ── Toolbar collapse plan ────────────────────────────────────────────────
@@ -2890,60 +3098,60 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 onClick={(e) => e.stopPropagation()}
               >
                 {showBack && (
-                <span
-                  className="term_controlIcon term_tooltipTrigger"
-                  onClick={this.goBack}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    cursor: this.state.canGoBack ? 'pointer' : 'default',
-                    opacity: this.state.canGoBack ? 1 : 0.4,
-                    pointerEvents: this.state.canGoBack ? 'auto' : 'none'
-                  }}
-                >
-                  <i className="ti ti-arrow-left" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <div className="term_tooltip" style={{minWidth: '160px'}}>
-                    <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Back</div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontFamily: 'var(--font-mono)',
-                        color: 'var(--text-secondary)',
-                        marginTop: 'var(--space-2)'
-                      }}
-                    >
-                      Alt+Left
+                  <span
+                    className="term_controlIcon term_tooltipTrigger"
+                    onClick={this.goBack}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      cursor: this.state.canGoBack ? 'pointer' : 'default',
+                      opacity: this.state.canGoBack ? 1 : 0.4,
+                      pointerEvents: this.state.canGoBack ? 'auto' : 'none'
+                    }}
+                  >
+                    <i className="ti ti-arrow-left" style={{fontSize: '14px'}} aria-hidden="true" />
+                    <div className="term_tooltip" style={{minWidth: '160px'}}>
+                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Back</div>
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          fontFamily: 'var(--font-mono)',
+                          color: 'var(--text-secondary)',
+                          marginTop: 'var(--space-2)'
+                        }}
+                      >
+                        Alt+Left
+                      </div>
                     </div>
-                  </div>
-                </span>
+                  </span>
                 )}
                 {showForward && (
-                <span
-                  className="term_controlIcon term_tooltipTrigger"
-                  onClick={this.goForward}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    cursor: this.state.canGoForward ? 'pointer' : 'default',
-                    opacity: this.state.canGoForward ? 1 : 0.4,
-                    pointerEvents: this.state.canGoForward ? 'auto' : 'none'
-                  }}
-                >
-                  <i className="ti ti-arrow-right" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <div className="term_tooltip" style={{minWidth: '160px'}}>
-                    <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Forward</div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontFamily: 'var(--font-mono)',
-                        color: 'var(--text-secondary)',
-                        marginTop: 'var(--space-2)'
-                      }}
-                    >
-                      Alt+Right
+                  <span
+                    className="term_controlIcon term_tooltipTrigger"
+                    onClick={this.goForward}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      cursor: this.state.canGoForward ? 'pointer' : 'default',
+                      opacity: this.state.canGoForward ? 1 : 0.4,
+                      pointerEvents: this.state.canGoForward ? 'auto' : 'none'
+                    }}
+                  >
+                    <i className="ti ti-arrow-right" style={{fontSize: '14px'}} aria-hidden="true" />
+                    <div className="term_tooltip" style={{minWidth: '160px'}}>
+                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Forward</div>
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          fontFamily: 'var(--font-mono)',
+                          color: 'var(--text-secondary)',
+                          marginTop: 'var(--space-2)'
+                        }}
+                      >
+                        Alt+Right
+                      </div>
                     </div>
-                  </div>
-                </span>
+                  </span>
                 )}
                 {showReload && (
                   <span
@@ -2981,7 +3189,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                       e.stopPropagation();
                       const url = this.state.activeUrl || this.props.url || '';
                       if (url) {
-                        const { shell } = require('electron');
+                        const {shell} = require('electron');
                         void shell.openExternal(url);
                       }
                     }}
@@ -2993,7 +3201,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                   >
                     <i className="ti ti-external-link" style={{fontSize: '14px'}} aria-hidden="true" />
                     <div className="term_tooltip" style={{minWidth: '160px'}}>
-                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Open in system browser</div>
+                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
+                        Open in system browser
+                      </div>
                     </div>
                   </span>
                 )}
@@ -3008,8 +3218,17 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                   >
                     <i className="ti ti-note" style={{fontSize: '14px'}} aria-hidden="true" />
                     <div className="term_tooltip" style={{minWidth: '160px'}}>
-                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>New sticky from page</div>
-                      <div style={{fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', marginTop: 'var(--space-2)'}}>
+                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
+                        New sticky from page
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          fontFamily: 'var(--font-mono)',
+                          color: 'var(--text-secondary)',
+                          marginTop: 'var(--space-2)'
+                        }}
+                      >
                         Title + URL + selection/extract
                       </div>
                     </div>
@@ -3017,156 +3236,163 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 )}
               </div>
             }
-            locationBar={showUrlBar ? (
-              <div
-                ref={this.urlBarRef}
-                className="web_locationBar"
-                onContextMenu={(e) => {
-                  // Right-click the URL bar → Copy URL (this is toolbar chrome,
-                  // not the guest page, so it's a plain renderer menu).
-                  e.preventDefault();
-                  e.stopPropagation();
-                  const currentUrl = this.state.activeUrl || this.props.url || '';
-                  try {
-                    // eslint-disable-next-line @typescript-eslint/no-var-requires
-                    const {Menu, MenuItem} = require('@electron/remote');
-                    // eslint-disable-next-line @typescript-eslint/no-var-requires
-                    const {clipboard} = require('electron');
-                    const menu = new Menu();
-                    menu.append(
-                      new MenuItem({
-                        label: 'Copy URL',
-                        enabled: !!currentUrl,
-                        click: () => {
-                          try {
-                            clipboard.writeText(currentUrl);
-                          } catch (err) {
-                            console.error('Copy URL failed:', err);
+            locationBar={
+              showUrlBar ? (
+                <div
+                  ref={this.urlBarRef}
+                  className="web_locationBar"
+                  onContextMenu={(e) => {
+                    // Right-click the URL bar → Copy URL (this is toolbar chrome,
+                    // not the guest page, so it's a plain renderer menu).
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const currentUrl = this.state.activeUrl || this.props.url || '';
+                    try {
+                      // eslint-disable-next-line @typescript-eslint/no-var-requires
+                      const {Menu, MenuItem} = require('@electron/remote');
+                      // eslint-disable-next-line @typescript-eslint/no-var-requires
+                      const {clipboard} = require('electron');
+                      const menu = new Menu();
+                      menu.append(
+                        new MenuItem({
+                          label: 'Copy URL',
+                          enabled: !!currentUrl,
+                          click: () => {
+                            try {
+                              clipboard.writeText(currentUrl);
+                            } catch (err) {
+                              console.error('Copy URL failed:', err);
+                            }
+                          }
+                        })
+                      );
+                      menu.popup();
+                    } catch (err) {
+                      console.error('URL bar context menu failed:', err);
+                    }
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const isOpen = !this.state.isUrlNavigatorOpen;
+                    let navigatorLeft = 8;
+                    let navigatorWidth = 320;
+                    let navigatorTop = 38;
+                    if (isOpen) {
+                      const el = this.urlBarRef.current;
+                      const wrapper = this.webWrapperRef.current;
+                      if (el && wrapper) {
+                        const rect = el.getBoundingClientRect();
+                        const parentRect = wrapper.getBoundingClientRect();
+                        navigatorLeft = rect.left - parentRect.left;
+                        navigatorTop = rect.bottom - parentRect.top + 4;
+                        const widthToUse = Math.max(rect.width, 320);
+                        navigatorWidth = widthToUse;
+                        if (navigatorLeft + widthToUse > parentRect.width) {
+                          // Right-justify and extend left
+                          navigatorLeft = rect.right - parentRect.left - widthToUse;
+                          if (navigatorLeft < 8) {
+                            navigatorLeft = 8;
                           }
                         }
-                      })
+                      }
+                    }
+                    this.setState(
+                      {
+                        isUrlNavigatorOpen: isOpen,
+                        navigatorInputVal: '',
+                        navigatorFocusedIndex: -1,
+                        navigatorError: null,
+                        navigatorLeft,
+                        navigatorWidth,
+                        navigatorTop
+                      },
+                      () => {
+                        if (isOpen) {
+                          requestAnimationFrame(() => {
+                            if (this.navigatorInputRef.current) {
+                              this.navigatorInputRef.current.focus();
+                              this.navigatorInputRef.current.select();
+                            }
+                          });
+                        }
+                      }
                     );
-                    menu.popup();
-                  } catch (err) {
-                    console.error('URL bar context menu failed:', err);
-                  }
-                }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const isOpen = !this.state.isUrlNavigatorOpen;
-                  let navigatorLeft = 8;
-                  let navigatorWidth = 320;
-                  let navigatorTop = 38;
-                  if (isOpen) {
-                    const el = this.urlBarRef.current;
-                    const wrapper = this.webWrapperRef.current;
-                    if (el && wrapper) {
-                      const rect = el.getBoundingClientRect();
-                      const parentRect = wrapper.getBoundingClientRect();
-                      navigatorLeft = rect.left - parentRect.left;
-                      navigatorTop = rect.bottom - parentRect.top + 4;
-                      const widthToUse = Math.max(rect.width, 320);
-                      navigatorWidth = widthToUse;
-                      if (navigatorLeft + widthToUse > parentRect.width) {
-                        // Right-justify and extend left
-                        navigatorLeft = (rect.right - parentRect.left) - widthToUse;
-                        if (navigatorLeft < 8) {
-                          navigatorLeft = 8;
-                        }
-                      }
-                    }
-                  }
-                  this.setState(
-                    {
-                      isUrlNavigatorOpen: isOpen,
-                      navigatorInputVal: '',
-                      navigatorFocusedIndex: -1,
-                      navigatorError: null,
-                      navigatorLeft,
-                      navigatorWidth,
-                      navigatorTop
-                    },
-                    () => {
-                      if (isOpen) {
-                        requestAnimationFrame(() => {
-                          if (this.navigatorInputRef.current) {
-                            this.navigatorInputRef.current.focus();
-                            this.navigatorInputRef.current.select();
-                          }
-                        });
-                      }
-                    }
-                  );
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-4)',
-                  background: 'var(--bg-primary)',
-                  border: '0.5px solid var(--border-focus)',
-                  borderRadius: 'var(--radius-3)',
-                  padding: '0 var(--space-6)',
-                  height: '24px',
-                  // Fill the row. Hard floor of ~11 chars ("https://" + a few
-                  // letters); below that the whole bar is hidden (showUrlBar),
-                  // never shrunk to a sub-"https://" stub.
-                  flex: 1,
-                  minWidth: '110px',
-                  cursor: 'pointer',
-                  boxSizing: 'border-box',
-                  marginLeft: 'var(--space-4)',
-                  marginRight: 'var(--space-8)'
-                }}
-                title={isAi ? 'Click to view recent threads' : 'Click to navigate'}
-              >
-                {loading && url ? (
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-4)',
+                    background: 'var(--bg-primary)',
+                    border: '0.5px solid var(--border-focus)',
+                    borderRadius: 'var(--radius-3)',
+                    padding: '0 var(--space-6)',
+                    height: '24px',
+                    // Fill the row. Hard floor of ~11 chars ("https://" + a few
+                    // letters); below that the whole bar is hidden (showUrlBar),
+                    // never shrunk to a sub-"https://" stub.
+                    flex: 1,
+                    minWidth: '110px',
+                    cursor: 'pointer',
+                    boxSizing: 'border-box',
+                    marginLeft: 'var(--space-4)',
+                    marginRight: 'var(--space-8)'
+                  }}
+                  title={isAi ? 'Click to view recent threads' : 'Click to navigate'}
+                >
+                  {loading && url ? (
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        display: 'inline-block',
+                        animation: 'web-pane-spin 1s linear infinite',
+                        opacity: 0.6,
+                        flexShrink: 0
+                      }}
+                    >
+                      ⟳
+                    </span>
+                  ) : (
+                    <i
+                      className={isAi ? 'ti ti-sparkles' : 'ti ti-world'}
+                      style={{
+                        fontSize: '12px',
+                        color: isAi ? 'var(--color-ai-purple, #7F77DD)' : 'var(--info-text)',
+                        flexShrink: 0
+                      }}
+                      aria-hidden="true"
+                    />
+                  )}
                   <span
                     style={{
+                      fontFamily: isAi ? 'var(--font-sans)' : 'var(--font-mono)',
                       fontSize: '11px',
-                      display: 'inline-block',
-                      animation: 'web-pane-spin 1s linear infinite',
-                      opacity: 0.6,
-                      flexShrink: 0
+                      color: 'var(--text-primary)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
                     }}
                   >
-                    ⟳
+                    {(() => {
+                      if (isAi) {
+                        const conversationId = url.slice(5);
+                        const conv = this.state.aiConversations.find((c) => c.id === conversationId);
+                        return conv ? conv.title : 'ask';
+                      }
+                      return this.state.activeUrl || this.props.url || 'about:blank';
+                    })()}
                   </span>
-                ) : (
-                  <i
-                    className={isAi ? 'ti ti-sparkles' : 'ti ti-world'}
-                    style={{
-                      fontSize: '12px',
-                      color: isAi
-                        ? 'var(--color-ai-purple, #7F77DD)'
-                        : 'var(--info-text)',
-                      flexShrink: 0
-                    }}
-                    aria-hidden="true"
-                  />
-                )}
-                <span
-                  style={{
-                    fontFamily: isAi ? 'var(--font-sans)' : 'var(--font-mono)',
-                    fontSize: '11px',
-                    color: 'var(--text-primary)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap'
-                  }}
-                >
-                  {(() => {
-                    if (isAi) {
-                      const conversationId = url.slice(5);
-                      const conv = this.state.aiConversations.find((c) => c.id === conversationId);
-                      return conv ? conv.title : 'ask';
-                    }
-                    return this.state.activeUrl || this.props.url || 'about:blank';
-                  })()}
-                </span>
-              </div>
-            ) : null}
-            onSplitRight={() => rpc.emit('split request vertical', {activeUid: this.props.sessionUid || this.props.groupUid, profile: 'picker'})}
-            onSplitDown={() => rpc.emit('split request horizontal', {activeUid: this.props.sessionUid || this.props.groupUid})}
+                </div>
+              ) : null
+            }
+            onSplitRight={() =>
+              rpc.emit('split request vertical', {
+                activeUid: this.props.sessionUid || this.props.groupUid,
+                profile: 'picker'
+              })
+            }
+            onSplitDown={() =>
+              rpc.emit('split request horizontal', {activeUid: this.props.sessionUid || this.props.groupUid})
+            }
             onClose={() => {
               if (hasSession) {
                 onClose?.();
@@ -3176,6 +3402,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
               }
             }}
             onContextMenu={this.handlePaneBandContextMenu}
+            onClick={this.props.onActive}
             height={isAi ? 'normal' : 'compact'}
           />
         )}
@@ -4555,6 +4782,9 @@ const mapDispatchToProps = (dispatch: HyperDispatch, ownProps: WebPaneProps) => 
   },
   onActive() {
     dispatch({type: 'TERM_GROUP_SET_ACTIVE', uid: ownProps.groupUid} as any);
+  },
+  onSplitWebPane(url: string, direction: 'HORIZONTAL' | 'VERTICAL') {
+    dispatch(splitWebPane(ownProps.groupUid, url, direction) as any);
   }
 });
 

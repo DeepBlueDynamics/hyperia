@@ -2472,6 +2472,7 @@ const MODEL_CATALOG: &[ModelEntry] = &[
     ModelEntry { id: "o3-mini",                 name: "o3-mini",                provider: "openai",    context: 200_000, tier: "reasoning", note: "Smaller reasoning model" },
     ModelEntry { id: "o1",                      name: "o1",                     provider: "openai",    context: 200_000, tier: "reasoning", note: "Deep reasoning, no streaming" },
     // Local Ollama
+    ModelEntry { id: "ollama:gemma4:12b",       name: "Gemma 4 12B",            provider: "ollama",    context: 8_192,   tier: "local",    note: "Default local Ollama model for Hyperia shell" },
     ModelEntry { id: "ollama:llama3.2",         name: "Llama 3.2",              provider: "ollama",    context: 128_000, tier: "local",    note: "General-purpose local model" },
     ModelEntry { id: "ollama:qwen2.5",          name: "Qwen 2.5",               provider: "ollama",    context: 128_000, tier: "local",    note: "Strong tool calling for a local model" },
     ModelEntry { id: "ollama:gemma4:e2b",       name: "Gemma 4 e2b",            provider: "ollama",    context: 8_192,   tier: "tiny",     note: "Maximus's compression model — small + fast" },

@@ -8,7 +8,7 @@ import {spawn} from 'child_process';
 import {readFileSync, writeFileSync, rmSync} from 'fs';
 import {join} from 'path';
 
-import {ipcMain, shell} from 'electron';
+import {ipcMain, shell, dialog, BrowserWindow} from 'electron';
 
 import {cfgPath, defaultCfg} from './config/paths';
 
@@ -33,6 +33,18 @@ export function initSettings() {
       event.sender.send('set-default-profile-done', {ok: true, name});
     } catch (e) {
       event.sender.send('set-default-profile-done', {ok: false, error: String(e)});
+    }
+  });
+
+  ipcMain.on('set-config-env', (event, env: Record<string, string>) => {
+    try {
+      const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+      if (!cfg.config) cfg.config = {};
+      cfg.config.env = env;
+      writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+      event.sender.send('set-config-env-done', {ok: true});
+    } catch (e) {
+      event.sender.send('set-config-env-done', {ok: false, error: String(e)});
     }
   });
 
@@ -111,5 +123,62 @@ export function initSettings() {
 
   ipcMain.handle('has-agent-token', () => {
     return hasAgentToken();
+  });
+
+  ipcMain.handle('pick-shell-executable', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const res = await dialog.showOpenDialog(win!, {
+      title: 'Select Shell Executable',
+      properties: ['openFile'],
+      filters: [
+        {name: 'Executables', extensions: ['exe', 'bat', 'cmd', 'sh', 'bash', 'zsh', 'fish', '*']}
+      ]
+    });
+    return res.canceled || !res.filePaths.length ? null : res.filePaths[0];
+  });
+
+  ipcMain.on('add-profile', (event, profile: {name: string; shell: string; shellArgs?: string[]; env?: Record<string, string>; kind?: string}) => {
+    try {
+      const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+      if (!cfg.config) cfg.config = {};
+      if (!cfg.config.profiles) cfg.config.profiles = [];
+
+      // Remove duplicate if it exists
+      cfg.config.profiles = cfg.config.profiles.filter((p: any) => p.name !== profile.name);
+
+      cfg.config.profiles.push({
+        name: profile.name,
+        // 'agent' custom profiles surface under "pick an agent"; everything else
+        // (default) shows with the shell buttons.
+        kind: profile.kind === 'agent' ? 'agent' : 'shell',
+        config: {
+          shell: profile.shell,
+          shellArgs: profile.shellArgs || [],
+          env: profile.env || {}
+        }
+      });
+      
+      writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+      event.sender.send('add-profile-done', {ok: true});
+    } catch (e) {
+      event.sender.send('add-profile-done', {ok: false, error: String(e)});
+    }
+  });
+
+  // Remove a (custom) profile by name. The config watcher reloads on write,
+  // which re-runs detection + pushes the new profiles list to the renderer, so
+  // the picker button disappears without a manual refresh.
+  ipcMain.on('remove-profile', (event, name: string) => {
+    try {
+      const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+      if (cfg.config?.profiles) {
+        cfg.config.profiles = cfg.config.profiles.filter((p: any) => p.name !== name);
+        if (cfg.config.defaultProfile === name) delete cfg.config.defaultProfile;
+        writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+      }
+      event.sender.send('remove-profile-done', {ok: true, name});
+    } catch (e) {
+      event.sender.send('remove-profile-done', {ok: false, error: String(e)});
+    }
   });
 }

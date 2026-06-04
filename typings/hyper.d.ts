@@ -34,6 +34,8 @@ export type ITermGroup = Immutable<{
   // User-set tab name. Lives on the root group so it survives splits.
   // null = use the auto-generated name from the active session.
   tabName?: string | null;
+  disableTitleInheritance?: boolean;
+  webName?: string | null;
 }>;
 
 export type ITermGroups = Immutable<Record<string, ITermGroup>>;
@@ -118,6 +120,7 @@ export type uiState = Immutable<{
   profiles: configOptions['profiles'];
   agentStatuses: Record<string, AgentStatus>;
   styleTheme?: any;
+  env?: Record<string, string>;
 }>;
 
 export type session = {
@@ -138,6 +141,7 @@ export type session = {
   cwd?: string;
   shellName?: string;
   lastCommand?: string;
+  manualTitle?: boolean;
 };
 
 export type sessionState = Immutable<{
@@ -255,7 +259,11 @@ export type TabProps = {
   agentStatus?: AgentStatus;
   isWebPane?: boolean;
   webUrl?: string;
+  paneColors?: string[];
+  groupTabName?: string;
   defaultProfile?: string;
+  disableTitleInheritance?: boolean;
+  onToggleTitleInheritance?: () => void;
 } & extensionProps;
 
 export type AgentStatus = {
@@ -276,6 +284,9 @@ export type ITab = {
   agentStatus?: AgentStatus;
   isWebPane?: boolean;
   webUrl?: string;
+  paneColors?: string[];
+  groupTabName?: string;
+  disableTitleInheritance?: boolean;
 };
 
 export type TabsProps = {

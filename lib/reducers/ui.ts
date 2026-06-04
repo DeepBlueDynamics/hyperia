@@ -123,7 +123,8 @@ const initial: uiState = Immutable<Mutable<uiState>>({
   screenReaderMode: false,
   defaultProfile: '',
   profiles: [],
-  agentStatuses: {}
+  agentStatuses: {},
+  env: {}
 });
 
 const reducer: IUiReducer = (state = initial, action) => {
@@ -307,6 +308,10 @@ const reducer: IUiReducer = (state = initial, action) => {
 
             if (config.profiles !== undefined) {
               ret.profiles = config.profiles;
+            }
+
+            if (config.env !== undefined) {
+              ret.env = config.env;
             }
 
             ret._lastUpdate = now;

@@ -25,9 +25,15 @@
   "tab:jump:prefix": "ctrl",
   "pane:next": "ctrl+pageup",
   "pane:prev": "ctrl+pagedown",
-  "pane:splitRight": "ctrl+shift+|",
+  "pane:splitRight": [
+    "ctrl+shift+d",
+    "ctrl+shift+|"
+  ],
   "pane:splitDown": "ctrl+shift+_",
-  "pane:cloneRight": "ctrl+alt+shift+|",
+  "pane:cloneRight": [
+    "ctrl+alt+shift+d",
+    "ctrl+alt+shift+|"
+  ],
   "pane:cloneDown": "ctrl+alt+shift+_",
   "pane:close": "ctrl+shift+w",
   "editor:undo": "ctrl+shift+z",

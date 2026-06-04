@@ -23,7 +23,9 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
       const {sessions, termGroups} = getState();
       let activeUid = _activeUid;
       if (!activeUid) {
-        if (termGroups.activeRootGroup) {
+        if (termGroups.activeTermGroup) {
+          activeUid = termGroups.activeTermGroup;
+        } else if (termGroups.activeRootGroup) {
           activeUid = termGroups.activeSessions[termGroups.activeRootGroup] || termGroups.activeRootGroup || undefined;
         } else {
           activeUid = sessions.activeUid || undefined;
@@ -48,8 +50,11 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
           const {ui, sessions, termGroups} = getState();
           let activeUid = _activeUid;
           if (!activeUid) {
-            if (termGroups.activeRootGroup) {
-              activeUid = termGroups.activeSessions[termGroups.activeRootGroup] || termGroups.activeRootGroup || undefined;
+            if (termGroups.activeTermGroup) {
+              activeUid = termGroups.activeTermGroup;
+            } else if (termGroups.activeRootGroup) {
+              activeUid =
+                termGroups.activeSessions[termGroups.activeRootGroup] || termGroups.activeRootGroup || undefined;
             } else {
               activeUid = sessions.activeUid || undefined;
             }
@@ -112,29 +117,39 @@ export function setActiveGroup(uid: string) {
     if (sessionUid) {
       dispatch(setActiveSession(sessionUid));
     } else {
-      // Web pane tab — no session, just set the active root group
+      // Find the first leaf pane of this root group (web pane) and activate it
+      const group = termGroups.termGroups[uid];
+      if (group) {
+        const leaves = findLeaves(termGroups, group);
+        const firstLeaf = leaves[0];
+        if (firstLeaf) {
+          if (firstLeaf.sessionUid) {
+            dispatch(setActiveSession(firstLeaf.sessionUid));
+          } else {
+            dispatch({type: 'TERM_GROUP_SET_ACTIVE', uid: firstLeaf.uid} as any);
+          }
+          return;
+        }
+      }
+      // Fallback
       dispatch({type: TERM_GROUP_ACTIVATE_WEB_TAB, uid} as any);
     }
   };
 }
 
-// When we've found the next group which we want to
-// set as active (after closing something), we also need
-// to find the first child group which has a sessionUid.
-const findFirstSession = (state: ITermState, group: ITermGroup): string | undefined => {
-  if (group.sessionUid) {
-    return group.sessionUid;
+// Helper to find all leaf groups (panes) under a group recursively
+const findLeaves = (state: ITermState, group: ITermGroup): ITermGroup[] => {
+  if (!group.children || group.children.length === 0) {
+    return [group];
   }
-
+  const leaves: ITermGroup[] = [];
   for (const childUid of group.children.asMutable()) {
     const child = state.termGroups[childUid];
-    // We want to find the *leftmost* session,
-    // even if it's nested deep down:
-    const sessionUid = findFirstSession(state, child);
-    if (sessionUid) {
-      return sessionUid;
+    if (child) {
+      leaves.push(...findLeaves(state, child));
     }
   }
+  return leaves;
 };
 
 const findPrevious = <T>(list: T[], old: T) => {
@@ -144,18 +159,22 @@ const findPrevious = <T>(list: T[], old: T) => {
   return index ? list[index - 1] : list[1];
 };
 
-const findNextSessionUid = (state: ITermState, group: ITermGroup) => {
-  // If we're closing a root group (i.e. a whole tab),
-  // the next group needs to be a root group as well:
-  if (state.activeRootGroup === group.uid) {
+// Find the next pane's UID (either session pane or web pane) when a pane is closed
+const findNextPaneUid = (state: ITermState, group: ITermGroup): string | undefined => {
+  if (!group.parentUid) {
     const rootGroups = getRootGroups({termGroups: state});
     const nextGroup = findPrevious(rootGroups, group);
-    return findFirstSession(state, nextGroup);
+    if (!nextGroup) return undefined;
+    const leaves = findLeaves(state, nextGroup);
+    return leaves[0]?.uid;
   }
 
-  const {children} = state.termGroups[group.parentUid!];
+  const {children} = state.termGroups[group.parentUid];
   const nextUid = findPrevious(children.asMutable(), group.uid);
-  return findFirstSession(state, state.termGroups[nextUid]);
+  const nextGroup = state.termGroups[nextUid];
+  if (!nextGroup) return undefined;
+  const leaves = findLeaves(state, nextGroup);
+  return leaves[0]?.uid;
 };
 
 export function ptyExitTermGroup(sessionUid: string) {
@@ -167,16 +186,25 @@ export function ptyExitTermGroup(sessionUid: string) {
       return dispatch(ptyExitSession(sessionUid));
     }
 
-
-
     dispatch({
       type: TERM_GROUP_EXIT,
       uid: group.uid,
       effect: () => {
+        const stateAfterExit = getState();
+        const termGroupsAfterExit = stateAfterExit.termGroups;
         const activeSessionUid = termGroups.activeSessions[termGroups.activeRootGroup!];
-        if (Object.keys(termGroups.termGroups).length > 1 && activeSessionUid === sessionUid) {
-          const nextSessionUid = findNextSessionUid(termGroups, group);
-          dispatch(setActiveSession(nextSessionUid!));
+        const isFocused = termGroups.activeTermGroup === group.uid || activeSessionUid === sessionUid;
+
+        if (Object.keys(termGroupsAfterExit.termGroups).length > 0 && isFocused) {
+          const nextPaneUid = findNextPaneUid(termGroups, group);
+          if (nextPaneUid && termGroupsAfterExit.termGroups[nextPaneUid]) {
+            const nextPane = termGroupsAfterExit.termGroups[nextPaneUid];
+            if (nextPane.sessionUid) {
+              dispatch(setActiveSession(nextPane.sessionUid));
+            } else {
+              dispatch({type: 'TERM_GROUP_SET_ACTIVE', uid: nextPaneUid} as any);
+            }
+          }
         }
 
         dispatch(ptyExitSession(sessionUid));
@@ -193,6 +221,7 @@ export function userExitTermGroup(uid: string) {
       uid,
       effect: () => {
         const group = termGroups.termGroups[uid];
+        if (!group) return;
         if (Object.keys(termGroups.termGroups).length <= 1) {
           // Last group — exit the session if there is one, and close the window immediately
           if (group.sessionUid) {
@@ -203,23 +232,19 @@ export function userExitTermGroup(uid: string) {
         }
 
         const activeSessionUid = termGroups.activeSessions[termGroups.activeRootGroup!];
-        const isActive = termGroups.activeRootGroup === uid || activeSessionUid === group.sessionUid;
+        const isActive = termGroups.activeRootGroup === uid || activeSessionUid === group.sessionUid || termGroups.activeTermGroup === uid;
 
         if (isActive) {
-          // Try to find the next session the normal way first
-          const nextSessionUid = group.sessionUid ? findNextSessionUid(termGroups, group) : undefined;
-          if (nextSessionUid) {
-            dispatch(setActiveSession(nextSessionUid));
-          } else {
-            // Next tab may be a web pane — find the previous root group directly
-            const rootGroups = getRootGroups({termGroups});
-            const nextGroup = findPrevious(rootGroups, group);
-            if (nextGroup) {
-              const nextSession = termGroups.activeSessions[nextGroup.uid];
-              if (nextSession) {
-                dispatch(setActiveSession(nextSession));
+          const nextPaneUid = findNextPaneUid(termGroups, group);
+          if (nextPaneUid) {
+            const stateAfterExit = getState();
+            const termGroupsAfterExit = stateAfterExit.termGroups;
+            if (termGroupsAfterExit.termGroups[nextPaneUid]) {
+              const nextPane = termGroupsAfterExit.termGroups[nextPaneUid];
+              if (nextPane.sessionUid) {
+                dispatch(setActiveSession(nextPane.sessionUid));
               } else {
-                dispatch({type: TERM_GROUP_ACTIVATE_WEB_TAB, uid: nextGroup.uid} as any);
+                dispatch({type: 'TERM_GROUP_SET_ACTIVE', uid: nextPaneUid} as any);
               }
             }
           }
@@ -237,8 +262,6 @@ export function userExitTermGroup(uid: string) {
     });
   };
 }
-
-
 
 export function setWebPane(url: string | null) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
@@ -261,14 +284,30 @@ export function openWebPaneInNewTab(url: string) {
   };
 }
 
+// Split the active pane and open `url` in a new WEB PANE below it (no shell,
+// no session) — for target="_blank" links in a web pane.
+export function splitWebPaneBelow(activeUid: string | undefined, url: string) {
+  return (dispatch: HyperDispatch) => {
+    dispatch({type: 'TERM_GROUP_SPLIT_WEB', activeUid, url, splitDirection: 'HORIZONTAL'} as any);
+  };
+}
+
+export function splitWebPane(activeUid: string | undefined, url: string, direction: 'HORIZONTAL' | 'VERTICAL') {
+  return (dispatch: HyperDispatch) => {
+    dispatch({type: 'TERM_GROUP_SPLIT_WEB', activeUid, url, splitDirection: direction} as any);
+  };
+}
+
 export function exitActiveTermGroup() {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     dispatch({
       type: TERM_GROUP_EXIT_ACTIVE,
       effect() {
         const {sessions, termGroups} = getState();
-        const {uid} = findBySession(termGroups, sessions.activeUid!)!;
-        dispatch(userExitTermGroup(uid));
+        const activeUid = termGroups.activeTermGroup || (sessions.activeUid ? findBySession(termGroups, sessions.activeUid)?.uid : null);
+        if (activeUid) {
+          dispatch(userExitTermGroup(activeUid));
+        }
       }
     });
   };

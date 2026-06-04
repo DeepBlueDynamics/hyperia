@@ -18,17 +18,10 @@
   .ai-spinner { display: inline-block; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
-<!-- highlight.js for code-note syntax highlighting. Pinned version +
-     Subresource Integrity hash + crossorigin so the browser refuses to
-     execute the script if the bytes don't match — that bounds the
-     CodeQL js/functionality-from-untrusted-source risk to "the file was
-     compromised at our build time" rather than "any future server
-     compromise". TODO: vendor locally to fully close this. -->
-<script
-  src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"
-  integrity="sha384-OQ8WUq1L6F+1nrkgmkQQwbnNwxTHC1WtRdhBoP+sZ8RaMl3xMmkrcUVN+pYL6tDP"
-  crossorigin="anonymous"
-  referrerpolicy="no-referrer"></script>
+<!-- highlight.js for code-note syntax highlighting. Vendored locally (v11.9.0,
+     app/highlight.min.js copied to target by webpack) so highlighting works
+     offline and never depends on a CDN that a slow/blocked network can drop. -->
+<script src="highlight.min.js"></script>
 <style>
   :root {
     --sticky-font-size: 22px;
@@ -716,9 +709,62 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+function translateContainerPath(filePath) {
+  if (!filePath) return filePath;
+  if (process.platform !== 'win32') return filePath;
+
+  let normalized = filePath.replace(/\\/g, '/');
+  if (normalized.startsWith('file:///')) {
+    normalized = normalized.slice(8);
+  } else if (normalized.startsWith('file://')) {
+    normalized = normalized.slice(7);
+  }
+
+  if (normalized.startsWith('workspace/')) {
+    normalized = '/' + normalized;
+  }
+
+  if (normalized.startsWith('/workspace/')) {
+    const parts = normalized.slice(11).split('/');
+    const workspaceName = parts[0];
+    const relativePath = parts.slice(1).join('\\');
+
+    let currentDir = process.cwd();
+    try {
+      const remote = require('@electron/remote');
+      if (remote && remote.app) {
+        currentDir = remote.app.getAppPath();
+      }
+    } catch (e) {}
+
+    let projectRoot = currentDir;
+    for (let i = 0; i < 5; i++) {
+      if (path.basename(projectRoot).toLowerCase() === workspaceName.toLowerCase()) {
+        return path.join(projectRoot, relativePath);
+      }
+      const parent = path.dirname(projectRoot);
+      if (parent === projectRoot) break;
+      projectRoot = parent;
+    }
+
+    // Fallback using package.json detection
+    projectRoot = currentDir;
+    for (let i = 0; i < 5; i++) {
+      if (fs.existsSync(path.join(projectRoot, 'package.json'))) {
+        return path.join(projectRoot, relativePath);
+      }
+      const parent = path.dirname(projectRoot);
+      if (parent === projectRoot) break;
+      projectRoot = parent;
+    }
+  }
+
+  return filePath;
+}
+
 const params = new URLSearchParams(window.location.search);
 const noteId = params.get('id') || '';
-const filePath = params.get('file') || '';
+const filePath = translateContainerPath(params.get('file') || '');
 const nameParam = params.get('name') || '';
 
 const stickysDir = path.join(os.homedir(), '.hyperia', 'stickys');
@@ -953,6 +999,38 @@ async function runAgentHighlight(content, codeEl) {
   }
 }
 
+// Split highlighted HTML into per-line spans, re-opening any hljs <span> that
+// crosses a newline (block comments etc.) so neither the colors nor the line
+// numbers break. Module-scope so the right-click highlight toggle can re-wrap.
+function splitHighlightedLines(html) {
+  const out = [];
+  const open = [];
+  let cur = '';
+  let i = 0;
+  while (i < html.length) {
+    const ch = html[i];
+    if (ch === '<') {
+      const end = html.indexOf('>', i);
+      if (end === -1) { cur += html.slice(i); break; }
+      const tag = html.slice(i, end + 1);
+      cur += tag;
+      if (/^<span/i.test(tag)) open.push(tag);
+      else if (/^<\/span/i.test(tag)) open.pop();
+      i = end + 1;
+    } else if (ch === '\n') {
+      out.push(cur + '</span>'.repeat(open.length));
+      cur = open.join('');
+      i++;
+    } else { cur += ch; i++; }
+  }
+  out.push(cur);
+  return out;
+}
+function wrapCodeLines(codeEl) {
+  const lines = splitHighlightedLines(codeEl.innerHTML);
+  codeEl.innerHTML = lines.map((l) => '<span class="line">' + l + '</span>').join('');
+}
+
 function applyHighlight(content, codeEl) {
   if (highlightMode === 'off') {
     codeEl.textContent = content;
@@ -960,8 +1038,10 @@ function applyHighlight(content, codeEl) {
   } else if (highlightMode === 'agent') {
     runAgentHighlight(content, codeEl);
   } else {
-    // static — highlight.js
+    // static — highlight.js. Reset textContent AND clear the data-highlighted
+    // marker so hljs will re-run on a toggle (otherwise it refuses + warns).
     codeEl.textContent = content;
+    delete codeEl.dataset.highlighted;
     if (window.hljs) window.hljs.highlightElement(codeEl);
     aiBanner.style.display = 'none';
   }
@@ -1027,6 +1107,9 @@ ipcRenderer.on('sticky-set-highlight', (_e, mode) => {
     const raw = codeEl.dataset.raw || codeEl.textContent;
     codeEl.dataset.raw = raw;
     applyHighlight(raw, codeEl);
+    // Re-wrap the line spans so the line-number gutter (and the # toggle)
+    // survive a highlight change — applyHighlight rebuilds innerHTML.
+    if (mode !== 'agent') wrapCodeLines(codeEl);
   } else {
     // Regular text note: live highlight via the backdrop behind the textarea.
     setSyntax(mode !== 'off');
@@ -1633,12 +1716,9 @@ if (isSearchMode) {
 
   applyHighlight(fileContent, code);
 
-  // Re-wrap lines after highlight (static mode wraps after hljs; agent mode skips)
-  function wrapLines() {
-    const lines = code.innerHTML.split('\n');
-    code.innerHTML = lines.map(l => '<span class="line">' + l + '</span>').join('');
-  }
-  if (highlightMode !== 'agent') wrapLines();
+  // Wrap each line in a .line span for the line-number gutter (static mode wraps
+  // after hljs; agent mode skips — it manages its own DOM).
+  if (highlightMode !== 'agent') wrapCodeLines(code);
 
   linesBtn.addEventListener('click', () => {
     pre.classList.toggle('with-lines');
@@ -1661,9 +1741,10 @@ if (isSearchMode) {
   // File-bound note: the file on disk is the source of truth. Read it fresh on
   // open (falls back to the cached note text if the file is missing/unreadable).
   if (saved && saved.source && saved.source.kind === 'file' && saved.source.path) {
-    try { textarea.value = fs.readFileSync(saved.source.path, 'utf8'); }
+    const translated = translateContainerPath(saved.source.path);
+    try { textarea.value = fs.readFileSync(translated, 'utf8'); }
     catch (e) { /* keep cached saved.text; file may have moved */ }
-    setFileBound(saved.source.path);
+    setFileBound(translated);
   }
 
   const tickRail = document.createElement('div');
@@ -1739,6 +1820,26 @@ if (isSearchMode) {
   textarea.addEventListener('blur', clearCtrl);
 
   const forceFocus = (setCursorAtEnd = false) => {
+    const findBar = document.getElementById('findBar');
+    if (findBar && findBar.style.display !== 'none') {
+      const findInput = document.getElementById('findInput');
+      if (findInput && document.activeElement !== findInput) {
+        findInput.focus();
+      }
+      return;
+    }
+    const titleInput = document.getElementById('titleInput');
+    if (titleInput && titleInput.style.display !== 'none') {
+      if (document.activeElement !== titleInput) {
+        titleInput.focus();
+      }
+      return;
+    }
+    const schedOverlay = document.getElementById('schedOverlay');
+    if (schedOverlay && schedOverlay.style.display !== 'none') {
+      return;
+    }
+
     if (document.activeElement !== textarea) {
       textarea.focus();
       if (setCursorAtEnd) {

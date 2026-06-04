@@ -1,15 +1,65 @@
 // Sticky note windows — frameless, always-on-top, colored floating notes.
 // Loads static sticky.html from app dir. Persists to ~/.hyperia/stickys/notes.json.
 
-import {readFileSync, writeFileSync, mkdirSync, watchFile, unwatchFile} from 'fs';
+import {exec} from 'child_process';
+import {readFileSync, writeFileSync, mkdirSync, watchFile, unwatchFile, existsSync} from 'fs';
 import {homedir} from 'os';
-import {join, resolve, basename} from 'path';
+import {join, resolve, basename, dirname} from 'path';
 
 import {BrowserWindow, ipcMain, Menu, screen, app, nativeImage, shell, dialog, Notification} from 'electron';
 
-import {exec} from 'child_process';
-
 import isDev from 'electron-is-dev';
+
+function translateContainerPath(filePath: string): string {
+  if (process.platform !== 'win32') {
+    return filePath;
+  }
+  if (!filePath) {
+    return filePath;
+  }
+
+  let normalized = filePath.replace(/\\/g, '/');
+  if (normalized.startsWith('file:///')) {
+    normalized = normalized.slice(8);
+  } else if (normalized.startsWith('file://')) {
+    normalized = normalized.slice(7);
+  }
+
+  if (normalized.startsWith('workspace/')) {
+    normalized = '/' + normalized;
+  }
+
+  if (normalized.startsWith('/workspace/')) {
+    const parts = normalized.slice(11).split('/');
+    const workspaceName = parts[0];
+    const relativePath = parts.slice(1).join('\\');
+
+    const currentDir = app ? app.getAppPath() : __dirname;
+    let projectRoot = currentDir;
+
+    for (let i = 0; i < 5; i++) {
+      if (basename(projectRoot).toLowerCase() === workspaceName.toLowerCase()) {
+        return join(projectRoot, relativePath);
+      }
+      const parent = dirname(projectRoot);
+      if (parent === projectRoot) break;
+      projectRoot = parent;
+    }
+
+    // Fallback using package.json detection
+    projectRoot = currentDir;
+    for (let i = 0; i < 5; i++) {
+      if (existsSync(join(projectRoot, 'package.json'))) {
+        return join(projectRoot, relativePath);
+      }
+      const parent = dirname(projectRoot);
+      if (parent === projectRoot) break;
+      projectRoot = parent;
+    }
+  }
+
+  return filePath;
+}
 
 const NOTE_ADJECTIVES = [
   'Bold',
@@ -172,7 +222,10 @@ const NOTE_EMOJIS = [
 // count as the SAME base name for uniqueness — the emoji is decorative, not
 // part of the note's identity.
 function noteNameBase(name: string): string {
-  return (name || '').replace(/^[^\sA-Za-z0-9]+\s*/, '').trim().toLowerCase();
+  return (name || '')
+    .replace(/^[^\sA-Za-z0-9]+\s*/, '')
+    .trim()
+    .toLowerCase();
 }
 
 // 56 adjectives × 62 animals = 3,472 base names. With dozens of notes the
@@ -482,7 +535,27 @@ function bindStickyFile(noteId: string, sender: Electron.WebContents): void {
     title: 'Link sticky to file',
     properties: ['openFile'],
     filters: [
-      {name: 'Text & code', extensions: ['txt', 'md', 'markdown', 'rs', 'ts', 'tsx', 'js', 'jsx', 'json', 'py', 'sh', 'toml', 'yaml', 'yml', 'html', 'css']},
+      {
+        name: 'Text & code',
+        extensions: [
+          'txt',
+          'md',
+          'markdown',
+          'rs',
+          'ts',
+          'tsx',
+          'js',
+          'jsx',
+          'json',
+          'py',
+          'sh',
+          'toml',
+          'yaml',
+          'yml',
+          'html',
+          'css'
+        ]
+      },
       {name: 'All files', extensions: ['*']}
     ]
   };
@@ -504,7 +577,6 @@ function bindStickyFile(noteId: string, sender: Electron.WebContents): void {
         upsertNote({id: noteId, source: {kind: 'file', path: filePath}, text: content, name});
         if (!sender.isDestroyed()) sender.send('sticky-bind-file', {path: filePath, content, name});
         startFileWatch(noteId, filePath); // live-refresh on external edits
-
       } catch (e) {
         console.error('sticky: link handler error:', e);
       }
@@ -520,7 +592,7 @@ function unbindStickyFile(noteId: string, sender: Electron.WebContents): void {
 
 function bindOpenFile(noteId: string): void {
   const note = getNote(noteId);
-  if (note?.source?.path) void shell.openPath(note.source.path);
+  if (note?.source?.path) void shell.openPath(translateContainerPath(note.source.path));
 }
 
 // Watch a linked file so external edits (another editor, an agent via
@@ -532,14 +604,15 @@ function bindOpenFile(noteId: string): void {
 // OWN writes don't echo back into a loop.
 const fileWatchPaths = new Map<string, string>();
 function startFileWatch(noteId: string, filePath: string): void {
+  const translated = translateContainerPath(filePath);
   stopFileWatch(noteId);
-  fileWatchPaths.set(noteId, filePath);
-  watchFile(filePath, {interval: 600}, (curr, prev) => {
+  fileWatchPaths.set(noteId, translated);
+  watchFile(translated, {interval: 600}, (curr, prev) => {
     if (curr.mtimeMs === prev.mtimeMs) return; // no real change
     const win = stickyWindows.get(noteId);
     if (!win || win.isDestroyed()) return;
     try {
-      const content = readFileSync(filePath, 'utf8');
+      const content = readFileSync(translated, 'utf8');
       win.webContents.send('sticky-file-changed', {content});
     } catch {
       /* file removed mid-edit; ignore this tick */
@@ -567,6 +640,10 @@ function createStickyNote(
     color?: string;
   } = {}
 ) {
+  if (options.filePath) {
+    options.filePath = translateContainerPath(options.filePath);
+  }
+
   const cursor = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursor);
 
@@ -576,6 +653,9 @@ function createStickyNote(
   // Already open? Bring it to front and focus.
   const existing = stickyWindows.get(noteId);
   if (existing && !existing.isDestroyed()) {
+    if (!existing.isVisible()) {
+      existing.show();
+    }
     existing.setAlwaysOnTop(true, 'floating');
     existing.focus();
     return existing;
@@ -583,6 +663,9 @@ function createStickyNote(
 
   // Generate a random name (or use existing)
   const savedNote = options.id ? getNote(options.id) : undefined;
+  if (savedNote?.source?.path) {
+    savedNote.source.path = translateContainerPath(savedNote.source.path);
+  }
 
   // Resolve default size (explicit > persisted manual size > default).
   const defaultSize = getStickyDefaultSize();
@@ -590,8 +673,7 @@ function createStickyNote(
   let height = options.height || savedNote?.height || defaultSize.height;
 
   // Candidate position: explicit > persisted > centered on the cursor.
-  const hasPlacedPos =
-    options.x != null || options.y != null || savedNote?.x != null || savedNote?.y != null;
+  const hasPlacedPos = options.x != null || options.y != null || savedNote?.x != null || savedNote?.y != null;
   let x = options.x ?? savedNote?.x ?? Math.round(cursor.x - width / 2);
   let y = options.y ?? savedNote?.y ?? Math.round(cursor.y - height / 2);
 
@@ -839,175 +921,176 @@ export function initSticky() {
   ipcMain.on(
     'sticky-context-menu',
     (event, noteId: string, hasSelection: boolean, _currentColor: string, isFileBound?: boolean) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (!win) return;
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win) return;
 
-    const colors = [
-      {name: 'Yellow', hex: '#fff9c4'},
-      {name: 'Pink', hex: '#ffb6c1'},
-      {name: 'Green', hex: '#c8e6c9'},
-      {name: 'Blue', hex: '#bbdefb'},
-      {name: 'Peach', hex: '#ffe0b2'},
-      {name: 'Lavender', hex: '#e1bee7'},
-      {name: 'Khaki', hex: '#f0e68c'},
-      {name: 'Plum', hex: '#dda0dd'},
-      {name: 'Tomato', hex: '#ff6347'},
-      {name: 'Gold', hex: '#ffd700'},
-      {name: 'Mint', hex: '#90ee90'},
-      {name: 'Salmon', hex: '#ffa07a'}
-    ];
+      const colors = [
+        {name: 'Yellow', hex: '#fff9c4'},
+        {name: 'Pink', hex: '#ffb6c1'},
+        {name: 'Green', hex: '#c8e6c9'},
+        {name: 'Blue', hex: '#bbdefb'},
+        {name: 'Peach', hex: '#ffe0b2'},
+        {name: 'Lavender', hex: '#e1bee7'},
+        {name: 'Khaki', hex: '#f0e68c'},
+        {name: 'Plum', hex: '#dda0dd'},
+        {name: 'Tomato', hex: '#ff6347'},
+        {name: 'Gold', hex: '#ffd700'},
+        {name: 'Mint', hex: '#90ee90'},
+        {name: 'Salmon', hex: '#ffa07a'}
+      ];
 
-    const codeThemes: Electron.MenuItemConstructorOptions[] = [
-      {type: 'separator'},
-      {
-        label: 'Code Highlighting — Light',
-        icon: makeColorSwatch('#f8f8f2'),
-        click: () => event.sender.send('sticky-set-color', 'code:light')
-      },
-      {
-        label: 'Code Highlighting — Dark',
-        icon: makeColorSwatch('#1e1e2e'),
-        click: () => event.sender.send('sticky-set-color', 'code:dark')
-      }
-    ];
+      const codeThemes: Electron.MenuItemConstructorOptions[] = [
+        {type: 'separator'},
+        {
+          label: 'Code Highlighting — Light',
+          icon: makeColorSwatch('#f8f8f2'),
+          click: () => event.sender.send('sticky-set-color', 'code:light')
+        },
+        {
+          label: 'Code Highlighting — Dark',
+          icon: makeColorSwatch('#1e1e2e'),
+          click: () => event.sender.send('sticky-set-color', 'code:dark')
+        }
+      ];
 
-    const template: Electron.MenuItemConstructorOptions[] = [
-      {
-        label: 'Color',
-        submenu: [
-          ...colors.map((c) => ({
-            label: c.name,
-            icon: makeColorSwatch(c.hex),
-            click: () => {
-              event.sender.send('sticky-set-color', c.hex);
+      const template: Electron.MenuItemConstructorOptions[] = [
+        {
+          label: 'Color',
+          submenu: [
+            ...colors.map((c) => ({
+              label: c.name,
+              icon: makeColorSwatch(c.hex),
+              click: () => {
+                event.sender.send('sticky-set-color', c.hex);
+              }
+            })),
+            ...codeThemes
+          ]
+        },
+        // Highlight is offered on every note now — code/file notes highlight the
+        // read-only <pre>, text notes use the live hljs backdrop behind the
+        // textarea. (`currentColor` no longer gates it.)
+        {
+          label: 'Syntax Highlight',
+          submenu: [
+            {
+              label: 'Auto (highlight.js)',
+              click: () => event.sender.send('sticky-set-highlight', 'static')
+            },
+            {
+              label: 'AI Highlight',
+              click: () => event.sender.send('sticky-set-highlight', 'agent')
+            },
+            {
+              label: 'Off',
+              click: () => event.sender.send('sticky-set-highlight', 'off')
             }
-          })),
-          ...codeThemes
-        ]
-      },
-      // Highlight is offered on every note now — code/file notes highlight the
-      // read-only <pre>, text notes use the live hljs backdrop behind the
-      // textarea. (`currentColor` no longer gates it.)
-      {
-        label: 'Syntax Highlight',
-        submenu: [
-          {
-            label: 'Auto (highlight.js)',
-            click: () => event.sender.send('sticky-set-highlight', 'static')
-          },
-          {
-            label: 'AI Highlight',
-            click: () => event.sender.send('sticky-set-highlight', 'agent')
-          },
-          {
-            label: 'Off',
-            click: () => event.sender.send('sticky-set-highlight', 'off')
+          ]
+        },
+        {type: 'separator'},
+        {
+          label: 'See Through',
+          type: 'checkbox',
+          checked: stickySeeThrough,
+          accelerator: 'CommandOrControl+Shift+T',
+          // Label only — the real key handling lives in the sticky renderer, so
+          // don't also register it here (would double-toggle).
+          registerAccelerator: false,
+          // Global toggle — flips transparency for EVERY sticky, not just this one.
+          click: () => toggleStickySeeThrough()
+        },
+        {type: 'separator'},
+        // File binding: a normal sticky can become a live view of a file on disk.
+        // Edits write back (debounced). Distinct from the read-only drag-in viewer.
+        ...(isFileBound
+          ? ([
+              {label: 'Open File in OS Editor', click: () => bindOpenFile(noteId)},
+              {label: 'Unlink File', click: () => unbindStickyFile(noteId, event.sender)}
+            ] as Electron.MenuItemConstructorOptions[])
+          : ([
+              {label: 'Link to File…', click: () => bindStickyFile(noteId, event.sender)}
+            ] as Electron.MenuItemConstructorOptions[])),
+        {type: 'separator'},
+        {
+          label: 'Cut',
+          enabled: hasSelection,
+          role: 'cut'
+        },
+        {
+          label: 'Copy',
+          enabled: hasSelection,
+          role: 'copy'
+        },
+        {
+          label: 'Paste',
+          role: 'paste'
+        },
+        {
+          label: 'Copy All',
+          click: () => event.sender.send('sticky-copy-all')
+        },
+        {type: 'separator'},
+        {label: 'New Sticky', click: () => createStickyNote({})},
+        {
+          label: 'Clone This Sticky',
+          click: () => {
+            const n = getNote(noteId);
+            createStickyNote({
+              text: n?.text,
+              color: n?.color,
+              width: n?.width,
+              height: n?.height,
+              name: n?.name ? `${n.name} (copy)` : undefined
+            });
           }
-        ]
-      },
-      {type: 'separator'},
-      {
-        label: 'See Through',
-        type: 'checkbox',
-        checked: stickySeeThrough,
-        accelerator: 'CommandOrControl+Shift+T',
-        // Label only — the real key handling lives in the sticky renderer, so
-        // don't also register it here (would double-toggle).
-        registerAccelerator: false,
-        // Global toggle — flips transparency for EVERY sticky, not just this one.
-        click: () => toggleStickySeeThrough()
-      },
-      {type: 'separator'},
-      // File binding: a normal sticky can become a live view of a file on disk.
-      // Edits write back (debounced). Distinct from the read-only drag-in viewer.
-      ...(isFileBound
-        ? ([
-            {label: 'Open File in OS Editor', click: () => bindOpenFile(noteId)},
-            {label: 'Unlink File', click: () => unbindStickyFile(noteId, event.sender)}
-          ] as Electron.MenuItemConstructorOptions[])
-        : ([{label: 'Link to File…', click: () => bindStickyFile(noteId, event.sender)}] as Electron.MenuItemConstructorOptions[])),
-      {type: 'separator'},
-      {
-        label: 'Cut',
-        enabled: hasSelection,
-        role: 'cut'
-      },
-      {
-        label: 'Copy',
-        enabled: hasSelection,
-        role: 'copy'
-      },
-      {
-        label: 'Paste',
-        role: 'paste'
-      },
-      {
-        label: 'Copy All',
-        click: () => event.sender.send('sticky-copy-all')
-      },
-      {type: 'separator'},
-      {label: 'New Sticky', click: () => createStickyNote({})},
-      {
-        label: 'Clone This Sticky',
-        click: () => {
-          const n = getNote(noteId);
-          createStickyNote({
-            text: n?.text,
-            color: n?.color,
-            width: n?.width,
-            height: n?.height,
-            name: n?.name ? `${n.name} (copy)` : undefined
-          });
+        },
+        {
+          label: 'Search Stickys...',
+          click: () => {
+            createStickyNote({
+              id: 'sticky-search-window',
+              name: '🔍 Search Stickys',
+              color: '#ffffff',
+              width: 400,
+              height: 500
+            });
+          }
+        },
+        {
+          // A linked sticky's name IS its file's basename — renaming the sticky
+          // would just diverge from the file, so it's disabled while linked.
+          label: isFileBound ? 'Rename… (linked to file)' : 'Rename...',
+          enabled: !isFileBound,
+          click: () => event.sender.send('sticky-rename')
+        },
+        {type: 'separator'},
+        {
+          label: 'Hide This',
+          click: () => {
+            if (!win.isDestroyed()) win.hide();
+          }
+        },
+        // Only offer "Hide Others" if there's another visible sticky to hide.
+        ...(otherStickysVisible(noteId) ? [{label: 'Hide Other Stickys', click: () => hideAllStickys(noteId)}] : []),
+        // "Active" = currently-open notes (not closed/archived). Only show "Hide"
+        // when something is visible, "Show" when something is hidden.
+        ...(anyStickyVisible() ? [{label: 'Hide Active Stickys', click: () => hideAllStickys()}] : []),
+        ...(anyStickyHidden() ? [{label: 'Show Active Stickys', click: () => showAllStickys()}] : []),
+        {type: 'separator'},
+        {
+          label: 'Delete',
+          click: () => event.sender.send('sticky-delete')
         }
-      },
-      {
-        label: 'Search Stickys...',
-        click: () => {
-          createStickyNote({
-            id: 'sticky-search-window',
-            name: '🔍 Search Stickys',
-            color: '#ffffff',
-            width: 400,
-            height: 500
-          });
-        }
-      },
-      {
-        // A linked sticky's name IS its file's basename — renaming the sticky
-        // would just diverge from the file, so it's disabled while linked.
-        label: isFileBound ? 'Rename… (linked to file)' : 'Rename...',
-        enabled: !isFileBound,
-        click: () => event.sender.send('sticky-rename')
-      },
-      {type: 'separator'},
-      {
-        label: 'Hide This',
-        click: () => {
-          if (!win.isDestroyed()) win.hide();
-        }
-      },
-      // Only offer "Hide Others" if there's another visible sticky to hide.
-      ...(otherStickysVisible(noteId)
-        ? [{label: 'Hide Other Stickys', click: () => hideAllStickys(noteId)}]
-        : []),
-      // "Active" = currently-open notes (not closed/archived). Only show "Hide"
-      // when something is visible, "Show" when something is hidden.
-      ...(anyStickyVisible() ? [{label: 'Hide Active Stickys', click: () => hideAllStickys()}] : []),
-      ...(anyStickyHidden() ? [{label: 'Show Active Stickys', click: () => showAllStickys()}] : []),
-      {type: 'separator'},
-      {
-        label: 'Delete',
-        click: () => event.sender.send('sticky-delete')
-      }
-    ];
+      ];
 
-    const menu = Menu.buildFromTemplate(template);
-    menu.popup({window: win});
-  });
+      const menu = Menu.buildFromTemplate(template);
+      menu.popup({window: win});
+    }
+  );
 
   // Open source file in default OS editor
   ipcMain.on('sticky-open-file', (_event, filePath: string) => {
-    void shell.openPath(filePath);
+    void shell.openPath(translateContainerPath(filePath));
   });
 
   // Open URL in default OS browser
@@ -1295,11 +1378,8 @@ function otherStickysVisible(exceptId: string): boolean {
 // in main because only here is the open-window set known.
 function buildStickysSummary(): string {
   const all = readAllNotes().filter((n) => n.text && n.text.trim().length > 0);
-  const openIds = new Set(
-    [...stickyWindows.keys()].filter((id) => id !== SEARCH_WIN_ID)
-  );
-  const recency = (n: NoteData) =>
-    Date.parse(n.last_closed_at || '') || Date.parse(n.saved_at || '') || 0;
+  const openIds = new Set([...stickyWindows.keys()].filter((id) => id !== SEARCH_WIN_ID));
+  const recency = (n: NoteData) => Date.parse(n.last_closed_at || '') || Date.parse(n.saved_at || '') || 0;
   const active = all.filter((n) => openIds.has(n.id)).sort((a, b) => recency(b) - recency(a));
   const saved = all.filter((n) => !openIds.has(n.id)).sort((a, b) => recency(b) - recency(a));
 

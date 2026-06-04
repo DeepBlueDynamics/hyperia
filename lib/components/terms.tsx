@@ -175,6 +175,7 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
             imageSupport: this.props.imageSupport,
             defaultProfile: (this.props as any).defaultProfile,
             profiles: (this.props as any).profiles,
+            env: (this.props as any).env,
             setWebPaneUrl: (this.props as any).setWebPaneUrl,
             onClosePane: (this.props as any).onClosePane,
             parentProps: this.props

@@ -55,7 +55,7 @@ export type MainEvents = {
   'open hamburger menu': {x: number; y: number};
   'quit and install': never;
   resize: {uid: string; cols: number; rows: number};
-  'session set xterm title': {uid: string; title: string};
+  'session set xterm title': {uid: string; title: string; manual?: boolean};
   'session set active': {uid: string};
   'session set description': {uid: string; description: string};
   'session set tab name': {uid: string; tabName: string};
@@ -81,6 +81,7 @@ export type MainEvents = {
   'web-pane-mouse-result': {uid: string; result: any};
   'split request vertical': {activeUid?: string | null; profile?: string | null; url?: string};
   'split request horizontal': {activeUid?: string | null; profile?: string | null; url?: string};
+  'split web pane req': {activeUid?: string | null; url?: string};
   'clone request vertical': any;
   'clone request horizontal': any;
   'layout-state-reply': any;
@@ -130,6 +131,7 @@ export type RendererEvents = {
   reload: never;
   'session clear req': never;
   'split request horizontal': {activeUid?: string | null; profile?: string | null; url?: string};
+  'split web pane req': {activeUid?: string | null; url?: string};
   'split request vertical': {activeUid?: string | null; profile?: string | null; url?: string};
   'clone request vertical': any;
   'clone request horizontal': any;
@@ -190,6 +192,7 @@ export type IpcCommands = {
   getDeprecatedConfig: () => Record<string, {css: string[]}>;
   getDecoratedConfig: (profile: string) => configOptions;
   getDecoratedKeymaps: () => Record<string, string[]>;
+  'pick-shell-executable': () => string | null;
 };
 
 export interface IpcMainWithCommands extends IpcMain {

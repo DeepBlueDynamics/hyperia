@@ -37,16 +37,19 @@ const config: webpack.Configuration[] = [
             to: '[name][ext]'
           },
           {
-            from: './app/splash-preload.js',
-            to: 'splash-preload.js'
-          },
-          {
             from: './app/*.json',
             globOptions: {ignore: ['**/node_modules/**']},
             to: '[name][ext]'
           },
           {
             from: './app/*.min.css',
+            globOptions: {ignore: ['**/node_modules/**']},
+            to: '[name][ext]'
+          },
+          {
+            // Vendored libraries (e.g. highlight.min.js) — loaded locally by
+            // sticky windows so syntax highlighting never depends on the CDN.
+            from: './app/*.min.js',
             globOptions: {ignore: ['**/node_modules/**']},
             to: '[name][ext]'
           },

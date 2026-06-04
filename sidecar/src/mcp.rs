@@ -101,6 +101,8 @@ pub struct ShellSearchRequest {
     pub pane_id: Option<String>,
     /// Max hits to return (default 20).
     pub limit: Option<usize>,
+    /// Number of lines of surrounding context to return around each matching line (optional, defaults to 0).
+    pub context_lines: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -406,6 +408,24 @@ pub struct SettingsSetRequest {
     /// New value to set at that path. Can be a string, number, boolean,
     /// object, or array. Pass null to remove the key.
     pub value: serde_json::Value,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SettingsAddProfileRequest {
+    /// Name of the new profile (e.g. "nemesis8"). Must be unique.
+    pub name: String,
+    /// Executable path (e.g. "/bin/bash" or "C:\\Windows\\System32\\cmd.exe").
+    pub shell: String,
+    /// Optional arguments for the shell (e.g. ["--login", "-i"]).
+    pub shell_args: Option<Vec<String>>,
+    /// Optional environment variables (e.g. {"FOO": "BAR"}).
+    pub env: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SettingsDeleteProfileRequest {
+    /// Name of the profile to delete.
+    pub name: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -1259,6 +1279,76 @@ impl HyperiaMcp {
         )]))
     }
 
+    #[tool(description = "Add a custom terminal profile to the Hyperia configuration.")]
+    async fn settings_add_profile(
+        &self,
+        Parameters(req): Parameters<SettingsAddProfileRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut cfg = self.read_config().await?;
+        
+        let config_obj = cfg["config"].as_object_mut().ok_or_else(|| ErrorData {
+            code: -32603,
+            message: "config key missing or not an object".into(),
+            data: None,
+        })?;
+        
+        if !config_obj.contains_key("profiles") {
+            config_obj.insert("profiles".to_string(), serde_json::json!([]));
+        }
+        
+        let profiles = config_obj["profiles"].as_array_mut().ok_or_else(|| ErrorData {
+            code: -32603,
+            message: "config.profiles is not an array".into(),
+            data: None,
+        })?;
+        
+        // Remove duplicate if it exists
+        profiles.retain(|p| p["name"].as_str() != Some(&req.name));
+        
+        let new_profile = serde_json::json!({
+            "name": req.name,
+            "config": {
+                "shell": req.shell,
+                "shellArgs": req.shell_args.unwrap_or_default(),
+                "env": req.env.unwrap_or_default(),
+            }
+        });
+        profiles.push(new_profile);
+        
+        self.write_config(&cfg).await?;
+        Ok(CallToolResult::success(vec![Content::text(
+            format!("Profile '{}' added successfully.", req.name),
+        )]))
+    }
+
+    #[tool(description = "Delete a terminal profile by name from the Hyperia configuration.")]
+    async fn settings_delete_profile(
+        &self,
+        Parameters(req): Parameters<SettingsDeleteProfileRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut cfg = self.read_config().await?;
+        
+        let profiles = cfg["config"]["profiles"].as_array_mut().ok_or_else(|| ErrorData {
+            code: -32603,
+            message: "config.profiles not found or not an array".into(),
+            data: None,
+        })?;
+        
+        let original_len = profiles.len();
+        profiles.retain(|p| p["name"].as_str() != Some(&req.name));
+        
+        if profiles.len() == original_len {
+            return Ok(CallToolResult::success(vec![Content::text(
+                format!("Profile '{}' not found.", req.name),
+            )]));
+        }
+        
+        self.write_config(&cfg).await?;
+        Ok(CallToolResult::success(vec![Content::text(
+            format!("Profile '{}' deleted successfully.", req.name),
+        )]))
+    }
+
     #[tool(description = "Toggle telemetry collection on or off.")]
     async fn telemetry_toggle(
         &self,
@@ -1480,7 +1570,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "BM25 full-text search across shell logs — the searchable history of everything that scrolled through your terminal panes (commands + output), kept per shell beyond the visible screen. Omit pane_id to search every shell; pass a paneId (from terminal_status) to search just one. Returns JSON {hits:[{session_uid, line_number, text, score}]}. Use this to find 'where did I see that error', 'what was that command', etc. instead of scrolling.")]
+    #[tool(description = "BM25 full-text search across shell logs — the searchable history of everything that scrolled through your terminal panes (commands + output), kept per shell beyond the visible screen. Omit pane_id to search every shell; pass a paneId (from terminal_status) to search just one. Returns JSON {hits:[{session_uid, line_number, text, score, context_before:[], context_after:[]}]}. Use this to find 'where did I see that error', 'what was that command', etc. instead of scrolling.")]
     async fn shell_log_search(
         &self,
         Parameters(req): Parameters<ShellSearchRequest>,
@@ -1491,6 +1581,9 @@ impl HyperiaMcp {
         }
         if let Some(l) = req.limit {
             path.push_str(&format!("&limit={}", l));
+        }
+        if let Some(cl) = req.context_lines {
+            path.push_str(&format!("&context_lines={}", cl));
         }
         let resp = self.get(&path).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))

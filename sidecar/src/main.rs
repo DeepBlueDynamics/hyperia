@@ -106,6 +106,7 @@ struct SearchQuery {
     /// For shell search: restrict to one session uid. Omit to search all shells.
     uid: Option<String>,
     limit: Option<usize>,
+    context_lines: Option<usize>,
 }
 
 /// BM25 search across per-shell logs (lume). `uid` restricts to one shell.
@@ -114,7 +115,8 @@ async fn get_search_shell(
     Query(q): Query<SearchQuery>,
 ) -> Json<serde_json::Value> {
     let limit = q.limit.unwrap_or(20).clamp(1, 200);
-    let hits = state.bridge.lume().search_shell(q.uid.as_deref(), &q.q, limit).await;
+    let context_lines = q.context_lines.unwrap_or(0);
+    let hits = state.bridge.lume().search_shell(q.uid.as_deref(), &q.q, limit, context_lines).await;
     Json(serde_json::json!({ "query": q.q, "hits": hits }))
 }
 
@@ -293,7 +295,7 @@ async fn post_auto_describe(
         &screen[..screen.len().min(2000)]
     );
     let body = serde_json::json!({
-        "model": "llama3.2",
+        "model": "gemma4:12b",
         "prompt": prompt,
         "stream": false,
     });

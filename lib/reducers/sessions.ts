@@ -105,7 +105,8 @@ function Session(obj: Immutable.DeepPartial<session>) {
     shell: '',
     pid: null,
     profile: '',
-    shellName: ''
+    shellName: '',
+    manualTitle: false
   };
   return Immutable(x).merge(obj);
 }
@@ -178,7 +179,8 @@ const reducer: ISessionReducer = (state = initialState, action) => {
             profile: s.profile || '',
             cwd: s.cwd || '',
             shellName: s.shellName || nextShellName(),
-            lastCommand: s.lastCommand || ''
+            lastCommand: s.lastCommand || '',
+            manualTitle: s.manualTitle || false
           });
         });
       }
@@ -235,7 +237,12 @@ const reducer: ISessionReducer = (state = initialState, action) => {
     case SESSION_SET_XTERM_TITLE: {
       const newTitle = action.title.trim();
       if (action.manual) {
-        return state.setIn(['sessions', action.uid, 'title'], newTitle);
+        return state
+          .setIn(['sessions', action.uid, 'title'], newTitle)
+          .setIn(['sessions', action.uid, 'manualTitle'], true);
+      }
+      if (state.sessions[action.uid]?.manualTitle) {
+        return state;
       }
       // Ignore shell path titles — keep the cute name
       if (!newTitle || /[/\\]/.test(newTitle) || /^(cmd|powershell|bash|sh|zsh|Command Prompt)/i.test(newTitle)) {

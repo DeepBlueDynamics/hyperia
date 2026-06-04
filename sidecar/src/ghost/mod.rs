@@ -51,7 +51,7 @@ fn default_endpoint(provider: &str) -> String {
 /// token for the local default; if a user runs Ollama Cloud they can set
 /// one and it'll be passed through.
 ///
-/// Falls back to local Ollama with `llama3.2` if nothing else is usable.
+/// Falls back to local Ollama with `gemma4:12b` if nothing else is usable.
 pub fn load_config() -> Option<GhostConfig> {
     let cfg_path = config_path()?;
     let content = std::fs::read_to_string(&cfg_path).ok()?;
@@ -151,15 +151,15 @@ fn default_model(provider: &str) -> &'static str {
         "anthropic" => "claude-sonnet-4-6",
         "openai" => "gpt-4o",
         "gemini" => "gemini-2.0-flash",
-        "ollama" => "llama3.2",
-        _ => "llama3.2",
+        "ollama" => "gemma4:12b",
+        _ => "gemma4:12b",
     }
 }
 
 fn default_local_ollama() -> GhostConfig {
     GhostConfig {
         provider: "ollama".into(),
-        model: "llama3.2".into(),
+        model: "gemma4:12b".into(),
         api_key: String::new(),
         endpoint: default_endpoint("ollama"),
         max_turns: 25,

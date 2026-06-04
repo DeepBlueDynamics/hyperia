@@ -34,6 +34,8 @@ pub struct ShellLogHit {
     pub line_number: usize,
     pub text: String,
     pub score: f64,
+    pub context_before: Vec<String>,
+    pub context_after: Vec<String>,
 }
 
 /// A single sticky-note search hit.
@@ -136,7 +138,7 @@ impl LumeStore {
 
     /// Search one shell (Some uid) or every shell (None). Returns hits sorted
     /// by descending BM25 score, capped at `limit`.
-    pub async fn search_shell(&self, uid: Option<&str>, query: &str, limit: usize) -> Vec<ShellLogHit> {
+    pub async fn search_shell(&self, uid: Option<&str>, query: &str, limit: usize, context_lines: usize) -> Vec<ShellLogHit> {
         let guard = self.inner.shell_logs.lock().await;
         let mut hits: Vec<ShellLogHit> = Vec::new();
         for (sess_uid, lines) in guard.iter() {
@@ -162,11 +164,30 @@ impl LumeStore {
             let results = index.search(query, SearchVariant::Plus, &Bm25Params::default(), None);
             for hit in results {
                 if let Some(line) = lines.get(hit.section_index) {
+                    let mut context_before = Vec::new();
+                    let mut context_after = Vec::new();
+                    if context_lines > 0 {
+                        let start = hit.section_index.saturating_sub(context_lines);
+                        for idx in start..hit.section_index {
+                            if let Some(l) = lines.get(idx) {
+                                context_before.push(l.clone());
+                            }
+                        }
+                        let end = (hit.section_index + 1 + context_lines).min(lines.len());
+                        for idx in (hit.section_index + 1)..end {
+                            if let Some(l) = lines.get(idx) {
+                                context_after.push(l.clone());
+                            }
+                        }
+                    }
+
                     hits.push(ShellLogHit {
                         session_uid: sess_uid.clone(),
                         line_number: hit.section_index,
                         text: line.clone(),
                         score: hit.score,
+                        context_before,
+                        context_after,
                     });
                 }
             }

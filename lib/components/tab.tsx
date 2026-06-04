@@ -3,7 +3,34 @@ import React, {forwardRef, useState, useRef, useEffect} from 'react';
 import type {TabProps} from '../../typings/hyper';
 import rpc from '../rpc';
 
+const PICKER_EMOJIS = ['🌐', '📌', '⭐', '🔥', '🚀', '🧠', '💻', '🎮', '🍎', '🐱', '🦄', '🦖', '🐼', '👻', '👺', '🧟', '👾', '🌪️', '⚡', '🥑', '🍩', '🌵', '🎈'];
+
+const EMOJI_REGEX = /^([\p{Extended_Pictographic}\u200d\uFE0F]+)\s*(.*)$/u;
+
+const parseTabName = (name: string, isWeb?: boolean, hasCustomName?: boolean) => {
+  if (!name) return { emoji: isWeb && !hasCustomName ? '🌐' : '', text: '' };
+  const match = EMOJI_REGEX.exec(name);
+  if (match) {
+    return { emoji: match[1], text: match[2] };
+  }
+  return { emoji: isWeb && !hasCustomName ? '🌐' : '', text: name };
+};
+
 const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
+  const {
+    isActive,
+    isFirst,
+    isLast,
+    borderColor,
+    hasActivity,
+    hasBell,
+    agentStatus,
+    tabName,
+    description,
+    isWebPane,
+    webUrl,
+    defaultProfile
+  } = props;
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [pendingName, setPendingName] = useState<string | null>(null);
@@ -34,13 +61,26 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     }
   };
 
-  const handleDoubleClick = (event: React.MouseEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setRenameValue(pendingName ?? (description || tabName || props.text));
+  const startRename = () => {
+    const currentName = pendingName ?? (tabName || description || props.text) ?? '';
+    const parsed = parseTabName(currentName, isWebPane);
+    
+    let finalEmoji = parsed.emoji;
+    if (parsed.emoji === '🌐' || !parsed.emoji) {
+      const randomIndex = Math.floor(Math.random() * PICKER_EMOJIS.length);
+      finalEmoji = PICKER_EMOJIS[randomIndex];
+    }
+    
+    setRenameValue(`${finalEmoji} ${parsed.text}`.trim());
     setPendingName(null);
     renamingRef.current = true;
     setRenaming(true);
+  };
+
+  const handleDoubleClick = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    startRename();
   };
 
   const handleRenameSubmit = () => {
@@ -69,26 +109,51 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     /* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
     const remote = require('@electron/remote');
     const {Menu, MenuItem} = remote;
-    const {clipboard, ipcMain} = require('electron');
+    const {clipboard} = require('electron');
     const menu = new Menu();
 
+    menu.append(
+      new MenuItem({
+        label: 'Rename',
+        click: () => {
+          startRename();
+        }
+      })
+    );
+
+    if (props.groupTabName || pendingName) {
+      menu.append(
+        new MenuItem({
+          label: 'Use Automatic Name',
+          click: () => {
+            setPendingName('');
+            if (props.onDescribe) {
+              props.onDescribe('');
+            }
+          }
+        })
+      );
+    }
+
+    menu.append(
+      new MenuItem({
+        label: 'Copy tab name + ID',
+        click: () => {
+          const name = (pendingName ?? (tabName || description || props.text) ?? 'Tab').trim();
+          const shortId = props.uid.replace(/-/g, '').slice(0, 8);
+          void clipboard.writeText(`${name} (tab ${shortId})`);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1000);
+        }
+      })
+    );
+
     if (props.isWebPane) {
+      menu.append(new MenuItem({type: 'separator'}));
       menu.append(
         new MenuItem({
           label: 'Reload',
           click: () => rpc.emit('web-pane-reload', props.uid)
-        })
-      );
-      menu.append(new MenuItem({type: 'separator'}));
-      menu.append(
-        new MenuItem({
-          label: 'Rename',
-          click: () => {
-            setRenameValue(pendingName ?? (description || tabName || props.text));
-            setPendingName(null);
-            renamingRef.current = true;
-            setRenaming(true);
-          }
         })
       );
       if (props.webUrl) {
@@ -99,63 +164,26 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           })
         );
       }
-      menu.append(new MenuItem({type: 'separator'}));
-      menu.append(new MenuItem({label: 'New Note', click: () => void ipcMain.emit('new-sticky', {})}));
-      // Always show — shell pane handles the no-token case via bootstub.
-      menu.append(new MenuItem({label: 'Ask Hyperia', click: () => void ipcMain.emit('open-ghost')}));
-      menu.append(new MenuItem({type: 'separator'}));
-      menu.append(new MenuItem({label: 'Close', click: () => props.onClose()}));
-    } else {
       menu.append(
         new MenuItem({
-          label: 'Rename',
+          label: 'Show Page Title',
+          type: 'checkbox',
+          checked: !props.disableTitleInheritance,
           click: () => {
-            setRenameValue(pendingName ?? (description || tabName || props.text));
-            setPendingName(null);
-            renamingRef.current = true;
-            setRenaming(true);
+            if (props.onToggleTitleInheritance) {
+              props.onToggleTitleInheritance();
+            }
           }
         })
       );
-      menu.append(
-        new MenuItem({
-          // Copy the visible tab name + a short ID suffix + kind. The agent
-          // (or human paster) gets the human label first; the parenthetical
-          // disambiguates two tabs with the same name and signals "this is
-          // a tab, not a pane". Raw UUIDs were unhelpful: nobody recognizes
-          // them and they paste as line noise.
-          label: 'Copy tab name + ID',
-          click: () => {
-            const name = (pendingName ?? (tabName || description || props.text) ?? 'Tab').trim();
-            const shortId = props.uid.replace(/-/g, '').slice(0, 8);
-            void clipboard.writeText(`${name} (tab ${shortId})`);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1000);
-          }
-        })
-      );
-      menu.append(new MenuItem({type: 'separator'}));
-      menu.append(new MenuItem({label: 'Close', click: () => props.onClose()}));
     }
+
+    menu.append(new MenuItem({type: 'separator'}));
+    menu.append(new MenuItem({label: 'Close', click: () => props.onClose()}));
 
     menu.popup();
     /* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
   };
-
-  const {
-    isActive,
-    isFirst,
-    isLast,
-    borderColor,
-    hasActivity,
-    hasBell,
-    agentStatus,
-    tabName,
-    description,
-    isWebPane,
-    webUrl,
-    defaultProfile
-  } = props;
 
   // Clear pendingName once Redux state has caught up to the committed rename.
   useEffect(() => {
@@ -165,8 +193,14 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   }, [tabName, description, pendingName]);
 
   const isFirstRun = !defaultProfile;
+  const rawText = pendingName ?? (tabName || description || props.text) ?? '';
+  const parsed = parseTabName(rawText, isWebPane);
   // Optimistically show pendingName to avoid any flicker while Redux propagates.
-  const displayText = copied ? 'Copied ✓' : isFirstRun ? 'untitled' : pendingName ?? (tabName || description || props.text);
+  const displayText = copied
+    ? 'Copied ✓'
+    : isFirstRun
+      ? 'untitled'
+      : parsed.text;
 
   // Agent dot color
   const agentDotColor = agentStatus?.working
@@ -176,6 +210,14 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
       : agentStatus?.connected
         ? '#00ff64'
         : null;
+
+  const paneColors = props.paneColors || [];
+  const indicatorColor =
+    paneColors.length === 0
+      ? 'var(--text-info)'
+      : paneColors.length === 1
+        ? paneColors[0]
+        : `linear-gradient(to right, ${paneColors.join(', ')})`;
 
   return (
     <>
@@ -193,6 +235,13 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         } ${hasActivity ? 'tab_hasActivity' : ''} ${isWebPane ? 'tab_webPane' : ''} ${isFirstRun ? 'tab_firstRun' : ''}`}
         ref={ref}
       >
+        <div
+          className="tab_activeIndicator"
+          style={{
+            background: indicatorColor,
+            opacity: isActive ? 1 : 0
+          }}
+        />
         {props.customChildrenBefore}
         <span
           className={`tab_text ${isLast ? 'tab_textLast' : ''} ${isActive ? 'tab_textActive' : ''}`}
@@ -212,17 +261,35 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           >
             {hasBell && <span className="tab_bell">🔔</span>}
             {renaming ? (
-              <input
-                ref={inputRef}
-                className="tab_renameInput"
-                value={renameValue}
-                onChange={(e) => setRenameValue(e.target.value)}
-                onKeyDown={handleRenameKey}
-                onBlur={handleRenameSubmit}
-              />
+              <div className="tab_renameContainer">
+                <input
+                  ref={inputRef}
+                  className="tab_renameInput"
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={handleRenameKey}
+                  onBlur={handleRenameSubmit}
+                />
+                <div className="tab_emojiPicker">
+                  {PICKER_EMOJIS.map((emoji) => (
+                    <span
+                      key={emoji}
+                      className="tab_pickerEmoji"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        const { text } = parseTabName(renameValue, isWebPane);
+                        setRenameValue(`${emoji} ${text}`.trim());
+                        inputRef.current?.focus();
+                      }}
+                    >
+                      {emoji}
+                    </span>
+                  ))}
+                </div>
+              </div>
             ) : (
               <span className="tab_textContent">
-                <span className="tab_webIcon">{isWebPane ? '🌐' : null}</span>
+                {parsed.emoji ? <span className="tab_webIcon">{parsed.emoji}</span> : null}
                 {isWebPane ? (
                   <span className="tab_webUrl" title={webUrl}>
                     {displayText}
@@ -257,6 +324,16 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           font-family: var(--font-sans);
           font-size: 11px;
           font-weight: 400;
+        }
+
+        .tab_activeIndicator {
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          height: 2px;
+          transition: opacity 0.15s ease;
+          pointer-events: none;
         }
 
         .tab_tab:active {
@@ -513,6 +590,52 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           vertical-align: middle;
           fill: currentColor;
           shape-rendering: crispEdges;
+        }
+
+        .tab_renameContainer {
+          position: relative;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          width: 100%;
+          z-index: 1000;
+        }
+
+        .tab_emojiPicker {
+          position: absolute;
+          top: calc(100% + 4px);
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+          background: var(--bg-secondary);
+          border: 0.5px solid var(--border-neutral);
+          border-radius: 6px;
+          padding: 6px;
+          width: 180px;
+          max-height: 100px;
+          overflow-y: auto;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+          justify-content: center;
+        }
+
+        .tab_pickerEmoji {
+          font-size: 14px;
+          cursor: pointer;
+          padding: 2px;
+          border-radius: 4px;
+          transition: background 0.15s, transform 0.1s;
+          user-select: none;
+        }
+
+        .tab_pickerEmoji:hover {
+          background: var(--border-neutral);
+          transform: scale(1.2);
+        }
+
+        .tab_pickerEmoji:active {
+          transform: scale(0.95);
         }
       `}</style>
     </>

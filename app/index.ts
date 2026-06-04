@@ -236,77 +236,6 @@ async function installDevExtensions(isDev_: boolean) {
   );
 }
 
-function _showSplash(
-  winBounds: {x: number; y: number; width: number; height: number},
-  mainWin: BrowserWindow
-): Promise<void> {
-  return new Promise((resolve_) => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const {icon: appIcon} = require('./config/paths');
-    const splash = new BrowserWindow({
-      x: winBounds.x,
-      y: winBounds.y,
-      width: winBounds.width,
-      height: winBounds.height,
-      frame: false,
-      transparent: true,
-      resizable: false,
-      skipTaskbar: true,
-      backgroundColor: '#00000000',
-      alwaysOnTop: true,
-      icon: appIcon,
-      title: 'Hyperia',
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        preload: resolve(__dirname, 'splash-preload.js')
-      }
-    });
-
-    void splash.loadFile(resolve(isDev ? __dirname : app.getAppPath(), 'splash.html'));
-
-    // Signal splash as soon as main window content loads
-    mainWin.webContents.once('did-finish-load', () => {
-      if (!splash.isDestroyed()) {
-        splash.webContents.send('app-ready');
-      }
-    });
-
-    let resolved = false;
-    const done = () => {
-      if (resolved) return;
-      resolved = true;
-      if (!splash.isDestroyed()) {
-        let opacity = 1;
-        const fadeInterval = setInterval(() => {
-          opacity -= 0.15;
-          if (opacity <= 0 || splash.isDestroyed()) {
-            clearInterval(fadeInterval);
-            if (!splash.isDestroyed()) {
-              splash.destroy();
-            }
-            // Show main window after splash is gone
-            if (!mainWin.isDestroyed() && !mainWin.isVisible()) {
-              mainWin.show();
-            }
-          } else {
-            try {
-              splash.setOpacity(opacity);
-            } catch {
-              /* already gone */
-            }
-          }
-        }, 30);
-      }
-      resolve_();
-    };
-
-    ipcMain.once('splash-done', done);
-    // Failsafe: close after 8 seconds max
-    setTimeout(done, 8000);
-  });
-}
-
 // Single instance lock — prevent duplicate tray icons and sidecar spawns
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -441,8 +370,14 @@ app.on('ready', () => {
       // Create the terminal window (starts hidden in production)
       const firstWin = createWindow();
 
-      // Show splash immediately (don't wait for window to show)
-      void _showSplash(firstWin.getBounds(), firstWin);
+      // No splash screen — show the main window as soon as its content is ready.
+      firstWin.webContents.once('did-finish-load', () => {
+        if (!firstWin.isDestroyed() && !firstWin.isVisible()) firstWin.show();
+      });
+      // Failsafe in case did-finish-load doesn't fire.
+      setTimeout(() => {
+        if (!firstWin.isDestroyed() && !firstWin.isVisible()) firstWin.show();
+      }, 2000);
 
       // expose to plugins
       app.createWindow = createWindow;

@@ -59,7 +59,8 @@ const mapStateToProps = (state: HyperState) => {
     windowsPty: state.ui.windowsPty,
     imageSupport: state.ui.imageSupport,
     defaultProfile: state.ui.defaultProfile,
-    profiles: state.ui.profiles ? (state.ui.profiles.asMutable ? state.ui.profiles.asMutable({deep: true}) : state.ui.profiles) : []
+    profiles: state.ui.profiles ? (state.ui.profiles.asMutable ? state.ui.profiles.asMutable({deep: true}) : state.ui.profiles) : [],
+    env: state.ui.env ? (state.ui.env.asMutable ? state.ui.env.asMutable({deep: true}) : state.ui.env) : {}
   };
 };
 

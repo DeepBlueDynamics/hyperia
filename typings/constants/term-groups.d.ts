@@ -63,6 +63,12 @@ export interface TermGroupSetTabNameAction {
   tabName: string;
 }
 
+export const TERM_GROUP_TOGGLE_TITLE_INHERITANCE = 'TERM_GROUP_TOGGLE_TITLE_INHERITANCE';
+export interface TermGroupToggleTitleInheritanceAction {
+  type: typeof TERM_GROUP_TOGGLE_TITLE_INHERITANCE;
+  uid: string;
+}
+
 export const RESTORE_LAYOUT_STATE = 'RESTORE_LAYOUT_STATE';
 export interface RestoreLayoutStateAction {
   type: typeof RESTORE_LAYOUT_STATE;
@@ -80,4 +86,5 @@ export type TermGroupActions =
   | TermGroupActivateWebTabAction
   | TermGroupSetWebNameAction
   | TermGroupSetTabNameAction
+  | TermGroupToggleTitleInheritanceAction
   | RestoreLayoutStateAction;

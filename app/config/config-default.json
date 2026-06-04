@@ -83,56 +83,6 @@
           "shell": "/bin/bash",
           "shellArgs": ["--login"]
         }
-      },
-      {
-        "name": "PowerShell",
-        "config": {
-          "shell": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
-          "shellArgs": []
-        }
-      },
-      {
-        "name": "CMD",
-        "config": {
-          "shell": "C:\\Windows\\System32\\cmd.exe",
-          "shellArgs": []
-        }
-      },
-      {
-        "name": "Ubuntu (WSL)",
-        "config": {
-          "shell": "C:\\Windows\\System32\\wsl.exe",
-          "shellArgs": ["-d", "Ubuntu"],
-          "pathTranslate": {
-            "kind": "wsl"
-          }
-        }
-      },
-      {
-        "name": "n8",
-        "config": {
-          "shell": "/bin/bash",
-          "shellArgs": ["--login"],
-          "pathTranslate": {
-            "kind": "docker-mount",
-            "hostPrefix": "~/.hyperia/assets",
-            "containerPrefix": "/host/paste"
-          }
-        }
-      },
-      {
-        "name": "Claude Code (macOS)",
-        "config": {
-          "shell": "/bin/zsh",
-          "shellArgs": ["-l", "-c", "claude"]
-        }
-      },
-      {
-        "name": "Claude Code (Windows)",
-        "config": {
-          "shell": "C:\\Windows\\System32\\cmd.exe",
-          "shellArgs": ["/c", "claude"]
-        }
       }
     ]
   },

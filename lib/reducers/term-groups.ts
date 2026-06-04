@@ -13,6 +13,7 @@ import {
   TERM_GROUP_ACTIVATE_WEB_TAB,
   TERM_GROUP_SET_WEB_NAME,
   TERM_GROUP_SET_TAB_NAME,
+  TERM_GROUP_TOGGLE_TITLE_INHERITANCE,
   RESTORE_LAYOUT_STATE
 } from '../../typings/constants/term-groups';
 import type {ITermGroup, ITermState, ITermGroups, ITermGroupReducer, Mutable} from '../../typings/hyper';
@@ -50,6 +51,10 @@ const findRootGroup = (termGroups: ITermGroups, uid: string): ITermGroup => {
 
 const setActiveGroup = (state: ITermState, action: {uid: string}) => {
   if (!action.uid) {
+    const currentActive = state.activeRootGroup;
+    if (currentActive && state.termGroups[currentActive]) {
+      return state;
+    }
     return state.set('activeRootGroup', null);
   }
 
@@ -159,10 +164,77 @@ const splitGroup = (state: ITermState, action: SessionAddAction) => {
   return state;
 };
 
+// Like splitGroup, but the NEW leaf is a clean WEB PANE (webUrl set, NO session,
+// NO shell) — for "open this link in a new web pane below". Avoids the terminal-
+// split path entirely (which dragged along a shell/blank phantom pane). The
+// resulting group is identical in shape to what the chooser's setWebPaneUrl makes.
+const splitWebGroup = (state: ITermState, action: any) => {
+  const {splitDirection, activeUid, url} = action;
+  let activeGroup = findBySession(state, activeUid);
+  if (!activeGroup && state.termGroups[activeUid]) {
+    activeGroup = state.termGroups[activeUid];
+  }
+  if (!activeGroup) return state;
+
+  if (splitDirection === 'HORIZONTAL') {
+    const stacks = countPathHorizontalStacks(activeGroup.uid, state.termGroups);
+    if (stacks >= 11) return state;
+  }
+
+  let parentGroup = activeGroup.parentUid ? state.termGroups[activeGroup.parentUid] : activeGroup;
+  if (parentGroup.direction && parentGroup.direction !== splitDirection) {
+    parentGroup = activeGroup;
+  }
+
+  const newSession = TermGroup({
+    uid: uuidv4(),
+    sessionUid: null,
+    parentUid: parentGroup.uid,
+    webUrl: url || ''
+  });
+  state = state.setIn(['termGroups', newSession.uid], newSession);
+
+  if (parentGroup.sessionUid || (parentGroup as any).webUrl !== undefined) {
+    const existingSession = TermGroup({
+      uid: uuidv4(),
+      sessionUid: parentGroup.sessionUid,
+      parentUid: parentGroup.uid,
+      webUrl: (parentGroup as any).webUrl
+    });
+    return state
+      .setIn(['termGroups', existingSession.uid], existingSession)
+      .setIn(['activeSessions', parentGroup.uid], null as any)
+      .setIn(
+        ['termGroups', parentGroup.uid],
+        parentGroup.merge({
+          sessionUid: '',
+          webUrl: undefined,
+          direction: splitDirection,
+          children: [existingSession.uid, newSession.uid]
+        })
+      )
+      .set('activeTermGroup', newSession.uid);
+  }
+
+  const {children} = parentGroup;
+  const index = children.indexOf(activeGroup.uid) + 1;
+  const newChildren = [...children.slice(0, index).asMutable(), newSession.uid, ...children.slice(index).asMutable()];
+  state = state.setIn(
+    ['termGroups', parentGroup.uid],
+    parentGroup.merge({direction: splitDirection, children: newChildren})
+  );
+  if (parentGroup.sizes) {
+    const newSizes = insertRebalance(parentGroup.sizes, index);
+    state = state.setIn(['termGroups', parentGroup.uid, 'sizes'], newSizes);
+  }
+  return state.set('activeTermGroup', newSession.uid);
+};
+
 // Replace the parent by the given child in the tree,
 // used when we remove another child and we're left
 // with a one-to-one mapping between parent and child.
 const replaceParent = (state: ITermState, parent: ITermGroup, child: ITermGroup) => {
+  if (!child) return state;
   if (parent.parentUid) {
     const parentParent = state.termGroups[parent.parentUid];
     // If the parent we're replacing has a parent,
@@ -176,10 +248,24 @@ const replaceParent = (state: ITermState, parent: ITermGroup, child: ITermGroup)
     // a root group, so we need to set it up as such:
     const newSessions = state.activeSessions.without(parent.uid).set(child.uid, state.activeSessions[parent.uid]);
 
-    state = state
-      .set('activeTermGroup', child.uid)
-      .set('activeRootGroup', child.uid)
-      .set('activeSessions', newSessions);
+    state = state.set('activeSessions', newSessions);
+
+    if (state.activeRootGroup === parent.uid) {
+      state = state.set('activeRootGroup', child.uid);
+    }
+    if (state.activeTermGroup === parent.uid) {
+      state = state.set('activeTermGroup', child.uid);
+    }
+
+    // Copy tab-level properties to the new root group
+    let updatedChild = state.termGroups[child.uid];
+    if (parent.tabName !== undefined) {
+      updatedChild = updatedChild.set('tabName', parent.tabName);
+    }
+    if (parent.disableTitleInheritance !== undefined) {
+      updatedChild = updatedChild.set('disableTitleInheritance', parent.disableTitleInheritance);
+    }
+    state = state.setIn(['termGroups', child.uid], updatedChild);
   }
 
   return state
@@ -198,7 +284,11 @@ const removeGroup = (state: ITermState, uid: string) => {
       // Since we only have one child left,
       // we can merge the parent and child into one group:
       const child = state.termGroups[newChildren[0]];
-      state = replaceParent(state, parent, child);
+      if (child) {
+        state = replaceParent(state, parent, child);
+      } else {
+        state = removeGroup(state, parent.uid);
+      }
     } else {
       state = state.setIn(['termGroups', group.parentUid, 'children'], newChildren);
       if (parent.sizes) {
@@ -254,14 +344,16 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       return state
         .setIn(['termGroups', uid], termGroup)
         .setIn(['activeSessions', uid], act.uid)
-        .set('activeRootGroup', uid);
+        .set('activeRootGroup', uid)
+        .set('activeTermGroup', uid);
     }
     case RESTORE_LAYOUT_STATE: {
       const {savedState} = act;
       return state
         .set('termGroups', Immutable(savedState.termGroups))
         .set('activeSessions', Immutable(savedState.activeSessions))
-        .set('activeRootGroup', savedState.activeRootGroup);
+        .set('activeRootGroup', savedState.activeRootGroup)
+        .set('activeTermGroup', savedState.activeTermGroup || null);
     }
     case SESSION_SET_ACTIVE:
       return setActiveGroup(state, act);
@@ -293,11 +385,17 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
         .setIn(['termGroups', uid], termGroup)
         .setIn(['termGroups', uid, 'webUrl'], url)
         .setIn(['activeSessions', uid], null as any)
-        .set('activeRootGroup', uid);
+        .set('activeRootGroup', uid)
+        .set('activeTermGroup', uid);
+    }
+    case 'TERM_GROUP_SPLIT_WEB' as any: {
+      return splitWebGroup(state, act);
     }
     case TERM_GROUP_ACTIVATE_WEB_TAB: {
       const {uid} = act;
-      return state.set('activeRootGroup', uid);
+      return state
+        .set('activeRootGroup', uid)
+        .set('activeTermGroup', uid);
     }
     case TERM_GROUP_SET_WEB_NAME: {
       const {uid, name} = act;
@@ -324,6 +422,13 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
         .set('activeRootGroup', rootGroup.uid)
         .set('activeTermGroup', uid)
         .setIn(['activeSessions', rootGroup.uid], null as any);
+    }
+    case TERM_GROUP_TOGGLE_TITLE_INHERITANCE: {
+      const {uid} = act;
+      const rootGroup = state.termGroups[uid] ? findRootGroup(state.termGroups, uid) : null;
+      if (!rootGroup) return state;
+      const val = !rootGroup.disableTitleInheritance;
+      return state.setIn(['termGroups', rootGroup.uid, 'disableTitleInheritance'], val);
     }
     case TERM_GROUP_REORDER: {
       const {fromUid, toIndex} = act;

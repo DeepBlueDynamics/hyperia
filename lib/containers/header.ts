@@ -11,6 +11,26 @@ import {connect} from '../utils/plugins';
 
 const isMac = /Mac/.test(navigator.userAgent);
 
+const PALETTE = [
+  'var(--text-success)', // Green
+  'var(--text-info)', // Blue
+  'var(--text-warning)', // Yellow/Orange
+  'var(--text-danger)', // Red
+  '#ec4899', // Pink
+  '#8b5cf6', // Purple
+  '#06b6d4', // Cyan
+  '#f97316', // Orange
+  '#10b981' // Emerald
+];
+
+const hashCode = (str: string): number => {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return Math.abs(hash);
+};
+
 const getSessions = ({sessions}: HyperState) => sessions.sessions;
 const getActiveRootGroup = ({termGroups}: HyperState) => termGroups.activeRootGroup;
 const getActiveSessions = ({termGroups}: HyperState) => termGroups.activeSessions;
@@ -18,51 +38,17 @@ const getActivityMarkers = ({ui}: HyperState) => ui.activityMarkers;
 const getBellMarkers = ({ui}: HyperState) => ui.bellMarkers;
 const getAgentStatuses = ({ui}: HyperState) => ui.agentStatuses;
 const getTermGroups = ({termGroups}: HyperState) => termGroups.termGroups;
-const getActiveTermGroup = ({termGroups}: HyperState) => (termGroups as any).activeTermGroup;
-
-const findActiveLeaf = (
-  termGroups: Record<string, any>,
-  activeTermGroup: string | null,
-  group: any
-): any => {
-  if (!group) return null;
-  if (group.sessionUid || group.webUrl !== undefined) {
-    return group;
+const getLeaves = (termGroups: Record<string, any>, group: any): Record<string, any>[] => {
+  if (!group) return [];
+  if (!group.children || group.children.length === 0) {
+    return [group] as Record<string, any>[];
   }
-  const children = group.children || [];
-  if (children.length === 0) return group;
-
-  const isDescendant = (parentUid: string, targetUid: string): boolean => {
-    const parent = termGroups[parentUid];
-    if (!parent) return false;
-    const ch = parent.children || [];
-    if (ch.includes(targetUid)) return true;
-    return ch.some((cId: string) => isDescendant(cId, targetUid));
-  };
-
-  if (activeTermGroup && isDescendant(group.uid, activeTermGroup)) {
-    for (const cUid of children) {
-      if (cUid === activeTermGroup || isDescendant(cUid, activeTermGroup)) {
-        return findActiveLeaf(termGroups, activeTermGroup, termGroups[cUid]);
-      }
-    }
-  }
-
-  return findActiveLeaf(termGroups, activeTermGroup, termGroups[children[0]]);
-};
-
-const findAnySessionUid = (
-  termGroups: Record<string, any>,
-  group: any
-): string | undefined => {
-  if (!group) return undefined;
-  if (group.sessionUid) return group.sessionUid;
-  const children = group.children || [];
+  const children = (group.children || []) as string[];
+  const leavesList: Record<string, any>[] = [];
   for (const cUid of children) {
-    const sUid = findAnySessionUid(termGroups, termGroups[cUid]);
-    if (sUid) return sUid;
+    leavesList.push(...getLeaves(termGroups, termGroups[cUid]));
   }
-  return undefined;
+  return leavesList;
 };
 
 const getTabs = createSelector(
@@ -74,54 +60,84 @@ const getTabs = createSelector(
     getActivityMarkers,
     getBellMarkers,
     getAgentStatuses,
-    getTermGroups,
-    getActiveTermGroup
+    getTermGroups
   ],
-  (sessions, rootGroups, activeSessions, activeRootGroup, activityMarkers, bellMarkers, agentStatuses, termGroups, activeTermGroup) =>
+  (sessions, rootGroups, activeSessions, activeRootGroup, activityMarkers, bellMarkers, agentStatuses, termGroups) =>
     rootGroups.map((t: any): ITab => {
-      const activeSessionUid = activeSessions[t.uid];
-      const anySessionUid = activeSessionUid || findAnySessionUid(termGroups, t);
-      const session = anySessionUid ? sessions[anySessionUid] : null;
-      const groupTabName = (t as any).tabName as string | null | undefined;
-      if (!session) {
-        // Web pane tab — derive title from custom name or URL
-        const activeLeaf = findActiveLeaf(termGroups, activeTermGroup, t);
-        const webUrl = activeLeaf ? activeLeaf.webUrl : (t as any).webUrl;
-        // The TAB is a project group — its name must NOT track the live page
-        // title (webName). Use the user's group name if set, else a STABLE
-        // hostname; the page title still labels the PANE (web-pane.tsx).
-        let title = groupTabName || 'Browser';
-        if (!groupTabName && webUrl) {
-          try {
-            title = new URL(webUrl).hostname || webUrl;
-          } catch {
-            title = webUrl;
+      const leaves = getLeaves(termGroups, t);
+      const firstLeaf = leaves[0];
+      const isFirstLeafWeb = firstLeaf && !firstLeaf.sessionUid;
+      const groupTabName: string | null | undefined = t.tabName;
+
+      let title = groupTabName || '';
+      if (isFirstLeafWeb) {
+        if (!title && !t.disableTitleInheritance) {
+          title = (firstLeaf.webName as string) || '';
+        }
+        if (!title && firstLeaf.webUrl) {
+          const urlStr = firstLeaf.webUrl as string;
+          if (urlStr.startsWith('ai://')) {
+            title = 'ask';
+          } else {
+            try {
+              title = new URL(urlStr).hostname || urlStr;
+            } catch {
+              title = urlStr;
+            }
           }
         }
-        return {
-          uid: t.uid,
-          title,
-          tabName: title,
-          description: '',
-          isActive: t.uid === activeRootGroup,
-          hasActivity: false,
-          hasBell: false,
-          agentStatus: undefined,
-          isWebPane: true,
-          webUrl: webUrl || undefined
-        };
+        if (!title) title = 'Browser';
+      } else {
+        if (!title) {
+          const firstSessionUid = firstLeaf ? (firstLeaf.sessionUid as string) : null;
+          const session = firstSessionUid ? sessions[firstSessionUid] : null;
+          title = session ? session.tabName || session.title : 'Terminal';
+        }
       }
-      // Source of truth for the tab label: the root group's tabName.
-      // Falls back to per-session fields for tabs created before this change.
+
+      // Collect pane colors
+      const startIdx = hashCode(t.uid as string) % PALETTE.length;
+      const mapLeafToColor = (leaf: any, idx: number): string => {
+        const url = leaf ? leaf.webUrl : null;
+        if (typeof url === 'string' && url.startsWith('ai://')) {
+          return 'var(--text-ai)';
+        }
+        // Align tab colors directly with the pane's rotating TINTS
+        const splitLabel = leaf ? leaf.splitLabel : '';
+        const paneIdx = splitLabel ? splitLabel.charCodeAt(0) - 97 : idx;
+        const TINTS = [
+          'var(--text-success)',
+          'var(--text-info)',
+          'var(--text-warning)',
+          'var(--text-danger)'
+        ];
+        return TINTS[(startIdx + paneIdx) % TINTS.length];
+      };
+      const paneColors = leaves.map((leaf, idx) => mapLeafToColor(leaf, idx));
+
+      // Check overall activity and bell markers across all sessions in this tab
+      const hasActivity = leaves.some((leaf) => leaf.sessionUid && activityMarkers[leaf.sessionUid]);
+      const hasBell = leaves.some((leaf) => leaf.sessionUid && bellMarkers[leaf.sessionUid]);
+
+      // Agent status from active session or first session
+      const activeSessionUid = activeSessions[t.uid];
+      const agentSessionUid = (activeSessionUid || (firstLeaf ? firstLeaf.sessionUid : null)) as string;
+      const agentStatus = agentSessionUid ? agentStatuses[agentSessionUid] : undefined;
+
       return {
         uid: t.uid,
-        title: session.title,
-        tabName: groupTabName || session.tabName || session.title,
-        description: session.description || '',
+        title,
+        tabName: title,
+        description: (firstLeaf?.sessionUid && sessions[firstLeaf.sessionUid]?.description) || '',
         isActive: t.uid === activeRootGroup,
-        hasActivity: activityMarkers[session.uid],
-        hasBell: !!bellMarkers[session.uid],
-        agentStatus: agentStatuses[session.uid]
+        hasActivity,
+        hasBell,
+        agentStatus,
+        isWebPane: isFirstLeafWeb,
+        webUrl: isFirstLeafWeb && firstLeaf ? firstLeaf.webUrl || undefined : undefined,
+        paneColors,
+        groupTabName: groupTabName || undefined,
+        disableTitleInheritance: !!t.disableTitleInheritance
       };
     })
 );
@@ -178,18 +194,15 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
     },
 
     onDescribe: (uid: string, description: string) => {
-      dispatch(((d: HyperDispatch, getState: () => HyperState) => {
-        const group = getState().termGroups.termGroups[uid];
-        if ((group as any)?.webUrl !== undefined) {
-          d({type: TERM_GROUP_SET_WEB_NAME, uid, name: description} as any);
-        } else {
-          // The rename UI surfaces this as a "describe" hook but for terminal
-          // tabs it just renames the tab. Route directly to the tab-name setter
-          // so we update the root group's tabName (the source of truth) without
-          // touching session.description.
-          d(setSessionTabName(uid, description) as any);
-        }
+      dispatch(((d: HyperDispatch) => {
+        // Always set session tab name on the root term group for both web and terminal tabs
+        // to persist it across reloads and navigation.
+        d(setSessionTabName(uid, description) as any);
       }) as any);
+    },
+
+    onToggleTitleInheritance: (uid: string) => {
+      dispatch({type: 'TERM_GROUP_TOGGLE_TITLE_INHERITANCE', uid} as any);
     },
 
     onMoveTab: (fromUid: string, toIndex: number) => {

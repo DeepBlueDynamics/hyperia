@@ -8,8 +8,6 @@ import Tab_ from './tab';
 
 const Tab = decorate(Tab_, 'Tab');
 const isMac = /Mac/.test(navigator.userAgent);
-const isWindows = /Windows/.test(navigator.userAgent);
-const trailingDragWidth = isMac ? 0 : isWindows ? 200 : 160;
 
 const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   const {tabs = [], borderColor, onChange, onClose, onDescribe, fullScreen} = props;
@@ -23,6 +21,14 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   const [focusedIndex, setFocusedIndex] = useState(0);
   const chevronRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [profileName, setProfileName] = useState('');
+  const [shellPath, setShellPath] = useState('');
+  const [shellArgs, setShellArgs] = useState('');
+  const [envVars, setEnvVars] = useState<{key: string; val: string}[]>([]);
+  const [newKey, setNewKey] = useState('');
+  const [newVal, setNewVal] = useState('');
 
   // Process, map, and sort profiles so the default is first
   const mappedProfiles = (props.profiles || []).map((p: any) => {
@@ -50,13 +56,9 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
     setIsOpen(false);
     if (index < sortedProfiles.length) {
       const p = sortedProfiles[index];
-      props.openNewTab(p.id);
+      props.openNewTab(p.id as string);
     } else if (index === sortedProfiles.length) {
-      try {
-        ipcRenderer.send('edit-config-external');
-      } catch (err) {
-        console.error(err);
-      }
+      setIsModalOpen(true);
     } else if (index === sortedProfiles.length + 1) {
       try {
         ipcRenderer.send('show-about');
@@ -230,8 +232,21 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         className={`tabs_list ${fullScreen && isMac ? 'tabs_fullScreen' : ''}`}
       >
         {tabs.map((tab, i) => {
-          const {uid, title, isActive, hasActivity, hasBell, agentStatus, tabName, description, isWebPane, webUrl} =
-            tab;
+          const {
+            uid,
+            title,
+            isActive,
+            hasActivity,
+            hasBell,
+            agentStatus,
+            tabName,
+            description,
+            isWebPane,
+            webUrl,
+            paneColors,
+            groupTabName,
+            disableTitleInheritance
+          } = tab;
           const tabProps = getTabProps(tab, props, {
             text: tabName || title || 'Shell',
             tabName: tabName || title || 'Shell',
@@ -246,6 +261,10 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             agentStatus,
             isWebPane,
             webUrl,
+            paneColors,
+            groupTabName,
+            disableTitleInheritance,
+            onToggleTitleInheritance: () => (props as any).onToggleTitleInheritance?.(uid),
             defaultProfile: props.defaultProfile,
             onSelect: onChange.bind(null, uid),
             onClose: onClose.bind(null, uid),
@@ -273,6 +292,54 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         >
           +
         </button>
+
+        <button
+          ref={chevronRef}
+          className="tabs_chevronBtn"
+          onClick={() => setIsOpen(!isOpen)}
+          aria-haspopup="true"
+          aria-expanded={isOpen}
+          aria-label="Profiles list"
+          title="Select Profile"
+        >
+          <svg viewBox="0 0 14 14" width="10" height="10">
+            <path d="M3 5l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+        </button>
+
+        {isOpen && (
+          <div className="new_tab_menu" ref={menuRef}>
+            {sortedProfiles.map((p, idx) => (
+              <div
+                key={p.id}
+                data-index={idx}
+                tabIndex={0}
+                className={`new_tab_menu_item ${p.isDefault ? 'new_tab_menu_item_default' : ''}`}
+                onClick={() => triggerItem(idx)}
+              >
+                {p.displayName}
+              </div>
+            ))}
+            <div className="new_tab_menu_divider" />
+            <div
+              data-index={sortedProfiles.length}
+              tabIndex={0}
+              className="new_tab_menu_item"
+              onClick={() => triggerItem(sortedProfiles.length)}
+            >
+              Custom…
+            </div>
+            <div className="new_tab_menu_divider" />
+            <div
+              data-index={sortedProfiles.length + 1}
+              tabIndex={0}
+              className="new_tab_menu_item"
+              onClick={() => triggerItem(sortedProfiles.length + 1)}
+            >
+              About
+            </div>
+          </div>
+        )}
 
         <button
           className="tabs_newTabBtn"
@@ -327,6 +394,321 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
       )}
       <div className="tabs_dragSpace" aria-hidden="true" />
       {props.customChildren}
+
+      {isModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            background: 'rgba(0, 0, 0, 0.65)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 99999,
+            color: 'var(--text-primary)',
+            fontFamily: 'var(--font-sans)',
+            cursor: 'default'
+          }}
+          onClick={() => setIsModalOpen(false)}
+        >
+          <div
+            style={{
+              width: '460px',
+              background: 'var(--bg-secondary)',
+              border: '0.5px solid var(--border-focus)',
+              borderRadius: '6px',
+              padding: '20px',
+              boxShadow: '0 8px 30px rgba(0, 0, 0, 0.5)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+              <span style={{fontSize: '14px', fontWeight: 600}}>Create Custom Profile</span>
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-tertiary)',
+                  cursor: 'pointer',
+                  fontSize: '16px'
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Profile Name */}
+            <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
+              <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Profile Name</label>
+              <input
+                type="text"
+                placeholder="e.g. My Shell"
+                value={profileName}
+                onChange={(e) => setProfileName(e.target.value)}
+                style={{
+                  background: 'var(--bg-primary)',
+                  border: '0.5px solid var(--border-neutral)',
+                  color: 'var(--text-primary)',
+                  borderRadius: '4px',
+                  padding: '8px 10px',
+                  fontSize: '12px'
+                }}
+              />
+            </div>
+
+            {/* Shell Executable Path */}
+            <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
+              <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Shell Path</label>
+              <div style={{display: 'flex', gap: '6px'}}>
+                <input
+                  type="text"
+                  placeholder="e.g. /bin/bash or C:\Windows\System32\cmd.exe"
+                  value={shellPath}
+                  onChange={(e) => setShellPath(e.target.value)}
+                  style={{
+                    flex: 1,
+                    background: 'var(--bg-primary)',
+                    border: '0.5px solid var(--border-neutral)',
+                    color: 'var(--text-primary)',
+                    borderRadius: '4px',
+                    padding: '8px 10px',
+                    fontSize: '12px',
+                    fontFamily: 'var(--font-mono)'
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const res = (await ipcRenderer.invoke('pick-shell-executable')) as any;
+                      if (res) setShellPath(res);
+                    } catch (err) {
+                      console.error(err);
+                    }
+                  }}
+                  style={{
+                    background: 'var(--bg-tertiary)',
+                    border: '0.5px solid var(--border-neutral)',
+                    color: 'var(--text-primary)',
+                    borderRadius: '4px',
+                    padding: '0 10px',
+                    fontSize: '12px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Browse…
+                </button>
+              </div>
+            </div>
+
+            {/* Shell Arguments */}
+            <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
+              <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Arguments (comma separated)</label>
+              <input
+                type="text"
+                placeholder="e.g. --login, -i"
+                value={shellArgs}
+                onChange={(e) => setShellArgs(e.target.value)}
+                style={{
+                  background: 'var(--bg-primary)',
+                  border: '0.5px solid var(--border-neutral)',
+                  color: 'var(--text-primary)',
+                  borderRadius: '4px',
+                  padding: '8px 10px',
+                  fontSize: '12px',
+                  fontFamily: 'var(--font-mono)'
+                }}
+              />
+            </div>
+
+            {/* Environment Variables (Secrets Manager) */}
+            <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
+              <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Environment Variables</label>
+              <div
+                style={{
+                  background: 'var(--bg-primary)',
+                  border: '0.5px solid var(--border-neutral)',
+                  borderRadius: '6px',
+                  padding: '10px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px'
+                }}
+              >
+                {/* Env list */}
+                <div style={{maxHeight: '80px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                  {envVars.length === 0 ? (
+                    <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontStyle: 'italic'}}>No environment variables added.</span>
+                  ) : (
+                    envVars.map((v, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          background: 'var(--bg-secondary)',
+                          borderRadius: '4px',
+                          padding: '3px 8px',
+                          fontSize: '11px',
+                          fontFamily: 'var(--font-mono)'
+                        }}
+                      >
+                        <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                          <span style={{color: 'var(--info-text)'}}>{v.key}</span>={v.val}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setEnvVars(envVars.filter((_, idx) => idx !== i))}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: 'var(--danger-text)',
+                            cursor: 'pointer',
+                            fontSize: '14px'
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Add inline form */}
+                <div style={{display: 'flex', gap: '6px'}}>
+                  <input
+                    type="text"
+                    placeholder="KEY"
+                    value={newKey}
+                    onChange={(e) => setNewKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
+                    style={{
+                      flex: 1,
+                      background: 'var(--bg-secondary)',
+                      border: '0.5px solid var(--border-neutral)',
+                      color: 'var(--text-primary)',
+                      borderRadius: '4px',
+                      padding: '6px 8px',
+                      fontSize: '10px',
+                      fontFamily: 'var(--font-mono)'
+                    }}
+                  />
+                  <input
+                    type="text"
+                    placeholder="VALUE"
+                    value={newVal}
+                    onChange={(e) => setNewVal(e.target.value)}
+                    style={{
+                      flex: 1.5,
+                      background: 'var(--bg-secondary)',
+                      border: '0.5px solid var(--border-neutral)',
+                      color: 'var(--text-primary)',
+                      borderRadius: '4px',
+                      padding: '6px 8px',
+                      fontSize: '10px',
+                      fontFamily: 'var(--font-mono)'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const k = newKey.trim();
+                      const v = newVal.trim();
+                      if (k) {
+                        setEnvVars([...envVars.filter(item => item.key !== k), {key: k, val: v}]);
+                        setNewKey('');
+                        setNewVal('');
+                      }
+                    }}
+                    style={{
+                      background: 'var(--info-text)',
+                      color: 'var(--bg-primary)',
+                      border: 'none',
+                      borderRadius: '4px',
+                      padding: '0 10px',
+                      fontSize: '10px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div style={{display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px'}}>
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                style={{
+                  background: 'var(--bg-primary)',
+                  border: '0.5px solid var(--border-neutral)',
+                  color: 'var(--text-secondary)',
+                  borderRadius: '4px',
+                  padding: '8px 14px',
+                  fontSize: '12px',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!profileName.trim() || !shellPath.trim()}
+                onClick={() => {
+                  const pName = profileName.trim();
+                  const sPath = shellPath.trim();
+                  if (pName && sPath) {
+                    const args = shellArgs
+                      .split(',')
+                      .map((a) => a.trim())
+                      .filter(Boolean);
+                    const envObj: Record<string, string> = {};
+                    envVars.forEach((ev) => {
+                      envObj[ev.key] = ev.val;
+                    });
+                    ipcRenderer.send('add-profile', {
+                      name: pName,
+                      shell: sPath,
+                      shellArgs: args,
+                      env: envObj
+                    });
+                    setIsModalOpen(false);
+                    // Reset fields
+                    setProfileName('');
+                    setShellPath('');
+                    setShellArgs('');
+                    setEnvVars([]);
+                  }
+                }}
+                style={{
+                  background: (profileName.trim() && shellPath.trim()) ? 'var(--info-text)' : 'var(--border-neutral)',
+                  color: 'var(--bg-primary)',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '8px 14px',
+                  fontSize: '12px',
+                  cursor: (profileName.trim() && shellPath.trim()) ? 'pointer' : 'default',
+                  opacity: (profileName.trim() && shellPath.trim()) ? 1 : 0.6
+                }}
+              >
+                Save Profile
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style jsx>{`
         .tabs_nav {
