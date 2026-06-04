@@ -707,6 +707,10 @@ function createStickyNote(
     resizable: true,
     minimizable: true,
     maximizable: false,
+    // macOS: a fullscreenable window shown while the host app is in native
+    // fullscreen gets pulled into that Space and resized to fill the screen.
+    // Sticky notes are small floating panels — never fullscreen them.
+    fullscreenable: false,
     focusable: true,
     show: false,
     backgroundColor: colorHex,
@@ -763,6 +767,11 @@ function createStickyNote(
   win.once('ready-to-show', () => {
     win.show();
     win.setAlwaysOnTop(true, 'floating');
+    // macOS: float the note over a native-fullscreen host app at its real size
+    // instead of letting it get absorbed into (and fill) the fullscreen Space.
+    if (process.platform === 'darwin') {
+      win.setVisibleOnAllWorkspaces(true, {visibleOnFullScreen: true});
+    }
     win.focus();
     win.webContents.focus();
 
