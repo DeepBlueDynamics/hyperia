@@ -1,0 +1,152 @@
+name: Nightly Build
+
+# Automatic unsigned nightly builds from the default branch (canary).
+# Runs every night and can be triggered manually. Nothing is code-signed:
+# Windows skips Azure Trusted Signing (no AZURE_CLIENT_SECRET), macOS skips the
+# Developer ID cert + notarization (identity=null, notarize=false), Linux is
+# unsigned as usual. All artifacts land on a single rolling "nightly" pre-release.
+
+on:
+  schedule:
+    - cron: '0 7 * * *' # 07:00 UTC daily (~1–2am US Central)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false # one platform failing shouldn't drop the others' artifacts
+      matrix:
+        include:
+          - os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            rust_target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # rcedit@5.0.2 (transitive via electron-builder) requires >= 22.12.
+          node-version: 22
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Setup Rust ARM64 target (macOS)
+        if: matrix.os == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin
+
+      - name: Install Yarn
+        run: npm install -g yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # Build sidecar — macOS uses --target so the binary lands where
+      # bin/cp-sidecar.js reads from (target/<triple>/release/).
+      - name: Build sidecar (release, default target)
+        if: matrix.os != 'macos-latest'
+        run: cargo build --release --manifest-path sidecar/Cargo.toml
+
+      - name: Build sidecar x86_64 (macOS)
+        if: matrix.os == 'macos-latest'
+        run: cargo build --release --manifest-path sidecar/Cargo.toml --target x86_64-apple-darwin
+
+      - name: Build sidecar ARM64 (macOS)
+        if: matrix.os == 'macos-latest'
+        run: cargo build --release --manifest-path sidecar/Cargo.toml --target aarch64-apple-darwin
+
+      - name: Build app
+        run: yarn build
+
+      - name: Install Linux build deps
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y rpm snapd
+
+      # Package installers — UNSIGNED on every platform.
+      - name: Build installer (Windows, unsigned)
+        if: matrix.os == 'windows-latest'
+        # No AZURE_CLIENT_SECRET → build/win/sign.js logs "skipping signing".
+        run: npx electron-builder --win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build installer (macOS, unsigned)
+        if: matrix.os == 'macos-latest'
+        # identity=null → no codesign; notarize=false overrides electron-builder.json.
+        run: npx electron-builder --mac --config.mac.identity=null --config.mac.notarize=false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Build installer (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: npx electron-builder --linux AppImage deb
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.blockmap
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() }} # publish whatever artifacts succeeded, even if one OS failed
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # Roll the single "nightly" release: delete the old one (and its tag) so
+      # the pre-release always reflects last night's build, then recreate it.
+      - name: Reset nightly release
+        run: gh release delete nightly --yes --cleanup-tag || true
+
+      - name: Publish nightly pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          target_commitish: ${{ github.sha }}
+          name: Nightly Build (unsigned)
+          prerelease: true
+          make_latest: false
+          body: |
+            Automated **unsigned** nightly build from `canary` (`${{ github.sha }}`).
+
+            These installers are **not code-signed**. Expect OS security prompts:
+            - **Windows** — SmartScreen warning; choose *More info → Run anyway*.
+            - **macOS** — Gatekeeper block; right-click → *Open*, or run
+              `xattr -dr com.apple.quarantine /Applications/Hyperia.app`.
+
+            For signed, notarized releases use the tagged versions on the Releases page.
+          files: |
+            artifacts/**/*.exe
+            artifacts/**/*.dmg
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
