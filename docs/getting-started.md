@@ -1,84 +1,74 @@
 # Getting Started
 
+Hyperia is an Electron terminal emulator paired with a Rust sidecar. This guide covers building from source, first launch, and connecting an agent.
+
+Prebuilt, signed installers for Windows and macOS are on the [Releases](https://github.com/DeepBlueDynamics/hyperia/releases) page — if you only want to *run* Hyperia, use those. The steps below build from source.
+
 ## Prerequisites
 
 **All platforms:**
-- Node.js >= 18
-- Yarn (`npm install -g yarn`)
-- Rust stable (`rustup` — https://rustup.rs)
+- **Node.js 22+** (the build toolchain requires ≥ 22.12)
+- **Yarn** (`npm install -g yarn`)
+- **Rust** stable (via [rustup](https://rustup.rs))
 
-**Windows:** Visual Studio Build Tools with C++ workload
+**Windows:** Visual Studio Build Tools with the C++ workload.
+**macOS:** `xcode-select --install`.
+**Linux (Debian/Ubuntu):** `sudo apt install build-essential libx11-dev libxkbfile-dev python3`
 
-**macOS:** `xcode-select --install`
+Hyperia has **no source dependency that must be cloned alongside it** — `yarn install` and `cargo build` pull everything they need.
 
-**Linux (Debian/Ubuntu):**
-```bash
-sudo apt install build-essential libx11-dev libxkbfile-dev python3
-```
-
-Hyperia has a path dependency on **Ferricula** (the memory engine). Clone it alongside:
-```
-C:/Code/Gnosis/ferricula/   ← or update sidecar/Cargo.toml path
-C:/Code/Gnosis/hyperia/
-```
-
----
-
-## Development
+## Build and run
 
 ```bash
 git clone https://github.com/DeepBlueDynamics/hyperia.git
 cd hyperia
+
+# JS/TS dependencies
 yarn install
 
-cd sidecar
-cargo build
-cd ..
+# Rust sidecar
+cd sidecar && cargo build && cd ..
 
-yarn run dev
+# Run in development (webpack + tsc watchers + the Electron app, with reload)
+yarn start
 ```
 
-The sidecar starts automatically with the Electron app on port 9800.
+`yarn start` launches Hyperia and reloads on change. The Electron app spawns the sidecar automatically as a child process on port `9800` — you do not start it yourself.
 
----
+For production/release builds (installers, code signing, nightly), see [building.md](building.md).
 
-## Release Build (Windows)
+## First launch
 
-See [BUILDING.md](../BUILDING.md) for the full release process including signing.
+On first run Hyperia casts a one-time splash, then opens a terminal. The built-in **Ghost** agent ("Ask Hyperia" / right-click menu) needs a provider configured to be useful:
 
-Quick version:
-```bat
-cd sidecar && cargo build --release && cd ..
-set AZURE_CLIENT_SECRET=<your secret>
-yarn run dist
+- **Frontier** — set an API key for `anthropic` (or `openai` / `gemini`) under `providers` in `~/.hyperia/hyperia.json`, and an `agent.provider` / `agent.model`.
+- **Local** — point it at a local Ollama; with nothing else configured the Ghost falls back to local Ollama (`gemma4:12b`).
+
+See [configuration.md](configuration.md) for the full config shape and [ghost-agent.md](ghost-agent.md) for the built-in agent.
+
+## Connect an agent (MCP over HTTP)
+
+While Hyperia is running, the sidecar exposes its MCP server over **streamable HTTP**:
+
+```
+http://localhost:9800/mcp
 ```
 
-Output: `dist/Hyperia-X.Y.Z-x64.exe`
+Point any MCP client at that URL — no API key, no local binary path. For example, with Claude Code:
 
----
-
-## First Launch
-
-1. Open Hyperia
-2. Press `Ctrl+,` to open Settings
-3. Enter your Anthropic API key and select a model (Claude Haiku 4.5 is the default)
-4. Right-click any tab or press the ghost icon to open the agent chat
-
----
-
-## MCP Server (for Claude Code, Codex, etc.)
-
-Add to your project's `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "hyperia": {
-      "command": "path/to/hyperia-sidecar.exe",
-      "args": ["--mcp"]
-    }
-  }
-}
+```bash
+claude mcp add --transport http hyperia http://localhost:9800/mcp
 ```
 
-The sidecar exposes 30+ tools for terminal control, agent status, telemetry, notes, and memory.
+Setup for Claude Code, OpenAI Codex, and Google Antigravity is in the [README](../README.md#connect-an-agent-mcp-over-http); the full catalog of 56 tools is in [mcp-tools.md](mcp-tools.md).
+
+## Where things live
+
+| Path | What |
+|------|------|
+| `~/.hyperia/hyperia.json` | Configuration (providers, profiles) |
+| `~/.hyperia/lume/` | Local search index (shell history + notes) |
+| `~/.hyperia/stickys/` | Sticky-note storage |
+| `app/` | Electron main process |
+| `lib/` | Renderer (React + xterm.js) |
+| `sidecar/` | Rust sidecar (HTTP / WebSocket / MCP) |

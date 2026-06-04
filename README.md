@@ -12,7 +12,7 @@ Built by [Deep Blue Dynamics](https://deepbluedynamics.com).
 
 ## Highlights
 
-- **Agent-native MCP server** — 50+ tools exposed over streamable HTTP. Any MCP-capable client (Claude Code, OpenAI Codex, Google Antigravity, and others) can drive the terminal: open tabs, split panes, run commands, read screens, manage sticky notes, and inspect telemetry.
+- **Agent-native MCP server** — 56 tools exposed over streamable HTTP. Any MCP-capable client (Claude Code, OpenAI Codex, Google Antigravity, and others) can drive the terminal: open tabs, split panes, run commands, read screens, manage sticky notes, and inspect telemetry.
 - **Ghost agent** — A built-in assistant with streaming chat, tool use, and persistent memory. It is aware of what is open, what is running, and what it has done before.
 - **Local memory & search** — A built-in BM25 index over your shell history and sticky notes, so an agent can search what you actually ran and wrote — not just the visible screen. An optional external memory service (Ferricula) can be attached for cross-session recall.
 - **Per-tab agent status** — Live indicators show which tabs have an agent connected, working, or idle.
@@ -32,7 +32,7 @@ yarn install
 
 cd sidecar && cargo build && cd ..
 
-yarn run dev
+yarn start
 ```
 
 See [docs/getting-started.md](docs/getting-started.md) for prerequisites and full build instructions. Prebuilt, signed installers for Windows and macOS are available on the [Releases](https://github.com/DeepBlueDynamics/hyperia/releases) page.
@@ -113,7 +113,7 @@ Any client that supports the MCP streamable-HTTP transport works the same way �
 | [MCP Tools](docs/mcp-tools.md) | Complete tool reference |
 | [Ghost Agent](docs/ghost-agent.md) | Built-in assistant — models, memory, behavior |
 | [Configuration](docs/configuration.md) | Config file reference and keyboard shortcuts |
-| [Ferricula Memory](docs/ferricula.md) | Memory engine, recall, and identity |
+| [Memory & Search](docs/memory.md) | Local search (lume) + optional external recall (Ferricula) |
 | [Architecture](docs/architecture.md) | Codebase structure and component overview |
 | [Building](docs/building.md) | Release builds — Windows (Azure Trusted Signing) and macOS |
 | [Apple Signing](docs/signing-apple.md) | macOS code signing and notarization |
@@ -128,7 +128,7 @@ Electron (UI + PTY sessions)
     │── WebSocket bridge ──▶ hyperia-sidecar (Rust, :9800)
                                   │
                                   ├── HTTP API (terminal, agent, notes, telemetry)
-                                  ├── MCP server (streamable HTTP at /mcp, 50+ tools)
+                                  ├── MCP server (streamable HTTP at /mcp, 56 tools)
                                   ├── Ghost agent (streaming, tool loop)
                                   ├── lume — local BM25 over shell logs + notes
                                   │     └── ~/.hyperia/lume/
