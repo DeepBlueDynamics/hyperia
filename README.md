@@ -15,7 +15,7 @@ Built by [Deep Blue Dynamics](https://deepbluedynamics.com).
 - **Agent-native MCP server** — 56 tools exposed over streamable HTTP. Any MCP-capable client (Claude Code, OpenAI Codex, Google Antigravity, and others) can drive the terminal: open tabs, split panes, run commands, read screens, manage sticky notes, and inspect telemetry.
 - **Ghost agent** — A built-in assistant with streaming chat, tool use, and persistent memory. It is aware of what is open, what is running, and what it has done before.
 - **Local memory & search** — A built-in BM25 index over your shell history and sticky notes, so an agent can search what you actually ran and wrote — not just the visible screen. An optional external memory service (Ferricula) can be attached for cross-session recall.
-- **Per-tab agent status** — Live indicators show which tabs have an agent connected, working, or idle.
+- **Agent status lights** — An agent can flag its tab as connected, working, or idle (via the `agent_status` tool), so you can see at a glance which tabs it's driving. It's a signal the agent raises, not auto-detection.
 - **Stickys™** — Floating, named, color-coded notes that persist across restarts and are fully controllable from any agent.
 - **Shell profiles** — PowerShell, CMD, WSL, Git Bash, or any custom shell, surfaced in the new-pane chooser.
 - **Sidecar architecture** — A dedicated Rust process (`hyperia-sidecar`) provides the HTTP, WebSocket, and MCP surfaces, decoupled from Electron for speed and reliability.
