@@ -8,6 +8,7 @@ pub mod provider;
 pub mod registry;
 pub mod types;
 pub mod widget;
+pub mod gpu;
 
 pub use api::GhostState;
 pub use types::GhostConfig;
@@ -51,7 +52,7 @@ fn default_endpoint(provider: &str) -> String {
 /// token for the local default; if a user runs Ollama Cloud they can set
 /// one and it'll be passed through.
 ///
-/// Falls back to local Ollama with `gemma4:12b` if nothing else is usable.
+/// Falls back to local Ollama with `gemma2:9b` if nothing else is usable.
 pub fn load_config() -> Option<GhostConfig> {
     let cfg_path = config_path()?;
     let content = std::fs::read_to_string(&cfg_path).ok()?;
@@ -91,9 +92,30 @@ pub fn load_config() -> Option<GhostConfig> {
     let providers = &cfg["providers"];
     let provider_section = &providers[&provider];
 
-    // Token: provider-specific first, then legacy agentToken as fallback IF
-    // the prefix matches (sk-ant- → anthropic, others → openai).
+    // Token: provider-specific first, then stored env from chooser config, then system env, then legacy agentToken.
     let mut api_key = provider_section["token"].as_str().unwrap_or("").to_string();
+    if api_key.is_empty() {
+        let env_keys = match provider.as_str() {
+            "anthropic" => vec!["ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"],
+            "openai" => vec!["OPENAI_API_KEY", "OPENAI_TOKEN"],
+            "gemini" => vec!["GEMINI_API_KEY", "GEMINI_TOKEN"],
+            _ => vec![],
+        };
+        for key in env_keys {
+            if let Some(val) = cfg["env"][key].as_str() {
+                if !val.trim().is_empty() {
+                    api_key = val.trim().to_string();
+                    break;
+                }
+            }
+            if let Ok(val) = std::env::var(key) {
+                if !val.trim().is_empty() {
+                    api_key = val.trim().to_string();
+                    break;
+                }
+            }
+        }
+    }
     if api_key.is_empty() {
         let legacy = cfg["agentToken"].as_str().unwrap_or("");
         let looks_anthropic = legacy.starts_with("sk-ant-");
@@ -134,12 +156,19 @@ pub fn load_config() -> Option<GhostConfig> {
         model = default_model(&provider).to_string();
     }
 
+    let maximus_model = cfg["maximus"]["model"].as_str().map(|s| s.to_string());
+    let maximus_url = cfg["maximus"]["url"].as_str().map(|s| s.to_string());
+    let maximus_disabled = cfg["maximus"]["disabled"].as_bool().unwrap_or(false);
+
     Some(GhostConfig {
         provider,
         model,
         api_key,
         endpoint,
         max_turns: 25,
+        maximus_model,
+        maximus_url,
+        maximus_disabled,
     })
 }
 
@@ -151,18 +180,21 @@ fn default_model(provider: &str) -> &'static str {
         "anthropic" => "claude-sonnet-4-6",
         "openai" => "gpt-4o",
         "gemini" => "gemini-2.0-flash",
-        "ollama" => "gemma4:12b",
-        _ => "gemma4:12b",
+        "ollama" => "gemma2:9b",
+        _ => "gemma2:9b",
     }
 }
 
 fn default_local_ollama() -> GhostConfig {
     GhostConfig {
         provider: "ollama".into(),
-        model: "gemma4:12b".into(),
+        model: "gemma2:9b".into(),
         api_key: String::new(),
         endpoint: default_endpoint("ollama"),
         max_turns: 25,
+        maximus_model: None,
+        maximus_url: None,
+        maximus_disabled: false,
     }
 }
 
@@ -194,7 +226,13 @@ fn legacy_provider_hint(legacy_model: &str) -> String {
     String::new()
 }
 
-fn config_path() -> Option<PathBuf> {
+pub(crate) fn config_path() -> Option<PathBuf> {
+    if let Ok(mock_home) = std::env::var("HYPERIA_MOCK_HOME") {
+        return Some(PathBuf::from(mock_home).join(".hyperia").join("hyperia.json"));
+    }
+    if cfg!(test) {
+        return None;
+    }
     let home = if cfg!(windows) {
         std::env::var("USERPROFILE").ok()
     } else {

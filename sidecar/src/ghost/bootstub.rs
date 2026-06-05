@@ -45,6 +45,10 @@ pub fn handle(message: &str) -> BootReply {
         };
     }
 
+    if m == "wipe config" || m == "reset config" || m == "clear config" || m == "wipe" {
+        return reply_wipe_config();
+    }
+
     if matches_install_ollama(&m) {
         return reply_install_ollama();
     }
@@ -52,6 +56,9 @@ pub fn handle(message: &str) -> BootReply {
         return reply_what_is_possible();
     }
     if let Some(reply) = try_set_provider_token(message) {
+        return reply;
+    }
+    if let Some(reply) = try_toggle_maximus(message) {
         return reply;
     }
     if let Some(reply) = try_set_token(message) {
@@ -129,7 +136,7 @@ fn matches_check(m: &str) -> bool {
 /// Extract sk-ant- (anthropic), sk- (openai), or AIza (gemini, only when
 /// "gemini" appears in the message) tokens. Returns BootReply with
 /// config_changed=true on success.
-fn try_set_token(raw: &str) -> Option<BootReply> {
+pub fn try_set_token(raw: &str) -> Option<BootReply> {
     let words: Vec<&str> = raw.split_whitespace().collect();
     let lower = raw.to_lowercase();
 
@@ -158,6 +165,67 @@ fn try_set_token(raw: &str) -> Option<BootReply> {
         }
     }
     None
+}
+
+/// Intercepts command to enable/disable Maximus context compressor.
+pub fn try_toggle_maximus(raw: &str) -> Option<BootReply> {
+    let m = raw.trim().to_lowercase();
+    if m == "maximus on" || m == "enable maximus" || m == "maximus enable" {
+        return Some(write_maximus_disabled(false));
+    }
+    if m == "maximus off" || m == "disable maximus" || m == "maximus disable" {
+        return Some(write_maximus_disabled(true));
+    }
+    None
+}
+
+fn write_maximus_disabled(disabled: bool) -> BootReply {
+    let path = match config_path() {
+        Some(p) => p,
+        None => {
+            return BootReply {
+                text: "couldn't find your home directory — set $HOME or $USERPROFILE and try again.".into(),
+                system: vec![],
+                config_changed: false,
+            };
+        }
+    };
+
+    let mut json: serde_json::Value = fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({ "config": {} }));
+
+    // Ensure structure exists.
+    if !json["config"].is_object() {
+        json["config"] = serde_json::json!({});
+    }
+    if !json["config"]["maximus"].is_object() {
+        json["config"]["maximus"] = serde_json::json!({});
+    }
+
+    json["config"]["maximus"]["disabled"] = serde_json::json!(disabled);
+
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let payload = serde_json::to_string_pretty(&json).unwrap_or_default();
+    match fs::write(&path, payload) {
+        Ok(_) => {
+            let status_text = if disabled { "DISABLED" } else { "ENABLED" };
+            BootReply {
+                text: format!("Maximus context compressor has been {}.", status_text),
+                system: vec![],
+                config_changed: true,
+            }
+        }
+        Err(e) => BootReply {
+            text: format!("failed to write config file: {}", e),
+            system: vec![],
+            config_changed: false,
+        },
+    }
 }
 
 fn write_token(provider: &str, token: &str) -> BootReply {
@@ -193,15 +261,18 @@ fn write_token(provider: &str, token: &str) -> BootReply {
 
     json["config"]["providers"][provider]["token"] = serde_json::json!(token);
 
-    // Set agent.provider + a default model only if not already set.
-    if json["config"]["agent"]["provider"]
+    // Set agent.provider + default model. If the provider is different or not set yet,
+    // we explicitly switch to this provider and set its default model.
+    let old_provider = json["config"]["agent"]["provider"]
         .as_str()
-        .unwrap_or("")
-        .is_empty()
-    {
+        .unwrap_or("");
+    if old_provider != provider {
         json["config"]["agent"]["provider"] = serde_json::json!(provider);
-    }
-    if json["config"]["agent"]["model"]
+        let default_model = default_model_for(provider);
+        if !default_model.is_empty() {
+            json["config"]["agent"]["model"] = serde_json::json!(default_model);
+        }
+    } else if json["config"]["agent"]["model"]
         .as_str()
         .unwrap_or("")
         .is_empty()
@@ -270,7 +341,7 @@ fn reply_install_ollama() -> BootReply {
     };
     BootReply {
         text: format!(
-            "ollama install for your platform:\n\n  {}\n\nafter install, pull a model that handles tool calls well. recommended:\n  `ollama pull gemma4:e2b`   — ~5GB, fast, reliable tool dispatch (this is the one verified inside hyperia)\n  `ollama pull qwen2.5-coder:7b` — slightly larger, also tool-capable, leans coding\n\nonce `ollama serve` is running (the installer usually starts it), refresh this page and i'll see it. avoid `llama3.2` for chat in hyperia — it tends to fall out of the tool-call format.",
+            "ollama install for your platform:\n\n  {}\n\nafter install, pull a model that handles tool calls well. recommended:\n  `ollama pull gemma2:2b`   — ~1.6GB, fast, reliable tool dispatch (this is the one verified inside hyperia)\n  `ollama pull qwen2.5-coder:7b` — slightly larger, also tool-capable, leans coding\n\nonce `ollama serve` is running (the installer usually starts it), refresh this page and i'll see it. avoid `llama3.2` for chat in hyperia — it tends to fall out of the tool-call format.",
             cmd
         ),
         system: vec![],
@@ -278,7 +349,69 @@ fn reply_install_ollama() -> BootReply {
     }
 }
 
+fn is_ollama_running() -> bool {
+    if cfg!(test) {
+        return true;
+    }
+    let port = std::env::var("OLLAMA_PORT").unwrap_or_else(|_| "11434".into());
+    let host = if std::path::Path::new("/.dockerenv").exists() {
+        "host.docker.internal"
+    } else {
+        "127.0.0.1"
+    };
+    let addr_str = format!("{}:{}", host, port);
+    use std::net::ToSocketAddrs;
+    if let Ok(mut addrs) = addr_str.to_socket_addrs() {
+        if let Some(addr) = addrs.next() {
+            return TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok();
+        }
+    }
+    false
+}
+
+fn is_ollama_disabled() -> bool {
+    if cfg!(test) {
+        return false;
+    }
+    if std::env::var("MAXIMUS_DISABLED").map(|s| s.trim().to_lowercase() == "true" || s.trim() == "1").unwrap_or(false) {
+        return true;
+    }
+    if let Some(path) = config_path() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                if json["config"]["maximus"]["disabled"].as_bool().unwrap_or(false) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn reply_what_is_possible() -> BootReply {
+    let disabled = is_ollama_disabled();
+    let running = is_ollama_running();
+    if disabled || !running {
+        let reason = if disabled {
+            "disabled via configuration"
+        } else {
+            "unreachable / not running"
+        };
+        return BootReply {
+            text: format!(
+                "Ollama is {} (local mode unavailable).\n\n\
+                 To enable the Hyperia agent, please configure an API token from one of the following providers:\n\n\
+                 * **OpenAI** — paste your `sk-...` token anywhere in your message.\n\
+                 * **Anthropic** — paste your `sk-ant-...` token anywhere in your message.\n\
+                 * **Gemini** (Google) — paste your `AIza...` token anywhere in your message.\n\n\
+                 Once a token is configured, Hyperia will activate the agent using that provider. Type `show config` to view the current configuration state, or `wipe config` to reset it.",
+                reason
+            ),
+            system: vec![],
+            config_changed: false,
+        };
+    }
+
     BootReply {
         text: "i can boot you into one of:\n\n\
             * local — ollama on http://localhost:11434.\n  type `install ollama`.\n\n\
@@ -321,24 +454,73 @@ fn reply_show_config() -> BootReply {
     }
 }
 
+fn reply_wipe_config() -> BootReply {
+    let path = match config_path() {
+        Some(p) => p,
+        None => return BootReply { text: "could not find your home directory.".into(), system: vec![], config_changed: false },
+    };
+    let empty_cfg = serde_json::json!({ "config": {} });
+    let payload = serde_json::to_string_pretty(&empty_cfg).unwrap_or_default();
+    match fs::write(&path, payload) {
+        Ok(_) => BootReply {
+            text: "wiped configuration file ~/.hyperia/hyperia.json successfully. say anything or refresh to re-probe.".into(),
+            system: vec![],
+            config_changed: true,
+        },
+        Err(e) => BootReply {
+            text: format!("failed to write config: {}", e),
+            system: vec![],
+            config_changed: false,
+        }
+    }
+}
+
 fn reply_unknown(raw: &str) -> BootReply {
     let preview = if raw.len() > 60 {
         format!("{}…", &raw[..57])
     } else {
         raw.to_string()
     };
-    BootReply {
-        text: format!(
+
+    let disabled = is_ollama_disabled();
+    let running = is_ollama_running();
+
+    let text = if disabled || !running {
+        let reason = if disabled {
+            "disabled via configuration"
+        } else {
+            "unreachable / not running"
+        };
+        format!(
+            "i don't know what `{}` means. Ollama is {} (local mode unavailable).\n\n\
+             Please provide a token from a provider to activate the Hyperia agent:\n\n\
+             * `paste openai token sk-…` (or just paste the token anywhere)\n\
+             * `paste anthropic token sk-ant-…`\n\
+             * `paste gemini token AIza…`\n\n\
+             Other commands:\n\
+             * `what's possible` — view options\n\
+             * `show config` — view current ~/.hyperia/hyperia.json\n\
+             * `wipe config` — reset your configuration file\n\
+             * `doctor` — check connection status",
+            preview, reason
+        )
+    } else {
+        format!(
             "i don't know what `{}` means yet. i only handle a small set of bootstrap intents:\n\n\
-            * `install ollama` — local model install command for your platform\n\
-            * `paste anthropic token sk-ant-…` (or paste it anywhere)\n\
-            * `paste openai token sk-…`\n\
-            * `paste gemini token AIza…`\n\
-            * `what's possible` — boot options\n\
-            * `show config` — current ~/.hyperia/hyperia.json (token redacted)\n\n\
-            once a model is wired, you'll be talking to the real agent (which understands much more).",
+             * `install ollama` — local model install command for your platform\n\
+             * `paste anthropic token sk-ant-…` (or paste it anywhere)\n\
+             * `paste openai token sk-…`\n\
+             * `paste gemini token AIza…`\n\
+             * `what's possible` — boot options\n\
+             * `show config` — current ~/.hyperia/hyperia.json (token redacted)\n\
+             * `wipe config` — reset your configuration file\n\n\
+             once a model is wired, you'll be talking to the real agent (which understands much more).",
             preview
-        ),
+        )
+    };
+
+    BootReply {
+        text,
         system: vec![],
         config_changed: false,
     }
@@ -416,7 +598,7 @@ fn reply_list_models() -> BootReply {
     BootReply {
         text: "Recommended Local & Cloud Models for Hyperia:\n\n\
             * Local (Ollama):\n  \
-              - `gemma4:e2b` (Recommended - ~5GB, extremely fast, excellent structured JSON & tool dispatch)\n  \
+              - `gemma2:2b` (Recommended - ~1.6GB, extremely fast, excellent structured JSON & tool dispatch)\n  \
               - `qwen2.5-coder:7b` (Strong alternative - 4.7GB, robust code generation)\n  \
               - `deepseek-coder:6.7b` (Coding specialist)\n\n\
             * Cloud (Frontier):\n  \
@@ -506,7 +688,7 @@ fn reply_list_panes() -> BootReply {
     }
 }
 
-fn try_set_provider_token(m: &str) -> Option<BootReply> {
+pub fn try_set_provider_token(m: &str) -> Option<BootReply> {
     let parts: Vec<&str> = m.split_whitespace().collect();
     if parts.len() >= 4 && parts[0].to_lowercase() == "set" && parts[2].to_lowercase() == "token" {
         let provider = parts[1].to_lowercase();
@@ -735,15 +917,30 @@ fn reply_doctor() -> BootReply {
                         active_model = mod_name.to_string();
                     }
                     
-                    if config_obj["providers"]["anthropic"]["token"].as_str().is_some() {
-                        anthropic_configured = true;
-                    }
-                    if config_obj["providers"]["openai"]["token"].as_str().is_some() {
-                        openai_configured = true;
-                    }
-                    if config_obj["providers"]["gemini"]["token"].as_str().is_some() {
-                        gemini_configured = true;
-                    }
+                    let has_token_boot = |name: &str, config_obj: &serde_json::Value| -> bool {
+                        if config_obj["providers"][name]["token"].as_str().map(|s| !s.is_empty()).unwrap_or(false) {
+                            return true;
+                        }
+                        let env_keys = match name {
+                            "anthropic" => vec!["ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"],
+                            "openai" => vec!["OPENAI_API_KEY", "OPENAI_TOKEN"],
+                            "gemini" => vec!["GEMINI_API_KEY", "GEMINI_TOKEN"],
+                            _ => vec![],
+                        };
+                        for key in env_keys {
+                            if config_obj["env"][key].as_str().map(|s| !s.trim().is_empty()).unwrap_or(false) {
+                                return true;
+                            }
+                            if std::env::var(key).map(|s| !s.trim().is_empty()).unwrap_or(false) {
+                                return true;
+                            }
+                        }
+                        false
+                    };
+                    
+                    anthropic_configured = has_token_boot("anthropic", config_obj);
+                    openai_configured = has_token_boot("openai", config_obj);
+                    gemini_configured = has_token_boot("gemini", config_obj);
                 }
             }
         }
@@ -764,23 +961,39 @@ fn reply_doctor() -> BootReply {
         lines.push("Config Status: Not found or invalid".to_string());
     }
     
+    let ollama_disabled = is_ollama_disabled();
     let mut ollama_running = false;
-    let ollama_port = std::env::var("OLLAMA_PORT").unwrap_or_else(|_| "11434".into());
-    let ollama_addr = format!("127.0.0.1:{}", ollama_port);
-    if let Ok(addr) = ollama_addr.parse::<std::net::SocketAddr>() {
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
-            ollama_running = true;
+    if !ollama_disabled {
+        let ollama_port = std::env::var("OLLAMA_PORT").unwrap_or_else(|_| "11434".into());
+        let ollama_addr = format!("127.0.0.1:{}", ollama_port);
+        if let Ok(addr) = ollama_addr.parse::<std::net::SocketAddr>() {
+            if TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
+                ollama_running = true;
+            }
         }
     }
     
     lines.push(format!(
         "Ollama Status: {}",
-        if ollama_running {
+        if ollama_disabled {
+            "Disabled via configuration"
+        } else if ollama_running {
             "Running locally (responding on port 11434)"
         } else {
             "Not running / unreachable"
         }
     ));
+
+    let vram_opt = super::gpu::get_gpu_vram_gb();
+    if let Some(vram) = vram_opt {
+        lines.push(format!("GPU VRAM: {} GB", vram));
+        if ollama_running {
+            let target_model = if vram <= 8 { "gemma2:2b" } else { "gemma2:9b" };
+            lines.push(format!("GPU VRAM target model: {}", target_model));
+        }
+    } else {
+        lines.push("GPU VRAM: Undetected / CPU Only".to_string());
+    }
     
     let sidecar_port = std::env::var("HYPERIA_PORT").unwrap_or_else(|_| "9800".into());
     let sidecar_addr = format!("127.0.0.1:{}", sidecar_port);
@@ -800,10 +1013,15 @@ fn reply_doctor() -> BootReply {
     ));
     
     lines.push("".to_string());
-    if (anthropic_configured || openai_configured || gemini_configured || ollama_running) && !active_provider.is_empty() {
+    if (anthropic_configured || openai_configured || gemini_configured || (ollama_running && !ollama_disabled)) && !active_provider.is_empty() {
         lines.push("Diagnosis: Healthy! Capabilities should be active. If you are stuck in bootstub, try saying anything to start the real agent.".to_string());
     } else {
-        lines.push("Diagnosis: Attention Required. Please configure a provider token or start Ollama local server to enable agent brains.".to_string());
+        let help_msg = if ollama_disabled {
+            "Diagnosis: Attention Required. Please configure a provider token to enable agent brains."
+        } else {
+            "Diagnosis: Attention Required. Please configure a provider token or start Ollama local server to enable agent brains."
+        };
+        lines.push(help_msg.to_string());
     }
     
     BootReply {
@@ -993,7 +1211,7 @@ mod tests {
     #[test]
     fn test_list_models() {
         let r = handle("list models");
-        assert!(r.text.contains("gemma4:e2b"));
+        assert!(r.text.contains("gemma2:2b"));
         assert!(r.text.contains("claude-sonnet-4-6"));
         assert!(!r.config_changed);
     }

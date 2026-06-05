@@ -43,6 +43,12 @@ pub enum GhostEvent {
     Error { message: String },
     #[serde(rename = "stats")]
     Stats { input_tokens: u64, output_tokens: u64, tool_calls: usize, turns: usize },
+    #[serde(rename = "thinking_start")]
+    ThinkingStart { id: String },
+    #[serde(rename = "thinking_delta")]
+    ThinkingDelta { id: String, text: String },
+    #[serde(rename = "thinking_end")]
+    ThinkingEnd { id: String },
 }
 
 /// A tool definition in Anthropic API format.
@@ -72,6 +78,9 @@ pub enum ProviderEvent {
     MessageStop { stop_reason: String },
     Retrying { attempt: u32, wait_secs: u64 },
     Error(String),
+    ThinkingStart { id: String },
+    ThinkingDelta { id: String, text: String },
+    ThinkingEnd { id: String },
 }
 
 /// Ghost agent config, loaded from ~/.hyperia/hyperia.json.
@@ -99,6 +108,12 @@ pub struct GhostConfig {
     ///   ollama    → http://localhost:11434
     pub endpoint: String,
     pub max_turns: usize,
+    /// Maximus model configuration (optional, overrides environment/defaults)
+    pub maximus_model: Option<String>,
+    /// Maximus Ollama URL configuration (optional, overrides environment/defaults)
+    pub maximus_url: Option<String>,
+    /// Whether Maximus is explicitly disabled
+    pub maximus_disabled: bool,
 }
 
 /// Chat request from the browser.

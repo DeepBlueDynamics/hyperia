@@ -46,3 +46,7 @@ issue91.txt
 /build_v*.log
 /sidecar_build.log
 /ci_watch.log
+/nightly_watch.log
+/signed_build.log
+/tsc_check.log
+/certificate-next-steps-*.md

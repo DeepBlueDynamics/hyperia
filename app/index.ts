@@ -28,6 +28,8 @@ import {resolve} from 'path';
 
 // Packages
 import {app, BrowserWindow, Menu, screen, ipcMain} from 'electron';
+app.name = 'Hyperia';
+app.setName('Hyperia');
 
 import isDev from 'electron-is-dev';
 import {gitDescribe} from 'git-describe';
@@ -46,6 +48,106 @@ import {restoreFor} from './window-state';
 import * as windowUtils from './utils/window-utils';
 
 const windowSet = new Set<BrowserWindow>([]);
+
+// Splash screen — shown ONCE per installed version. The first launch after an
+// install/update casts the splash; a marker in the config dir then suppresses it
+// on every subsequent launch (on any platform). Returns true exactly once per
+// version, and only if the marker was persisted (so a write failure can't make
+// the splash reappear every launch).
+function shouldShowSplashOnce(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const {cfgDir} = require('./config/paths');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const path = require('path');
+    const stateFile = path.join(cfgDir, 'splash-state.json');
+    const version = app.getVersion();
+    try {
+      const stored = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+      if (stored && stored.version === version) return false; // already shown for this install
+    } catch {
+      /* no state file yet — first launch for this install */
+    }
+    // Mark BEFORE showing so a crash mid-splash can't re-trigger it forever.
+    fs.writeFileSync(stateFile, JSON.stringify({version}), 'utf8');
+    return true;
+  } catch {
+    return false; // can't persist the marker → don't risk showing it every launch
+  }
+}
+
+function _showSplash(
+  winBounds: {x: number; y: number; width: number; height: number},
+  mainWin: BrowserWindow
+): Promise<void> {
+  return new Promise((resolve_) => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const {icon: appIcon} = require('./config/paths');
+    const splash = new BrowserWindow({
+      x: winBounds.x,
+      y: winBounds.y,
+      width: winBounds.width,
+      height: winBounds.height,
+      frame: false,
+      transparent: true,
+      resizable: false,
+      skipTaskbar: true,
+      backgroundColor: '#00000000',
+      alwaysOnTop: true,
+      icon: appIcon,
+      title: 'Hyperia',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: resolve(__dirname, 'splash-preload.js')
+      }
+    });
+
+    void splash.loadFile(resolve(isDev ? __dirname : app.getAppPath(), 'splash.html'));
+
+    // Signal splash as soon as main window content loads
+    mainWin.webContents.once('did-finish-load', () => {
+      if (!splash.isDestroyed()) {
+        splash.webContents.send('app-ready');
+      }
+    });
+
+    let resolved = false;
+    const done = () => {
+      if (resolved) return;
+      resolved = true;
+      if (!splash.isDestroyed()) {
+        let opacity = 1;
+        const fadeInterval = setInterval(() => {
+          opacity -= 0.15;
+          if (opacity <= 0 || splash.isDestroyed()) {
+            clearInterval(fadeInterval);
+            if (!splash.isDestroyed()) {
+              splash.destroy();
+            }
+            // Show main window after splash is gone
+            if (!mainWin.isDestroyed() && !mainWin.isVisible()) {
+              mainWin.show();
+            }
+          } else {
+            try {
+              splash.setOpacity(opacity);
+            } catch {
+              /* already gone */
+            }
+          }
+        }, 30);
+      }
+      resolve_();
+    };
+
+    ipcMain.once('splash-done', done);
+    // Failsafe: close after 8 seconds max
+    setTimeout(done, 8000);
+  });
+}
 
 // --- Sidecar process (Rust agent engine, MCP) ---
 let sidecarProcess: ChildProcess | null = null;
@@ -370,14 +472,20 @@ app.on('ready', () => {
       // Create the terminal window (starts hidden in production)
       const firstWin = createWindow();
 
-      // No splash screen — show the main window as soon as its content is ready.
-      firstWin.webContents.once('did-finish-load', () => {
-        if (!firstWin.isDestroyed() && !firstWin.isVisible()) firstWin.show();
-      });
-      // Failsafe in case did-finish-load doesn't fire.
-      setTimeout(() => {
-        if (!firstWin.isDestroyed() && !firstWin.isVisible()) firstWin.show();
-      }, 2000);
+      // Splash only on the first launch after an install/update (once per
+      // version, any platform). _showSplash fades out and reveals the main
+      // window itself; otherwise just show the window when its content loads.
+      if (shouldShowSplashOnce()) {
+        void _showSplash(firstWin.getBounds(), firstWin);
+      } else {
+        firstWin.webContents.once('did-finish-load', () => {
+          if (!firstWin.isDestroyed() && !firstWin.isVisible()) firstWin.show();
+        });
+        // Failsafe in case did-finish-load doesn't fire.
+        setTimeout(() => {
+          if (!firstWin.isDestroyed() && !firstWin.isVisible()) firstWin.show();
+        }, 2000);
+      }
 
       // expose to plugins
       app.createWindow = createWindow;

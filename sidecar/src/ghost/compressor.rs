@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use super::ferricula::FerriculaBackend;
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
-const DEFAULT_MODEL: &str = "gemma4:e2b";
+const DEFAULT_MODEL: &str = "gemma2:2b";
 const DEFAULT_KEEP_RECENT: usize = 6;
 const COMPRESS_THRESHOLD: usize = 10;
 pub const FOCUS_MIN_CHARS: usize = 400;
@@ -94,6 +94,7 @@ pub struct ContextCompressor {
     ferricula: Option<Arc<FerriculaBackend>>,
     pattern_cache: Arc<RwLock<HashMap<String, LearnedPattern>>>,
     last_meta: Arc<Mutex<Option<MaximusMeta>>>,
+    pub disabled: bool,
 }
 
 impl ContextCompressor {
@@ -109,13 +110,55 @@ impl ContextCompressor {
             ferricula: None,
             pattern_cache: Arc::new(RwLock::new(HashMap::new())),
             last_meta: Arc::new(Mutex::new(None)),
+            disabled: false,
         }
     }
 
     pub fn from_env() -> Self {
         let url = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| DEFAULT_OLLAMA_URL.to_string());
         let model = std::env::var("MAXIMUS_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-        Self::new(&url, &model)
+        let mut comp = Self::new(&url, &model);
+        comp.disabled = std::env::var("MAXIMUS_DISABLED").map(|s| s.trim().to_lowercase() == "true" || s.trim() == "1").unwrap_or(false);
+        comp
+    }
+
+    pub fn get_url(&self) -> String {
+        if let Some(cfg) = super::load_config() {
+            if let Some(ref url) = cfg.maximus_url {
+                return url.clone();
+            }
+        }
+        std::env::var("OLLAMA_HOST").unwrap_or_else(|_| self.ollama_url.clone())
+    }
+
+    pub fn get_model(&self) -> String {
+        if let Some(cfg) = super::load_config() {
+            if let Some(ref model) = cfg.maximus_model {
+                return model.clone();
+            }
+        }
+        std::env::var("MAXIMUS_MODEL").unwrap_or_else(|_| self.model.clone())
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        if let Some(cfg) = super::load_config() {
+            if cfg.maximus_disabled {
+                return true;
+            }
+        }
+        std::env::var("MAXIMUS_DISABLED").map(|s| s.trim().to_lowercase() == "true" || s.trim() == "1").unwrap_or(self.disabled)
+    }
+
+    pub fn from_config(cfg: &super::types::GhostConfig) -> Self {
+        let url = cfg.maximus_url.clone()
+            .or_else(|| std::env::var("OLLAMA_HOST").ok())
+            .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string());
+        let model = cfg.maximus_model.clone()
+            .or_else(|| std::env::var("MAXIMUS_MODEL").ok())
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+        let mut comp = Self::new(&url, &model);
+        comp.disabled = cfg.maximus_disabled || std::env::var("MAXIMUS_DISABLED").map(|s| s.trim().to_lowercase() == "true" || s.trim() == "1").unwrap_or(false);
+        comp
     }
 
     pub fn with_ferricula(mut self, fc: Arc<FerriculaBackend>) -> Self {
@@ -124,7 +167,12 @@ impl ContextCompressor {
     }
 
     pub async fn is_available(&self) -> bool {
-        let tags_url = format!("{}/api/tags", self.ollama_url);
+        if self.is_disabled() {
+            return false;
+        }
+        let ollama_url = self.get_url();
+        let model = self.get_model();
+        let tags_url = format!("{}/api/tags", ollama_url);
         let resp = match self.client.get(&tags_url).send().await {
             Ok(r) if r.status().is_success() => r,
             _ => return false,
@@ -141,22 +189,22 @@ impl ContextCompressor {
                 models.iter().any(|m| {
                     m["name"]
                         .as_str()
-                        .map(|n| n == self.model || n.starts_with(&format!("{}:", self.model)))
+                        .map(|n| n == model || n.starts_with(&format!("{}:", model)))
                         .unwrap_or(false)
                 })
             })
             .unwrap_or(false);
 
         if !model_present {
-            info!("maximus: model '{}' not found — pulling in background", self.model);
+            info!("maximus: model '{}' not found — pulling in background", model);
             let client = self.client.clone();
-            let url = format!("{}/api/pull", self.ollama_url);
-            let model = self.model.clone();
+            let url = format!("{}/api/pull", ollama_url);
+            let model_clone = model.clone();
             tokio::spawn(async move {
-                let body = serde_json::json!({"name": model, "stream": false});
+                let body = serde_json::json!({"name": model_clone, "stream": false});
                 match client.post(&url).json(&body).send().await {
                     Ok(r) if r.status().is_success() => {
-                        tracing::info!("maximus: model '{}' pull complete", model)
+                        tracing::info!("maximus: model '{}' pull complete", model_clone)
                     }
                     Ok(r) => tracing::warn!("maximus: model pull returned HTTP {}", r.status()),
                     Err(e) => tracing::warn!("maximus: model pull failed: {}", e),
@@ -435,7 +483,7 @@ impl ContextCompressor {
     async fn classify_content(&self, content: &str) -> anyhow::Result<String> {
         let snippet = &content[..content.len().min(800)];
         let body = serde_json::json!({
-            "model": self.model,
+            "model": self.get_model(),
             "messages": [
                 {
                     "role": "system",
@@ -451,7 +499,7 @@ impl ContextCompressor {
 
         let resp = self
             .client
-            .post(format!("{}/api/chat", self.ollama_url))
+            .post(format!("{}/api/chat", self.get_url()))
             .json(&body)
             .send()
             .await?;
@@ -470,7 +518,7 @@ impl ContextCompressor {
     async fn derive_strategy(&self, content: &str, content_type: &str) -> anyhow::Result<String> {
         let snippet = &content[..content.len().min(800)];
         let body = serde_json::json!({
-            "model": self.model,
+            "model": self.get_model(),
             "messages": [
                 {
                     "role": "system",
@@ -489,7 +537,7 @@ impl ContextCompressor {
 
         let resp = self
             .client
-            .post(format!("{}/api/chat", self.ollama_url))
+            .post(format!("{}/api/chat", self.get_url()))
             .json(&body)
             .send()
             .await?;
@@ -517,7 +565,7 @@ impl ContextCompressor {
             format!(" Specific focus: {focus}.")
         };
         let body = serde_json::json!({
-            "model": self.model,
+            "model": self.get_model(),
             "messages": [
                 {
                     "role": "system",
@@ -534,7 +582,7 @@ impl ContextCompressor {
 
         let resp = self
             .client
-            .post(format!("{}/api/chat", self.ollama_url))
+            .post(format!("{}/api/chat", self.get_url()))
             .json(&body)
             .send()
             .await?;
@@ -553,7 +601,7 @@ impl ContextCompressor {
     async fn summarize(&self, messages: &[Value]) -> anyhow::Result<String> {
         let text = render_messages(messages);
         let body = serde_json::json!({
-            "model": self.model,
+            "model": self.get_model(),
             "messages": [
                 {
                     "role": "system",
@@ -571,7 +619,7 @@ impl ContextCompressor {
 
         let resp = self
             .client
-            .post(format!("{}/api/chat", self.ollama_url))
+            .post(format!("{}/api/chat", self.get_url()))
             .json(&body)
             .send()
             .await?;
@@ -693,7 +741,7 @@ mod tests {
         std::env::remove_var("MAXIMUS_MODEL");
         let c = ContextCompressor::from_env();
         assert_eq!(c.ollama_url, "http://localhost:11434");
-        assert_eq!(c.model, "gemma4:e2b");
+        assert_eq!(c.model, "gemma2:2b");
     }
 
     #[test]
@@ -705,6 +753,55 @@ mod tests {
         std::env::remove_var("MAXIMUS_MODEL");
         assert_eq!(c.ollama_url, "http://custom:9999");
         assert_eq!(c.model, "mistral");
+    }
+
+    #[test]
+    fn getters_prefer_config_then_env_then_fields() {
+        let temp_dir = std::env::temp_dir().join(format!("hyperia_test_{}", std::process::id()));
+        let config_dir = temp_dir.join(".hyperia");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let config_file = config_dir.join("hyperia.json");
+
+        let config_json = serde_json::json!({
+            "config": {
+                "maximus": {
+                    "model": "gemma2:9b-mock",
+                    "url": "http://mock-ollama:11434",
+                    "disabled": true
+                }
+            }
+        });
+        std::fs::write(&config_file, serde_json::to_string(&config_json).unwrap()).unwrap();
+
+        std::env::set_var("HYPERIA_MOCK_HOME", temp_dir.to_str().unwrap());
+        std::env::set_var("OLLAMA_HOST", "http://env-ollama:11434");
+        std::env::set_var("MAXIMUS_MODEL", "gemma2:env-model");
+        std::env::set_var("MAXIMUS_DISABLED", "false");
+
+        let c = ContextCompressor::new("http://default-ollama:11434", "gemma2:default-model");
+        assert_eq!(c.get_url(), "http://mock-ollama:11434");
+        assert_eq!(c.get_model(), "gemma2:9b-mock");
+        assert!(c.is_disabled());
+
+        let config_json_empty = serde_json::json!({
+            "config": {
+                "maximus": {}
+            }
+        });
+        std::fs::write(&config_file, serde_json::to_string(&config_json_empty).unwrap()).unwrap();
+        
+        assert_eq!(c.get_url(), "http://env-ollama:11434");
+        assert_eq!(c.get_model(), "gemma2:env-model");
+        std::env::remove_var("OLLAMA_HOST");
+        std::env::remove_var("MAXIMUS_MODEL");
+        std::env::remove_var("MAXIMUS_DISABLED");
+        
+        assert_eq!(c.get_url(), "http://default-ollama:11434");
+        assert_eq!(c.get_model(), "gemma2:default-model");
+        assert!(!c.is_disabled());
+
+        std::env::remove_var("HYPERIA_MOCK_HOME");
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     // --- compress_messages: passthrough when under threshold ---
@@ -933,7 +1030,7 @@ mod tests {
         assert!(out.len() < 300);
     }
 
-    // --- Live integration tests (require Ollama running with gemma4:e2b) ---
+    // --- Live integration tests (require Ollama running with gemma2:2b) ---
     // Run with: cargo test ghost::compressor::tests::live -- --ignored --nocapture
 
     fn agent_msgs() -> Vec<Value> {
@@ -959,9 +1056,9 @@ mod tests {
                 {"type":"tool_use","name":"terminal_run","input":{"command":"curl -s http://localhost:11434/api/tags | jq '.models[].name'","tab":"maximus"}}
             ]}),
             serde_json::json!({"role":"user","content":[
-                {"type":"tool_result","content":"\"gemma4:e2b\"\n\"llama3.2:3b\""}
+                {"type":"tool_result","content":"\"gemma2:2b\"\n\"llama3.2:3b\""}
             ]}),
-            serde_json::json!({"role":"assistant","content":"Ollama is up. Two models available: gemma4:e2b and llama3.2:3b."}),
+            serde_json::json!({"role":"assistant","content":"Ollama is up. Two models available: gemma2:2b and llama3.2:3b."}),
             serde_json::json!({"role":"user","content":"Run the live integration tests too."}),
             serde_json::json!({"role":"assistant","content":[
                 {"type":"tool_use","name":"terminal_run","input":{"command":"cargo test ghost::compressor::tests::live -- --ignored --nocapture 2>&1","tab":"maximus"}}
@@ -1042,7 +1139,7 @@ focus="port number"
 input=The server started on port 8080. There were 3 warnings about deprecated APIs.
 output=The server started on port 8080. There were 3 warnings about deprecated APIs.
 test ghost::compressor::tests::live_extract_focused_from_screen_dump ... ok
-Ollama available: true  url=http://localhost:11434 model=gemma4:e2b
+Ollama available: true  url=http://localhost:11434 model=gemma2:2b
 test ghost::compressor::tests::live_is_available ... ok
 test ghost::compressor::tests::live_compress_messages ... ok
 output: The kubernetes cluster name is not present in the output.
@@ -1067,7 +1164,7 @@ focus="port number"
 input=The server started on port 8080. There were 3 warnings about deprecated APIs.
 output=The server started on port 8080. There were 3 warnings about deprecated APIs.
 test ghost::compressor::tests::live_extract_focused_from_screen_dump ... ok
-Ollama available: true  url=http://localhost:11434 model=gemma4:e2b
+Ollama available: true  url=http://localhost:11434 model=gemma2:2b
 test ghost::compressor::tests::live_is_available ... ok
 test ghost::compressor::tests::live_compress_messages ... ok
 output: The kubernetes cluster name is not present in the output.
@@ -1083,7 +1180,7 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; fin
 
         let out2 = c.extract_focused(screen, "which model is Ollama using").await;
         println!("focus: ollama model\noutput: {out2}");
-        assert!(out2.contains("gemma4") || out2.contains("e2b"), "expected model name in: {out2}");
+        assert!(out2.contains("gemma2") || out2.contains("2b"), "expected model name in: {out2}");
     }
 
     #[tokio::test]

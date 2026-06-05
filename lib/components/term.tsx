@@ -36,6 +36,18 @@ export const activeTerminals = new Map<string, Term>();
 
 const isWindows = ['Windows', 'Win16', 'Win32', 'WinCE'].includes(navigator.platform) || process.platform === 'win32';
 
+// A profile's shell path reveals its OS: Windows shells use .exe / backslashes /
+// drive letters, Unix shells are absolute /paths. A config synced between
+// machines can carry a Windows profile (WSL, cmd, pwsh) onto a Mac (or vice
+// versa) — hide profiles whose shell belongs to the other platform so the
+// picker only shows shells that can actually run here.
+const profileFitsPlatform = (p: any): boolean => {
+  const shell = String(p?.config?.shell || '');
+  if (!shell) return true;
+  const looksWindows = /\.exe$|\\|^[A-Za-z]:/.test(shell);
+  return isWindows ? looksWindows : !looksWindows;
+};
+
 // map old hterm constants to xterm.js
 const CURSOR_STYLES = {
   BEAM: 'bar',
@@ -2637,7 +2649,7 @@ export default class Term extends React.PureComponent<
                   fontFamily: 'var(--font-sans)'
                 }}
               >
-                New Terminal Session
+                New Pane
               </div>
 
               <div
@@ -2646,7 +2658,7 @@ export default class Term extends React.PureComponent<
                   alignItems: 'center',
                   gap: 'var(--space-10)',
                   width: '100%',
-                  maxWidth: '280px'
+                  maxWidth: '560px'
                 }}
               >
                 <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
@@ -2662,7 +2674,9 @@ export default class Term extends React.PureComponent<
                     const n = p.name.toLowerCase();
                     // Agents live under "pick an agent", not the shell grid:
                     // built-in agent names + any custom profile saved as kind 'agent'.
-                    return n !== 'claude code' && n !== 'nemesis8' && p.kind !== 'agent';
+                    if (n === 'claude code' || n === 'nemesis8' || p.kind === 'agent') return false;
+                    // Don't show shells that belong to another OS (synced config).
+                    return profileFitsPlatform(p);
                   })
                   // Stock (system-detected, no `kind`) shells first; user-added
                   // custom shells (kind:'shell') after. Stable, so each group
@@ -2739,7 +2753,7 @@ export default class Term extends React.PureComponent<
                   alignItems: 'center',
                   gap: 'var(--space-10)',
                   width: '100%',
-                  maxWidth: '280px',
+                  maxWidth: '560px',
                   marginTop: 'var(--space-4)'
                 }}
               >
@@ -2804,7 +2818,7 @@ export default class Term extends React.PureComponent<
                 </button>
                 {/* Custom agents the user saved (kind 'agent') */}
                 {((this.props as any).profiles || [])
-                  .filter((p: any) => p.kind === 'agent')
+                  .filter((p: any) => p.kind === 'agent' && profileFitsPlatform(p))
                   .map((p: any) => (
                     <button
                       key={p.name}
@@ -2849,7 +2863,7 @@ export default class Term extends React.PureComponent<
                   alignItems: 'center',
                   gap: 'var(--space-10)',
                   width: '100%',
-                  maxWidth: '280px',
+                  maxWidth: '560px',
                   marginTop: 'var(--space-4)'
                 }}
               >
@@ -3312,6 +3326,7 @@ export default class Term extends React.PureComponent<
             display: flex;
             align-items: center;
             justify-content: center;
+            gap: 6px;
             transition:
               background 0.15s ease,
               border-color 0.15s ease;
@@ -3359,10 +3374,13 @@ export default class Term extends React.PureComponent<
 
           .term_pickerGrid_rev {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
+            /* 4 across when wide (560 fits 4×110+gaps), squish to fewer as the
+               pane narrows. auto-fit + margin auto keeps the grid centered. */
+            grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
             gap: 6px;
             width: 100%;
-            max-width: 280px;
+            max-width: 560px;
+            margin: 0 auto;
           }
 
           .term_pickerButton_rev {
@@ -3378,6 +3396,7 @@ export default class Term extends React.PureComponent<
             display: flex;
             align-items: center;
             justify-content: center;
+            gap: 6px;
             transition:
               background 0.15s ease,
               border-color 0.15s ease;

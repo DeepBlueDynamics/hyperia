@@ -729,8 +729,14 @@ function handleCommand(msg: Record<string, unknown>) {
       const text = msg.text as string | undefined;
       const color = msg.color as string | undefined;
       const filePath = msg.filePath as string | undefined;
-      createStickyNote({text, color, filePath});
-      sendResult(seq, 'ok');
+      const res = createStickyNote({text, color, filePath}) as any;
+      if (res && res.error) {
+        // e.g. an unreachable code-sticky file — report it instead of "ok".
+        sendResult(seq, JSON.stringify({ok: false, error: res.error}));
+      } else {
+        // Return the note's id + name so the caller doesn't have to look it up.
+        sendResult(seq, JSON.stringify({ok: true, id: res?.id, name: res?.name}));
+      }
       break;
     }
 
@@ -743,8 +749,8 @@ function handleCommand(msg: Record<string, unknown>) {
 
     case 'NoteOpen': {
       const noteId = msg.id as string;
-      const win = createStickyNote({id: noteId});
-      sendResult(seq, win ? 'ok' : 'Note not found');
+      const res = createStickyNote({id: noteId}) as any;
+      sendResult(seq, res?.win ? 'ok' : 'Note not found');
       break;
     }
 

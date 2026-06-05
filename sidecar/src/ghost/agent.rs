@@ -94,11 +94,13 @@ The docker_run tool is your one terminal exception — it exists so you can star
 - If docker_run returns success=false or a non-zero exit_code, read the stderr field and explain the failure to the user — don't just retry.
 
 ## Changing the model
-When the user says \"change my model\", \"switch to OpenAI\", \"use Claude\", or anything similar, follow this exact two-step flow:
-  1. Call model_catalog() (no args). You get back a list of providers — anthropic, openai, ollama. Call show_picker with id=\"provider\" and one option per provider (use the `label` field as the picker label, `provider` as the value).
+When the user says \"change my model\", \"switch to OpenAI\", \"use Claude\", or anything similar, follow this exact flow:
+  1. Call model_catalog() (no args). You get back a list of providers — anthropic, openai, gemini, ollama. Call show_picker with id=\"provider\" and one option per provider (use the `label` field as the picker label, `provider` as the value).
   2. After the user picks a provider, call model_catalog(provider=\"<choice>\"). You get back the models for that provider. Call show_picker with id=\"model\" and one option per model (use `name` + a description line from `note` and `context`, and `id` as the value).
-  3. After the user picks a model, call settings_set with path=\"config.agentModel\" and value=<id>. Tell the user the change is saved and takes effect on the next message.
-  4. If they pick an `openai` model and there's no OpenAI key configured, follow up with show_input(id=\"openai_key\", kind=\"password\") to collect it, then settings_set(\"config.openaiToken\", <value>).
+  3. After the user picks a model, write both config settings:
+       settings_set with path=\"config.agent.provider\" and value=<provider>
+       settings_set with path=\"config.agent.model\" and value=<model_id>
+  4. If the chosen provider has no token configured (settings_get(\"config.providers.<provider>.token\") returns null/empty) and the provider isn't ollama, follow up with show_input(id=\"token\", kind=\"password\") to collect it, then settings_set(\"config.providers.<provider>.token\", <value>).
 Do not invent models. Only present what model_catalog returns.";
 
 #[derive(Debug, Clone)]
@@ -338,7 +340,7 @@ async fn run_loop(
     compressor.load_patterns_from_ferricula().await;
     let compress = compressor.is_available().await;
     if compress {
-        tracing::info!("maximus: context compression active ({})", compressor.model);
+        tracing::info!("maximus: context compression active ({})", compressor.get_model());
     }
 
     let mut turns = 0;
@@ -443,6 +445,18 @@ After cleanup, reply to the human and end the turn."
 
         while let Some(event) = event_rx.recv().await {
             match event {
+                ProviderEvent::ThinkingStart { id } => {
+                    text_parts.push("[Thinking: ".to_string());
+                    let _ = tx.send(GhostEvent::ThinkingStart { id }).await;
+                }
+                ProviderEvent::ThinkingDelta { id, text } => {
+                    text_parts.push(text.clone());
+                    let _ = tx.send(GhostEvent::ThinkingDelta { id, text }).await;
+                }
+                ProviderEvent::ThinkingEnd { id } => {
+                    text_parts.push("]\n\n".to_string());
+                    let _ = tx.send(GhostEvent::ThinkingEnd { id }).await;
+                }
                 ProviderEvent::TextDelta(text) => {
                     text_parts.push(text.clone());
                     let _ = tx.send(GhostEvent::TextDelta { text }).await;

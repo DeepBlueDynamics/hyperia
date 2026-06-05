@@ -496,25 +496,13 @@ function updateNote(id: string, text: string): boolean {
 
 const lastStickyNotify = new Map<string, number>();
 function notifyStickyUpdated(note: NoteData): void {
-  if (!Notification.isSupported()) return;
-  const now = Date.now();
-  const last = lastStickyNotify.get(note.id) || 0;
-  if (now - last < 30000) return; // at most one ping per note per 30s
-  lastStickyNotify.set(note.id, now);
-  const n = new Notification({
-    title: `📝 ${note.name || 'Sticky'} updated`,
-    body: (note.text || '').replace(/\s+/g, ' ').slice(0, 140)
-  });
-  n.on('click', () => {
-    const w = stickyWindows.get(note.id);
-    if (w && !w.isDestroyed()) {
-      w.show();
-      w.focus();
-    } else {
-      createStickyNote({id: note.id});
-    }
-  });
-  n.show();
+  const w = stickyWindows.get(note.id);
+  if (w && !w.isDestroyed()) {
+    w.show();
+    w.focus();
+  } else {
+    createStickyNote({id: note.id});
+  }
 }
 
 function deleteNote(id: string): boolean {
@@ -642,6 +630,18 @@ function createStickyNote(
 ) {
   if (options.filePath) {
     options.filePath = translateContainerPath(options.filePath);
+    // Code stickies render the file's contents. If the (translated) path isn't
+    // reachable from the Hyperia host — e.g. a container /workspace path that
+    // doesn't exist on this OS — fail loudly instead of silently ACKing and
+    // opening a note that just shows "Error reading file".
+    if (!existsSync(options.filePath)) {
+      return {
+        win: null as BrowserWindow | null,
+        id: options.id || '',
+        name: basename(options.filePath),
+        error: `Cannot read file '${options.filePath}' — not reachable from the Hyperia host. If you're running in a container or on another machine, the path isn't accessible here; pass the content via sticky_note_create instead, or use a host-reachable path.`
+      };
+    }
   }
 
   const cursor = screen.getCursorScreenPoint();
@@ -658,7 +658,7 @@ function createStickyNote(
     }
     existing.setAlwaysOnTop(true, 'floating');
     existing.focus();
-    return existing;
+    return {win: existing, id: noteId, name: getNote(noteId)?.name || noteId};
   }
 
   // Generate a random name (or use existing)
@@ -824,7 +824,7 @@ function createStickyNote(
     stopFileWatch(noteId);
   });
 
-  return win;
+  return {win, id: noteId, name: displayName};
 }
 
 export function initSticky() {

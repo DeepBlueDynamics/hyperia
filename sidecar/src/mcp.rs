@@ -1686,7 +1686,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Create a new sticky note floating window. Optionally provide initial text and a background color hex.")]
+    #[tool(description = "Create a new sticky note floating window. Optionally provide initial text and a background color hex. Returns {ok, id, name} — use the returned id/name directly; no need to call sticky_note_list afterward.")]
     async fn sticky_note_create(
         &self,
         Parameters(req): Parameters<NoteCreateRequest>,
@@ -1716,7 +1716,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Open a source file as a code-highlighted sticky note. The note reads directly from disk. Provide a verified absolute path — the sidecar will reject the call if the file does not exist.")]
+    #[tool(description = "Open a source file as a code-highlighted sticky note. The note reads the file directly from the Hyperia host's disk. Provide an absolute path reachable from that host — if the file can't be read (e.g. a container/remote /workspace path that doesn't exist on this OS), the call returns {ok:false, error:...} and creates nothing instead of silently succeeding. On success returns {ok, id, name}.")]
     async fn sticky_note_create_code(
         &self,
         Parameters(req): Parameters<StickyNoteCreateCodeRequest>,

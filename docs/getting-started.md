@@ -42,7 +42,7 @@ For production/release builds (installers, code signing, nightly), see [building
 On first run Hyperia casts a one-time splash, then opens a terminal. The built-in **Ghost** agent ("Ask Hyperia" / right-click menu) needs a provider configured to be useful:
 
 - **Frontier** — set an API key for `anthropic` (or `openai` / `gemini`) under `providers` in `~/.hyperia/hyperia.json`, and an `agent.provider` / `agent.model`.
-- **Local** — point it at a local Ollama; with nothing else configured the Ghost falls back to local Ollama (`gemma4:12b`).
+- **Local** — point it at a local Ollama; with nothing else configured the Ghost falls back to local Ollama (`gemma2:9b`).
 
 See [configuration.md](configuration.md) for the full config shape and [ghost-agent.md](ghost-agent.md) for the built-in agent.
 

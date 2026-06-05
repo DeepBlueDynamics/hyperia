@@ -37,7 +37,7 @@ The built-in **Ghost** agent picks its model from the `agent` block plus a match
 - `providers.<name>.token` — the API key for that provider (`ollama` needs none).
 - `providers.<name>.endpoint` — optional override of the provider's base URL.
 
-If no usable frontier provider/token is configured, the Ghost falls back to a local **Ollama** model (`gemma4:12b`). The legacy top-level keys `agentToken` / `agentModel` are still read and migrated, but the `agent` + `providers` shape above is the source of truth.
+If no usable frontier provider/token is configured, the Ghost falls back to a local **Ollama** model (`gemma2:9b`). The legacy top-level keys `agentToken` / `agentModel` are still read and migrated, but the `agent` + `providers` shape above is the source of truth.
 
 > **Ferricula** (optional external memory) is not configured here — it's resolved from the `FERRICULA_URL` environment variable (default `http://localhost:8765`) and is a no-op when unreachable. See [memory.md](memory.md).
 

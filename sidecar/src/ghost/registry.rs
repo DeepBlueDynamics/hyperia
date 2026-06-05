@@ -158,6 +158,9 @@ impl ToolRegistry {
                 "file_write",
                 "web_fetch",
                 "open_web_pane",
+                "web_pane_content",
+                "web_pane_eval",
+                "web_pane_mouse",
                 "tab_snapshot",
                 "shell_state",
                 "show_input",
@@ -1004,6 +1007,48 @@ impl ToolRegistry {
 
                 return match self.client
                     .post(format!("{}/api/web-pane/click{}", base, query))
+                    .json(&body)
+                    .send()
+                    .await
+                {
+                    Ok(resp) => resp.text().await.unwrap_or_else(|e| format!("Error: {}", e)),
+                    Err(e) => format!("Error: {}", e),
+                };
+            }
+            "web_pane_content" => {
+                return match self.client
+                    .post(build_target_url("/api/web-pane/content"))
+                    .send()
+                    .await
+                {
+                    Ok(resp) => resp.text().await.unwrap_or_else(|e| format!("Error: {}", e)),
+                    Err(e) => format!("Error: {}", e),
+                };
+            }
+            "web_pane_eval" => {
+                let js = input["js"].as_str().unwrap_or("");
+                let body = serde_json::json!({ "js": js });
+                return match self.client
+                    .post(build_target_url("/api/web-pane/eval"))
+                    .json(&body)
+                    .send()
+                    .await
+                {
+                    Ok(resp) => resp.text().await.unwrap_or_else(|e| format!("Error: {}", e)),
+                    Err(e) => format!("Error: {}", e),
+                };
+            }
+            "web_pane_mouse" => {
+                let x = input["x"].as_f64().unwrap_or(0.0);
+                let y = input["y"].as_f64().unwrap_or(0.0);
+                let action = input["action"].as_str().unwrap_or("move");
+                let body = serde_json::json!({
+                    "x": x,
+                    "y": y,
+                    "action": action,
+                });
+                return match self.client
+                    .post(build_target_url("/api/web-pane/mouse"))
                     .json(&body)
                     .send()
                     .await
@@ -2073,6 +2118,48 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
             }
         },
         {
+            "name": "web_pane_content",
+            "description": "Read the CURRENT page of a web pane as clean reader-mode MARKDOWN. Returns JSON {success, url, title, markdown}: `url` is the LIVE location.href (the opened URL in terminal_status goes stale after the user navigates — this is the real one), `title` is document.title, `markdown` is the page's main content converted from the ALREADY-RENDERED DOM (post-JS, logged-in/cookie state applied) by grub's converter — nav/footer/ads stripped. Strictly better than re-crawling the URL, which would re-fetch a possibly bot-blocked or logged-out version. Use this to see what page the user is on and extract its content (recipe, article, docs, search results). Address panes with window/tab/pane.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "window": { "type": "integer", "description": "Window id from terminal_status (optional)" },
+                    "tab": { "type": "string", "description": "Tab name from terminal_status (optional)" },
+                    "pane": { "type": "string", "description": "Pane label within the tab, e.g. 'a' or 'b' (optional)" }
+                }
+            }
+        },
+        {
+            "name": "web_pane_eval",
+            "description": "Run arbitrary JavaScript inside a web pane and return its result. The code runs in the page's context (full DOM access), with a user-gesture so gesture-gated APIs work. The value of the LAST expression is returned as JSON {success, value}; return a Promise to await async work. Use this to scrape structured data, fill forms, read computed state, drive a SPA — anything the page's own JS could do. Address panes with window/tab/pane.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "js": { "type": "string", "description": "JavaScript code string to evaluate" },
+                    "window": { "type": "integer", "description": "Window id from terminal_status (optional)" },
+                    "tab": { "type": "string", "description": "Tab name from terminal_status (optional)" },
+                    "pane": { "type": "string", "description": "Pane label within the tab, e.g. 'a' or 'b' (optional)" }
+                },
+                "required": ["js"]
+            }
+        },
+        {
+            "name": "web_pane_mouse",
+            "description": "Move or click at a pixel coordinate in a web pane, with a 👻 ghost cursor that visibly GLIDES to the spot so the human can watch you act. action='move' just glides the ghost there; action='click' glides then fires the full pointer/mouse event sequence on the element at (x,y). Coordinates are CSS pixels from the top-left of the page viewport (use web_pane_content / web_pane_eval with getBoundingClientRect to find them). Returns JSON {success, action, x, y, target, text}. Address panes with window/tab/pane.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "x": { "type": "integer", "description": "X coordinate in CSS pixels" },
+                    "y": { "type": "integer", "description": "Y coordinate in CSS pixels" },
+                    "action": { "type": "string", "enum": ["move", "click"], "description": "Whether to just move ('move') or click ('click', default)" },
+                    "window": { "type": "integer", "description": "Window id from terminal_status (optional)" },
+                    "tab": { "type": "string", "description": "Tab name from terminal_status (optional)" },
+                    "pane": { "type": "string", "description": "Pane label within the tab, e.g. 'a' or 'b' (optional)" }
+                },
+                "required": ["x", "y"]
+            }
+        },
+        {
             "name": "open_web_pane",
             "description": "Open a URL in a new web pane tab. Opens a dedicated browser tab inside Hyperia showing the given URL. Use this to show documentation, dashboards, search results, or any web content. Example: open_web_pane with url='https://google.com'",
             "input_schema": {
@@ -2472,10 +2559,12 @@ const MODEL_CATALOG: &[ModelEntry] = &[
     ModelEntry { id: "o3-mini",                 name: "o3-mini",                provider: "openai",    context: 200_000, tier: "reasoning", note: "Smaller reasoning model" },
     ModelEntry { id: "o1",                      name: "o1",                     provider: "openai",    context: 200_000, tier: "reasoning", note: "Deep reasoning, no streaming" },
     // Local Ollama
-    ModelEntry { id: "ollama:gemma4:12b",       name: "Gemma 4 12B",            provider: "ollama",    context: 8_192,   tier: "local",    note: "Default local Ollama model for Hyperia shell" },
+    ModelEntry { id: "ollama:gemma4:e2b",       name: "Gemma 4 e2b",            provider: "ollama",    context: 8_192,   tier: "tiny",     note: "Maximus's compression model — small + fast" },
+    ModelEntry { id: "ollama:gemma4:12b",      name: "Gemma 4 12B",            provider: "ollama",    context: 8_192,   tier: "local",    note: "Ollama gemma4 local model" },
+    ModelEntry { id: "ollama:gemma2:9b",        name: "Gemma 2 9B",             provider: "ollama",    context: 8_192,   tier: "local",    note: "Default local Ollama model for Hyperia shell" },
     ModelEntry { id: "ollama:llama3.2",         name: "Llama 3.2",              provider: "ollama",    context: 128_000, tier: "local",    note: "General-purpose local model" },
     ModelEntry { id: "ollama:qwen2.5",          name: "Qwen 2.5",               provider: "ollama",    context: 128_000, tier: "local",    note: "Strong tool calling for a local model" },
-    ModelEntry { id: "ollama:gemma4:e2b",       name: "Gemma 4 e2b",            provider: "ollama",    context: 8_192,   tier: "tiny",     note: "Maximus's compression model — small + fast" },
+    ModelEntry { id: "ollama:gemma2:2b",        name: "Gemma 2 2B",             provider: "ollama",    context: 8_192,   tier: "tiny",     note: "Maximus's compression model — small + fast" },
     ModelEntry { id: "ollama:mistral",          name: "Mistral 7B",             provider: "ollama",    context: 32_768,  tier: "local",    note: "Solid baseline local model" },
 ];
 
@@ -2585,12 +2674,29 @@ async fn probe_ollama() -> serde_json::Value {
                         .collect()
                 })
                 .unwrap_or_default();
+
+            // 1. Detect VRAM using modular helper
+            let vram_opt = super::gpu::get_gpu_vram_gb();
+            let mut download_triggered = false;
+            let mut target_model = None;
+            
+            if let Some(vram) = vram_opt {
+                let (model, triggered) = super::gpu::trigger_ollama_pull(&url, vram, &models);
+                target_model = Some(model);
+                download_triggered = triggered;
+            }
+
             serde_json::json!({
                 "running": true,
                 "url": url,
                 "models": models,
+                "gpu": {
+                    "vram_gb": vram_opt,
+                    "target_model": target_model,
+                    "download_triggered": download_triggered
+                }
             })
         }
-        _ => serde_json::json!({ "running": false, "url": url, "models": [] }),
+        _ => serde_json::json!({ "running": false, "url": url, "models": [], "gpu": null }),
     }
 }

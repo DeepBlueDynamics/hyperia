@@ -52,6 +52,27 @@ pub async fn ghost_chat(
     State(state): State<GhostState>,
     Json(req): Json<ChatRequest>,
 ) -> Sse<Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>> {
+    // 1. Check for token setting intercept
+    let mut intercept_reply = None;
+    if let Some(reply) = super::bootstub::try_set_token(&req.message) {
+        intercept_reply = Some(reply);
+    } else if let Some(reply) = super::bootstub::try_set_provider_token(&req.message) {
+        intercept_reply = Some(reply);
+    } else if let Some(reply) = super::bootstub::try_toggle_maximus(&req.message) {
+        intercept_reply = Some(reply);
+    }
+
+    if let Some(reply) = intercept_reply {
+        let s = async_stream::stream! {
+            let event = GhostEvent::TextDelta {
+                text: reply.text,
+            };
+            let json = serde_json::to_string(&event).unwrap_or_default();
+            yield Ok::<_, Infallible>(Event::default().data(json));
+        };
+        return Sse::new(Box::pin(s));
+    }
+
     // Lazy-load config each request — no restart needed after setting token
     let config = match super::load_config() {
         Some(c) => c,
@@ -310,10 +331,33 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
         .trim()
         .to_lowercase();
     let has_token = |name: &str| -> bool {
-        providers[name]["token"].as_str().map(|s| !s.is_empty()).unwrap_or(false)
+        if providers[name]["token"].as_str().map(|s| !s.is_empty()).unwrap_or(false) {
+            return true;
+        }
+        let env_keys = match name {
+            "anthropic" => vec!["ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"],
+            "openai" => vec!["OPENAI_API_KEY", "OPENAI_TOKEN"],
+            "gemini" => vec!["GEMINI_API_KEY", "GEMINI_TOKEN"],
+            _ => vec![],
+        };
+        for key in env_keys {
+            if raw_cfg["config"]["env"][key].as_str().map(|s| !s.trim().is_empty()).unwrap_or(false) {
+                return true;
+            }
+            if std::env::var(key).map(|s| !s.trim().is_empty()).unwrap_or(false) {
+                return true;
+            }
+        }
+        false
     };
 
     // Ollama probe — try /api/version, then /api/tags to list installed models.
+    let ollama_disabled = std::env::var("MAXIMUS_DISABLED")
+        .map(|s| s.trim().to_lowercase() == "true" || s.trim() == "1")
+        .unwrap_or(false)
+        || raw_cfg["config"]["maximus"]["disabled"].as_bool().unwrap_or(false)
+        || cfg.as_ref().map(|c| c.maximus_disabled).unwrap_or(false);
+
     let mut ollama_endpoint = providers["ollama"]["endpoint"]
         .as_str()
         .unwrap_or("http://localhost:11434")
@@ -324,12 +368,16 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
             ollama_endpoint = "http://host.docker.internal:11434".to_string();
         }
     }
-    let ollama_reachable = client
-        .get(format!("{}/api/version", ollama_endpoint))
-        .send()
-        .await
-        .map(|r| r.status().is_success())
-        .unwrap_or(false);
+    let ollama_reachable = if ollama_disabled {
+        false
+    } else {
+        client
+            .get(format!("{}/api/version", ollama_endpoint))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+    };
     let mut ollama_models: Vec<String> = Vec::new();
     if ollama_reachable {
         if let Ok(resp) = client.get(format!("{}/api/tags", ollama_endpoint)).send().await {
@@ -408,6 +456,7 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
                 "reachable": ollama_reachable,
                 "endpoint": ollama_endpoint,
                 "models":   ollama_models,
+                "disabled": ollama_disabled,
             }
         },
         "ferricula": {
@@ -418,12 +467,7 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
 }
 
 fn config_raw() -> Option<serde_json::Value> {
-    let home = if cfg!(windows) {
-        std::env::var("USERPROFILE").ok()?
-    } else {
-        std::env::var("HOME").ok()?
-    };
-    let path = std::path::PathBuf::from(home).join(".hyperia").join("hyperia.json");
+    let path = super::config_path()?;
     let content = std::fs::read_to_string(&path).ok()?;
     serde_json::from_str(&content).ok()
 }
@@ -480,7 +524,7 @@ fn write_agent_model(provider: &str, model: &str) -> std::io::Result<()> {
 /// `config.agent.model` in ~/.hyperia/hyperia.json. Used by the shell's
 /// model picker. Preserves all other config keys. Body:
 ///   { "provider": "ollama" | "anthropic" | "openai" | "gemini",
-///     "model":    "gemma4:e2b" | "claude-sonnet-4-6" | ... }
+///     "model":    "gemma2:2b" | "claude-sonnet-4-6" | ... }
 pub async fn ghost_set_model(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
@@ -513,13 +557,31 @@ pub async fn ghost_set_model(
     }
 }
 
-fn config_raw_path() -> Option<std::path::PathBuf> {
-    let home = if cfg!(windows) {
-        std::env::var("USERPROFILE").ok()?
-    } else {
-        std::env::var("HOME").ok()?
+/// POST /api/ghost/wipe-config — reset ~/.hyperia/hyperia.json to {"config": {}}.
+pub async fn ghost_wipe_config(
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let path = match config_raw_path() {
+        Some(p) => p,
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "ok": false, "error": "couldn't resolve $HOME / $USERPROFILE" })),
+            ));
+        }
     };
-    Some(std::path::PathBuf::from(home).join(".hyperia").join("hyperia.json"))
+    let empty_cfg = serde_json::json!({ "config": {} });
+    let payload = serde_json::to_string_pretty(&empty_cfg).unwrap_or_default();
+    match std::fs::write(&path, payload) {
+        Ok(_) => Ok(Json(serde_json::json!({ "ok": true }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        )),
+    }
+}
+
+fn config_raw_path() -> Option<std::path::PathBuf> {
+    super::config_path()
 }
 
 // ─── Assets: paste / drop / upload — appear inline in the shell ──────────

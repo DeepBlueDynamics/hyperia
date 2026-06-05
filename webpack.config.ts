@@ -37,6 +37,12 @@ const config: webpack.Configuration[] = [
             to: '[name][ext]'
           },
           {
+            // Splash preload (contextIsolated IPC bridge) — a plain .js the
+            // other copy patterns don't match, so it needs its own rule.
+            from: './app/splash-preload.js',
+            to: 'splash-preload.js'
+          },
+          {
             from: './app/*.json',
             globOptions: {ignore: ['**/node_modules/**']},
             to: '[name][ext]'

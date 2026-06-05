@@ -10,7 +10,8 @@ use super::types::{GhostConfig, ProviderEvent, ToolDef};
 pub enum AnyProvider {
     Anthropic(AnthropicProvider),
     Ollama(OllamaProvider),
-    /// Stub for not-yet-implemented providers (OpenAI, Gemini). Holds the
+    OpenAI(OpenAIProvider),
+    /// Stub for not-yet-implemented providers (Gemini). Holds the
     /// provider name so the error message can name it. Stream emits a
     /// single Error event explaining what's missing and returns.
     Unsupported(String),
@@ -24,7 +25,7 @@ impl AnyProvider {
         match config.provider.as_str() {
             "anthropic" => AnyProvider::Anthropic(AnthropicProvider::new(config)),
             "ollama" => AnyProvider::Ollama(OllamaProvider::new(config)),
-            "openai" => AnyProvider::Unsupported("openai".into()),
+            "openai" => AnyProvider::OpenAI(OpenAIProvider::new(config)),
             "gemini" => AnyProvider::Unsupported("gemini".into()),
             other => AnyProvider::Unsupported(other.to_string()),
         }
@@ -34,6 +35,7 @@ impl AnyProvider {
         match self {
             AnyProvider::Anthropic(_) => "anthropic",
             AnyProvider::Ollama(_) => "ollama",
+            AnyProvider::OpenAI(_) => "openai",
             AnyProvider::Unsupported(name) => name,
         }
     }
@@ -42,6 +44,7 @@ impl AnyProvider {
         match self {
             AnyProvider::Anthropic(p) => &p.model,
             AnyProvider::Ollama(p) => &p.model,
+            AnyProvider::OpenAI(p) => &p.model,
             AnyProvider::Unsupported(_) => "",
         }
     }
@@ -56,6 +59,7 @@ impl AnyProvider {
         match self {
             AnyProvider::Anthropic(p) => p.stream(system, messages, tools, max_tokens).await,
             AnyProvider::Ollama(p) => p.stream(system, messages, tools, max_tokens).await,
+            AnyProvider::OpenAI(p) => p.stream(system, messages, tools, max_tokens).await,
             AnyProvider::Unsupported(name) => {
                 let (tx, rx) = mpsc::channel(8);
                 let msg = format!(
@@ -338,6 +342,103 @@ fn validate_arguments(schema: &serde_json::Value, args: &serde_json::Value) -> b
     true
 }
 
+#[derive(Debug)]
+enum CandidateError {
+    Http(String),
+    JsonParse {
+        raw_content: String,
+        native_thinking: String,
+        input_tokens: u64,
+        output_tokens: u64,
+        error_msg: String,
+    },
+    Validation(String),
+}
+
+impl std::fmt::Display for CandidateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CandidateError::Http(s) => write!(f, "HTTP error: {}", s),
+            CandidateError::JsonParse { error_msg, .. } => write!(f, "JSON parse error: {}", error_msg),
+            CandidateError::Validation(s) => write!(f, "Validation error: {}", s),
+        }
+    }
+}
+
+impl std::error::Error for CandidateError {}
+
+fn extract_reply_fallback(raw: &str) -> String {
+    if let Some(idx) = raw.find("\"reply\"") {
+        let sub = &raw[idx..];
+        if let Some(colon_idx) = sub.find(':') {
+            let val_part = sub[colon_idx + 1..].trim();
+            if val_part.starts_with('"') {
+                let mut end_idx = None;
+                let chars: Vec<char> = val_part.chars().collect();
+                let mut escaped = false;
+                for i in 1..chars.len() {
+                    if escaped {
+                        escaped = false;
+                    } else if chars[i] == '\\' {
+                        escaped = true;
+                    } else if chars[i] == '"' {
+                        end_idx = Some(i);
+                        break;
+                    }
+                }
+                if let Some(e) = end_idx {
+                    let extracted: String = chars[1..e].iter().collect();
+                    return extracted
+                        .replace("\\\"", "\"")
+                        .replace("\\n", "\n")
+                        .replace("\\t", "\t");
+                }
+            }
+        }
+    }
+    raw.to_string()
+}
+
+fn clean_and_parse_json(content: &str) -> anyhow::Result<serde_json::Value> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("Empty content");
+    }
+
+    // 1. Try standard JSON parse
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return Ok(val);
+    }
+
+    // 2. Try parsing a JSON object from code fence/brackets block
+    if let Some(start_idx) = trimmed.find('{') {
+        if let Some(end_idx) = trimmed.rfind('}') {
+            if end_idx > start_idx {
+                let json_slice = &trimmed[start_idx..=end_idx];
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_slice) {
+                    return Ok(val);
+                }
+            }
+        }
+    }
+
+    // 3. Try parsing as a list/array
+    if let Some(start_idx) = trimmed.find('[') {
+        if let Some(end_idx) = trimmed.rfind(']') {
+            if end_idx > start_idx {
+                let json_slice = &trimmed[start_idx..=end_idx];
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_slice) {
+                    return Ok(val);
+                }
+            }
+        }
+    }
+
+    // 4. Return standard parse error
+    let parsed: serde_json::Value = serde_json::from_str(trimmed)?;
+    Ok(parsed)
+}
+
 async fn run_ollama_candidate(
     client: reqwest::Client,
     endpoint: String,
@@ -370,26 +471,49 @@ async fn run_ollama_candidate(
         req = req.bearer_auth(&api_key);
     }
 
+    let req_body_str = body.to_string();
     let resp = req.send().await?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let raw = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Ollama error {}: {}", status, raw);
+    let status = resp.status();
+    let raw = resp.text().await.unwrap_or_default();
+
+    let log_content = format!(
+        "=== REQUEST ===\n{}\n=== STATUS: {} ===\n=== RESPONSE ===\n{}\n",
+        req_body_str, status, raw
+    );
+    let _ = std::fs::write("ollama_debug.log", log_content);
+
+    if !status.is_success() {
+        return Err(anyhow::Error::new(CandidateError::Http(format!("Ollama error {}: {}", status, raw))));
     }
 
-    let json: serde_json::Value = resp.json().await?;
+    let json: serde_json::Value = serde_json::from_str(&raw)?;
     let content = json["message"]["content"].as_str()
         .ok_or_else(|| anyhow::anyhow!("No content in response"))?
         .to_string();
+
+    let native_thinking = json["message"]["thinking"].as_str().unwrap_or("").to_string();
 
     let input_tokens = json["prompt_eval_count"].as_u64().unwrap_or(0);
     let output_tokens = json["eval_count"].as_u64().unwrap_or(0);
 
     // Parse the structured JSON
-    let parsed: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("Invalid JSON syntax in candidate output: {}. Raw: {}", e, content))?;
-    
-    let thought = parsed["thought"].as_str().unwrap_or("").to_string();
+    let parsed: serde_json::Value = match clean_and_parse_json(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            return Err(anyhow::Error::new(CandidateError::JsonParse {
+                raw_content: content,
+                native_thinking,
+                input_tokens,
+                output_tokens,
+                error_msg: e.to_string(),
+            }));
+        }
+    };
+
+    let mut thought = parsed["thought"].as_str().unwrap_or("").to_string();
+    if thought.is_empty() && !native_thinking.is_empty() {
+        thought = native_thinking;
+    }
     let reply = parsed["reply"].as_str().unwrap_or("").to_string();
     
     // Remap flat fields back into nested tool_call format
@@ -413,14 +537,14 @@ async fn run_ollama_candidate(
                     // Find the tool definition
                     if let Some(tool_def) = tools.iter().find(|t| t.name == name) {
                         if !validate_arguments(&tool_def.input_schema, arguments) {
-                            anyhow::bail!("Invalid arguments for tool {}. Args: {}", name, arguments);
+                            return Err(anyhow::Error::new(CandidateError::Validation(format!("Invalid arguments for tool {}. Args: {}", name, arguments))));
                         }
                     } else {
-                        anyhow::bail!("Model called unknown tool {}", name);
+                        return Err(anyhow::Error::new(CandidateError::Validation(format!("Model called unknown tool {}", name))));
                     }
                 }
             } else {
-                anyhow::bail!("Missing tool name in tool_call");
+                return Err(anyhow::Error::new(CandidateError::Validation("Missing tool name in tool_call".to_string())));
             }
         }
     }
@@ -490,9 +614,41 @@ impl OllamaProvider {
 
             // Simple string content — pass through
             if msg["content"].is_string() {
+                let content_str = msg["content"].as_str().unwrap_or("");
+                let final_content = if role == "assistant" {
+                    if content_str.starts_with("[Thinking:") {
+                        if let Some(end_idx) = content_str.find("]\n\n") {
+                            let thought = &content_str[10..end_idx];
+                            let reply = &content_str[end_idx + 3..];
+                            serde_json::json!({
+                                "thought": thought,
+                                "reply": reply
+                            }).to_string()
+                        } else {
+                            serde_json::json!({
+                                "thought": "",
+                                "reply": content_str
+                            }).to_string()
+                        }
+                    } else {
+                        // Try to parse the content string as JSON. If it is already a JSON string (reconstructed),
+                        // pass it. Otherwise wrap it.
+                        if serde_json::from_str::<serde_json::Value>(content_str).is_ok() {
+                            content_str.to_string()
+                        } else {
+                            serde_json::json!({
+                                "thought": "",
+                                "reply": content_str
+                            }).to_string()
+                        }
+                    }
+                } else {
+                    content_str.to_string()
+                };
+
                 out.push(serde_json::json!({
                     "role": role,
-                    "content": msg["content"].as_str().unwrap_or(""),
+                    "content": final_content,
                 }));
                 continue;
             }
@@ -502,7 +658,8 @@ impl OllamaProvider {
                 if role == "assistant" {
                     // Collect text and tool_use blocks
                     let mut text_parts: Vec<String> = Vec::new();
-                    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+                    let mut tool_name = None;
+                    let mut tool_arguments = None;
 
                     for block in blocks {
                         match block["type"].as_str() {
@@ -512,55 +669,64 @@ impl OllamaProvider {
                                 }
                             }
                             Some("tool_use") => {
-                                tool_calls.push(serde_json::json!({
-                                    "function": {
-                                        "name": block["name"],
-                                        "arguments": block["input"],
-                                    }
-                                }));
+                                tool_name = block["name"].as_str().map(|s| s.to_string());
+                                tool_arguments = Some(block["input"].clone());
                             }
                             _ => {}
                         }
                     }
 
                     let combined_text = text_parts.join("");
-                    if !tool_calls.is_empty() {
-                        out.push(serde_json::json!({
-                            "role": "assistant",
-                            "content": combined_text,
-                            "tool_calls": tool_calls,
-                        }));
+                    
+                    // Reconstruct the JSON matching the schema format the model originally generated.
+                    // This avoids confusing Ollama's template processor with native "tool_calls".
+                    let content_json = if let Some(name) = tool_name {
+                        serde_json::json!({
+                            "thought": combined_text,
+                            "tool_name": name,
+                            "tool_arguments": tool_arguments.unwrap_or(serde_json::json!({}))
+                        })
                     } else {
-                        out.push(serde_json::json!({
-                            "role": "assistant",
-                            "content": combined_text,
-                        }));
-                    }
+                        let mut reply = combined_text;
+                        let mut thought = String::new();
+                        if reply.starts_with("[Thinking:") {
+                            if let Some(end_idx) = reply.find("]\n\n") {
+                                thought = reply[10..end_idx].to_string();
+                                reply = reply[end_idx + 3..].to_string();
+                            }
+                        }
+                        serde_json::json!({
+                            "thought": thought,
+                            "reply": reply
+                        })
+                    };
+
+                    out.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": content_json.to_string(),
+                    }));
                 } else if role == "user" {
                     // User blocks may contain tool_result entries
+                    let mut user_texts = Vec::new();
                     for block in blocks {
                         match block["type"].as_str() {
                             Some("tool_result") => {
-                                let content = block["content"]
-                                    .as_str()
-                                    .unwrap_or("")
-                                    .to_string();
-                                out.push(serde_json::json!({
-                                    "role": "tool",
-                                    "content": content,
-                                }));
+                                if let Some(content) = block["content"].as_str() {
+                                    user_texts.push(format!("Tool result:\n{}", content));
+                                }
                             }
                             _ => {
                                 // Plain text block in a user message
                                 if let Some(t) = block["text"].as_str() {
-                                    out.push(serde_json::json!({
-                                        "role": "user",
-                                        "content": t,
-                                    }));
+                                    user_texts.push(t.to_string());
                                 }
                             }
                         }
                     }
+                    out.push(serde_json::json!({
+                        "role": "user",
+                        "content": user_texts.join("\n\n"),
+                    }));
                 }
             }
         }
@@ -658,7 +824,7 @@ impl OllamaProvider {
             // We await candidates using futures::future::select_all to grab the first one that succeeds.
             // If one succeeds, we drop all other candidates (canceling their in-flight HTTP requests).
             let mut matched_candidate = None;
-            let mut last_error = None;
+            let mut last_error: Option<anyhow::Error> = None;
 
             while !candidates.is_empty() {
                 let (res, _index, remaining) = futures::future::select_all(candidates).await;
@@ -679,13 +845,35 @@ impl OllamaProvider {
             let (thought, tool_call, reply, input_tokens, output_tokens) = match matched_candidate {
                 Some(val) => val,
                 None => {
-                    // All parallel candidates failed. Report the error.
-                    let err_msg = format!(
-                        "All parallel candidate generations failed. Last error: {}",
-                        last_error.map(|e| e.to_string()).unwrap_or_else(|| "Unknown failure".into())
-                    );
-                    let _ = tx.send(ProviderEvent::Error(err_msg)).await;
-                    return;
+                    // Try to downcast last_error to CandidateError::JsonParse to perform robust fallback.
+                    // This allows local models that get lazy and reply with raw text to still finish successfully.
+                    let mut fallback = None;
+                    if let Some(ref err) = last_error {
+                        if let Some(CandidateError::JsonParse { raw_content, native_thinking, input_tokens, output_tokens, .. }) = err.downcast_ref::<CandidateError>() {
+                            tracing::info!("All candidates failed JSON parsing. Falling back to raw content as reply.");
+                            let mut reply = extract_reply_fallback(raw_content);
+                            if reply.starts_with("```") {
+                                // Strip code fences
+                                let lines: Vec<&str> = reply.lines().collect();
+                                if lines.len() >= 2 && lines.first().unwrap().starts_with("```") && lines.last().unwrap().starts_with("```") {
+                                    reply = lines[1..lines.len()-1].join("\n").trim().to_string();
+                                }
+                            }
+                            fallback = Some((native_thinking.clone(), None, reply, *input_tokens, *output_tokens));
+                        }
+                    }
+
+                    if let Some(val) = fallback {
+                        val
+                    } else {
+                        // All parallel candidates failed. Report the error.
+                        let err_msg = format!(
+                            "All parallel candidate generations failed. Last error: {}",
+                            last_error.map(|e| e.to_string()).unwrap_or_else(|| "Unknown failure".into())
+                        );
+                        let _ = tx.send(ProviderEvent::Error(err_msg)).await;
+                        return;
+                    }
                 }
             };
 
@@ -694,10 +882,25 @@ impl OllamaProvider {
                 let _ = tx.send(ProviderEvent::Usage { input_tokens, output_tokens }).await;
             }
 
-            // Emit the thinking reasoning block to the text delta channel so the user/agent sees thoughts
+            // Emit the thinking reasoning block via structured thinking events
             if !thought.is_empty() {
-                let formatted_thought = format!("[Thinking: {}]\n\n", thought);
-                let _ = tx.send(ProviderEvent::TextDelta(formatted_thought)).await;
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                let id = format!("think_{}", timestamp);
+                let _ = tx.send(ProviderEvent::ThinkingStart { id: id.clone() }).await;
+                // Stream the thought word-by-word to make it feel alive and responsive in the UI
+                let words: Vec<&str> = thought.split_whitespace().collect();
+                for (i, word) in words.iter().enumerate() {
+                    let mut chunk = word.to_string();
+                    if i > 0 {
+                        chunk = format!(" {}", chunk);
+                    }
+                    let _ = tx.send(ProviderEvent::ThinkingDelta { id: id.clone(), text: chunk }).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+                }
+                let _ = tx.send(ProviderEvent::ThinkingEnd { id }).await;
             }
 
             let mut had_tool_call = false;
@@ -708,7 +911,11 @@ impl OllamaProvider {
                     if let Some(name) = tc["name"].as_str() {
                         if name != "none" {
                             let arguments = &tc["arguments"];
-                            let id = "ol_0".to_string(); // Single execution path id
+                            let timestamp = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_nanos())
+                                .unwrap_or(0);
+                            let id = format!("ol_{}", timestamp);
                             had_tool_call = true;
 
                             let _ = tx.send(ProviderEvent::ToolCallStart {
@@ -743,4 +950,321 @@ impl OllamaProvider {
 
         Ok(rx)
     }
+}
+
+// ---------------------------------------------------------------------------
+// OpenAIProvider — implementation for OpenAI chat completion endpoint
+// ---------------------------------------------------------------------------
+
+pub struct OpenAIProvider {
+    client: reqwest::Client,
+    api_key: String,
+    pub model: String,
+    endpoint: String,
+}
+
+impl OpenAIProvider {
+    pub fn new(config: &GhostConfig) -> Self {
+        let model = if config.model.is_empty() {
+            "gpt-4o".to_string()
+        } else {
+            config.model.clone()
+        };
+        let endpoint = if config.endpoint.is_empty() {
+            "https://api.openai.com".to_string()
+        } else {
+            config.endpoint.trim_end_matches('/').to_string()
+        };
+        Self {
+            client: reqwest::Client::new(),
+            api_key: config.api_key.clone(),
+            model,
+            endpoint,
+        }
+    }
+
+    pub async fn stream(
+        &self,
+        system: &str,
+        messages: &[serde_json::Value],
+        tools: &[ToolDef],
+        max_tokens: u32,
+    ) -> anyhow::Result<mpsc::Receiver<ProviderEvent>> {
+        let (tx, rx) = mpsc::channel(128);
+
+        let openai_messages = build_openai_messages(system, messages);
+
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "messages": openai_messages,
+            "stream": true,
+            "stream_options": {
+                "include_usage": true
+            }
+        });
+
+        if max_tokens > 0 {
+            body["max_tokens"] = serde_json::json!(max_tokens);
+        }
+
+        if !tools.is_empty() {
+            let tool_defs: Vec<serde_json::Value> = tools
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.input_schema,
+                        }
+                    })
+                })
+                .collect();
+            body["tools"] = serde_json::json!(tool_defs);
+        }
+
+        let resp = self
+            .client
+            .post(format!("{}/v1/chat/completions", self.endpoint))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let raw = resp.text().await.unwrap_or_default();
+            let api_message = serde_json::from_str::<serde_json::Value>(&raw)
+                .ok()
+                .and_then(|j| j["error"]["message"].as_str().map(|s| s.to_string()));
+            let label = if let Some(msg) = api_message {
+                format!("OpenAI error {} — {}\nFull response: {}", status, msg, raw)
+            } else {
+                format!("OpenAI error {} — {}", status, raw)
+            };
+            let _ = tx.send(ProviderEvent::Error(label)).await;
+            return Ok(rx);
+        }
+
+        let mut stream = resp.bytes_stream();
+
+        tokio::spawn(async move {
+            let mut buffer = String::new();
+            let mut active_tool_calls: std::collections::HashMap<u64, (String, String)> = std::collections::HashMap::new();
+            let mut sent_thinking_start = false;
+            let think_id = format!(
+                "think_{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            );
+
+            while let Some(chunk) = stream.next().await {
+                let chunk = match chunk {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = tx.send(ProviderEvent::Error(e.to_string())).await;
+                        break;
+                    }
+                };
+
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                while let Some(pos) = buffer.find("\n\n") {
+                    let block = buffer[..pos].to_string();
+                    buffer = buffer[pos + 2..].to_string();
+
+                    for line in block.lines() {
+                        let line_trimmed = line.trim();
+                        if line_trimmed.is_empty() {
+                            continue;
+                        }
+                        if line_trimmed == "data: [DONE]" {
+                            break;
+                        }
+                        if let Some(data) = line_trimmed.strip_prefix("data:") {
+                            let data_trimmed = data.trim();
+                            if data_trimmed.is_empty() {
+                                continue;
+                            }
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(data_trimmed) {
+                                // 1. Usage stats
+                                if let Some(usage) = val["usage"].as_object() {
+                                    let input_tokens = usage["prompt_tokens"].as_u64().unwrap_or(0);
+                                    let output_tokens = usage["completion_tokens"].as_u64().unwrap_or(0);
+                                    if input_tokens > 0 || output_tokens > 0 {
+                                        let _ = tx.send(ProviderEvent::Usage { input_tokens, output_tokens }).await;
+                                    }
+                                }
+
+                                if let Some(choices) = val["choices"].as_array() {
+                                    if let Some(choice) = choices.first() {
+                                        let delta = &choice["delta"];
+
+                                        // 2. Text delta
+                                        if let Some(content) = delta["content"].as_str() {
+                                            if !content.is_empty() {
+                                                if sent_thinking_start {
+                                                    let _ = tx.send(ProviderEvent::ThinkingEnd { id: think_id.clone() }).await;
+                                                    sent_thinking_start = false;
+                                                }
+                                                let _ = tx.send(ProviderEvent::TextDelta(content.to_string())).await;
+                                            }
+                                        }
+
+                                        // 3. Reasoning delta
+                                        if let Some(reasoning) = delta["reasoning_content"].as_str().or_else(|| delta["reasoning"].as_str()) {
+                                            if !reasoning.is_empty() {
+                                                if !sent_thinking_start {
+                                                    let _ = tx.send(ProviderEvent::ThinkingStart { id: think_id.clone() }).await;
+                                                    sent_thinking_start = true;
+                                                }
+                                                let _ = tx.send(ProviderEvent::ThinkingDelta {
+                                                    id: think_id.clone(),
+                                                    text: reasoning.to_string(),
+                                                }).await;
+                                            }
+                                        }
+
+                                        // 4. Tool calls delta
+                                        if let Some(tool_calls) = delta["tool_calls"].as_array() {
+                                            if sent_thinking_start {
+                                                let _ = tx.send(ProviderEvent::ThinkingEnd { id: think_id.clone() }).await;
+                                                sent_thinking_start = false;
+                                            }
+                                            for tc in tool_calls {
+                                                let index = tc["index"].as_u64().unwrap_or(0);
+                                                if let Some(id) = tc["id"].as_str() {
+                                                    let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+                                                    let id_str = id.to_string();
+                                                    active_tool_calls.insert(index, (id_str.clone(), name.clone()));
+                                                    let _ = tx.send(ProviderEvent::ToolCallStart {
+                                                        id: id_str,
+                                                        name,
+                                                    }).await;
+                                                }
+                                                if let Some(args) = tc["function"]["arguments"].as_str() {
+                                                    if let Some((id, _name)) = active_tool_calls.get(&index) {
+                                                        let _ = tx.send(ProviderEvent::ToolCallDelta {
+                                                            id: id.clone(),
+                                                            json_fragment: args.to_string(),
+                                                        }).await;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // 5. Message stop reason
+                                        if let Some(finish_reason) = choice["finish_reason"].as_str() {
+                                            let stop_reason = match finish_reason {
+                                                "tool_calls" => "tool_use",
+                                                _ => "end_turn",
+                                            };
+                                            let _ = tx.send(ProviderEvent::MessageStop { stop_reason: stop_reason.to_string() }).await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if sent_thinking_start {
+                let _ = tx.send(ProviderEvent::ThinkingEnd { id: think_id }).await;
+            }
+            for (_index, (id, _name)) in active_tool_calls {
+                let _ = tx.send(ProviderEvent::ToolCallEnd { id }).await;
+            }
+        });
+
+        Ok(rx)
+    }
+}
+
+fn build_openai_messages(system: &str, messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+
+    if !system.is_empty() {
+        out.push(serde_json::json!({
+            "role": "system",
+            "content": system,
+        }));
+    }
+
+    for msg in messages {
+        let role = msg["role"].as_str().unwrap_or("user");
+
+        if msg["content"].is_string() {
+            let content_str = msg["content"].as_str().unwrap_or("");
+            out.push(serde_json::json!({
+                "role": role,
+                "content": content_str,
+            }));
+        } else if msg["content"].is_array() {
+            if role == "user" {
+                for block in msg["content"].as_array().unwrap() {
+                    if block["type"] == "tool_result" {
+                        let tool_use_id = block["tool_use_id"].as_str().unwrap_or("").to_string();
+                        let content_val = block["content"].clone();
+                        let content_str = if content_val.is_string() {
+                            content_val.as_str().unwrap_or("").to_string()
+                        } else {
+                            content_val.to_string()
+                        };
+                        out.push(serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": tool_use_id,
+                            "content": content_str,
+                        }));
+                    } else if block["type"] == "text" {
+                        let text = block["text"].as_str().unwrap_or("");
+                        out.push(serde_json::json!({
+                            "role": "user",
+                            "content": text,
+                        }));
+                    }
+                }
+            } else if role == "assistant" {
+                let mut text_content = String::new();
+                let mut tool_calls = Vec::new();
+                for block in msg["content"].as_array().unwrap() {
+                    if block["type"] == "text" {
+                        if let Some(txt) = block["text"].as_str() {
+                            text_content.push_str(txt);
+                        }
+                    } else if block["type"] == "tool_use" {
+                        let id = block["id"].as_str().unwrap_or("").to_string();
+                        let name = block["name"].as_str().unwrap_or("").to_string();
+                        let input = block["input"].clone();
+                        tool_calls.push(serde_json::json!({
+                            "id": id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": input.to_string(),
+                            }
+                        }));
+                    }
+                }
+                let mut assistant_msg = serde_json::json!({
+                    "role": "assistant",
+                });
+                if !text_content.is_empty() {
+                    assistant_msg["content"] = serde_json::json!(text_content);
+                } else {
+                    assistant_msg["content"] = serde_json::Value::Null;
+                }
+                if !tool_calls.is_empty() {
+                    assistant_msg["tool_calls"] = serde_json::json!(tool_calls);
+                }
+                out.push(assistant_msg);
+            }
+        }
+    }
+
+    out
 }

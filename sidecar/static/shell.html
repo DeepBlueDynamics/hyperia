@@ -71,6 +71,18 @@
     color: var(--text-dim);
     font-variant-numeric: tabular-nums;
   }
+  .titlebar .hud .stat.reset:hover {
+    background: var(--line) !important;
+    color: var(--text-dim) !important;
+  }
+  .usage-badge {
+    color: var(--text-faint);
+    font-size: 10px;
+    margin-left: 6px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    opacity: 0.8;
+  }
 
   /* ─── status strip ─── */
   .status {
@@ -206,14 +218,14 @@
     display: block;
     color: var(--text-faint);
     font-size: 12px;
-    border-left: 2px solid var(--line);
-    padding: 0 0 0 6px;
-    margin-left: -2px;
-    transition: background 0.15s, border-color 0.15s;
+    border-left: none;
+    padding: 0;
+    margin-left: 0;
+    transition: background 0.15s;
+    white-space: nowrap;
   }
   .row.tool:hover {
     background: var(--bg-soft);
-    border-left-color: var(--accent);
   }
   .row.tool .summary {
     display: flex;
@@ -222,6 +234,7 @@
     min-width: 0;
     cursor: pointer;
     user-select: none;
+    white-space: nowrap;
   }
   .row.tool .label {
     color: var(--tool);
@@ -273,19 +286,36 @@
     color: var(--text-faint);
     font-family: var(--font);
     font-size: 11px;
-    border-left: 1px solid var(--line);
-    padding-left: 8px;
+    border-left: none;
+    padding-left: 0;
     margin-top: 4px;
-    margin-left: 8px;
+    margin-left: 14px;
     white-space: pre-wrap;
     word-break: break-word;
     overflow-wrap: anywhere;
-    max-height: 320px;
+    max-height: 140px;
     overflow-y: auto;
     padding-bottom: 4px;
   }
   .row.tool.expanded .output {
     display: block;
+  }
+  .row.tool.thinking-row {
+    border-left: none !important;
+    padding-left: 0 !important;
+    margin-left: 0 !important;
+    opacity: 0.8;
+  }
+  .row.tool.thinking-row .summary {
+    font-size: 11px;
+  }
+  .row.tool.thinking-row .output {
+    border-left: none !important;
+    padding-left: 0 !important;
+    margin-left: 14px !important;
+    font-size: 11px;
+    font-style: italic;
+    color: var(--text-dim);
   }
 
   /* ─── pasted assets (image / pdf / text files) ─── */
@@ -370,6 +400,7 @@
     margin-top: 4px;
     margin-bottom: 4px;
     background: rgba(200,57,197,0.04);
+    white-space: normal;
   }
   .row.widget .prompt {
     color: var(--accent);
@@ -535,6 +566,7 @@
     <div class="stat"><span>out</span><span class="v" id="hud-out">0</span></div>
     <div class="stat"><span>tools</span><span class="v" id="hud-tools">0</span></div>
     <div class="stat"><span>turns</span><span class="v" id="hud-turns">0</span></div>
+    <div class="stat reset" id="hud-reset" title="reset metrics" style="cursor: pointer; padding: 0 4px; border: 1px solid var(--line); border-radius: 3px; background: var(--bg-soft); font-size: 8px; font-weight: bold; margin-left: 4px; align-self: center; display: inline-flex; align-items: center; justify-content: center; height: 14px; text-transform: uppercase;">reset</div>
   </div>
 </div>
 
@@ -572,6 +604,8 @@ const hint       = $('hint');
 const promptLbl  = $('prompt-label');
 
 const STATS = { in: 0, out: 0, tools: 0, turns: 0 };
+let turn_in = 0;
+let turn_out = 0;
 function updateHud() {
   $('hud-in').textContent    = STATS.in.toLocaleString();
   $('hud-out').textContent   = STATS.out.toLocaleString();
@@ -593,6 +627,7 @@ const TOOL_EMOJI = {
   terminal_status: '📋', terminal_split: '⬛', terminal_focus: '🎯',
   terminal_new_tab: '➕', terminal_new_window: '🪟', terminal_close: '✖️',
   tab_snapshot: '📸', shell_state: '🐚', open_web_pane: '🌐',
+  web_pane_content: '🌐', web_pane_eval: '🌐', web_pane_mouse: '🖱️',
   file_read: '📖', file_write: '✏️', file_edit: '🩹', list_files: '📁',
   grep: '🔍', web_fetch: '🌐', web_search: '🔭',
   doctor: '🩺', model_catalog: '📚', docker_run: '🐳', help: '❓',
@@ -625,6 +660,9 @@ function buildLabel(name, input) {
     case 'web_fetch':       return `fetch · ${input.url || ''}`;
     case 'web_search':      return `search · "${input.query || ''}"`;
     case 'open_web_pane':   return `pane · ${input.url || ''}`;
+    case 'web_pane_content':return `read pane${input.pane ? ' · pane ' + input.pane : ''}`;
+    case 'web_pane_eval':   return `eval js${input.pane ? ' · pane ' + input.pane : ''}`;
+    case 'web_pane_mouse':  return `${input.action || 'click'} · (${input.x}, ${input.y})`;
     case 'tab_snapshot':    return `snapshot${input.tab ? ' · ' + input.tab : ''}`;
     case 'memory_recall':   return `recall · "${input.query || ''}"`;
     case 'memory_remember': return `remember · ${(input.text || '').slice(0, 60)}`;
@@ -659,22 +697,51 @@ function addWatercooler(text) {
   autoscroll();
 }
 
+let activeThinkingRow = null;
+
+function addThinkingRow(id) {
+  endAgentStream();
+  const r = document.createElement('div');
+  r.className = 'row tool thinking-row expanded';
+  r.id = 'thinking-' + id;
+  r.innerHTML = `<div class="summary"><span class="chev">▸</span><span class="label">💭</span><span class="name">thinking</span><span class="arg"></span><span class="meta"></span></div><div class="output" style="display: block;"></div>`;
+  r.querySelector('.summary').addEventListener('click', () => {
+    r.classList.toggle('expanded');
+    const out = r.querySelector('.output');
+    out.style.display = r.classList.contains('expanded') ? 'block' : 'none';
+  });
+  screen.appendChild(r);
+  activeThinkingRow = r;
+  autoscroll();
+}
+
+function streamThinkingText(id, text) {
+  const r = document.getElementById('thinking-' + id);
+  if (!r) return;
+  const outEl = r.querySelector('.output');
+  if (outEl) {
+    outEl.innerHTML += escapeHtml(text).replace(/\n/g, '<br>');
+  }
+  autoscroll();
+}
+
+function finishThinkingRow(id) {
+  activeThinkingRow = null;
+  const r = document.getElementById('thinking-' + id);
+  if (r) {
+    r.classList.remove('expanded');
+    const out = r.querySelector('.output');
+    if (out) out.style.display = 'none';
+  }
+}
+
 function addToolRow(name, id) {
   const r = document.createElement('div');
   r.className = 'row tool';
   r.id = 'tool-' + id;
   // Summary line is the only click target — the output region below
   // doesn't toggle when you click into it (so you can select text).
-  r.innerHTML = `
-    <div class="summary">
-      <span class="chev">▸</span>
-      <span class="label running">${getEmoji(name)}</span>
-      <span class="name">${escapeHtml(name)}</span>
-      <span class="arg">running…</span>
-      <span class="meta"></span>
-    </div>
-    <div class="output"></div>
-  `;
+  r.innerHTML = `<div class="summary"><span class="chev">▸</span><span class="label running">${getEmoji(name)}</span><span class="name">${escapeHtml(name)}</span><span class="arg">running…</span><span class="meta"></span></div><div class="output"></div>`;
   r.querySelector('.summary').addEventListener('click', () => r.classList.toggle('expanded'));
   screen.appendChild(r);
   STATS.tools++; updateHud();
@@ -697,7 +764,21 @@ function finishToolRow(id, name, input, output) {
     ? '<span class="fail">✗</span>'
     : '<span class="ok">✓</span>';
   const outEl = r.querySelector('.output');
-  if (outEl) outEl.textContent = output || '(no output)';
+  if (outEl) {
+    let formattedOutput = output || '(no output)';
+    if (output) {
+      const trimmed = output.trim();
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          formattedOutput = JSON.stringify(parsed, null, 2);
+        } catch (e) {
+          // Fallback to raw output
+        }
+      }
+    }
+    outEl.textContent = formattedOutput;
+  }
   console.debug('[tool] finished', id, name, 'output bytes:', (output || '').length);
 }
 
@@ -711,7 +792,7 @@ function startAgentStream() {
 function streamText(chunk) {
   if (!streamingRow) startAgentStream();
   // Strip leading whitespace from the very start of an agent turn. Some
-  // local models (gemma4:e2b in particular) emit several \n\n\n chunks
+  // local models (gemma2:2b in particular) emit several \n\n\n chunks
   // before any real content — without this they paint as blank lines.
   if (!streamSeenContent) {
     chunk = chunk.replace(/^[\s\r\n]+/, '');
@@ -720,13 +801,21 @@ function streamText(chunk) {
   }
   const body = streamingRow.querySelector('.body');
   body.innerHTML += escapeHtml(chunk).replace(/\n/g, '<br>');
-  STATS.out += Math.max(1, (chunk.length / 4) | 0);
+  const est = Math.max(1, (chunk.length / 4) | 0);
+  STATS.out += est;
+  turn_out += est;
   updateHud();
   autoscroll();
 }
 function endAgentStream() {
   if (streamingRow) {
     streamingRow.classList.remove('streaming');
+    if (turn_in > 0 || turn_out > 0) {
+      const usageEl = document.createElement('span');
+      usageEl.className = 'usage-badge';
+      usageEl.textContent = ` [${turn_in.toLocaleString()} in · ${turn_out.toLocaleString()} out]`;
+      streamingRow.querySelector('.body').appendChild(usageEl);
+    }
     streamingRow = null;
   }
   streamSeenContent = false;
@@ -1179,7 +1268,10 @@ let abortCtrl = null;
 
 async function runChat(message) {
   setBusy(true);
-  STATS.turns++; updateHud();
+  STATS.turns++;
+  turn_in = 0;
+  turn_out = 0;
+  updateHud();
   abortCtrl = new AbortController();
 
   let response;
@@ -1233,11 +1325,21 @@ async function runChat(message) {
     endAgentStream();
     setBusy(false);
     abortCtrl = null;
+    await bootCapabilities();
   }
 }
 
 function handleEvent(ev) {
   switch (ev.type) {
+    case 'thinking_start':
+      addThinkingRow(ev.id);
+      break;
+    case 'thinking_delta':
+      streamThinkingText(ev.id, ev.text || '');
+      break;
+    case 'thinking_end':
+      finishThinkingRow(ev.id);
+      break;
     case 'text_delta':
       streamText(ev.text || '');
       break;
@@ -1261,13 +1363,22 @@ function handleEvent(ev) {
       addRow('system', 'system=&gt;',
         `retrying (attempt ${ev.attempt}, waiting ${ev.wait_secs}s)`);
       break;
-    case 'stats':
-      STATS.in     = ev.input_tokens  || STATS.in;
-      STATS.out    = ev.output_tokens || STATS.out;
+    case 'stats': {
+      const delta_in = (ev.input_tokens || 0) - turn_in;
+      const delta_out = (ev.output_tokens || 0) - turn_out;
+      if (delta_in > 0) {
+        STATS.in += delta_in;
+        turn_in = ev.input_tokens;
+      }
+      if (delta_out > 0) {
+        STATS.out += delta_out;
+        turn_out = ev.output_tokens;
+      }
       STATS.tools  = ev.tool_calls    != null ? ev.tool_calls : STATS.tools;
       STATS.turns  = ev.turns         || STATS.turns;
       updateHud();
       break;
+    }
     case 'done':
       endAgentStream();
       break;
@@ -1325,6 +1436,37 @@ input.addEventListener('keydown', async (e) => {
   }
 });
 
+function redactTokenString(token) {
+  if (token.length > 12) {
+    return token.substring(0, 6) + '…' + token.substring(token.length - 3);
+  }
+  return '***';
+}
+
+function redactTokensInText(text) {
+  if (!text) return '';
+  const words = text.split(/(\s+)/);
+  const lower = text.toLowerCase();
+  const hasGeminiMention = lower.includes('gemini');
+
+  return words.map(w => {
+    const trimmed = w.replace(/^["'\s]+|["'\s]+$/g, '');
+    // Anthropic
+    if (trimmed.startsWith('sk-ant-') && trimmed.length > 10) {
+      return w.replace(trimmed, redactTokenString(trimmed));
+    }
+    // OpenAI
+    if (trimmed.startsWith('sk-') && !trimmed.startsWith('sk-ant-') && trimmed.length > 8) {
+      return w.replace(trimmed, redactTokenString(trimmed));
+    }
+    // Gemini
+    if (hasGeminiMention && trimmed.startsWith('AIza') && trimmed.length > 20) {
+      return w.replace(trimmed, redactTokenString(trimmed));
+    }
+    return w;
+  }).join('');
+}
+
 async function submit() {
   const line = input.value.trim();
   if (!line) return;
@@ -1334,7 +1476,7 @@ async function submit() {
 
   if (promptline.classList.contains('busy')) {
     // Inject mid-stream — soft preemption via POST /api/ghost/inject.
-    addRow('user', 'you~&gt;', escapeHtml(line), { injected: true });
+    addRow('user', 'you~&gt;', escapeHtml(redactTokensInText(line)), { injected: true });
     try {
       await fetch('/api/ghost/inject', {
         method: 'POST',
@@ -1345,7 +1487,7 @@ async function submit() {
     return;
   }
 
-  addRow('user', 'you~&gt;', escapeHtml(line));
+  addRow('user', 'you~&gt;', escapeHtml(redactTokensInText(line)));
   // Hardwired intents fire first — same set works regardless of level
   // (none/local/frontier/hybrid). If a typed phrase matches a UI we
   // already have (model picker, capabilities readout, etc.), invoke it
@@ -1415,6 +1557,13 @@ async function handleHardwiredIntent(line) {
       await cmdResetConversation();
       return true;
 
+    case 'wipe config':
+    case 'reset config':
+    case 'clear config':
+    case 'wipe':
+      await cmdWipeConfig();
+      return true;
+
     case 'continue':
     case 'carry on':
     case 'resume':
@@ -1440,12 +1589,16 @@ async function cmdListModels() {
   const caps = await freshCaps();
   const ollama = caps && caps.providers && caps.providers.ollama;
   if (!ollama || !ollama.reachable) {
-    addRow('error', 'err!', 'ollama is not reachable at <code>' + escapeHtml(ollama && ollama.endpoint || 'localhost:11434') + '</code>. type <code>install ollama</code> for setup steps.');
+    const ollamaDisabled = ollama && ollama.disabled;
+    const msg = ollamaDisabled
+      ? 'ollama is disabled via configuration.'
+      : 'ollama is not reachable at <code>' + escapeHtml(ollama && ollama.endpoint || 'localhost:11434') + '</code>. type <code>install ollama</code> for setup steps.';
+    addRow('error', 'err!', msg);
     return;
   }
   const models = Array.isArray(ollama.models) ? ollama.models : [];
   if (!models.length) {
-    addRow('system', 'system=&gt;', 'ollama is up but has no models pulled. try <code>ollama pull gemma4:e2b</code>.');
+    addRow('system', 'system=&gt;', 'ollama is up but has no models pulled. try <code>ollama pull gemma2:2b</code>.');
     return;
   }
   addRow('system', 'system=&gt;', `installed ollama models (${models.length}):`);
@@ -1470,6 +1623,8 @@ async function cmdShowConfig() {
   if (ollama.reachable) {
     const n = Array.isArray(ollama.models) ? ollama.models.length : 0;
     addRow('system', 'system=&gt;', `ollama: <em class="ok">reachable</em> at <code>${escapeHtml(ollama.endpoint || '?')}</code> · ${n} model${n === 1 ? '' : 's'} pulled`);
+  } else if (ollama.disabled) {
+    addRow('system', 'system=&gt;', `ollama: <em class="fail">disabled</em>`);
   } else {
     addRow('system', 'system=&gt;', `ollama: <em class="fail">unreachable</em>`);
   }
@@ -1503,7 +1658,9 @@ async function cmdDoctor() {
     : !!agent.model;
 
   addRow('system', 'system=&gt;', '— readiness probe —');
-  addRow('system', 'system=&gt;', `  ${ollama.reachable ? '<em class="ok">✓</em>' : '<em class="fail">✗</em>'} ollama reachable`);
+  const ollamaStatusText = ollama.disabled ? 'disabled' : (ollama.reachable ? 'reachable' : 'unreachable');
+  const ollamaIcon = ollama.reachable ? '<em class="ok">✓</em>' : '<em class="fail">✗</em>';
+  addRow('system', 'system=&gt;', `  ${ollamaIcon} ollama: ${ollamaStatusText}`);
   addRow('system', 'system=&gt;', `  ${hasAnyToken ? '<em class="ok">✓</em>' : '<em class="fail">✗</em>'} frontier token (any of anthropic / openai / gemini)`);
   addRow('system', 'system=&gt;', `  ${modelInstalled ? '<em class="ok">✓</em>' : '<em class="fail">✗</em>'} configured model is reachable: <code>${escapeHtml(agent.provider || '?')}/${escapeHtml(agent.model || '?')}</code>`);
   addRow('system', 'system=&gt;', `  ${(caps.ferricula && caps.ferricula.reachable) ? '<em class="ok">✓</em>' : '<em class="fail">✗</em>'} ferricula reachable`);
@@ -1524,6 +1681,7 @@ function cmdShowCommands() {
     ['doctor',        'readiness probe with pass/fail per check'],
     ['version',       'sidecar version'],
     ['reset',         'clear the conversation history (server-side)'],
+    ['wipe config',   'wipe/factory-reset ~/.hyperia/hyperia.json config'],
     ['continue',      'cancel a pending stop request — agent resumes'],
     ['commands',      'this list'],
   ];
@@ -1547,8 +1705,24 @@ async function cmdResetConversation() {
   // Clear local scrollback so the visual state matches the server.
   screen.innerHTML = '';
   STATS.in = 0; STATS.out = 0; STATS.tools = 0; STATS.turns = 0;
+  turn_in = 0; turn_out = 0;
   updateHud();
   addWatercooler('conversation reset');
+}
+
+async function cmdWipeConfig() {
+  try {
+    const r = await fetch('/api/ghost/wipe-config', { method: 'POST' });
+    if (!r.ok) {
+      addRow('error', 'err!', 'wipe config failed: HTTP ' + r.status);
+      return;
+    }
+  } catch (e) {
+    addRow('error', 'err!', 'wipe config unreachable: ' + escapeHtml(e.message));
+    return;
+  }
+  addRow('system', 'system=&gt;', 'wiped config successfully. re-probing capabilities…');
+  await bootCapabilities();
 }
 
 async function cmdContinue() {
@@ -1589,7 +1763,31 @@ async function seedHistory() {
     for (const m of msgs) {
       const role = m.role === 'assistant' ? 'agent' : 'user';
       const label = role === 'agent' ? 'hyperia~&gt;' : 'you~&gt;';
-      addRow(role, label, escapeHtml(m.content || '').replace(/\n/g, '<br>'));
+      let content = m.content || '';
+      if (role === 'agent' && content.startsWith('[Thinking:')) {
+        const endIdx = content.indexOf(']\n\n');
+        if (endIdx !== -1) {
+          const thought = content.slice(10, endIdx);
+          const reply = content.slice(endIdx + 3);
+
+          const thoughtId = 'hist_think_' + Math.random().toString(36).substring(2, 9);
+          addThinkingRow(thoughtId);
+          streamThinkingText(thoughtId, thought);
+          finishThinkingRow(thoughtId);
+
+          // Collapse historical thoughts by default
+          const rEl = document.getElementById('thinking-' + thoughtId);
+          if (rEl) {
+            rEl.classList.remove('expanded');
+            rEl.querySelector('.output').style.display = 'none';
+          }
+
+          addRow(role, label, escapeHtml(reply).replace(/\n/g, '<br>'));
+          continue;
+        }
+      }
+      const displayContent = role === 'user' ? redactTokensInText(content) : content;
+      addRow(role, label, escapeHtml(displayContent).replace(/\n/g, '<br>'));
     }
   } catch (_) { /* no history is fine */ }
 }
@@ -1616,7 +1814,8 @@ async function bootCapabilities() {
   // Strip any prior warn span and append fresh if needed.
   const modelItem = $('s-model-item');
   modelItem.querySelectorAll('.warn').forEach(el => el.remove());
-  if (providerNm === 'ollama' && ollamaModels.length && !modelInstalled) {
+  const ollamaDisabled = caps && caps.providers && caps.providers.ollama && caps.providers.ollama.disabled;
+  if (providerNm === 'ollama' && ollamaModels.length && !modelInstalled && !ollamaDisabled) {
     const warn = document.createElement('span');
     warn.className = 'warn';
     warn.textContent = '(not pulled)';
@@ -1652,6 +1851,8 @@ async function bootCapabilities() {
   const ollama = caps.providers && caps.providers.ollama;
   if (ollama && ollama.reachable) {
     addRow('system', 'system=&gt;', `ollama: <em class="ok">reachable</em> at <code>${escapeHtml(ollama.endpoint || '')}</code>`);
+  } else if (ollama && ollama.disabled) {
+    addRow('system', 'system=&gt;', `ollama: <em class="fail">disabled</em>`);
   } else {
     addRow('system', 'system=&gt;', `ollama: <em class="fail">unreachable</em>`);
   }
@@ -1710,15 +1911,26 @@ async function boot() {
   await seedAssets();
   const greeting = (() => {
     if (!caps) return "no sidecar capabilities — i'll wait here.";
+    const ollama = caps.providers && caps.providers.ollama || {};
+    const ollamaDisabled = ollama.disabled;
+    const ollamaReachable = ollama.reachable;
+
     switch (caps.level) {
       case 'hybrid':
         return "ready. frontier + local both online. ask anything.";
       case 'frontier':
-        return "ready on frontier. install ollama for a local compressor.";
+        return ollamaDisabled
+          ? "ready on frontier."
+          : (ollamaReachable ? "ready on frontier." : "ready on frontier. install ollama for a local compressor.");
       case 'local':
         return "ready on local model. planning will feel slower than frontier; paste an anthropic / openai / gemini token to upgrade.";
       case 'none':
       default:
+        if (ollamaDisabled) {
+          return "Ollama is disabled via configuration. To activate the Hyperia agent, please configure an API token from one of the following providers: OpenAI (paste <code>sk-…</code>), Anthropic (paste <code>sk-ant-…</code>), or Gemini (paste <code>AIza…</code>). Typing <code>what's possible</code> walks through options.";
+        } else if (!ollamaReachable) {
+          return "Ollama is unreachable or not running, and no provider tokens are configured. Please start Ollama or configure an API token from OpenAI (paste <code>sk-…</code>), Anthropic (paste <code>sk-ant-…</code>), or Gemini (paste <code>AIza…</code>). Typing <code>what's possible</code> walks through options.";
+        }
         return "i don't have a brain wired yet. try <code>install ollama</code> for a local model, or <code>paste anthropic token sk-ant-…</code> for a frontier one. typing <code>what's possible</code> walks through options.";
     }
   })();
@@ -1753,12 +1965,20 @@ function openModelPicker() {
   };
   for (const p of ['anthropic', 'openai', 'gemini']) {
     const pInfo = caps.providers && caps.providers[p];
-    if (pInfo && pInfo.token) {
-      options.push({ provider: p, model: frontierDefaults[p], label: p + ' · ' + frontierDefaults[p] });
-    }
+    const hasToken = !!(pInfo && pInfo.token);
+    const suffix = hasToken ? '' : ' (no token)';
+    options.push({
+      provider: p,
+      model: frontierDefaults[p],
+      label: p + ' · ' + frontierDefaults[p] + suffix
+    });
   }
   if (!options.length) {
-    addRow('system', 'system=&gt;', 'no models available — no frontier token configured and no ollama models pulled. type <code>install ollama</code> in the prompt to get started.');
+    const ollamaDisabled = caps.providers && caps.providers.ollama && caps.providers.ollama.disabled;
+    const msg = ollamaDisabled
+      ? 'no models available — no frontier token configured. paste a token from openai, anthropic or gemini in the prompt to get started.'
+      : 'no models available — no frontier token configured and no ollama models pulled. type <code>install ollama</code> in the prompt to get started.';
+    addRow('system', 'system=&gt;', msg);
     return;
   }
   // Render an inline picker row (reuse show_widget styling).
@@ -1813,6 +2033,15 @@ function openModelPicker() {
   });
 }
 $('s-model-item').addEventListener('click', openModelPicker);
+$('hud-reset').addEventListener('click', () => {
+  STATS.in = 0;
+  STATS.out = 0;
+  STATS.tools = 0;
+  STATS.turns = 0;
+  turn_in = 0;
+  turn_out = 0;
+  updateHud();
+});
 
 updateHud();
 autoresize();

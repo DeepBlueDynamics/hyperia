@@ -208,6 +208,11 @@ async fn settings_run_loop(
 
         while let Some(event) = event_rx.recv().await {
             match event {
+                ProviderEvent::ThinkingStart { .. }
+                | ProviderEvent::ThinkingDelta { .. }
+                | ProviderEvent::ThinkingEnd { .. } => {
+                    // The settings agent doesn't surface thinking blocks.
+                }
                 ProviderEvent::TextDelta(text) => {
                     text_parts.push(text.clone());
                     let _ = tx.send(GhostEvent::TextDelta { text }).await;

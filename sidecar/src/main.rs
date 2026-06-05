@@ -295,7 +295,7 @@ async fn post_auto_describe(
         &screen[..screen.len().min(2000)]
     );
     let body = serde_json::json!({
-        "model": "gemma4:12b",
+        "model": "gemma2:9b",
         "prompt": prompt,
         "stream": false,
     });
@@ -1582,6 +1582,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ghost/bootchat", axum::routing::post(ghost::api::ghost_bootchat))
         // Model picker — writes config.agent.{provider,model} from the shell.
         .route("/api/ghost/set-model", axum::routing::post(ghost::api::ghost_set_model))
+        .route("/api/ghost/wipe-config", axum::routing::post(ghost::api::ghost_wipe_config))
         // Assets: paste/drop targets land here, then appear as rows in the shell.
         .route(
             "/api/ghost/asset",
