@@ -1706,6 +1706,8 @@ async function cmdResetConversation() {
   screen.innerHTML = '';
   STATS.in = 0; STATS.out = 0; STATS.tools = 0; STATS.turns = 0;
   turn_in = 0; turn_out = 0;
+  history.length = 0;
+  histIdx = -1;
   updateHud();
   addWatercooler('conversation reset');
 }

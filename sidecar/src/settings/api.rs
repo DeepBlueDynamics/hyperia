@@ -40,6 +40,12 @@ bringing up any local services they need.
        settings_set(\"config.agent.model\", <model_id>)
   4. If the chosen provider has no token configured (settings_get(\"config.providers.<provider>.token\") returns null/empty) and the provider isn't ollama, follow up with show_input(id=\"token\", kind=\"password\") and settings_set(\"config.providers.<provider>.token\", value).
 
+\"what's the poop with ferricula\" / \"nuts.services token missing or expired\" / \"fix ferricula auth\" / \"get token\":
+  1. Explain that the nuts.services token is required to authenticate ferricula memory services.
+  2. Call open_web_pane(url=\"https://auth.nuts.services\") to open the login page in a web pane.
+  3. Call show_input(id=\"nuts_token\", prompt=\"Paste your nuts.services token\", kind=\"password\") to collect the new token.
+  4. Call settings_set(\"config.nuts.token\", value) to save it.
+
 ## Config schema (the one source of truth — no legacy fields)
   config.agent.provider     anthropic | openai | gemini | ollama
   config.agent.model        full model id, e.g. claude-sonnet-4-6, gpt-4o, llama3.2
