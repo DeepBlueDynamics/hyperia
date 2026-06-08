@@ -321,6 +321,26 @@ function stickysDir(): string {
   return dir;
 }
 
+// Persist whether the user has stickies hidden, so a Hide-All survives a restart
+// (otherwise every relaunch reopens them shown and the user has to hide again).
+function stickyStateFile(): string {
+  return join(stickysDir(), 'state.json');
+}
+function readStickyHidden(): boolean {
+  try {
+    return JSON.parse(readFileSync(stickyStateFile(), 'utf8'))?.hidden === true;
+  } catch {
+    return false;
+  }
+}
+function writeStickyHidden(hidden: boolean): void {
+  try {
+    writeFileSync(stickyStateFile(), JSON.stringify({hidden}), 'utf8');
+  } catch {
+    // non-fatal
+  }
+}
+
 function getStickyDefaultSize(): {width: number; height: number} {
   try {
     const d = JSON.parse(readFileSync(join(stickysDir(), 'defaults.json'), 'utf8'));
@@ -477,21 +497,46 @@ function upsertNote(note: NoteData) {
 function updateNote(id: string, text: string): boolean {
   const notes = readAllNotes();
   const note = notes.find((n) => n.id === id);
-  if (!note) return false;
-  note.text = text;
-  writeAllNotes(notes);
+
+  if (note) {
+    note.text = text;
+    writeAllNotes(notes);
+
+    if (note.source && note.source.kind === 'file' && note.source.path) {
+      try {
+        const translated = translateContainerPath(note.source.path);
+        writeFileSync(translated, text, 'utf8');
+      } catch (e) {
+        console.error(`sticky: failed to write updated content to linked file ${note.source.path}:`, e);
+      }
+    }
+  }
+
+  const watchPath = fileWatchPaths.get(id);
+  if (watchPath) {
+    try {
+      writeFileSync(watchPath, text, 'utf8');
+    } catch (e) {
+      console.error(`sticky: failed to write updated content to watch path ${watchPath}:`, e);
+    }
+  }
+
   // If the window is open, send it a message to refresh
   const win = stickyWindows.get(id);
   if (win && !win.isDestroyed()) {
     win.webContents.send('note-updated', {id, text});
   }
-  // updateNote is the EXTERNAL path (agent / MCP sticky_note_update). If you're
-  // not already looking at the note, ping you that it changed — clicking the
-  // notification opens it. Skipped when the note window is focused (you can
-  // see the live update) and rate-limited so a streaming agent isn't spammy.
+
   const focused = win && !win.isDestroyed() && win.isFocused();
-  if (!focused) notifyStickyUpdated(note);
-  return true;
+  if (!focused) {
+    if (win && !win.isDestroyed()) {
+      win.show();
+      win.focus();
+    } else if (note) {
+      notifyStickyUpdated(note);
+    }
+  }
+  return !!(note || win);
 }
 
 const lastStickyNotify = new Map<string, number>();
@@ -626,6 +671,7 @@ function createStickyNote(
     width?: number;
     height?: number;
     color?: string;
+    startHidden?: boolean;
   } = {}
 ) {
   if (options.filePath) {
@@ -765,19 +811,25 @@ function createStickyNote(
 
   // Show and focus once ready
   win.once('ready-to-show', () => {
-    win.show();
-    win.setAlwaysOnTop(true, 'floating');
-    // macOS: float the note over a native-fullscreen host app at its real size
-    // instead of letting it get absorbed into (and fill) the fullscreen Space.
-    if (process.platform === 'darwin') {
-      win.setVisibleOnAllWorkspaces(true, {visibleOnFullScreen: true});
+    // Restored while the user had stickies hidden → keep it hidden (no flash).
+    // showAllStickys() will reveal it later.
+    if (!options.startHidden) {
+      win.show();
+      win.setAlwaysOnTop(true, 'floating');
+      // macOS: float the note over a native-fullscreen host app at its real size
+      // instead of letting it get absorbed into (and fill) the fullscreen Space.
+      if (process.platform === 'darwin') {
+        win.setVisibleOnAllWorkspaces(true, {visibleOnFullScreen: true});
+      }
+      win.focus();
+      win.webContents.focus();
     }
-    win.focus();
-    win.webContents.focus();
 
     // Linked note → watch its file so external edits refresh it live.
     if (savedNote?.source?.kind === 'file' && savedNote.source.path) {
       startFileWatch(noteId, savedNote.source.path);
+    } else if (options.filePath) {
+      startFileWatch(noteId, options.filePath);
     }
 
     // DevTools on the first sticky for diagnostics
@@ -1134,10 +1186,12 @@ export function initSticky() {
   // an app quit (taskkill) leaves active notes flagged open → they reopen here.
   // Deferred a tick so the windows mount after the app is ready.
   setTimeout(() => {
+    const hidden = readStickyHidden();
     for (const note of readAllNotes()) {
       if (note.id === SEARCH_WIN_ID || note.filePath) continue;
       if (note.open && !stickyWindows.has(note.id)) {
-        createStickyNote({id: note.id});
+        // If the user had stickies hidden at last quit, restore them hidden.
+        createStickyNote({id: note.id, startHidden: hidden});
       }
     }
   }, 400);
@@ -1161,6 +1215,10 @@ export function closeStickyNote(noteId: string): boolean {
 const SEARCH_WIN_ID = 'sticky-search-window';
 
 function hideAllStickys(exceptId?: string): void {
+  // A full Hide-All (no exception) is the "user hid everything" state we persist
+  // so it survives restart. "Hide others" (exceptId set) leaves one visible, so
+  // it isn't a global-hidden state.
+  if (!exceptId) writeStickyHidden(true);
   for (const [id, win] of stickyWindows.entries()) {
     if (id === SEARCH_WIN_ID) continue;
     if (exceptId && id === exceptId) continue;
@@ -1169,6 +1227,7 @@ function hideAllStickys(exceptId?: string): void {
 }
 
 function showAllStickys(): void {
+  writeStickyHidden(false);
   for (const [id, win] of stickyWindows.entries()) {
     if (id === SEARCH_WIN_ID) continue;
     if (!win.isDestroyed() && !win.isVisible()) win.showInactive();

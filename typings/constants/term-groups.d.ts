@@ -75,6 +75,12 @@ export interface RestoreLayoutStateAction {
   savedState: any;
 }
 
+export const TERM_GROUP_POP_OUT_PANE = 'TERM_GROUP_POP_OUT_PANE';
+export interface TermGroupPopOutPaneAction {
+  type: typeof TERM_GROUP_POP_OUT_PANE;
+  uid: string;
+}
+
 export type TermGroupActions =
   | TermGroupRequestAction
   | TermGroupExitAction
@@ -87,4 +93,6 @@ export type TermGroupActions =
   | TermGroupSetWebNameAction
   | TermGroupSetTabNameAction
   | TermGroupToggleTitleInheritanceAction
-  | RestoreLayoutStateAction;
+  | RestoreLayoutStateAction
+  | TermGroupPopOutPaneAction;
+

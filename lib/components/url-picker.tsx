@@ -22,15 +22,21 @@ function normalizeUrlKey(u: string): string {
   }
 }
 
-// Group key: scheme://host/<first-path-segment>. Collapses e.g. every
-// google.com/maps/@lat,lng URL under one "google.com/maps" root.
+// Collapse key: scheme://host + full path, truncated at the first "special"
+// character (! ? @ # & = ; , ~ * + and more). Query strings and fragments live
+// in .search/.hash so they're already excluded; the path truncation also folds
+// in-path noise like google.com/maps/@lat,lng or /!bangs. Distinct pages keep
+// their full path and stay separate (article/123 ≠ article/456) — only variants
+// of the SAME page collapse together.
 function rootKeyForUrl(u: string): string {
   try {
     const p = new URL(/^[a-z]+:\/\//i.test(u) ? u : 'https://' + u);
-    const seg = p.pathname.split('/').filter(Boolean)[0] || '';
-    return `${p.protocol}//${p.host}${seg ? '/' + seg : ''}`.toLowerCase();
+    let path = p.pathname;
+    const m = path.match(/[!?@#&=;,~*+$%^]/);
+    if (m && m.index !== undefined && m.index > 0) path = path.slice(0, m.index);
+    return `${p.protocol}//${p.host}${path}`.replace(/\/+$/, '').toLowerCase();
   } catch {
-    return u.trim().toLowerCase();
+    return u.split(/[!?@#&=;,~*+$%^]/)[0].trim().toLowerCase();
   }
 }
 
@@ -252,9 +258,17 @@ export default class UrlPicker extends React.Component<Props, State> {
                       key={`root-${row.key}`}
                       onMouseDown={(ev) => {
                         ev.preventDefault();
-                        this.toggleRoot(row.key);
+                        // Ctrl/Cmd-click reveals the collapsed ?/#/@ variants; a
+                        // plain click navigates to the latest visit of this page.
+                        if (ev.ctrlKey || ev.metaKey) {
+                          this.toggleRoot(row.key);
+                        } else {
+                          this.setState({focusedIndex: -1});
+                          onNavigate(row.entries[0].value);
+                        }
                       }}
                       onMouseEnter={() => this.setState({focusedIndex: i})}
+                      title={`${row.entries.length} versions · Ctrl-click to show`}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -296,9 +310,11 @@ export default class UrlPicker extends React.Component<Props, State> {
                   <div
                     key={e.value + e.visitedAt}
                     onMouseDown={(ev) => {
-                      // mousedown (not click) so it fires before the input blur
-                      // closes the list.
+                      // Click a URL row → navigate straight there (preventDefault
+                      // keeps the input from blurring + closing the dropdown
+                      // before this fires). No second Enter needed.
                       ev.preventDefault();
+                      this.setState({focusedIndex: -1});
                       onNavigate(e.value);
                     }}
                     onMouseEnter={() => this.setState({focusedIndex: i})}

@@ -434,6 +434,7 @@ export type TermProps = {
   onResize: (cols: number, rows: number) => void;
   onTitle: (title: string, manual?: boolean) => void;
   onClosePane?: (groupUid: string) => void;
+  onPopOutPane?: (groupUid: string) => void;
   groupUid?: string;
   padding: string;
   quickEdit: boolean;

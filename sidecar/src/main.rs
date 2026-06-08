@@ -560,15 +560,17 @@ async fn post_split(
     // No human-activity lockout: a split creates a NEW pane; it doesn't
     // stomp on whatever the human is typing in the active pane. Blocking
     // it just made splits silently fail with 409 while the user was busy.
-    let direction = if body.is_empty() {
-        "vertical".to_string()
-    } else {
-        serde_json::from_str::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|v| v["direction"].as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| "vertical".into())
-    };
-    let cmd = serde_json::json!({"type": "Split", "direction": direction});
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let direction = parsed["direction"].as_str().unwrap_or("vertical").to_string();
+    let profile = parsed["profile"].as_str().unwrap_or("").to_string();
+    let command = parsed["command"].as_str().unwrap_or("").to_string();
+
+    let cmd = serde_json::json!({
+        "type": "Split",
+        "direction": direction,
+        "profile": profile,
+        "command": command
+    });
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),

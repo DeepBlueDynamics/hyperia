@@ -178,6 +178,7 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
             env: (this.props as any).env,
             setWebPaneUrl: (this.props as any).setWebPaneUrl,
             onClosePane: (this.props as any).onClosePane,
+            onPopOutPane: (this.props as any).onPopOutPane,
             parentProps: this.props
           });
 

@@ -9,7 +9,7 @@ import {
   setSessionCwd
 } from '../actions/sessions';
 import {markTabBell, openContextMenu} from '../actions/ui';
-import {userExitTermGroup} from '../actions/term-groups';
+import {userExitTermGroup, popOutPane} from '../actions/term-groups';
 import Terms from '../components/terms';
 import {getRootGroups} from '../selectors';
 import {connect} from '../utils/plugins';
@@ -68,6 +68,10 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
   return {
     onClosePane(groupUid: string) {
       dispatch(userExitTermGroup(groupUid) as any);
+    },
+
+    onPopOutPane(groupUid: string) {
+      dispatch(popOutPane(groupUid) as any);
     },
 
     setWebPaneUrl(groupUid: string, url: string | null) {

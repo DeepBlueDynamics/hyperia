@@ -377,6 +377,22 @@ export default class Term extends React.PureComponent<
 
     menu.append(new MenuItem({type: 'separator'}));
 
+    const termGroup = (this.props as any).allTermGroups?.[this.props.groupUid!];
+    const isPoppable = termGroup && !!termGroup.parentUid;
+
+    if (isPoppable) {
+      menu.append(
+        new MenuItem({
+          label: 'Move Pane to New Tab',
+          click: () => {
+            if (this.props.onPopOutPane && this.props.groupUid) {
+              this.props.onPopOutPane(this.props.groupUid);
+            }
+          }
+        })
+      );
+    }
+
     menu.append(
       new MenuItem({
         label: 'Close Pane',

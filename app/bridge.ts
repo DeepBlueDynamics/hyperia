@@ -70,6 +70,19 @@ let commandHandler: CommandHandler | null = null;
 // Pending startup command for next new session
 let pendingCommand: ((uid: string, session: Session) => void) | null = null;
 
+interface PendingSessionCallback {
+  seq: number;
+  timer: NodeJS.Timeout;
+}
+let pendingSessionCallback: PendingSessionCallback | null = null;
+
+function clearPendingSessionCallback() {
+  if (pendingSessionCallback) {
+    clearTimeout(pendingSessionCallback.timer);
+    pendingSessionCallback = null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket connection
 // ---------------------------------------------------------------------------
@@ -364,12 +377,43 @@ function handleCommand(msg: Record<string, unknown>) {
       const win = getFocusedHyperiaWindow();
       if (win) {
         const dir = (msg.direction as string) || 'vertical';
-        if (dir === 'horizontal') {
-          win.rpc.emit('split request horizontal', {});
-        } else {
-          win.rpc.emit('split request vertical', {});
+        const profile = (msg.profile as string) || 'default'; // Programmatic split defaults to 'default' shell, not 'picker'
+        const command = (msg.command as string) || '';
+
+        clearPendingSessionCallback();
+        if (seq !== undefined) {
+          const currentSeq = seq;
+          const timer = setTimeout(() => {
+            if (pendingSessionCallback && pendingSessionCallback.seq === currentSeq) {
+              sendResult(currentSeq, JSON.stringify({ ok: false, error: 'Timeout waiting for pane registration' }));
+              pendingSessionCallback = null;
+            }
+          }, 5000);
+          pendingSessionCallback = { seq: currentSeq, timer };
         }
-        sendResult(seq, 'ok');
+
+        // If a startup command was provided, write it to the new session once it's ready
+        if (command) {
+          const onNewSession = (_uid: string, session: Session) => {
+            const tryWrite = (attempts: number) => {
+              if (session.pty?.pid) {
+                setTimeout(() => {
+                  session.write(command + '\r');
+                }, 800);
+              } else if (attempts > 0) {
+                setTimeout(() => tryWrite(attempts - 1), 200);
+              }
+            };
+            tryWrite(15);
+          };
+          pendingCommand = onNewSession;
+        }
+
+        if (dir === 'horizontal') {
+          win.rpc.emit('split request horizontal', {profile});
+        } else {
+          win.rpc.emit('split request vertical', {profile});
+        }
       } else {
         sendResult(seq, 'No focused window');
       }
@@ -418,6 +462,19 @@ function handleCommand(msg: Record<string, unknown>) {
       if (win) {
         const profile = (msg.profile as string) || '';
         const command = (msg.command as string) || '';
+
+        clearPendingSessionCallback();
+        if (seq !== undefined) {
+          const currentSeq = seq;
+          const timer = setTimeout(() => {
+            if (pendingSessionCallback && pendingSessionCallback.seq === currentSeq) {
+              sendResult(currentSeq, JSON.stringify({ ok: false, error: 'Timeout waiting for pane registration' }));
+              pendingSessionCallback = null;
+            }
+          }, 5000);
+          pendingSessionCallback = { seq: currentSeq, timer };
+        }
+
         win.rpc.emit('termgroup add req', profile ? {profile} : {});
 
         // If a startup command was provided, write it to the new session once it's ready
@@ -438,8 +495,6 @@ function handleCommand(msg: Record<string, unknown>) {
           // Listen for the next session registration
           pendingCommand = onNewSession;
         }
-
-        sendResult(seq, 'ok');
       } else {
         sendResult(seq, 'No focused window');
       }
@@ -887,6 +942,16 @@ export function registerSession(
   });
 
   sendSessionRegister(uid, tracked);
+
+  // Resolve pending session callback if one was set (from Split or NewTab)
+  if (pendingSessionCallback) {
+    const seq = pendingSessionCallback.seq;
+    clearPendingSessionCallback();
+    sendResult(seq, JSON.stringify({
+      ok: true,
+      paneId: uid
+    }));
+  }
 
   // Execute pending startup command if one was set
   if (pendingCommand) {

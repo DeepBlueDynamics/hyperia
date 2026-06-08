@@ -48,6 +48,58 @@ import contextMenuTemplate from './contextmenu';
 // Tab names are assigned by the renderer and synced via 'session set tab name' RPC.
 // The main process no longer generates names.
 
+// Web panes spoof a Chrome User-Agent (see BROWSER_UA), but the <webview>
+// `useragent` attribute only changes the UA *string* — Chromium still emits
+// `sec-ch-ua` client hints that carry the "Electron" brand. Cloudflare's managed
+// challenge cross-checks the UA against those hints, so a Chrome UA paired with
+// Electron client hints loops on "Just a moment…" forever. Rewrite the outgoing
+// headers so UA AND client hints both say Google Chrome, consistently.
+const configuredWebPaneSessions = new WeakSet<Electron.Session>();
+function chromeHeaderSet() {
+  const full = process.versions.chrome || '146.0.0.0';
+  const major = full.split('.')[0];
+  const isMac = process.platform === 'darwin';
+  const isLinux = process.platform === 'linux';
+  const uaPlat = isMac ? 'Macintosh; Intel Mac OS X 10_15_7' : isLinux ? 'X11; Linux x86_64' : 'Windows NT 10.0; Win64; x64';
+  const chPlat = isMac ? '"macOS"' : isLinux ? '"Linux"' : '"Windows"';
+  const platVersion = isMac ? '"13.0.0"' : isLinux ? '"6.0.0"' : '"10.0.0"';
+  return {
+    ua: `Mozilla/5.0 (${uaPlat}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`,
+    brands: `"Chromium";v="${major}", "Google Chrome";v="${major}", "Not?A_Brand";v="24"`,
+    fullVersionList: `"Chromium";v="${full}", "Google Chrome";v="${full}", "Not?A_Brand";v="24.0.0.0"`,
+    platform: chPlat,
+    platformVersion: platVersion
+  };
+}
+function configureWebPaneSession(sess: Electron.Session) {
+  if (!sess || configuredWebPaneSessions.has(sess)) return;
+  configuredWebPaneSessions.add(sess);
+  const {ua, brands, fullVersionList, platform, platformVersion} = chromeHeaderSet();
+  sess.webRequest.onBeforeSendHeaders((details, callback) => {
+    const h = details.requestHeaders;
+    h['User-Agent'] = ua;
+    // Drop whatever case Chromium sent the hints in, then set the Chrome set.
+    for (const k of Object.keys(h)) {
+      const lk = k.toLowerCase();
+      if (
+        lk === 'sec-ch-ua' ||
+        lk === 'sec-ch-ua-full-version-list' ||
+        lk === 'sec-ch-ua-platform' ||
+        lk === 'sec-ch-ua-platform-version' ||
+        lk === 'sec-ch-ua-mobile'
+      ) {
+        delete h[k];
+      }
+    }
+    h['sec-ch-ua'] = brands;
+    h['sec-ch-ua-mobile'] = '?0';
+    h['sec-ch-ua-platform'] = platform;
+    h['sec-ch-ua-platform-version'] = platformVersion;
+    h['sec-ch-ua-full-version-list'] = fullVersionList;
+    callback({requestHeaders: h});
+  });
+}
+
 function makeLetterIcon(letter: string): Electron.NativeImage {
   // Generate a 32x32 PNG with a single letter via canvas-free SVG→PNG
   const ch = (letter || 'H').charAt(0).toUpperCase();
@@ -608,6 +660,13 @@ export function newWindow(
   // popup windows (OAuth flows, target="_blank" links) as new BrowserWindows.
   // Route them to the system browser instead.
   window.webContents.on('did-attach-webview', (_event, webviewContents) => {
+    // Make this web pane's outgoing requests fingerprint as Chrome (UA + matching
+    // sec-ch-ua client hints) so Cloudflare's challenge clears instead of looping.
+    try {
+      configureWebPaneSession(webviewContents.session);
+    } catch (err) {
+      console.error('[web-pane] header config failed:', err);
+    }
     // Let the renderer reach this guest via @electron/remote too (zoom keys etc.).
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires

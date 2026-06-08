@@ -17,7 +17,7 @@ pub struct KeysRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
     pub pane: Option<String>,
     /// Set true to send immediately even when the human is active in this pane — use this to interrupt a running process (e.g. Ctrl-C). When the human is active and this is false/omitted, the keys are queued and you get a notice telling you to resend with interrupt=true.
     pub interrupt: Option<bool>,
@@ -31,7 +31,7 @@ pub struct RunRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
     pub pane: Option<String>,
     /// Milliseconds to wait for output before reading screen (default: 2000)
     pub wait_ms: Option<u64>,
@@ -53,7 +53,7 @@ pub struct ScreenRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
     pub pane: Option<String>,
     /// What you're looking for on the screen — Maximus extracts just that. Example: "last error", "current directory", "running process name".
     pub focus: Option<String>,
@@ -65,6 +65,10 @@ pub struct ScreenRequest {
 pub struct SplitRequest {
     /// Split direction: "horizontal" or "vertical" (default: vertical)
     pub direction: Option<String>,
+    /// Shell command to run after the split opens (e.g. "cd /my/project && cargo test")
+    pub command: Option<String>,
+    /// Shell profile to use for the new split pane. If omitted, uses default shell.
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -73,7 +77,7 @@ pub struct FocusRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
     pub pane: Option<String>,
 }
 
@@ -81,6 +85,8 @@ pub struct FocusRequest {
 pub struct NewTabRequest {
     /// Shell command to run after the tab opens (e.g. "cd /my/project && claude")
     pub command: Option<String>,
+    /// Shell profile to use for the new tab. If omitted, uses default shell.
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -155,7 +161,7 @@ pub struct WebReloadRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
     pub pane: Option<String>,
 }
 
@@ -169,7 +175,7 @@ pub struct WebClickRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
     pub pane: Option<String>,
 }
 
@@ -182,7 +188,7 @@ pub struct WebEvalRequest {
     pub window: Option<u32>,
     /// Tab name. Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label / paneId. Omit for first pane.
+    /// Pane label / paneId (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
     pub pane: Option<String>,
 }
 
@@ -198,7 +204,7 @@ pub struct WebMouseRequest {
     pub window: Option<u32>,
     /// Tab name. Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label / paneId. Omit for first pane.
+    /// Pane label / paneId (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
     pub pane: Option<String>,
 }
 
@@ -232,7 +238,7 @@ pub struct AgentStatusRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
     pub pane: Option<String>,
 }
 
@@ -280,7 +286,7 @@ pub struct ShellConfirmRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
     pub pane: Option<String>,
 }
 
@@ -290,7 +296,7 @@ pub struct AutoDescribeRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label within the tab (e.g. "a", "b"). Omit for first pane.
+    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
     pub pane: Option<String>,
 }
 
@@ -736,7 +742,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(out)]))
     }
 
-    #[tool(description = "List all open windows, tabs, and panes in a nested hierarchy. Each window has an `id` field — pass that exact value as the `window` parameter in other tools (it is NOT 0-based; the first window is typically id=1). Each pane includes both a label and a paneId. Use the pane label when present; if the label is empty, use paneId when addressing that pane in other tools.")]
+    #[tool(description = "List all open windows, tabs, and panes in a nested hierarchy. Each window has an `id` field — pass that exact value as the `window` parameter in other tools (it is NOT 0-based; the first window is typically id=1). Each pane includes both a label (DEPRECATED; do not use as it shifts when splits are added/removed) and a paneId. When addressing a pane in other tools, always use the stable paneId or its 4+ character prefix instead of the label.")]
     async fn terminal_status(&self) -> Result<CallToolResult, ErrorData> {
         let text = self.get("/api/status").await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -890,13 +896,15 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Split the currently focused pane into two. Direction: 'horizontal' (top/bottom) or 'vertical' (left/right, default). The new panes will be labeled with the next available letters. Use terminal_status after splitting to see the updated labels.")]
+    #[tool(description = "Split the currently focused pane into two. Returns the new pane's stable paneId UUID. Direction: 'horizontal' (top/bottom) or 'vertical' (left/right, default). You can optionally provide a startup command to run in the new split pane, and specify a shell profile. If no profile is specified, it defaults to the 'default' shell profile.")]
     async fn terminal_split(
         &self,
         Parameters(req): Parameters<SplitRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let body = serde_json::json!({
             "direction": req.direction.unwrap_or_else(|| "vertical".into()),
+            "command": req.command,
+            "profile": req.profile,
         });
         let resp = self.post_json("/api/pane/split", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
@@ -937,7 +945,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Open a new tab. Optionally run a startup command in it.")]
+    #[tool(description = "Open a new tab. Returns the new tab's root pane stable paneId UUID. Optionally specify a startup command to run in it and a shell profile. If no profile is specified, it uses default shell.")]
     async fn terminal_new_tab(
         &self,
         Parameters(req): Parameters<NewTabRequest>,
@@ -945,6 +953,9 @@ impl HyperiaMcp {
         let mut body = serde_json::json!({});
         if let Some(cmd) = &req.command {
             body["command"] = serde_json::json!(cmd);
+        }
+        if let Some(prof) = &req.profile {
+            body["profile"] = serde_json::json!(prof);
         }
         let resp = self.post_json("/api/pane/new", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))

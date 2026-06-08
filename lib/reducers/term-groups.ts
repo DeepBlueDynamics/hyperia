@@ -14,7 +14,8 @@ import {
   TERM_GROUP_SET_WEB_NAME,
   TERM_GROUP_SET_TAB_NAME,
   TERM_GROUP_TOGGLE_TITLE_INHERITANCE,
-  RESTORE_LAYOUT_STATE
+  RESTORE_LAYOUT_STATE,
+  TERM_GROUP_POP_OUT_PANE
 } from '../../typings/constants/term-groups';
 import type {ITermGroup, ITermState, ITermGroups, ITermGroupReducer, Mutable} from '../../typings/hyper';
 import {decorateTermGroupsReducer} from '../utils/plugins';
@@ -429,6 +430,56 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       if (!rootGroup) return state;
       const val = !rootGroup.disableTitleInheritance;
       return state.setIn(['termGroups', rootGroup.uid, 'disableTitleInheritance'], val);
+    }
+    case TERM_GROUP_POP_OUT_PANE: {
+      const {uid} = act;
+      const group = state.termGroups[uid];
+      if (!group || !group.parentUid) return state;
+
+      const parent = state.termGroups[group.parentUid];
+      if (!parent) return state;
+
+      const newChildren = parent.children.filter((childUid) => childUid !== uid);
+
+      if (newChildren.length === 1) {
+        const child = state.termGroups[newChildren[0]];
+        if (child) {
+          state = replaceParent(state, parent, child);
+        } else {
+          state = removeGroup(state, parent.uid);
+        }
+      } else {
+        state = state.setIn(['termGroups', group.parentUid, 'children'], newChildren);
+        if (parent.sizes) {
+          const childIndex = parent.children.indexOf(uid);
+          const newSizes = removalRebalance(parent.sizes, childIndex);
+          state = state.setIn(['termGroups', group.parentUid, 'sizes'], newSizes);
+        }
+      }
+
+      state = state.setIn(['termGroups', uid, 'parentUid'], null);
+
+      let sessionUid = group.sessionUid;
+      if (!sessionUid) {
+        const getFirstLeafSession = (gUid: string): string | null => {
+          const g = state.termGroups[gUid];
+          if (!g) return null;
+          if (g.sessionUid) return g.sessionUid;
+          if (g.children && g.children.length > 0) {
+            for (const childUid of g.children) {
+              const res = getFirstLeafSession(childUid);
+              if (res) return res;
+            }
+          }
+          return null;
+        };
+        sessionUid = getFirstLeafSession(uid);
+      }
+
+      state = state.setIn(['activeSessions', uid], sessionUid || (null as any));
+      return state
+        .set('activeRootGroup', uid)
+        .set('activeTermGroup', uid);
     }
     case TERM_GROUP_REORDER: {
       const {fromUid, toIndex} = act;

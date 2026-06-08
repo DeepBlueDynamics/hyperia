@@ -6,12 +6,18 @@
 // leave the page rendering bare (e.g. seths.blog).
 export const BROWSER_UA = (() => {
   const FALLBACK =
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
   try {
     let ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
     if (!ua) return FALLBACK;
     // Drop "Electron/x.y.z" and the app product (Hyper/Hyperia/x.y.z).
     ua = ua.replace(/\s*(?:Electron|Hyper\w*)\/\S+/gi, '');
+    // Freeze the Chrome version to real-Chrome's frozen form (major.0.0.0) so
+    // navigator.userAgent matches the sec-ch-ua client hints the main process
+    // rewrites onto outgoing requests (see app/ui/window.ts configureWebPaneSession).
+    // A UA/client-hint mismatch is exactly what Cloudflare's "Just a moment…"
+    // challenge flags as a bot.
+    ua = ua.replace(/Chrome\/(\d+)\.\d+\.\d+(?:\.\d+)?/i, 'Chrome/$1.0.0.0');
     const moz = ua.indexOf('Mozilla/');
     return (moz > 0 ? ua.slice(moz) : ua).replace(/\s{2,}/g, ' ').trim();
   } catch {
@@ -112,13 +118,20 @@ export const isValidUrl = (urlStr: string): boolean => {
 // Group key: scheme://host/<first-path-segment>. Collapses e.g. every
 // google.com/maps/@lat,lng,zoom URL under one "google.com/maps" root, so a
 // session that spammed many URLs (Maps, search) becomes one expandable entry.
+// Collapse key: scheme://host + full path truncated at the first "special"
+// character (! ? @ # & = ; , ~ * + and more). Query/fragment already live in
+// .search/.hash so they're excluded; the path truncation folds in-path noise
+// (e.g. /maps/@lat,lng, /!bangs). Distinct pages keep their full path and stay
+// separate — only variants of the SAME page collapse together.
 export const historyRootKey = (value: string): string => {
   try {
     const u = new URL(/^[a-z]+:\/\//i.test(value) ? value : 'https://' + value);
-    const seg = u.pathname.split('/').filter(Boolean)[0] || '';
-    return `${u.protocol}//${u.host}${seg ? '/' + seg : ''}`.toLowerCase();
+    let path = u.pathname;
+    const m = path.match(/[!?@#&=;,~*+$%^]/);
+    if (m && m.index !== undefined && m.index > 0) path = path.slice(0, m.index);
+    return `${u.protocol}//${u.host}${path}`.replace(/\/+$/, '').toLowerCase();
   } catch {
-    return value.toLowerCase();
+    return value.split(/[!?@#&=;,~*+$%^]/)[0].toLowerCase();
   }
 };
 

@@ -525,12 +525,18 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
         key={`root-${row.key}`}
         onClick={(e) => {
           e.stopPropagation();
-          props.onUpdateState({
-            expandedHistoryRoots: {
-              ...props.expandedHistoryRoots,
-              [row.key]: !props.expandedHistoryRoots[row.key]
-            }
-          });
+          // Ctrl/Cmd-click reveals the collapsed ?/#/@ variants; a plain click
+          // navigates to the latest visit of this page.
+          if (e.ctrlKey || e.metaKey) {
+            props.onUpdateState({
+              expandedHistoryRoots: {
+                ...props.expandedHistoryRoots,
+                [row.key]: !props.expandedHistoryRoots[row.key]
+              }
+            });
+          } else {
+            props.onNavigate(row.entries[0].value);
+          }
         }}
         style={{
           display: 'flex',
@@ -634,9 +640,10 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
               props.onNavigate(`ai://${conversationId}`);
             }
           } else {
+            // Click a URL row → navigate straight there (no extra Enter).
+            props.onUpdateState({navigatorFocusedIndex: -1, navigatorError: null});
             props.onNavigate(item.value);
           }
-          props.onUpdateState({ isUrlNavigatorOpen: false });
         }}
         style={{
           display: 'flex',

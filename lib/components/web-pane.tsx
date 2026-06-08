@@ -4,7 +4,7 @@ import React from 'react';
 import {connect} from 'react-redux';
 
 import type {HyperDispatch} from '../../typings/hyper';
-import {clearWebPane, userExitTermGroup, splitWebPane} from '../actions/term-groups';
+import {clearWebPane, userExitTermGroup, splitWebPane, popOutPane} from '../actions/term-groups';
 import rpc from '../rpc';
 import {countPathHorizontalStacks} from '../utils/term-groups';
 
@@ -256,6 +256,21 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       console.error('Failed to reload:', err);
     }
     /* eslint-enable @typescript-eslint/no-unsafe-call */
+  };
+
+  // Open the current page in the system browser (Chrome). The reliable bail-out
+  // when an embedded webview can't clear a bot wall (Cloudflare et al.).
+  openInExternal = () => {
+    const wv: any = this.webviewRef.current;
+    const u =
+      (wv && typeof wv.getURL === 'function' && wv.getURL()) || this.props.url || this.state.urlInputVal || '';
+    if (/^https?:\/\//i.test(u)) {
+      try {
+        shell.openExternal(u);
+      } catch (err) {
+        console.error('openExternal failed:', err);
+      }
+    }
   };
 
   goBack = () => {
@@ -777,10 +792,14 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   };
 
   removeHistoryEntry = (kind: 'url' | 'ai-query', value: string, visitedAt?: number) => {
+    const normKey = kind === 'url' ? normalizeUrlKey(value) : value;
     const newHistory = this.state.webHistory.filter((item) => {
-      if (item.kind === kind && item.value === value) {
-        if (visitedAt === undefined || item.visitedAt === visitedAt) {
-          return false;
+      if (item.kind === kind) {
+        const itemKey = kind === 'url' ? normalizeUrlKey(item.value) : item.value;
+        if (itemKey === normKey) {
+          if (visitedAt === undefined || item.visitedAt === visitedAt) {
+            return false;
+          }
         }
       }
       return true;
@@ -983,12 +1002,31 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       } catch (err) {
         console.warn('Failed to retrieve page background color:', err);
       }
+
+      // Check HTTP response status code for 404 or other bad status codes
+      try {
+        const httpStatus = await wv.executeJavaScript(
+          "(function(){try{var entries=performance.getEntriesByType('navigation');return entries.length?entries[0].responseStatus:0;}catch(e){return 0;}})()"
+        );
+        if (httpStatus === 404 || httpStatus >= 400) {
+          const currentUrl = wv.getURL();
+          if (currentUrl) {
+            this.removeHistoryEntry('url', currentUrl);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to retrieve page HTTP status code:', err);
+      }
     });
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-    wv.addEventListener('did-fail-load', (e: {errorCode: number; errorDescription: string}) => {
+    wv.addEventListener('did-fail-load', (e: {errorCode: number; errorDescription: string; validatedURL?: string}) => {
       if (e.errorCode === -3) return;
       this.setState({loading: false, error: e.errorDescription || 'Failed to load'});
+      const badUrl = e.validatedURL || this.state.urlInputVal;
+      if (badUrl) {
+        this.removeHistoryEntry('url', badUrl);
+      }
     });
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
@@ -1785,6 +1823,20 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     menu.append(new MenuItem({type: 'separator'}));
 
+    const termGroup = (this.props as any).allTermGroups?.[this.props.groupUid];
+    const isPoppable = termGroup && !!termGroup.parentUid;
+
+    if (isPoppable) {
+      menu.append(
+        new MenuItem({
+          label: 'Move Pane to New Tab',
+          click: () => {
+            (this.props as any).onPopOutPane?.();
+          }
+        })
+      );
+    }
+
     menu.append(
       new MenuItem({
         label: 'Close Pane',
@@ -1966,6 +2018,29 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     </div>
                   </span>
                 )}
+                <span
+                  className="term_controlIcon term_tooltipTrigger"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    this.openInExternal();
+                  }}
+                  style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
+                >
+                  <i className="ti ti-external-link" style={{fontSize: '14px'}} aria-hidden="true" />
+                  <div className="term_tooltip" style={{minWidth: '180px'}}>
+                    <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Open in Chrome</div>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        fontFamily: 'var(--font-mono)',
+                        color: 'var(--text-secondary)',
+                        marginTop: 'var(--space-2)'
+                      }}
+                    >
+                      System browser — bypasses bot walls
+                    </div>
+                  </div>
+                </span>
                 {showReload && (
                   <span
                     className="term_controlIcon term_tooltipTrigger"
@@ -2991,6 +3066,9 @@ const mapDispatchToProps = (dispatch: HyperDispatch, ownProps: WebPaneProps) => 
   },
   onClosePane() {
     dispatch(userExitTermGroup(ownProps.groupUid) as any);
+  },
+  onPopOutPane() {
+    dispatch(popOutPane(ownProps.groupUid) as any);
   },
   onSetTitle(title: string) {
     dispatch({type: 'TERM_GROUP_SET_WEB_NAME', uid: ownProps.groupUid, name: title} as any);

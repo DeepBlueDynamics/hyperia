@@ -8,7 +8,8 @@ import {
   TERM_GROUP_SET_WEB_URL,
   TERM_GROUP_ADD_WEB_TAB,
   TERM_GROUP_ACTIVATE_WEB_TAB,
-  RESTORE_LAYOUT_STATE
+  RESTORE_LAYOUT_STATE,
+  TERM_GROUP_POP_OUT_PANE
 } from '../../typings/constants/term-groups';
 import type {ITermState, ITermGroup, HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
@@ -336,3 +337,13 @@ export function restoreLayoutState(savedState: any) {
     }
   };
 }
+
+export function popOutPane(uid: string) {
+  return (dispatch: HyperDispatch) => {
+    dispatch({
+      type: TERM_GROUP_POP_OUT_PANE,
+      uid
+    } as any);
+  };
+}
+

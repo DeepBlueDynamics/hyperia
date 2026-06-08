@@ -1268,11 +1268,21 @@ ipcRenderer.on('sticky-file-changed', (_e, info) => {
   try {
     if (!info || typeof info.content !== 'string') return;
     const ta = document.getElementById('noteText');
-    if (!ta || ta.value === info.content) return;
-    const pos = ta.selectionStart;
-    ta.value = info.content;
-    try { ta.setSelectionRange(Math.min(pos, ta.value.length), Math.min(pos, ta.value.length)); } catch (e) {}
-    scheduleSyntax();
+    if (ta) {
+      if (ta.value === info.content) return;
+      const pos = ta.selectionStart;
+      ta.value = info.content;
+      try { ta.setSelectionRange(Math.min(pos, ta.value.length), Math.min(pos, ta.value.length)); } catch (e) {}
+      scheduleSyntax();
+    } else {
+      const codeEl = document.getElementById('codeBlock')?.querySelector('code');
+      if (codeEl) {
+        if (codeEl.dataset.raw === info.content) return;
+        codeEl.dataset.raw = info.content;
+        applyHighlight(info.content, codeEl);
+        if (highlightMode !== 'agent') wrapCodeLines(codeEl);
+      }
+    }
   } catch (err) {
     console.error('sticky: file-changed apply failed:', err);
   }
@@ -1397,10 +1407,12 @@ ipcRenderer.on('note-updated', (_e, payload) => {
     return;
   }
   // Code/file-mode note: refresh the highlighted block if present.
-  const code = document.querySelector('pre code');
-  if (code) {
-    code.textContent = text;
-    if (window.hljs) window.hljs.highlightElement(code);
+  const codeEl = document.getElementById('codeBlock')?.querySelector('code');
+  if (codeEl) {
+    if (codeEl.dataset.raw === text) return;
+    codeEl.dataset.raw = text;
+    applyHighlight(text, codeEl);
+    if (highlightMode !== 'agent') wrapCodeLines(codeEl);
   }
 });
 const titleInput = document.getElementById('titleInput');

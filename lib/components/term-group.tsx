@@ -129,6 +129,7 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       env: (this.props as any).env,
       setWebPaneUrl: (this.props as any).setWebPaneUrl,
       onClosePane: (this.props as any).onClosePane,
+      onPopOutPane: (this.props as any).onPopOutPane,
       sessionProfile: session ? (session as any).profile : undefined,
       sessionTitle: session ? (session as any).title : undefined,
       sessionTabName: session ? (session as any).tabName : undefined,

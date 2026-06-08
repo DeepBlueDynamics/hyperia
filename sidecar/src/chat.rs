@@ -292,7 +292,7 @@ fn compile_system_prompt(screen_text: &str, pane_name: &str) -> String {
             - Web Content: open_web_pane -> terminal_status -> Parse tabId -> web_pane_content.\n\
             - Terminal Execution: terminal_status -> Parse active paneId -> terminal_run -> terminal_screen.\n\
          2. TARGET PARAMETERS:\n\
-            - Terminal tools (terminal_screen, terminal_run) target a 'pane' (e.g. split labels \"a\", \"b\" or paneId UUIDs).\n\
+             - Terminal tools (terminal_screen, terminal_run) target a 'pane' (highly prefer the stable paneId UUID or its 4+ char prefix; alphabetical split labels like \"a\", \"b\" are DEPRECATED and shift when layout changes).\n\
             - Web tools (web_pane_content, web_pane_eval) target a 'tab' (e.g. tabId UUID or tab name).\n\
             - For simple tasks in the current view, omit target parameters (window, tab, pane) to leverage target defaults.\n\
          3. PAGE LOAD ASYNCHRONY: When open_web_pane returns, wait briefly or verify that the content is loaded before summarizing.",
