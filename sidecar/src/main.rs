@@ -1,5 +1,6 @@
 #![allow(dead_code, unused_imports, unused_variables)]
 
+mod audit;
 mod bridge;
 mod dashboard;
 mod identity;
@@ -732,12 +733,24 @@ async fn identity_mw(
                 .to_string()
         })
         .filter(|s| !s.is_empty());
+    let method = req.method().as_str().to_string();
+    let path = req.uri().path().to_string();
     let id = bridge.resolve_caller(bearer.as_deref()).await;
-    if !id.is_anonymous() {
-        tracing::info!("call from {} ({}) -> {}", id.label(), id.kind(), req.uri().path());
+    let (label, kind, anon) = (id.label(), id.kind(), id.is_anonymous());
+    if !anon {
+        tracing::info!("call from {label} ({kind}) -> {path}");
     }
     req.extensions_mut().insert(id);
-    next.run(req).await
+    let resp = next.run(req).await;
+    // Audit: every identified call, plus every mutation attempt (non-GET) — but
+    // not anonymous GET polls (renderer status/log polling), /health, or /ws.
+    let auditable = (path.starts_with("/api/") || path.starts_with("/mcp"))
+        && path != "/health"
+        && (!anon || method != "GET");
+    if auditable {
+        crate::audit::record_call(&label, kind, &method, &path, resp.status().as_u16());
+    }
+    resp
 }
 
 async fn get_identity_agents(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -1887,6 +1900,9 @@ async fn main() -> anyhow::Result<()> {
         .map(|h| std::path::PathBuf::from(h).join(".hyperia").join("logs"))
         .unwrap_or_else(|| std::path::PathBuf::from(".hyperia-logs"));
     let _ = std::fs::create_dir_all(&log_dir);
+
+    // Audit log: one JSONL line per gated/identified call, rolled daily.
+    audit::init(&log_dir);
 
     let log_buffer = logs::new_log_buffer();
     let file_appender = tracing_appender::rolling::daily(&log_dir, "sidecar.log");
