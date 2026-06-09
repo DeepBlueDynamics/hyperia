@@ -253,6 +253,16 @@ pub struct UIKeyRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SetWindowSizeRequest {
+    /// Target content width in pixels.
+    pub width: u32,
+    /// Target content height in pixels.
+    pub height: u32,
+    /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
+    pub window: Option<u32>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct TelemetryToggleRequest {
     /// Enable or disable telemetry collection
     pub enabled: bool,
@@ -601,7 +611,7 @@ impl HyperiaMcp {
         if screen_held_input {
             lines.push(format!(
                 "[hyperia:hint] Your input appears to still be sitting in the target's input buffer ({}…). The submit byte was not accepted as Enter by this process. To submit it now, call terminal_keys with keys=\"\\n\" (LF) against this same pane.",
-                &cmd_summary[..cmd_summary.len().min(50)],
+                crate::util::safe_prefix(&cmd_summary, 50),
             ));
         } else if quiet_silent {
             lines.push(format!(
@@ -964,6 +974,22 @@ impl HyperiaMcp {
     #[tool(description = "Open a new Hyperia OS window (separate from the current window). Use terminal_status after to get its window `id` for targeting other tools. Use when the user wants a separate window, not just a new tab.")]
     async fn terminal_new_window(&self) -> Result<CallToolResult, ErrorData> {
         let resp = self.post_json("/api/window/new", &serde_json::json!({})).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(
+        description = "Resize a Hyperia window to an exact content size in pixels — use this to get consistent screenshots (set the size, then call tab_image). Pass width and height; pass window (the id from terminal_status) to target a specific window, or omit it to resize the focused window. Returns the resulting {width, height}. Agent-only capability — there is no user-facing control for it."
+    )]
+    async fn terminal_set_window_size(
+        &self,
+        Parameters(req): Parameters<SetWindowSizeRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({
+            "window": req.window,
+            "width": req.width,
+            "height": req.height,
+        });
+        let resp = self.post_json("/api/window/size", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 

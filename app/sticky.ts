@@ -1352,7 +1352,12 @@ async function fireSchedule(note: NoteData): Promise<void> {
       const full = s.dir ? `cd "${s.dir}"; ${cmd}` : cmd;
       await fetch(`${SIDECAR}/api/pane/new`, {
         method: 'POST',
-        headers: {'content-type': 'application/json'},
+        headers: {
+          'content-type': 'application/json',
+          // Internal Hyperia call → carry the system token to bypass the agent
+          // create-consent gate.
+          authorization: `Bearer ${process.env.HYPERIA_SYSTEM_TOKEN || ''}`
+        },
         body: JSON.stringify({profile: 'n8', command: full})
       });
     } else if (s.runner === 'n8agent') {

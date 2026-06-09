@@ -18,9 +18,11 @@ import * as sessionActions from './actions/sessions';
 import * as termGroupActions from './actions/term-groups';
 import * as uiActions from './actions/ui';
 import * as updaterActions from './actions/updater';
+import AgentToast from './components/agent-toast';
 import {activeTerminals} from './components/term';
 import WebPaneDialog, {showWebPaneDialog} from './components/web-pane-dialog';
 import HyperContainer from './containers/hyper';
+import * as permissionsBus from './permissions-bus';
 import rpc from './rpc';
 import {getRootGroups} from './selectors';
 import configureStore from './store/configure-store';
@@ -106,6 +108,19 @@ rpc.on('session rename', ({uid, name}: {uid: string; name: string}) => {
 
 rpc.on('session cwd', ({uid, cwd}: {uid: string; cwd: string}) => {
   store_.dispatch(sessionActions.setSessionCwd(uid, cwd));
+});
+
+rpc.on('permission request', (req) => {
+  permissionsBus.setRequest(req);
+});
+
+rpc.on('permission resolved', ({targetPane, id}: {targetPane: string; decision: string; id?: string}) => {
+  permissionsBus.clearRequest(targetPane);
+  if (id) permissionsBus.clearToast(id);
+});
+
+rpc.on('agent toast', (req) => {
+  permissionsBus.setToast(req);
 });
 
 rpc.on('termgroup close req', () => {
@@ -354,6 +369,7 @@ function collectPaneLayout(
   isWeb: boolean;
   isAi: boolean;
   title: string;
+  shellName: string;
   url?: string;
   active: boolean;
 }> {
@@ -368,7 +384,7 @@ function collectPaneLayout(
     const customTitle = session ? session.title : '';
     const title = shellName ? shellName : (customTitle || shellType);
     const active = group.sessionUid === state.sessions.activeUid;
-    return [{uid: group.sessionUid, splitLabel: '', isWeb: false, isAi: false, title, active}];
+    return [{uid: group.sessionUid, splitLabel: '', isWeb: false, isAi: false, title, shellName, active}];
   }
   if (group?.webUrl !== undefined && group?.webUrl !== null) {
     const isAi = group.webUrl.startsWith('ai://');
@@ -388,13 +404,13 @@ function collectPaneLayout(
       title = isAi ? 'ask' : 'Browser';
     }
     const active = group.uid === state.termGroups.activeTermGroup;
-    return [{uid: group.uid, splitLabel: '', isWeb: true, isAi, title, url: group.webUrl, active}];
+    return [{uid: group.uid, splitLabel: '', isWeb: true, isAi, title, shellName: '', url: group.webUrl, active}];
   }
 
   const panes: any[] = [];
 
   // Collect all leaf uids first (in order), then assign unique sequential labels
-  function collectLeaves(g: Record<string, any>): Array<{uid: string; isWeb: boolean; isAi: boolean; title: string; url?: string; active: boolean}> {
+  function collectLeaves(g: Record<string, any>): Array<{uid: string; isWeb: boolean; isAi: boolean; title: string; shellName: string; url?: string; active: boolean}> {
     if (!g) return [];
     if (g.sessionUid) {
       const session = state.sessions.sessions[g.sessionUid];
@@ -403,7 +419,7 @@ function collectPaneLayout(
       const customTitle = session ? session.title : '';
       const title = shellName ? shellName : (customTitle || shellType);
       const active = g.sessionUid === state.sessions.activeUid;
-      return [{uid: g.sessionUid as string, isWeb: false, isAi: false, title, active}];
+      return [{uid: g.sessionUid as string, isWeb: false, isAi: false, title, shellName, active}];
     }
     if (g.webUrl !== undefined && g.webUrl !== null) {
       const isAi = g.webUrl.startsWith('ai://');
@@ -423,7 +439,7 @@ function collectPaneLayout(
         title = isAi ? 'ask' : 'Browser';
       }
       const active = g.uid === state.termGroups.activeTermGroup;
-      return [{uid: g.uid as string, isWeb: true, isAi, title, url: g.webUrl, active}];
+      return [{uid: g.uid as string, isWeb: true, isAi, title, shellName: '', url: g.webUrl, active}];
     }
     const children: string[] = (g.children as string[]) || [];
     return children.flatMap((cUid: string) => collectLeaves(termGroups[cUid] as Record<string, any>));
@@ -513,6 +529,7 @@ root.render(
   <Provider store={store_}>
     <HyperContainer />
     <WebPaneDialog />
+    <AgentToast />
   </Provider>
 );
 

@@ -228,6 +228,13 @@ async function spawnSidecar() {
   // Kill any existing sidecar before spawning
   await killExistingSidecars();
 
+  // Mint a per-run system token so Hyperia's OWN HTTP calls (e.g. the sticky
+  // n8shell runner) bypass the agent create-consent gate. Set it on the main
+  // process env BEFORE spawning so (a) the sidecar inherits + trusts it and
+  // (b) internal callers like app/sticky.ts can read it. Agents never see it.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  process.env.HYPERIA_SYSTEM_TOKEN = `hyp_sys_${require('crypto').randomBytes(24).toString('hex')}`;
+
   isDev && console.log(`[sidecar] Spawning: ${sidecarPath} --port ${SIDECAR_PORT}`);
   sidecarProcess = spawn(sidecarPath, ['--port', String(SIDECAR_PORT)], {
     stdio: ['ignore', 'pipe', 'pipe']

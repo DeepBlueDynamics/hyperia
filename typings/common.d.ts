@@ -69,10 +69,14 @@ export type MainEvents = {
       isWeb: boolean;
       isAi: boolean;
       title: string;
+      shellName: string;
       url?: string;
       active: boolean;
     }>;
   }>;
+  'permission request': {id: string; requester: string; requesterPane: string; targetPane: string};
+  'permission resolved': {targetPane: string; decision: string; id?: string};
+  'agent toast': {id: string; requester: string; action: string};
   unmaximize: never;
   'web-pane-reload': string;
   'web-pane-click-result': {uid: string; result: any};
@@ -142,6 +146,9 @@ export type RendererEvents = {
   'session data': string;
   'session cwd': {uid: string; cwd: string};
   'session exit': {uid: string};
+  'permission request': {id: string; requester: string; requesterPane: string; targetPane: string};
+  'permission resolved': {targetPane: string; decision: string; id?: string};
+  'agent toast': {id: string; requester: string; action: string};
   'windowGeometry change': {isMaximized: boolean};
   move: {bounds: {x: number; y: number}};
   'enter full screen': never;

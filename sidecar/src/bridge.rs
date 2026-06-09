@@ -18,6 +18,11 @@ use crate::AppState;
 
 pub struct SessionInfo {
     pub name: String,
+    /// Friendly, layout-stable pane name (e.g. "Suspicious Marlin 🧄"),
+    /// generated per-pane in the renderer and pushed via `SessionName`.
+    /// Distinct from `name` (the shell binary path) and `title` (overloaded
+    /// with OSC/custom titles). This is the stable human handle for a pane.
+    pub shell_name: String,
     pub tab_name: String,
     pub description: String,
     pub rows: u16,
@@ -38,6 +43,19 @@ pub struct SessionInfo {
     pub cwd: String,
     pub last_user_activity: Option<std::time::Instant>,
     pub title: String,
+}
+
+/// Match a pane's friendly `name` (e.g. "Suspicious Marlin 🧄") against an
+/// agent-supplied target. Case-insensitive and tolerant of a missing trailing
+/// emoji / whitespace, so "suspicious marlin" resolves the same pane. An empty
+/// target never matches (so it can't accidentally hit an unnamed pane).
+fn name_matches(name: &str, target: &str) -> bool {
+    if target.trim().is_empty() {
+        return false;
+    }
+    let norm =
+        |s: &str| s.trim().trim_end_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+    norm(name) == norm(target)
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +82,10 @@ struct BridgeInner {
     output_subs: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>,
     /// Lume-backed per-shell log store (BM25 search + pickle-to-disk).
     lume: crate::lume_store::LumeStore,
+    /// Cross-pane access consent ledger (pending prompts + active grants).
+    perms: crate::perms::PermStore,
+    /// Persistent external-agent identities (file-backed, survive restarts).
+    identity: crate::identity::IdentityStore,
 }
 
 impl Bridge {
@@ -77,6 +99,8 @@ impl Bridge {
                 focused_window_id: Mutex::new(None),
                 output_subs: Mutex::new(HashMap::new()),
                 lume: crate::lume_store::LumeStore::new(),
+                perms: crate::perms::PermStore::default(),
+                identity: crate::identity::IdentityStore::new(),
             }),
         }
     }
@@ -84,6 +108,165 @@ impl Bridge {
     /// Access the lume store (per-shell log search, sticky search, persistence).
     pub fn lume(&self) -> crate::lume_store::LumeStore {
         self.inner.lume.clone()
+    }
+
+    /// Access the cross-pane permission ledger.
+    pub fn perms(&self) -> &crate::perms::PermStore {
+        &self.inner.perms
+    }
+
+    /// Access the persistent agent-identity store.
+    pub fn identity(&self) -> &crate::identity::IdentityStore {
+        &self.inner.identity
+    }
+
+    /// Resolve an `Authorization: Bearer` token to a caller identity. Checks
+    /// persistent agent tokens first, then ephemeral pane tokens, else anonymous.
+    pub async fn resolve_caller(&self, bearer: Option<&str>) -> crate::identity::CallerIdentity {
+        use crate::identity::CallerIdentity;
+        let token = match bearer {
+            Some(t) if !t.trim().is_empty() => t.trim(),
+            _ => return CallerIdentity::Anonymous,
+        };
+        if self.inner.identity.is_system(token) {
+            return CallerIdentity::System;
+        }
+        if let Some(rec) = self.inner.identity.resolve(token).await {
+            return CallerIdentity::Agent { name: rec.name, token: rec.token };
+        }
+        if let Some(pane) = self.inner.perms.pane_for_token(token).await {
+            return CallerIdentity::Pane { pane, token: token.to_string() };
+        }
+        CallerIdentity::Anonymous
+    }
+
+    /// Tab uid (root_tab_uid) a pane belongs to, if registered.
+    pub async fn tab_of(&self, pane: &str) -> Option<String> {
+        self.inner.sessions.lock().await.get(pane).map(|s| s.root_tab_uid.clone())
+    }
+
+    /// Tab-aware grant check: any-scope → every pane; pane-scope → that exact
+    /// pane; tab-scope → any pane in the same tab as the grant's anchor pane.
+    async fn caller_has_grant(&self, label: &str, target_pane: &str) -> bool {
+        let grants = self.inner.perms.grants_for(label).await;
+        if grants.is_empty() {
+            return false;
+        }
+        let target_tab = self.tab_of(target_pane).await;
+        for (scope, pane) in grants {
+            match scope.as_str() {
+                "any" => return true,
+                "pane" => {
+                    if pane == target_pane {
+                        return true;
+                    }
+                }
+                "tab" => {
+                    if let Some(tt) = &target_tab {
+                        if self.tab_of(&pane).await.as_deref() == Some(tt.as_str()) {
+                            return true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Would `label` be allowed to drive `target_pane` by ownership or a live
+    /// grant? Tab-aware — same logic `authorize_drive` uses — so the
+    /// `/api/perms/check` endpoint can't diverge from real enforcement.
+    pub async fn grant_allows(&self, label: &str, target_pane: &str) -> bool {
+        let owned = self.inner.perms.owner_of(target_pane).await.as_deref() == Some(label);
+        owned || self.caller_has_grant(label, target_pane).await
+    }
+
+    /// Decide whether `id` may drive `target_pane`. When enforcement is off this
+    /// is always Allow (attribution-only). When on: a pane can't drive itself
+    /// (RefuseHome); anonymous is SoftWalled; an identified caller that owns the
+    /// pane or holds a live grant (pane/tab/any) is allowed; a recently-denied
+    /// caller is told Denied (no re-prompt); otherwise NeedConsent.
+    pub async fn authorize_drive(
+        &self,
+        id: &crate::identity::CallerIdentity,
+        target_pane: &str,
+    ) -> crate::perms::AuthDecision {
+        use crate::identity::CallerIdentity;
+        use crate::perms::AuthDecision;
+        if !self.inner.perms.enforced() {
+            return AuthDecision::Allow;
+        }
+        match id {
+            CallerIdentity::System => AuthDecision::Allow,
+            CallerIdentity::Pane { pane, .. } if pane == target_pane => AuthDecision::RefuseHome,
+            CallerIdentity::Anonymous => AuthDecision::SoftWall,
+            _ => {
+                let label = id.label();
+                let owned =
+                    self.inner.perms.owner_of(target_pane).await.as_deref() == Some(label.as_str());
+                if owned || self.caller_has_grant(&label, target_pane).await {
+                    AuthDecision::Allow
+                } else if self.inner.perms.recently_denied(&label, target_pane).await {
+                    AuthDecision::Denied
+                } else {
+                    AuthDecision::NeedConsent
+                }
+            }
+        }
+    }
+
+    /// Decide whether `id` may CREATE a surface (pane/tab/window/web-pane/sticky).
+    /// Create has no pane target, so it's gated on a per-agent create grant, not
+    /// a pane/tab/any scope. System bypasses; anonymous is soft-walled; a live
+    /// create grant allows (consuming a one-shot); a recent denial reports back.
+    /// The denial/grant key is the sentinel pane `__create__`.
+    pub async fn authorize_create(
+        &self,
+        id: &crate::identity::CallerIdentity,
+    ) -> crate::perms::AuthDecision {
+        use crate::identity::CallerIdentity;
+        use crate::perms::AuthDecision;
+        if !self.inner.perms.enforced() {
+            return AuthDecision::Allow;
+        }
+        match id {
+            CallerIdentity::System => AuthDecision::Allow,
+            CallerIdentity::Anonymous => AuthDecision::SoftWall,
+            _ => {
+                let label = id.label();
+                if self.inner.perms.has_create(&label).await {
+                    AuthDecision::Allow
+                } else if self.inner.perms.recently_denied(&label, crate::perms::CREATE_KEY).await {
+                    AuthDecision::Denied
+                } else {
+                    AuthDecision::NeedConsent
+                }
+            }
+        }
+    }
+
+    /// The active pane of the focused window — context for the create toast.
+    pub async fn focused_pane(&self) -> Option<String> {
+        let focused = *self.inner.focused_window_id.lock().await;
+        let sessions = self.inner.sessions.lock().await;
+        sessions
+            .iter()
+            .find(|(_, s)| Some(s.window_id) == focused && s.pane_active)
+            .map(|(uid, _)| uid.clone())
+    }
+
+    /// Fire-and-forget a JSON message to Electron (no seq, no response wait).
+    /// Used for sidecar-initiated pushes the renderer handles out-of-band
+    /// (e.g. permission prompts, which reply over HTTP rather than the WS).
+    pub async fn notify(&self, msg: serde_json::Value) -> Result<(), String> {
+        let guard = self.inner.cmd_tx.lock().await;
+        match guard.as_ref() {
+            Some(sender) => sender
+                .send(msg.to_string())
+                .map_err(|_| "Electron disconnected".to_string()),
+            None => Err("No Electron client connected".into()),
+        }
     }
 
     /// Whether an Electron client is connected.
@@ -300,15 +483,24 @@ impl Bridge {
         if let Some(label) = pane {
             sorted_panes
                 .into_iter()
-                // Match by split_label first; then exact session uid (paneId);
-                // then a paneId PREFIX. The pane-band "copy" produces an 8-char
-                // prefix (e.g. "dbccc3fe"), so agents paste a prefix, not the
-                // full UUID — accept it. Guarded to >=4 chars so a single-char
-                // split label (a/b/c) can't accidentally prefix-match a uid.
+                // Resolution order, stable identity first:
+                //   1. exact session uid (paneId) — the immutable canonical key
+                //   2. paneId PREFIX (>=4 chars). The pane-band "copy" produces
+                //      an 8-char prefix (e.g. "dbccc3fe"), so agents paste a
+                //      prefix, not the full UUID — accept it.
+                //   3. friendly `name` (e.g. "Suspicious Marlin 🧄"), matched
+                //      case-insensitively and tolerant of a missing trailing
+                //      emoji/whitespace — this is the STABLE human handle and
+                //      the one agents should prefer.
+                //   4. split_label (a/b/c) LAST — positional and volatile (a
+                //      pane's letter changes when siblings open/close), kept
+                //      only for back-compat. Prefer name or paneId.
                 .find(|(uid, info)| {
-                    info.split_label == label
-                        || uid.as_str() == label
+                    uid.as_str() == label
                         || (label.len() >= 4 && uid.starts_with(label))
+                        || name_matches(&info.shell_name, label)
+                        || name_matches(&info.title, label)
+                        || info.split_label == label
                 })
                 .map(|(uid, _)| uid.clone())
         } else {
@@ -402,8 +594,18 @@ impl Bridge {
                         let user_active_secs_ago = info
                             .last_user_activity
                             .map(|t| t.elapsed().as_secs());
+                        // `name` = the friendly, layout-stable pane name
+                        // (e.g. "Suspicious Marlin 🧄"). Fall back to `title`
+                        // until the renderer's first `SessionName` arrives, so
+                        // a freshly-registered pane is never nameless.
+                        let friendly = if info.shell_name.is_empty() {
+                            info.title.clone()
+                        } else {
+                            info.shell_name.clone()
+                        };
                         serde_json::json!({
                             "paneId": uid,
+                            "name": friendly,
                             "label": info.split_label,
                             "shell": shell,
                             "process": process,
@@ -472,6 +674,7 @@ impl Bridge {
                 let tab_active = msg["tabActive"].as_bool().unwrap_or(false);
                 let pane_active = msg["paneActive"].as_bool().unwrap_or(false);
                 let title = msg["title"].as_str().unwrap_or("").to_string();
+                let shell_name = msg["shellName"].as_str().unwrap_or("").to_string();
                 tracing::info!("Session registered: {uid} ({tab_name}) {cols}x{rows} pid={pid} tab={root_tab_uid} win={window_id}");
                 let mut focused_window_id = self.inner.focused_window_id.lock().await;
                 if focused_window_id.is_none() {
@@ -481,6 +684,7 @@ impl Bridge {
                     uid,
                     SessionInfo {
                         name,
+                        shell_name,
                         tab_name,
                         description,
                         rows,
@@ -544,6 +748,15 @@ impl Bridge {
                 if let Some(info) = self.inner.sessions.lock().await.get_mut(uid) {
                     info.title = title.clone();
                     tracing::info!("Session {uid} title updated: {title}");
+                }
+            }
+
+            "SessionName" => {
+                let uid = msg["uid"].as_str().unwrap_or("");
+                let name = msg["name"].as_str().unwrap_or("").to_string();
+                if let Some(info) = self.inner.sessions.lock().await.get_mut(uid) {
+                    info.shell_name = name.clone();
+                    tracing::info!("Session {uid} name updated: {name}");
                 }
             }
 
@@ -617,6 +830,8 @@ impl Bridge {
                 let uid = msg["uid"].as_str().unwrap_or("");
                 tracing::info!("Session exited: {uid}");
                 self.inner.sessions.lock().await.remove(uid);
+                // Revoke any cross-pane grants/prompts tied to the closed pane.
+                self.inner.perms.cleanup_pane(uid).await;
             }
 
             "Resize" => {
@@ -757,6 +972,7 @@ mod tests {
     fn session_info(window_id: u32, root_tab_uid: &str, split_label: &str, tab_active: bool, pane_active: bool) -> SessionInfo {
         SessionInfo {
             name: "shell".into(),
+            shell_name: String::new(),
             tab_name: "tab".into(),
             description: String::new(),
             rows: 24,

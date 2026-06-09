@@ -30,6 +30,8 @@ grub-md = { path = "../grub-md" }
 # Claude API + HTTP client
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
 base64 = "0.22"
+# OS CSPRNG for access-token generation (XOR-mixed with the sdrrand true-random relay).
+getrandom = "0.2"
 
 # MCP server (stdio + streamable HTTP/SSE)
 rmcp = { version = "0.15", features = ["server", "macros", "transport-io", "transport-streamable-http-server", "schemars"] }

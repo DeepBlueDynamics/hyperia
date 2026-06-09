@@ -310,6 +310,7 @@ function getHyperiaWindowById(windowId: number): BrowserWindow | null {
 // ---------------------------------------------------------------------------
 
 function handleCommand(msg: Record<string, unknown>) {
+  console.log('[bridge] Received command:', JSON.stringify(msg));
   const type = msg.type as string;
   const seq = msg.seq as number | undefined;
 
@@ -433,6 +434,47 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'PermissionRequest': {
+      // Cross-pane consent prompt. Broadcast to every window's renderer; the
+      // permissions-bus keys by targetPane, so only the band owning that pane
+      // slides the panel down.
+      const payload = {
+        id: msg.id as string,
+        requester: (msg.requester as string) || 'Unknown agent',
+        requesterPane: (msg.requesterPane as string) || '',
+        targetPane: msg.targetPane as string
+      };
+      for (const w of (app as any).getWindows?.() || []) {
+        if (w && w.rpc) w.rpc.emit('permission request', payload);
+      }
+      break;
+    }
+
+    case 'PermissionResolved': {
+      const payload = {
+        id: msg.id as string,
+        targetPane: msg.targetPane as string,
+        decision: (msg.decision as string) || 'deny'
+      };
+      for (const w of (app as any).getWindows?.() || []) {
+        if (w && w.rpc) w.rpc.emit('permission resolved', payload);
+      }
+      break;
+    }
+
+    case 'AgentToast': {
+      // Create-consent prompt — a window-level toast (no target pane).
+      const payload = {
+        id: msg.id as string,
+        requester: (msg.requester as string) || 'Unknown agent',
+        action: (msg.action as string) || 'create'
+      };
+      for (const w of (app as any).getWindows?.() || []) {
+        if (w && w.rpc) w.rpc.emit('agent toast', payload);
+      }
+      break;
+    }
+
     case 'Close': {
       const targetUid = msg.uid as string | undefined;
       if (targetUid) {
@@ -508,6 +550,25 @@ function handleCommand(msg: Record<string, unknown>) {
         sendResult(seq, 'ok');
       } else {
         sendResult(seq, 'createWindow not available');
+      }
+      break;
+    }
+
+    case 'SetWindowSize': {
+      // Resize a window to an exact content size — used by the agent to take
+      // consistent screenshots (set size, then tab_image). Agent-only; no UI.
+      const targetWindowId = msg.windowId as number | undefined;
+      const width = Math.round(Number(msg.width));
+      const height = Math.round(Number(msg.height));
+      const win = targetWindowId ? getHyperiaWindowById(targetWindowId) : getFocusedHyperiaWindow();
+      if (!win || win.isDestroyed()) {
+        sendResult(seq, 'No matching window');
+      } else if (!(width > 0 && height > 0)) {
+        sendResult(seq, 'width and height must be positive integers');
+      } else {
+        win.setContentSize(width, height);
+        const b = win.getContentBounds();
+        sendResult(seq, JSON.stringify({ok: true, width: b.width, height: b.height}));
       }
       break;
     }
@@ -1037,6 +1098,7 @@ export function updateSessionLayout(
       isWeb: boolean;
       isAi: boolean;
       title: string;
+      shellName?: string;
       url?: string;
       active: boolean;
     }>;
@@ -1116,6 +1178,9 @@ export function updateSessionLayout(
 
       if (pane.title) {
         send({type: 'SessionTitle', uid: pane.uid, title: pane.title});
+      }
+      if (pane.shellName) {
+        send({type: 'SessionName', uid: pane.uid, name: pane.shellName});
       }
       if (pane.url) {
         send({type: 'SessionCwd', uid: pane.uid, cwd: pane.url});

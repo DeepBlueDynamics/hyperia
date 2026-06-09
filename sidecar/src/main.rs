@@ -1,21 +1,23 @@
 #![allow(dead_code, unused_imports, unused_variables)]
 
 mod bridge;
-mod chat;
 mod dashboard;
+mod identity;
 mod fsnav;
 mod ghost;
 mod logs;
 mod mcp;
+mod perms;
 mod process;
 mod lume_store;
 mod screen;
+mod util;
 mod settings;
 mod snapshot_image;
 mod telemetry;
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use clap::Parser;
 use serde::Deserialize;
@@ -292,7 +294,7 @@ async fn post_auto_describe(
     let ollama_url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
     let prompt = format!(
         "In 10 words or fewer, describe what this terminal is doing:\n\n{}",
-        &screen[..screen.len().min(2000)]
+        crate::util::safe_prefix(&screen, 2000)
     );
     let body = serde_json::json!({
         "model": "gemma2:9b",
@@ -458,6 +460,7 @@ fn unescape_keys(raw: &str) -> String {
 
 async fn post_type(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(addr): Query<PaneAddress>,
     body: String,
 ) -> (StatusCode, String) {
@@ -487,6 +490,9 @@ If the pane label is empty, use paneId.",
             ));
         }
     };
+    if let Err(resp) = enforce_drive(&state, &headers, &uid).await {
+        return resp;
+    }
     let interrupt = addr.interrupt.unwrap_or(false);
     // The human-activity gate now lives in the renderer (enqueueOrWrite): when
     // the human is active in this pane it QUEUES the keys and replies with a
@@ -497,7 +503,7 @@ If the pane label is empty, use paneId.",
     if let Some((tab, pane, win)) = state.bridge.pane_address_for_log(&uid).await {
         tracing::info!(
             "type win={} tab={:?} pane={} bytes={} interrupt={} preview={:?}",
-            win, tab, pane, keys.len(), interrupt, &keys[..keys.len().min(120)]
+            win, tab, pane, keys.len(), interrupt, crate::util::safe_prefix(&keys, 120)
         );
     }
     let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys, "interrupt": interrupt});
@@ -509,6 +515,7 @@ If the pane label is empty, use paneId.",
 
 async fn post_type_and_collect(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(addr): Query<PaneAddress>,
     body: String,
 ) -> (StatusCode, String) {
@@ -528,6 +535,9 @@ async fn post_type_and_collect(
             );
         }
     };
+    if let Err(resp) = enforce_drive(&state, &headers, &uid).await {
+        return resp;
+    }
     // No activity gate: another caller (human OR agent) being active is not
     // grounds to refuse this call. Agents can see per-pane userActiveSecsAgo
     // via terminal_status and decide for themselves whether to defer/warn.
@@ -540,7 +550,7 @@ async fn post_type_and_collect(
     if let Some((tab, pane, win)) = &log_addr {
         tracing::info!(
             "type-and-collect ▶ win={} tab={:?} pane={} quiet_ms={} bytes_in={} preview={:?}",
-            win, tab, pane, quiet_ms, keys.len(), &keys[..keys.len().min(120)]
+            win, tab, pane, quiet_ms, keys.len(), crate::util::safe_prefix(&keys, 120)
         );
     }
     let output = state.bridge.type_and_collect(&uid, &keys, quiet_ms).await;
@@ -555,8 +565,12 @@ async fn post_type_and_collect(
 
 async fn post_split(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: String,
 ) -> (StatusCode, String) {
+    if let Err(resp) = enforce_create(&state, &headers, "create_pane").await {
+        return resp;
+    }
     // No human-activity lockout: a split creates a NEW pane; it doesn't
     // stomp on whatever the human is typing in the active pane. Blocking
     // it just made splits silently fail with 409 while the user was busy.
@@ -572,8 +586,27 @@ async fn post_split(
         "command": command
     });
     match state.bridge.send_command(cmd).await {
-        Ok(r) => (StatusCode::OK, r),
+        Ok(r) => {
+            stamp_created_pane(&state, &headers, &r).await;
+            (StatusCode::OK, r)
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+/// After a split/new-tab returns its `{ "paneId": ... }`, record the identified
+/// caller as the owner so they can drive the pane they just created without
+/// asking. Anonymous creators stamp nothing.
+async fn stamp_created_pane(state: &AppState, headers: &HeaderMap, result: &str) {
+    let id = state.bridge.resolve_caller(bearer_token(headers).as_deref()).await;
+    if id.is_anonymous() {
+        return;
+    }
+    if let Some(pane) = serde_json::from_str::<serde_json::Value>(result)
+        .ok()
+        .and_then(|v| v["paneId"].as_str().map(|s| s.to_string()))
+    {
+        state.bridge.perms().stamp_owner(&pane, &id.label()).await;
     }
 }
 
@@ -615,6 +648,350 @@ async fn post_focus(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Cross-pane permissions — consent prompts + grants.
+//
+// Flow: a caller that wants to drive a pane it doesn't own POSTs /request,
+// which parks a pending prompt and pushes it to the renderer (the target
+// pane's band slides a consent panel down). The human's choice comes back via
+// /respond, which records a grant (scope + duration) and dismisses the panel.
+// /state is a debug/test surface; /check answers "am I allowed?" for the
+// (future) enforcement layer. Grants are revoked when the pane closes.
+// ---------------------------------------------------------------------------
+
+/// Extract a bearer token from an `Authorization` header (case-insensitive
+/// scheme, tolerant of a bare token without the "Bearer " prefix).
+fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    let raw = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .trim();
+    let tok = raw
+        .strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))
+        .unwrap_or(raw)
+        .trim();
+    if tok.is_empty() {
+        None
+    } else {
+        Some(tok.to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Identity — persistent external-agent tokens + "who am I" resolution.
+//
+// An external agent (e.g. Claude Code in a terminal) is never spawned inside a
+// pane, so it gets no injected token. Instead it carries a persistent agent
+// token in its Authorization header; the sidecar resolves it to a stable named
+// identity that survives restarts (unlike pane tokens, which die with panes).
+// ---------------------------------------------------------------------------
+
+async fn post_identity_agent(State(state): State<AppState>, body: String) -> (StatusCode, String) {
+    let p = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let name = p["name"].as_str().unwrap_or("").trim().to_string();
+    if name.is_empty() {
+        return (StatusCode::BAD_REQUEST, "name required".into());
+    }
+    let rec = state.bridge.identity().mint(&name).await;
+    (
+        StatusCode::OK,
+        serde_json::json!({"name": rec.name, "token": rec.token, "createdMs": rec.created_ms}).to_string(),
+    )
+}
+
+async fn get_identity_whoami(State(state): State<AppState>, headers: HeaderMap) -> Json<serde_json::Value> {
+    let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    Json(serde_json::json!({
+        "kind": id.kind(),
+        "label": id.label(),
+        "anonymous": id.is_anonymous(),
+    }))
+}
+
+/// Middleware: resolve the caller identity from the Authorization header for
+/// EVERY request (including the nested `/mcp` MCP service), stash it in request
+/// extensions for downstream handlers, and log non-anonymous calls so MCP tool
+/// traffic is attributable. Enforcement (refusing/ gating) lands in #59.
+async fn identity_mw(
+    State(bridge): State<Bridge>,
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let bearer = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            let s = s.trim();
+            s.strip_prefix("Bearer ")
+                .or_else(|| s.strip_prefix("bearer "))
+                .unwrap_or(s)
+                .trim()
+                .to_string()
+        })
+        .filter(|s| !s.is_empty());
+    let id = bridge.resolve_caller(bearer.as_deref()).await;
+    if !id.is_anonymous() {
+        tracing::info!("call from {} ({}) -> {}", id.label(), id.kind(), req.uri().path());
+    }
+    req.extensions_mut().insert(id);
+    next.run(req).await
+}
+
+async fn get_identity_agents(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let agents = state.bridge.identity().list().await;
+    let list: Vec<_> = agents
+        .iter()
+        .map(|a| serde_json::json!({"name": a.name, "token": a.token, "createdMs": a.created_ms}))
+        .collect();
+    Json(serde_json::json!({"agents": list}))
+}
+
+/// Toggle the master enforcement switch (default off).
+async fn post_perm_enforce(State(state): State<AppState>, body: String) -> (StatusCode, String) {
+    let p = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let enabled = p["enabled"].as_bool().unwrap_or(false);
+    state.bridge.perms().set_enforce(enabled);
+    tracing::info!("perms enforcement {}", if enabled { "ENABLED" } else { "disabled" });
+    (StatusCode::OK, serde_json::json!({"ok": true, "enforce": enabled}).to_string())
+}
+
+/// Gate a drive action (type / keys) on the caller's identity. Returns Ok to
+/// proceed, or an Err((status, body)) the handler should return directly. When
+/// enforcement is off this is always Ok. NeedConsent auto-raises the consent
+/// prompt in the target pane and returns 202.
+async fn enforce_drive(
+    state: &AppState,
+    headers: &HeaderMap,
+    target_uid: &str,
+) -> Result<(), (StatusCode, String)> {
+    use identity::CallerIdentity;
+    use perms::AuthDecision;
+    let id = state.bridge.resolve_caller(bearer_token(headers).as_deref()).await;
+    match state.bridge.authorize_drive(&id, target_uid).await {
+        AuthDecision::Allow => Ok(()),
+        AuthDecision::RefuseHome => Err((
+            StatusCode::FORBIDDEN,
+            "That's the pane you're running in — you can't drive your own terminal. \
+             Split it or open a new pane for a worker shell."
+                .to_string(),
+        )),
+        AuthDecision::SoftWall => Err((
+            StatusCode::UNAUTHORIZED,
+            "No identity. Ask the user to copy a pane or agent token and send it as \
+             'Authorization: Bearer <token>'."
+                .to_string(),
+        )),
+        AuthDecision::Denied => Err((
+            StatusCode::FORBIDDEN,
+            "Access to this pane was denied by the user. Don't retry — ask the user directly if you need it."
+                .to_string(),
+        )),
+        AuthDecision::NeedConsent => {
+            let label = id.label();
+            // Dedupe: if a prompt for this (caller, pane) is already pending,
+            // don't stack another — just report it's still awaiting approval.
+            if state.bridge.perms().has_pending(&label, target_uid).await {
+                return Err((
+                    StatusCode::ACCEPTED,
+                    serde_json::json!({
+                        "ok": false, "pending": true,
+                        "message": "Still awaiting approval in the target pane."
+                    })
+                    .to_string(),
+                ));
+            }
+            let requester_pane = match &id {
+                CallerIdentity::Pane { pane, .. } => pane.clone(),
+                _ => String::new(),
+            };
+            let req = state
+                .bridge
+                .perms()
+                .create_request(&label, &requester_pane, target_uid, "drive")
+                .await;
+            let _ = state
+                .bridge
+                .notify(serde_json::json!({
+                    "type": "PermissionRequest",
+                    "id": req.id,
+                    "requester": req.requester,
+                    "requesterPane": req.requester_pane,
+                    "targetPane": req.target_pane,
+                }))
+                .await;
+            Err((
+                StatusCode::ACCEPTED,
+                serde_json::json!({
+                    "ok": false,
+                    "pending": true,
+                    "requestId": req.id,
+                    "message": "Permission requested — awaiting approval in the target pane."
+                })
+                .to_string(),
+            ))
+        }
+    }
+}
+
+/// Gate a CREATE action (split / new tab / window / web-pane / sticky) on the
+/// caller's identity + create grant. System bypasses; anonymous is soft-walled;
+/// a denial reports back; otherwise it raises a create-consent toast and 202s.
+async fn enforce_create(
+    state: &AppState,
+    headers: &HeaderMap,
+    action: &str,
+) -> Result<(), (StatusCode, String)> {
+    use identity::CallerIdentity;
+    use perms::AuthDecision;
+    let id = state.bridge.resolve_caller(bearer_token(headers).as_deref()).await;
+    match state.bridge.authorize_create(&id).await {
+        AuthDecision::Allow => Ok(()),
+        AuthDecision::RefuseHome => Ok(()), // n/a to create
+        AuthDecision::SoftWall => Err((
+            StatusCode::UNAUTHORIZED,
+            "No identity. Send an Authorization token (Bearer <token>) to create panes/tabs."
+                .to_string(),
+        )),
+        AuthDecision::Denied => Err((
+            StatusCode::FORBIDDEN,
+            "Creating panes/tabs was denied by the user. Don't retry — ask the user directly."
+                .to_string(),
+        )),
+        AuthDecision::NeedConsent => {
+            let label = id.label();
+            if state.bridge.perms().has_pending_create(&label).await {
+                return Err((
+                    StatusCode::ACCEPTED,
+                    serde_json::json!({"ok": false, "pending": true, "message": "Still awaiting create approval."}).to_string(),
+                ));
+            }
+            let focus = state.bridge.focused_pane().await.unwrap_or_default();
+            let requester_pane = match &id {
+                CallerIdentity::Pane { pane, .. } => pane.clone(),
+                _ => String::new(),
+            };
+            let req = state
+                .bridge
+                .perms()
+                .create_request(&label, &requester_pane, &focus, action)
+                .await;
+            let _ = state
+                .bridge
+                .notify(serde_json::json!({
+                    "type": "AgentToast",
+                    "id": req.id,
+                    "requester": req.requester,
+                    "action": req.action,
+                }))
+                .await;
+            Err((
+                StatusCode::ACCEPTED,
+                serde_json::json!({
+                    "ok": false, "pending": true, "requestId": req.id,
+                    "message": "Create requested — awaiting your approval (toast)."
+                })
+                .to_string(),
+            ))
+        }
+    }
+}
+
+async fn post_perm_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    let p = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    // Prefer the authenticated caller identity; fall back to an explicit body
+    // requester (test/manual), then a generic label.
+    let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    let requester = if id.is_anonymous() {
+        p["requester"].as_str().unwrap_or("Unknown agent").to_string()
+    } else {
+        id.label()
+    };
+    let requester_pane = match &id {
+        identity::CallerIdentity::Pane { pane, .. } => pane.clone(),
+        _ => p["requesterPane"].as_str().unwrap_or("").to_string(),
+    };
+    let target = p["targetPane"].as_str().unwrap_or("").to_string();
+    if target.is_empty() {
+        return (StatusCode::BAD_REQUEST, "targetPane required".into());
+    }
+    let req = state
+        .bridge
+        .perms()
+        .create_request(&requester, &requester_pane, &target, "drive")
+        .await;
+    let _ = state
+        .bridge
+        .notify(serde_json::json!({
+            "type": "PermissionRequest",
+            "id": req.id,
+            "requester": req.requester,
+            "requesterPane": req.requester_pane,
+            "targetPane": req.target_pane,
+        }))
+        .await;
+    (StatusCode::OK, serde_json::json!({"ok": true, "id": req.id}).to_string())
+}
+
+async fn post_perm_respond(State(state): State<AppState>, body: String) -> (StatusCode, String) {
+    let p = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let id = p["id"].as_str().unwrap_or("");
+    let allow = p["decision"].as_str().unwrap_or("deny") == "allow";
+    let scope = p["scope"].as_str().unwrap_or("pane");
+    let duration_secs = p["durationSecs"].as_u64();
+    match state.bridge.perms().respond(id, allow, scope, duration_secs).await {
+        Some(req) => {
+            let _ = state
+                .bridge
+                .notify(serde_json::json!({
+                    "type": "PermissionResolved",
+                    "id": req.id,
+                    "targetPane": req.target_pane,
+                    "decision": if allow { "allow" } else { "deny" },
+                }))
+                .await;
+            (StatusCode::OK, serde_json::json!({"ok": true}).to_string())
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            serde_json::json!({"ok": false, "error": "unknown request id"}).to_string(),
+        ),
+    }
+}
+
+async fn get_perm_state(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(state.bridge.perms().snapshot().await)
+}
+
+/// Mint/return the access token for a pane. The pane menu copies this and the
+/// human hands it to an external agent (→ MCP Authorization header).
+async fn get_perm_token(
+    State(state): State<AppState>,
+    Query(addr): Query<PaneAddress>,
+) -> (StatusCode, String) {
+    let pane = addr.pane.unwrap_or_default();
+    if pane.is_empty() {
+        return (StatusCode::BAD_REQUEST, "pane required".into());
+    }
+    let token = state.bridge.perms().token_for(&pane).await;
+    (StatusCode::OK, serde_json::json!({"pane": pane, "token": token}).to_string())
+}
+
+async fn post_perm_check(State(state): State<AppState>, body: String) -> (StatusCode, String) {
+    let p = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let requester = p["requester"].as_str().unwrap_or("");
+    let target = p["targetPane"].as_str().unwrap_or("");
+    // Tab-aware, identical to real enforcement (authorize_drive) — no divergence.
+    let allowed = state.bridge.grant_allows(requester, target).await;
+    (StatusCode::OK, serde_json::json!({"allowed": allowed}).to_string())
+}
+
 async fn post_close(State(state): State<AppState>, body: String) -> (StatusCode, String) {
     let uid = serde_json::from_str::<serde_json::Value>(&body)
         .ok()
@@ -633,14 +1010,21 @@ async fn post_close(State(state): State<AppState>, body: String) -> (StatusCode,
 
 async fn post_new_tab(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: String,
 ) -> (StatusCode, String) {
+    if let Err(resp) = enforce_create(&state, &headers, "create_tab").await {
+        return resp;
+    }
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let profile = parsed["profile"].as_str().unwrap_or("").to_string();
     let command = parsed["command"].as_str().unwrap_or("").to_string();
     let cmd = serde_json::json!({"type": "NewTab", "profile": profile, "command": command});
     match state.bridge.send_command(cmd).await {
-        Ok(r) => (StatusCode::OK, r),
+        Ok(r) => {
+            stamp_created_pane(&state, &headers, &r).await;
+            (StatusCode::OK, r)
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
@@ -707,8 +1091,25 @@ async fn get_where_pane(
     }).to_string())
 }
 
-async fn post_new_window(State(state): State<AppState>) -> (StatusCode, String) {
+async fn post_new_window(State(state): State<AppState>, headers: HeaderMap) -> (StatusCode, String) {
+    if let Err(resp) = enforce_create(&state, &headers, "create_window").await {
+        return resp;
+    }
     let cmd = serde_json::json!({"type": "NewWindow"});
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn post_window_size(State(state): State<AppState>, body: String) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let cmd = serde_json::json!({
+        "type": "SetWindowSize",
+        "windowId": parsed["window"],
+        "width": parsed["width"],
+        "height": parsed["height"],
+    });
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
@@ -723,7 +1124,14 @@ async fn post_layout_save(State(state): State<AppState>) -> (StatusCode, String)
     }
 }
 
-async fn post_open_web_pane(State(state): State<AppState>, body: String) -> (StatusCode, String) {
+async fn post_open_web_pane(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    if let Err(resp) = enforce_create(&state, &headers, "create_web").await {
+        return resp;
+    }
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let url = match parsed["url"].as_str() {
         Some(u) if !u.is_empty() => u.to_string(),
@@ -986,8 +1394,12 @@ async fn get_notes(Query(query): Query<NotesQuery>) -> (StatusCode, String) {
 
 async fn post_note_create(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: String,
 ) -> (StatusCode, String) {
+    if let Err(resp) = enforce_create(&state, &headers, "create_sticky").await {
+        return resp;
+    }
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let cmd = serde_json::json!({
         "type": "NoteCreate",
@@ -1507,6 +1919,8 @@ async fn main() -> anyhow::Result<()> {
     // Grab lume handles before `state` is moved into the router below.
     let lume_for_flush = state.bridge.lume();
     let lume_for_shutdown = state.bridge.lume();
+    // Bridge handle for the identity middleware (runs across all routes incl. /mcp).
+    let bridge_for_mw = state.bridge.clone();
 
     let app = axum::Router::new()
         .route("/health", axum::routing::get(|| async { "ok" }))
@@ -1527,9 +1941,19 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/type-and-collect", axum::routing::post(post_type_and_collect))
         .route("/api/pane/split", axum::routing::post(post_split))
         .route("/api/pane/focus", axum::routing::post(post_focus))
+        .route("/api/perms/request", axum::routing::post(post_perm_request))
+        .route("/api/perms/respond", axum::routing::post(post_perm_respond))
+        .route("/api/perms/state", axum::routing::get(get_perm_state))
+        .route("/api/perms/check", axum::routing::post(post_perm_check))
+        .route("/api/perms/token", axum::routing::get(get_perm_token))
+        .route("/api/perms/enforce", axum::routing::post(post_perm_enforce))
+        .route("/api/identity/agent", axum::routing::post(post_identity_agent))
+        .route("/api/identity/whoami", axum::routing::get(get_identity_whoami))
+        .route("/api/identity/agents", axum::routing::get(get_identity_agents))
         .route("/api/pane/close", axum::routing::post(post_close))
         .route("/api/pane/new", axum::routing::post(post_new_tab))
         .route("/api/window/new", axum::routing::post(post_new_window))
+        .route("/api/window/size", axum::routing::post(post_window_size))
         .route("/api/layout/save", axum::routing::post(post_layout_save))
         .route("/api/web-pane", axum::routing::post(post_open_web_pane))
         .route("/api/web-pane/reload", axum::routing::post(post_web_pane_reload))
@@ -1611,7 +2035,10 @@ async fn main() -> anyhow::Result<()> {
         .merge(dash_routes)
         .merge(ghost_routes)
         .merge(settings_routes)
-        .nest_service("/mcp", mcp::streamable_http_service(args.port));
+        .nest_service("/mcp", mcp::streamable_http_service(args.port))
+        // Resolve caller identity from the Authorization header for every route
+        // (incl. /mcp) — attribution now, enforcement next (#59).
+        .layer(axum::middleware::from_fn_with_state(bridge_for_mw, identity_mw));
 
     let addr = std::net::SocketAddr::new(args.bind, args.port);
     let listener = match tokio::net::TcpListener::bind(addr).await {
