@@ -2,10 +2,26 @@ use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
-    schemars, tool, tool_handler, tool_router,
+    schemars,
+    service::{RequestContext, RoleServer},
+    tool, tool_handler, tool_router,
 };
 
 use crate::ghost::compressor::{ContextCompressor, FOCUS_MIN_CHARS};
+
+/// Pull the caller's `Authorization` header off the /mcp request so it can be
+/// forwarded on the internal proxy hop to the gated HTTP endpoints. Without
+/// this, every MCP mutation tool would reach the HTTP API anonymous and get
+/// soft-walled — the consent prompt could never fire. The HTTP request Parts
+/// (incl. headers) are injected into the RequestContext extensions by rmcp's
+/// streamable-http transport. Absent on the stdio transport → None (anonymous).
+fn forwarded_auth(ctx: &RequestContext<RoleServer>) -> Option<String> {
+    ctx.extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|p| p.headers.get(axum::http::header::AUTHORIZATION))
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+}
 
 // -- Tool request schemas --
 
@@ -632,6 +648,7 @@ impl HyperiaMcp {
     async fn terminal_keys(
         &self,
         Parameters(req): Parameters<KeysRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         self.focus_pane(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
         let mut path = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
@@ -640,7 +657,7 @@ impl HyperiaMcp {
             path.push(sep);
             path.push_str("interrupt=true");
         }
-        let resp = self.post_text(&path, &req.keys).await?;
+        let resp = self.post_text_as(&path, &req.keys, None, forwarded_auth(&ctx).as_deref()).await?;
         let target_process = self.pane_process_name(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
         let mut out = resp;
         if !target_process.is_empty() {
@@ -660,6 +677,7 @@ impl HyperiaMcp {
     async fn terminal_run(
         &self,
         Parameters(req): Parameters<RunRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         self.focus_pane(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
         let submit = req.submit.unwrap_or(true);
@@ -703,7 +721,12 @@ impl HyperiaMcp {
             // time out before /api/type-and-collect finishes draining PTY output.
             let req_timeout = std::time::Duration::from_millis(wait + 15_000);
             let raw_output = self
-                .post_text_with_timeout(&collect_path, &format!("{}{}", cmd, submit_seq), Some(req_timeout))
+                .post_text_as(
+                    &collect_path,
+                    &format!("{}{}", cmd, submit_seq),
+                    Some(req_timeout),
+                    forwarded_auth(&ctx).as_deref(),
+                )
                 .await?;
             let max_chars = req.max_output_chars.unwrap_or(12_000);
             let text = clean_terminal_output(&raw_output, max_chars);
@@ -910,13 +933,14 @@ impl HyperiaMcp {
     async fn terminal_split(
         &self,
         Parameters(req): Parameters<SplitRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let body = serde_json::json!({
             "direction": req.direction.unwrap_or_else(|| "vertical".into()),
             "command": req.command,
             "profile": req.profile,
         });
-        let resp = self.post_json("/api/pane/split", &body).await?;
+        let resp = self.post_json_as("/api/pane/split", &body, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -959,6 +983,7 @@ impl HyperiaMcp {
     async fn terminal_new_tab(
         &self,
         Parameters(req): Parameters<NewTabRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let mut body = serde_json::json!({});
         if let Some(cmd) = &req.command {
@@ -967,13 +992,15 @@ impl HyperiaMcp {
         if let Some(prof) = &req.profile {
             body["profile"] = serde_json::json!(prof);
         }
-        let resp = self.post_json("/api/pane/new", &body).await?;
+        let resp = self.post_json_as("/api/pane/new", &body, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
     #[tool(description = "Open a new Hyperia OS window (separate from the current window). Use terminal_status after to get its window `id` for targeting other tools. Use when the user wants a separate window, not just a new tab.")]
-    async fn terminal_new_window(&self) -> Result<CallToolResult, ErrorData> {
-        let resp = self.post_json("/api/window/new", &serde_json::json!({})).await?;
+    async fn terminal_new_window(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let resp = self
+            .post_json_as("/api/window/new", &serde_json::json!({}), forwarded_auth(&ctx).as_deref())
+            .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -997,8 +1024,11 @@ impl HyperiaMcp {
     async fn open_web_pane(
         &self,
         Parameters(req): Parameters<OpenWebPaneRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let resp = self.post_json("/api/web-pane", &serde_json::json!({"url": req.url})).await?;
+        let resp = self
+            .post_json_as("/api/web-pane", &serde_json::json!({"url": req.url}), forwarded_auth(&ctx).as_deref())
+            .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -1727,9 +1757,10 @@ impl HyperiaMcp {
     async fn sticky_note_create(
         &self,
         Parameters(req): Parameters<NoteCreateRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let body = serde_json::json!({"text": req.text, "color": req.color});
-        let resp = self.post_json("/api/notes", &body).await?;
+        let resp = self.post_json_as("/api/notes", &body, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -1757,6 +1788,7 @@ impl HyperiaMcp {
     async fn sticky_note_create_code(
         &self,
         Parameters(req): Parameters<StickyNoteCreateCodeRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let color = match req.theme.as_deref().unwrap_or("dark") {
             "light" => "code:light",
@@ -1770,7 +1802,7 @@ impl HyperiaMcp {
             "width": req.width.unwrap_or(800),
             "height": req.height.unwrap_or(600),
         });
-        let resp = self.post_json("/api/notes", &body).await?;
+        let resp = self.post_json_as("/api/notes", &body, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -2302,6 +2334,53 @@ impl HyperiaMcp {
         tokio::fs::write(&path, data.as_bytes())
             .await
             .map_err(|e| ErrorData::internal_error(format!("Write config: {e}"), None))
+    }
+
+    /// post_json that forwards a caller Authorization header on the internal
+    /// hop, so gated endpoints (enforce_drive/enforce_create) see the real
+    /// identity instead of anonymous.
+    async fn post_json_as(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+        auth: Option<&str>,
+    ) -> Result<String, ErrorData> {
+        let mut rb = self.client.post(format!("{}{}", self.base_url, path)).json(body);
+        if let Some(a) = auth {
+            rb = rb.header(reqwest::header::AUTHORIZATION, a);
+        }
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+        resp.text()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
+    }
+
+    /// post_text variant that forwards a caller Authorization header (+ optional
+    /// timeout) for the gated drive endpoints.
+    async fn post_text_as(
+        &self,
+        path: &str,
+        body: &str,
+        timeout: Option<std::time::Duration>,
+        auth: Option<&str>,
+    ) -> Result<String, ErrorData> {
+        let mut rb = self.client.post(format!("{}{}", self.base_url, path)).body(body.to_string());
+        if let Some(t) = timeout {
+            rb = rb.timeout(t);
+        }
+        if let Some(a) = auth {
+            rb = rb.header(reqwest::header::AUTHORIZATION, a);
+        }
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+        resp.text()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
     }
 
     async fn post_json(&self, path: &str, body: &serde_json::Value) -> Result<String, ErrorData> {
