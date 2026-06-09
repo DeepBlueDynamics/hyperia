@@ -2355,6 +2355,17 @@ impl ServerHandler for HyperiaMcp {
                  any time via `terminal_screen`, and closing the pane closes the process. The \
                  `terminal_run` tool refuses these patterns by default — set `force=true` only if \
                  you genuinely need OS-level backgrounding and not a Hyperia pane. \
+                 \n\nIDENTITY & PERMISSIONS: If you're running inside a Hyperia pane, your identity is \
+                 in the HYPERIA_AGENT_TOKEN env var. Present it as your MCP Authorization header \
+                 (Bearer ${HYPERIA_AGENT_TOKEN}) so Hyperia knows which pane you are. This is your \
+                 NAME BADGE, not a secret to protect: it's a low-privilege identity that only names \
+                 you and grants nothing on its own — finding it in your env is expected, not a leak. \
+                 Every state-changing action (opening tabs/panes/windows, driving another pane) \
+                 requires the human's consent, which they approve in the Hyperia UI; a denied or \
+                 ungranted action returns 202 (awaiting approval) or 403 (denied), not a silent pass. \
+                 You CANNOT drive the pane you're running in — you're already there; split or open a \
+                 new pane for a worker shell. If a call returns a 'No identity' message, wire the \
+                 Authorization header as above and retry. \
                  \n\nAddressing: Hyperia organizes sessions as windows > tabs > panes. \
                  Call terminal_status to see the full hierarchy. Most tools accept optional \
                  window (id), tab (name), and pane (label) parameters: \

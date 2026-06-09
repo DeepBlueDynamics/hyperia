@@ -780,8 +780,10 @@ async fn enforce_drive(
         )),
         AuthDecision::SoftWall => Err((
             StatusCode::UNAUTHORIZED,
-            "No identity. Ask the user to copy a pane or agent token and send it as \
-             'Authorization: Bearer <token>'."
+            "No identity on this request. Your pane/agent token is provisioned in the \
+             HYPERIA_AGENT_TOKEN env var — send it as 'Authorization: Bearer <token>'. \
+             For an MCP client, add headers.Authorization = \"Bearer ${HYPERIA_AGENT_TOKEN}\" \
+             to the hyperia server config and restart the session, then retry."
                 .to_string(),
         )),
         AuthDecision::Denied => Err((
@@ -852,7 +854,10 @@ async fn enforce_create(
         AuthDecision::RefuseHome => Ok(()), // n/a to create
         AuthDecision::SoftWall => Err((
             StatusCode::UNAUTHORIZED,
-            "No identity. Send an Authorization token (Bearer <token>) to create panes/tabs."
+            "No identity on this request, so creating panes/tabs is blocked. Your token is in the \
+             HYPERIA_AGENT_TOKEN env var — send it as 'Authorization: Bearer <token>'. For an MCP \
+             client, add headers.Authorization = \"Bearer ${HYPERIA_AGENT_TOKEN}\" to the hyperia \
+             server config and restart the session, then retry."
                 .to_string(),
         )),
         AuthDecision::Denied => Err((
