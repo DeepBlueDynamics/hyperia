@@ -261,6 +261,7 @@ export type TabProps = {
   webUrl?: string;
   paneColors?: string[];
   groupTabName?: string;
+  manualTabName?: boolean;
   defaultProfile?: string;
   disableTitleInheritance?: boolean;
   onToggleTitleInheritance?: () => void;
@@ -286,6 +287,7 @@ export type ITab = {
   webUrl?: string;
   paneColors?: string[];
   groupTabName?: string;
+  manualTabName?: boolean;
   disableTitleInheritance?: boolean;
 };
 

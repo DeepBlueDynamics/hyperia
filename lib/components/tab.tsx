@@ -121,7 +121,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
       })
     );
 
-    if (props.groupTabName || pendingName) {
+    // Only offer the revert when the human actually typed a custom name —
+    // agent/auto tab names (manualTabName=false) shouldn't show it.
+    if (props.manualTabName || pendingName) {
       menu.append(
         new MenuItem({
           label: 'Use Automatic Name',

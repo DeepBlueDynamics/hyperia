@@ -137,6 +137,7 @@ const getTabs = createSelector(
         webUrl: isFirstLeafWeb && firstLeaf ? firstLeaf.webUrl || undefined : undefined,
         paneColors,
         groupTabName: groupTabName || undefined,
+        manualTabName: !!t.manualTabName,
         disableTitleInheritance: !!t.disableTitleInheritance
       };
     })
@@ -196,8 +197,9 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
     onDescribe: (uid: string, description: string) => {
       dispatch(((d: HyperDispatch) => {
         // Always set session tab name on the root term group for both web and terminal tabs
-        // to persist it across reloads and navigation.
-        d(setSessionTabName(uid, description) as any);
+        // to persist it across reloads and navigation. manual=true: this is a
+        // human-typed rename, so the "Use Automatic Name" revert may show.
+        d(setSessionTabName(uid, description, true, true) as any);
       }) as any);
     },
 

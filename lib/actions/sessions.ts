@@ -199,14 +199,16 @@ export function setSessionDescription(uid: string, description: string) {
 // Sets the tab name on the root term group (the sole source of truth).
 // Also dispatches the legacy SESSION_SET_TAB_NAME so any consumer that still
 // reads session.tabName (e.g. the bridge sync) stays in sync.
-export function setSessionTabName(uid: string, tabName: string, sync = true) {
+export function setSessionTabName(uid: string, tabName: string, sync = true, manual = false) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     const sessionUid = getState().termGroups.activeSessions[uid] || uid;
     if (sync) {
       window.rpc.emit('session set tab name', {uid: sessionUid, tabName});
     }
-    // Source of truth: the root group.
-    dispatch({type: TERM_GROUP_SET_TAB_NAME, uid: sessionUid, tabName} as any);
+    // Source of truth: the root group. `manual` marks a user-typed rename (vs
+    // an agent/auto rename) so the "Use Automatic Name" revert only offers
+    // itself when the human actually set a custom name.
+    dispatch({type: TERM_GROUP_SET_TAB_NAME, uid: sessionUid, tabName, manual} as any);
     // Back-compat: also update the per-session field so anything still reading it
     // (bridge mirror, plugins) sees the same name.
     dispatch({

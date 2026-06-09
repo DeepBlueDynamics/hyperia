@@ -1,5 +1,11 @@
 import React from 'react';
 
+import {
+  subscribe as subscribePermission,
+  clearRequest as clearPermission,
+  type PermRequest
+} from '../permissions-bus';
+
 type PaneBandProps = {
   paneType: 'shell' | 'web' | 'ai';
   tint?: 'success' | 'info' | 'warning' | 'danger' | 'ai' | 'neutral';
@@ -20,6 +26,34 @@ type PaneBandProps = {
   paneName?: string; // Optional override for the visible name used in click-to-copy
   paneId?: string; // Underlying UID — used ONLY to append a short suffix to the copied string for disambiguation
 };
+
+// Segmented-control pill used by the consent panel (scope + duration rows).
+const segStyle = (active: boolean): React.CSSProperties => ({
+  padding: '3px 9px',
+  fontSize: '11px',
+  borderRadius: '5px',
+  border: '1px solid',
+  borderColor: active ? 'var(--accent-primary, #6ea8fe)' : 'var(--border-neutral, rgba(255,255,255,0.12))',
+  background: active ? 'var(--accent-primary, #6ea8fe)' : 'transparent',
+  color: active ? '#0b0b0f' : 'var(--text-secondary, #9a9aa2)',
+  fontWeight: active ? 600 : 400,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap'
+});
+
+// Deny / Allow buttons. `primary` = the Allow affirmative.
+const actionStyle = (primary: boolean, busy: boolean): React.CSSProperties => ({
+  padding: '5px 16px',
+  fontSize: '12px',
+  fontWeight: 600,
+  borderRadius: '6px',
+  border: '1px solid',
+  borderColor: primary ? 'var(--accent-success, #3fb950)' : 'var(--border-neutral, rgba(255,255,255,0.15))',
+  background: primary ? 'var(--accent-success, #3fb950)' : 'transparent',
+  color: primary ? '#06140a' : 'var(--text-primary, #e8e8ea)',
+  cursor: busy ? 'default' : 'pointer',
+  opacity: busy ? 0.55 : 1
+});
 
 const getTextFromNode = (node: React.ReactNode): string => {
   if (!node) return '';
@@ -73,6 +107,49 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
     const resolvedTint = isPlaceholder ? 'neutral' : tint;
     const isAi = paneType === 'ai';
 
+    // Cross-pane access consent prompt. The sidecar pushes a request targeting
+    // this paneId; we slide a panel down under the band until the human picks.
+    const [permReq, setPermReq] = React.useState<PermRequest | null>(null);
+    const [permScope, setPermScope] = React.useState<'pane' | 'tab' | 'any'>('pane');
+    const [permDuration, setPermDuration] = React.useState<number | null>(null); // null = always
+    const [permBusy, setPermBusy] = React.useState(false);
+
+    React.useEffect(() => {
+      if (!paneId) return;
+      return subscribePermission(paneId, (r) => {
+        setPermReq(r);
+        if (r) {
+          // Reset the choice to the friendly defaults each time a prompt opens.
+          setPermScope('pane');
+          setPermDuration(null);
+          setPermBusy(false);
+        }
+      });
+    }, [paneId]);
+
+    const respondPermission = React.useCallback(
+      (decision: 'allow' | 'deny') => {
+        if (!permReq) return;
+        setPermBusy(true);
+        const port = (process.env.HYPERIA_PORT as string) || '9800';
+        fetch(`http://localhost:${port}/api/perms/respond`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            id: permReq.id,
+            decision,
+            scope: permScope,
+            durationSecs: permDuration
+          })
+        })
+          .catch((err) => console.error('permission respond failed:', err))
+          .finally(() => {
+            if (paneId) clearPermission(paneId);
+          });
+      },
+      [permReq, permScope, permDuration, paneId]
+    );
+
     const [copied, setCopied] = React.useState(false);
 
     React.useEffect(() => {
@@ -98,15 +175,80 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       const cleanText = shortId ? `${name} (pane ${shortId})` : name;
       if (cleanText) {
         // Use Electron's clipboard, not navigator.clipboard — the latter fails
-        // silently in this (non-secure-context) renderer, so the "Copied" badge
-        // never showed even though the click registered.
+        // silently in this (non-secure-context) renderer.
         try {
           // eslint-disable-next-line @typescript-eslint/no-var-requires
           require('electron').clipboard.writeText(cleanText);
-          setCopied(true);
         } catch (err) {
           console.error('Failed to copy pane name to clipboard:', err);
         }
+        // Always flash the badge — it confirms the click registered even if the
+        // clipboard write was blocked. (Previously setCopied lived inside the
+        // try, so a clipboard failure left zero feedback.)
+        setCopied(true);
+      }
+    };
+
+    // Right-click the pane name → copy menu (name / id / access token). Built in
+    // the renderer (via @electron/remote, like the tab menu) so each copy can
+    // flash the same "Copied ✓" feedback.
+    const handleNameContextMenu = (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const name = (getTextFromNode(label) || paneName || 'Pane').trim();
+      const shortId = paneId ? paneId.replace(/-/g, '').slice(0, 8) : '';
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const {Menu, MenuItem} = require('@electron/remote');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const {clipboard} = require('electron');
+        const menu = new Menu();
+        menu.append(
+          new MenuItem({
+            label: 'Copy Pane Name',
+            click: () => {
+              clipboard.writeText(shortId ? `${name} (pane ${shortId})` : name);
+              setCopied(true);
+            }
+          })
+        );
+        if (paneId) {
+          menu.append(
+            new MenuItem({
+              label: 'Copy Pane ID',
+              click: () => {
+                clipboard.writeText(paneId);
+                setCopied(true);
+              }
+            })
+          );
+          if (paneType === 'shell') {
+            menu.append(new MenuItem({type: 'separator'}));
+            menu.append(
+              new MenuItem({
+                label: 'Copy Pane Token + ID',
+                click: () => {
+                  const port = (process.env.HYPERIA_PORT as string) || '9800';
+                  fetch(`http://localhost:${port}/api/perms/token?pane=${encodeURIComponent(paneId)}`)
+                    .then((r) => r.json())
+                    .then((d) => {
+                      if (d && d.token) {
+                        // Hand the agent everything it needs in one paste: the
+                        // pane it's identifying as + the token for its
+                        // Authorization header. Name line is a human comment.
+                        clipboard.writeText(`${name}\npane: ${paneId}\ntoken: ${d.token}`);
+                        setCopied(true);
+                      }
+                    })
+                    .catch((err) => console.error('copy pane token failed:', err));
+                }
+              })
+            );
+          }
+        }
+        menu.popup();
+      } catch (err) {
+        console.error('pane name context menu failed:', err);
       }
     };
 
@@ -136,7 +278,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           flexShrink: 0,
           boxSizing: 'border-box',
           cursor: onClick ? 'pointer' : 'default',
-          userSelect: 'none'
+          userSelect: 'none',
+          position: 'relative'
         }}
       >
         {/* Left-justified content: name, nav, URL bar. URL bar fills the row. */}
@@ -153,6 +296,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           <div
             className="pane-band-name-cluster"
             onClick={handleNameClick}
+            onContextMenu={handleNameContextMenu}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -175,14 +319,17 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             <span style={{display: 'flex', alignItems: 'center', flexShrink: 0}}>{resolvedIcon}</span>
           )}
           {isPlaceholder ? (
-            <span style={{color: 'var(--text-tertiary)', fontStyle: 'italic', fontWeight: 400, whiteSpace: 'nowrap', flexShrink: 0}}>{label}</span>
+            <span style={{color: 'var(--text-tertiary)', fontStyle: 'italic', fontWeight: 400, whiteSpace: 'nowrap', flexShrink: 0}}>{copied ? 'Copied ✓' : label}</span>
           ) : (
             <span style={{display: 'inline-flex', alignItems: 'center', gap: 'var(--space-4)', whiteSpace: 'nowrap', flexShrink: 0}}>
-              {label}
-              {profileChip}
+              {copied ? 'Copied ✓' : (
+                <>
+                  {label}
+                  {profileChip}
+                </>
+              )}
             </span>
           )}
-          {copied && <div className="pane-band-copied-badge">Copied (pane)</div>}
         </div>
 
           {/* Nav Cluster */}
@@ -198,58 +345,6 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           style={{display: 'flex', alignItems: 'center', gap: 'var(--space-10)', flexShrink: 0}}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Split Right */}
-          {!isSplitRightDisabled && (
-            <span
-              className="pane-band-control-icon pane-band-tooltip-trigger"
-              onClick={(e) => {
-                e.stopPropagation();
-                onSplitRight();
-              }}
-              style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
-            >
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <line x1="12" y1="3" x2="12" y2="21" />
-              </svg>
-              <div className="pane-band-tooltip">
-                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Split right</div>
-                <div
-                  style={{
-                    fontSize: '11px',
-                    fontFamily: 'var(--font-mono)',
-                    color: 'var(--text-secondary)',
-                    marginTop: 'var(--space-2)'
-                  }}
-                >
-                  Ctrl+Shift+D
-                </div>
-                <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: 'var(--space-6) 0'}} />
-                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Clone right</div>
-                <div
-                  style={{
-                    fontSize: '11px',
-                    fontFamily: 'var(--font-mono)',
-                    color: 'var(--text-secondary)',
-                    marginTop: 'var(--space-2)'
-                  }}
-                >
-                  Ctrl+Alt+Shift+D
-                </div>
-              </div>
-            </span>
-          )}
-
           {/* Split Down */}
           {!isSplitDownDisabled && (
             <span
@@ -302,6 +397,58 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             </span>
           )}
 
+          {/* Split Right */}
+          {!isSplitRightDisabled && (
+            <span
+              className="pane-band-control-icon pane-band-tooltip-trigger"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSplitRight();
+              }}
+              style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
+            >
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <line x1="12" y1="3" x2="12" y2="21" />
+              </svg>
+              <div className="pane-band-tooltip">
+                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Split right</div>
+                <div
+                  style={{
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--text-secondary)',
+                    marginTop: 'var(--space-2)'
+                  }}
+                >
+                  Ctrl+Shift+D
+                </div>
+                <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: 'var(--space-6) 0'}} />
+                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Clone right</div>
+                <div
+                  style={{
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--text-secondary)',
+                    marginTop: 'var(--space-2)'
+                  }}
+                >
+                  Ctrl+Alt+Shift+D
+                </div>
+              </div>
+            </span>
+          )}
+
           {/* Close */}
           <span
             className="pane-band-control-icon pane-band-tooltip-trigger"
@@ -347,6 +494,98 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             </div>
           </span>
         </div>
+
+        {permReq && (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              top: '100%',
+              left: 0,
+              right: 0,
+              zIndex: 60,
+              padding: '12px 14px',
+              boxSizing: 'border-box',
+              background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',
+              borderTop: '1px solid var(--accent-primary, #6ea8fe)',
+              borderBottom: '1px solid var(--border-neutral, rgba(255,255,255,0.08))',
+              boxShadow: '0 10px 24px rgba(0,0,0,0.45)',
+              color: 'var(--text-primary, #e8e8ea)',
+              fontFamily: 'var(--font-sans)',
+              animation: 'hyPermSlide 150ms ease',
+              cursor: 'default'
+            }}
+          >
+            <style>{`@keyframes hyPermSlide{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}`}</style>
+
+            {/* Who's asking */}
+            <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px'}}>
+              <span style={{fontSize: '15px'}}>🛂</span>
+              <div style={{fontSize: '12px', lineHeight: 1.35}}>
+                <span style={{fontWeight: 600}}>{permReq.requester}</span>
+                <span style={{color: 'var(--text-secondary, #9a9aa2)'}}> wants to control this pane.</span>
+              </div>
+            </div>
+
+            {/* Scope */}
+            <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px'}}>
+              <span style={{fontSize: '10px', color: 'var(--text-secondary, #9a9aa2)', width: '52px', flexShrink: 0}}>
+                Access
+              </span>
+              <div style={{display: 'flex', gap: '4px'}}>
+                {([['pane', 'This pane'], ['tab', 'This tab'], ['any', 'Any pane']] as const).map(([val, lbl]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setPermScope(val)}
+                    style={segStyle(permScope === val)}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Duration */}
+            <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px'}}>
+              <span style={{fontSize: '10px', color: 'var(--text-secondary, #9a9aa2)', width: '52px', flexShrink: 0}}>
+                For
+              </span>
+              <div style={{display: 'flex', gap: '4px'}}>
+                {([['15 min', 900], ['1 hour', 3600], ['Always', null]] as const).map(([lbl, secs]) => (
+                  <button
+                    key={lbl}
+                    type="button"
+                    onClick={() => setPermDuration(secs)}
+                    style={segStyle(permDuration === secs)}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div style={{display: 'flex', gap: '8px', justifyContent: 'flex-end'}}>
+              <button
+                type="button"
+                disabled={permBusy}
+                onClick={() => respondPermission('deny')}
+                style={actionStyle(false, permBusy)}
+              >
+                Deny
+              </button>
+              <button
+                type="button"
+                disabled={permBusy}
+                onClick={() => respondPermission('allow')}
+                style={actionStyle(true, permBusy)}
+              >
+                Allow
+              </button>
+            </div>
+          </div>
+        )}
 
         <style jsx>{`
           .pane-band-container {
@@ -453,9 +692,9 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
 
           .pane-band-copied-badge {
             position: absolute;
-            top: -24px;
-            left: 50%;
-            transform: translateX(-50%);
+            top: 100%;
+            left: var(--space-10);
+            margin-top: 4px;
             background: var(--info-text);
             color: #ffffff;
             font-size: 10px;

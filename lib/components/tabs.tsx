@@ -245,6 +245,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             webUrl,
             paneColors,
             groupTabName,
+            manualTabName,
             disableTitleInheritance
           } = tab;
           const tabProps = getTabProps(tab, props, {
@@ -263,6 +264,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             webUrl,
             paneColors,
             groupTabName,
+            manualTabName,
             disableTitleInheritance,
             onToggleTitleInheritance: () => (props as any).onToggleTitleInheritance?.(uid),
             defaultProfile: props.defaultProfile,

@@ -403,7 +403,7 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       return state.setIn(['termGroups', uid, 'webName'], name);
     }
     case TERM_GROUP_SET_TAB_NAME: {
-      const {uid, tabName} = act;
+      const {uid, tabName, manual} = act;
       // uid may be a session uid OR a term-group uid — resolve to the root group.
       let groupUid: string | null = null;
       if (state.termGroups[uid]) {
@@ -413,7 +413,13 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
         if (child) groupUid = findRootGroup(state.termGroups, child.uid).uid;
       }
       if (!groupUid) return state;
-      return state.setIn(['termGroups', groupUid, 'tabName'], tabName);
+      // manualTabName is true ONLY for a non-empty user-typed rename. Agent/auto
+      // renames (manual=false) and clears (empty) leave it false, so the
+      // "Use Automatic Name" revert stays hidden unless the human set the name.
+      const manualTabName = !!manual && !!tabName;
+      return state
+        .setIn(['termGroups', groupUid, 'tabName'], tabName)
+        .setIn(['termGroups', groupUid, 'manualTabName'], manualTabName);
     }
     case 'TERM_GROUP_SET_ACTIVE': {
       const {uid} = act;
