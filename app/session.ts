@@ -174,6 +174,19 @@ export default class Session extends EventEmitter {
       const err = _err as {message: string};
       if (/is not a function/.test(err.message)) {
         throw createNodePtyError();
+      }
+      // node-pty's WindowsPtyAgent throws "File not found" when the cwd can't be
+      // resolved on this host (e.g. an agent in a container passed /workspace/...).
+      // Retry once without the cwd so the pane still opens instead of crashing
+      // the main process with an uncaught exception.
+      if (options.cwd) {
+        try {
+          delete (options as {cwd?: string}).cwd;
+          this.cwd = '';
+          this.pty = spawn(shell, shellArgs, options);
+        } catch {
+          throw err;
+        }
       } else {
         throw err;
       }

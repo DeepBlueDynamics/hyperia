@@ -100,6 +100,26 @@ function configureWebPaneSession(sess: Electron.Session) {
   });
 }
 
+// A guaranteed-valid shell for this host. Used when a session's configured shell
+// is empty or its binary is missing — otherwise node-pty throws "File not found"
+// and that UNCAUGHT exception crashes the whole main process (e.g. an agent
+// splitting a pane with no/invalid profile, /api/pane/split with no shell).
+function fallbackShell(): string {
+  if (process.platform === 'win32') {
+    const candidates = [
+      'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      'C:\\Windows\\System32\\cmd.exe'
+    ];
+    for (const c of candidates) if (existsSync(c)) return c;
+    return 'cmd.exe';
+  }
+  const sh = process.env.SHELL;
+  if (sh && existsSync(sh)) return sh;
+  for (const c of ['/bin/zsh', '/bin/bash', '/bin/sh']) if (existsSync(c)) return c;
+  return '/bin/sh';
+}
+
 function makeLetterIcon(letter: string): Electron.NativeImage {
   // Generate a 32x32 PNG with a single letter via canvas-free SVG→PNG
   const ch = (letter || 'H').charAt(0).toUpperCase();
@@ -300,7 +320,15 @@ export function newWindow(
     }
 
     // remove the rows and cols, the wrong value of them will break layout when init create
-    const resolvedCwd = extraOptionsFiltered.cwd || cwd || workingDirectory;
+    // Validate the cwd before it reaches node-pty. An agent running in a
+    // container/another machine can pass a path like /workspace/kordl that does
+    // not exist on this host; node-pty's WindowsPtyAgent then throws "File not
+    // found" as an UNCAUGHT exception and crashes the whole main process. Fall
+    // back to a known-good directory instead.
+    let resolvedCwd = extraOptionsFiltered.cwd || cwd || workingDirectory;
+    if (!resolvedCwd || !isAbsolute(resolvedCwd) || !existsSync(resolvedCwd)) {
+      resolvedCwd = cwd || (existsSync(workingDirectory) ? workingDirectory : homeDirectory);
+    }
     const defaultOptions = Object.assign(
       {
         splitDirection: undefined,
@@ -315,14 +343,42 @@ export function newWindow(
       }
     );
     const options = decorateSessionOptions(defaultOptions);
+    // Guard the shell: an empty shell, or a profile whose binary is missing,
+    // makes node-pty throw "File not found" → uncaught crash. Default to a real
+    // shell that exists. (Bare names like "pwsh" are left alone — node-pty
+    // resolves those via PATH.)
+    if (!options.shell || (isAbsolute(options.shell) && !existsSync(options.shell))) {
+      options.shell = fallbackShell();
+      options.shellArgs = [];
+    }
     const DecoratedSession = decorateSessionClass(Session);
-    const session = new DecoratedSession(options);
+    let session;
+    try {
+      session = new DecoratedSession(options);
+    } catch (err) {
+      // Last-resort recovery so a failed spawn never crashes the main process:
+      // retry once with a guaranteed default shell + home cwd.
+      console.error('[session] spawn failed; retrying with default shell:', (err as Error).message);
+      options.shell = fallbackShell();
+      options.shellArgs = [];
+      options.cwd = homeDirectory;
+      session = new DecoratedSession(options);
+    }
     sessions.set(uid, session);
     return {session, options};
   }
 
   rpc.on('new', (extraOptions) => {
-    const {session, options} = createSession(extraOptions);
+    let created;
+    try {
+      created = createSession(extraOptions);
+    } catch (err) {
+      // Even the fallback spawn failed — log and bail rather than crash the
+      // main process with an uncaught exception (the new pane just won't open).
+      console.error('[new] failed to create session:', err);
+      return;
+    }
+    const {session, options} = created;
 
     sessions.set(options.uid, session);
     rpc.emit('session add', {
@@ -452,6 +508,7 @@ export function newWindow(
           isWeb: boolean;
           isAi: boolean;
           title: string;
+          shellName: string;
           url?: string;
           active: boolean;
         }>;

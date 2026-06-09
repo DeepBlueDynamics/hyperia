@@ -662,7 +662,7 @@ After cleanup, reply to the human and end the turn."
                     let is_error = out_lower.contains("error") || out_lower.contains("failed")
                         || out_lower.contains("blocked") || out_lower.contains("unknown tool");
                     if is_error {
-                        let snippet = &output[..output.len().min(300)];
+                        let snippet = crate::util::safe_prefix(&output, 300);
                         ferricula.remember(
                             &format!("Tool '{}' returned an error: {}", tool.name, snippet),
                             "tool-health",
@@ -822,7 +822,7 @@ After cleanup, reply to the human and end the turn."
         }
 
         // Remember the exchange in Ferricula — both as semantic memory and as chat history
-        let summary = format!("User: {}\nAssistant: {}", user_message, &full_text[..full_text.len().min(500)]);
+        let summary = format!("User: {}\nAssistant: {}", user_message, crate::util::safe_prefix(&full_text, 500));
         ferricula.remember(&summary, "ghost").await;
         ferricula.remember_turn("user", user_message).await;
         ferricula.remember_turn("assistant", &full_text).await;

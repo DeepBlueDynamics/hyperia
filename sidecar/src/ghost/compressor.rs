@@ -454,7 +454,7 @@ impl ContextCompressor {
 
         if cached.is_none() && current.len() < content.len() {
             let first = content.lines().next().unwrap_or("").trim();
-            let sig = &first[..first.len().min(40)];
+            let sig = crate::util::safe_prefix(first, 40);
             let lp = LearnedPattern {
                 content_type: content_type.clone(),
                 pattern: pattern_name.clone(),
@@ -481,7 +481,16 @@ impl ContextCompressor {
     }
 
     async fn classify_content(&self, content: &str) -> anyhow::Result<String> {
-        let snippet = &content[..content.len().min(800)];
+        // Truncate at a UTF-8 char boundary ≤ 800 bytes. Slicing at a raw byte
+        // index (content[..800]) panics with "byte index N is not a char
+        // boundary" when byte 800 lands mid-character — and terminal output is
+        // full of multi-byte chars (emoji, box-drawing). That panic was crashing
+        // the whole sidecar.
+        let mut end = content.len().min(800);
+        while end > 0 && !content.is_char_boundary(end) {
+            end -= 1;
+        }
+        let snippet = &content[..end];
         let body = serde_json::json!({
             "model": self.get_model(),
             "messages": [
@@ -516,7 +525,7 @@ impl ContextCompressor {
     }
 
     async fn derive_strategy(&self, content: &str, content_type: &str) -> anyhow::Result<String> {
-        let snippet = &content[..content.len().min(800)];
+        let snippet = crate::util::safe_prefix(content, 800);
         let body = serde_json::json!({
             "model": self.get_model(),
             "messages": [
@@ -696,7 +705,7 @@ fn extract_content(v: &Value) -> String {
                         .as_str()
                         .or_else(|| p["content"][0]["text"].as_str())
                         .unwrap_or("…");
-                    Some(format!("[tool_result: {}]", &content[..content.len().min(200)]))
+                    Some(format!("[tool_result: {}]", crate::util::safe_prefix(content, 200)))
                 }
                 _ => None,
             })
@@ -1101,7 +1110,7 @@ mod tests {
                 m["role"].as_str().unwrap_or("?"),
                 m["content"]
                     .as_str()
-                    .map(|s| &s[..s.len().min(120)])
+                    .map(|s| crate::util::safe_prefix(s, 120))
                     .unwrap_or("(blocks)")
             );
         }

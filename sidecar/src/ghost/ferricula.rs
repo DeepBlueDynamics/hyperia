@@ -115,11 +115,7 @@ impl FerriculaBackend {
 
     /// Store a chat turn for history restoration. Tags with role.
     pub async fn remember_turn(&self, role: &str, content: &str) {
-        let text = if content.len() > 1000 {
-            &content[..1000]
-        } else {
-            content
-        };
+        let text = crate::util::safe_prefix(content, 1000);
         let max_id = match self.remote_max_id().await {
             Ok(id) => id,
             Err(_) => return,

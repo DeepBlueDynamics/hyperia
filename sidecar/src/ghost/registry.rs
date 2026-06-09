@@ -257,7 +257,7 @@ impl ToolRegistry {
             Some(fc) => {
                 fc.remember_full(text, channel, importance, emotion, keystone).await;
                 let extras = if keystone { " [keystone]" } else { "" };
-                format!("Remembered (importance={:.1}){}:{}", importance, extras, &text[..text.len().min(100)])
+                format!("Remembered (importance={:.1}){}:{}", importance, extras, crate::util::safe_prefix(text, 100))
             }
             None => "Ferricula not configured.".into(),
         }
