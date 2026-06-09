@@ -1,5 +1,6 @@
 // eslint-disable-next-line import/order
 import {cfgPath} from './config/paths';
+import {SYSTEM_TOKEN} from './system-token';
 
 // Print diagnostic information for a few arguments instead of running Hyperia.
 if (['--help', '-v', '--version'].includes(process.argv[1])) {
@@ -228,16 +229,14 @@ async function spawnSidecar() {
   // Kill any existing sidecar before spawning
   await killExistingSidecars();
 
-  // Mint a per-run system token so Hyperia's OWN HTTP calls (e.g. the sticky
-  // n8shell runner) bypass the agent create-consent gate. Set it on the main
-  // process env BEFORE spawning so (a) the sidecar inherits + trusts it and
-  // (b) internal callers like app/sticky.ts can read it. Agents never see it.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  process.env.HYPERIA_SYSTEM_TOKEN = `hyp_sys_${require('crypto').randomBytes(24).toString('hex')}`;
-
+  // Hand the per-run system token (app/system-token.ts) to the sidecar via the
+  // CHILD's env only — NOT process.env. If it were on process.env, every PTY
+  // the terminal spawns would inherit it (app/session.ts → getDecoratedEnv) and
+  // any shell in any pane could read it and bypass ALL permission enforcement.
   isDev && console.log(`[sidecar] Spawning: ${sidecarPath} --port ${SIDECAR_PORT}`);
   sidecarProcess = spawn(sidecarPath, ['--port', String(SIDECAR_PORT)], {
-    stdio: ['ignore', 'pipe', 'pipe']
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {...process.env, HYPERIA_SYSTEM_TOKEN: SYSTEM_TOKEN}
   });
 
   sidecarProcess.stdout?.on('data', (data: Buffer) => {

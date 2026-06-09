@@ -10,6 +10,8 @@ import {BrowserWindow, ipcMain, Menu, screen, app, nativeImage, shell, dialog, N
 
 import isDev from 'electron-is-dev';
 
+import {SYSTEM_TOKEN} from './system-token';
+
 function translateContainerPath(filePath: string): string {
   if (process.platform !== 'win32') {
     return filePath;
@@ -1355,8 +1357,8 @@ async function fireSchedule(note: NoteData): Promise<void> {
         headers: {
           'content-type': 'application/json',
           // Internal Hyperia call → carry the system token to bypass the agent
-          // create-consent gate.
-          authorization: `Bearer ${process.env.HYPERIA_SYSTEM_TOKEN || ''}`
+          // create-consent gate. Read from the leaf module, never process.env.
+          authorization: `Bearer ${SYSTEM_TOKEN}`
         },
         body: JSON.stringify({profile: 'n8', command: full})
       });
