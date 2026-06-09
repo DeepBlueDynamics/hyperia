@@ -73,7 +73,6 @@ pub enum AuthDecision {
     NeedConsent,
 }
 
-#[derive(Default)]
 pub struct PermStore {
     pending: Mutex<HashMap<String, PermRequest>>,
     grants: Mutex<Vec<Grant>>,
@@ -91,11 +90,27 @@ pub struct PermStore {
     denials: Mutex<HashMap<(String, String), Instant>>,
     /// Per-agent create-capability grants (capability="create", no pane scope).
     create_grants: Mutex<Vec<CreateGrant>>,
-    /// Master enforcement switch. OFF (default) = attribution only, nothing is
-    /// blocked. ON = drive actions are gated (home-refusal / ownership / grants
-    /// / consent / soft-wall). Runtime-toggled, defaults off so nothing breaks.
+    /// Master enforcement switch. ON by default — every boot comes up gated
+    /// (home-refusal / ownership / grants / consent / soft-wall). Grants reset
+    /// each start, identities persist, so agents re-earn access every session.
+    /// Runtime-toggleable for debugging; resets to ON on restart.
     enforce: AtomicBool,
     next_id: AtomicU64,
+}
+
+impl Default for PermStore {
+    fn default() -> Self {
+        Self {
+            pending: Mutex::default(),
+            grants: Mutex::default(),
+            tokens: Mutex::default(),
+            owners: Mutex::default(),
+            denials: Mutex::default(),
+            create_grants: Mutex::default(),
+            enforce: AtomicBool::new(true), // gated out of the box
+            next_id: AtomicU64::default(),
+        }
+    }
 }
 
 impl PermStore {
@@ -271,6 +286,17 @@ impl PermStore {
     /// Who owns this pane, if anyone?
     pub async fn owner_of(&self, pane: &str) -> Option<String> {
         self.owners.lock().await.get(pane).cloned()
+    }
+
+    /// Register a pane's token, minted + injected into the pane's PTY env by the
+    /// Electron main process at spawn. Makes `pane_for_token` resolve an in-pane
+    /// agent's Authorization header → this pane, and makes `token_for` / the
+    /// "Copy access token" menu return the same token the agent already holds.
+    pub async fn set_pane_token(&self, pane: &str, token: &str) {
+        if pane.is_empty() || token.is_empty() {
+            return;
+        }
+        self.tokens.lock().await.insert(pane.to_string(), token.to_string());
     }
 
     /// Reverse lookup: which pane does this token identify? (For #58's header

@@ -1,3 +1,4 @@
+import {randomBytes} from 'crypto';
 import {EventEmitter} from 'events';
 import {dirname} from 'path';
 import {StringDecoder} from 'string_decoder';
@@ -101,6 +102,12 @@ export default class Session extends EventEmitter {
   initTimestamp: number;
   profile!: string;
   cwd!: string;
+  // Per-pane identity token injected into the PTY env as HYPERIA_AGENT_TOKEN.
+  // An agent running in this pane forwards it to the sidecar (MCP Authorization
+  // header) so it's identified as THIS pane — gets consent prompts instead of
+  // being anonymous. Registered with the sidecar in SessionRegister. This is a
+  // low-privilege pane token (NOT the system bypass token).
+  agentToken = '';
   constructor(options: SessionOptions) {
     super();
     this.pty = null;
@@ -130,6 +137,10 @@ export default class Session extends EventEmitter {
     const shell = _shell || defaultShell;
     const shellArgs = _shellArgs || defaultShellArgs;
 
+    // Mint this pane's identity token and inject it so an in-pane agent can
+    // present it to the sidecar (via its MCP Authorization header).
+    this.agentToken = `hyp_pane_${randomBytes(16).toString('hex')}`;
+
     const cleanEnv =
       process.env['APPIMAGE'] && process.env['APPDIR'] ? shellEnv.sync(_shell || defaultShell) : process.env;
     const baseEnv: Record<string, string> = {
@@ -139,6 +150,7 @@ export default class Session extends EventEmitter {
       COLORTERM: 'truecolor',
       TERM_PROGRAM: productName,
       TERM_PROGRAM_VERSION: version,
+      HYPERIA_AGENT_TOKEN: this.agentToken,
       ...envFromConfig
     };
     // path to AppImage mount point is added to PATH environment variable automatically

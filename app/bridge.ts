@@ -175,7 +175,10 @@ function sendSessionRegister(uid: string, tracked: TrackedSession) {
     splitLabel: tracked.splitLabel,
     tabOrder: tracked.tabOrder,
     tabActive: tracked.tabActive,
-    paneActive: tracked.paneActive
+    paneActive: tracked.paneActive,
+    // Per-pane identity token (injected into this pane's PTY env) so the
+    // sidecar can resolve an in-pane agent's Authorization header → this pane.
+    agentToken: tracked.session?.agentToken || ''
   });
 }
 

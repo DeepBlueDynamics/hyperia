@@ -676,6 +676,12 @@ impl Bridge {
                 let title = msg["title"].as_str().unwrap_or("").to_string();
                 let shell_name = msg["shellName"].as_str().unwrap_or("").to_string();
                 tracing::info!("Session registered: {uid} ({tab_name}) {cols}x{rows} pid={pid} tab={root_tab_uid} win={window_id}");
+                // Register the pane's injected identity token so an in-pane
+                // agent's Authorization header resolves to this pane.
+                let agent_token = msg["agentToken"].as_str().unwrap_or("");
+                if !agent_token.is_empty() {
+                    self.inner.perms.set_pane_token(&uid, agent_token).await;
+                }
                 let mut focused_window_id = self.inner.focused_window_id.lock().await;
                 if focused_window_id.is_none() {
                     *focused_window_id = Some(window_id);
