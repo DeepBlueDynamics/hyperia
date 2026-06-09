@@ -20,6 +20,82 @@ static AUDIT: OnceLock<NonBlocking> = OnceLock::new();
 /// How many daily files to keep before the oldest is pruned.
 const KEEP_DAYS: usize = 14;
 
+fn log_dir() -> std::path::PathBuf {
+    let home = std::env::var("USERPROFILE")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok())
+        .unwrap_or_else(|| ".".into());
+    std::path::PathBuf::from(home).join(".hyperia").join("logs")
+}
+
+/// Search the audit log, newest-first. All filters are AND-combined; identity
+/// and path match as case-insensitive substrings. Reads across daily files.
+pub fn search(
+    identity: Option<&str>,
+    path_q: Option<&str>,
+    status: Option<u16>,
+    since_ms: Option<u64>,
+    limit: usize,
+) -> Vec<serde_json::Value> {
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(log_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map_or(false, |n| n.starts_with("audit.") && n.ends_with(".jsonl"))
+        })
+        .collect();
+    // YYYY-MM-DD sorts lexically; reverse → newest day first.
+    files.sort();
+    files.reverse();
+
+    let id_lc = identity.map(|s| s.to_lowercase());
+    let path_lc = path_q.map(|s| s.to_lowercase());
+    let mut out = Vec::new();
+    for f in files {
+        if out.len() >= limit {
+            break;
+        }
+        let Ok(content) = std::fs::read_to_string(&f) else {
+            continue;
+        };
+        // Lines are appended chronologically; reverse for newest-first.
+        for line in content.lines().rev() {
+            if out.len() >= limit {
+                break;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if let Some(q) = &id_lc {
+                if !v["identity"].as_str().unwrap_or("").to_lowercase().contains(q) {
+                    continue;
+                }
+            }
+            if let Some(q) = &path_lc {
+                if !v["path"].as_str().unwrap_or("").to_lowercase().contains(q) {
+                    continue;
+                }
+            }
+            if let Some(s) = status {
+                if v["status"].as_u64().unwrap_or(0) as u16 != s {
+                    continue;
+                }
+            }
+            if let Some(since) = since_ms {
+                if v["ts"].as_u64().unwrap_or(0) < since {
+                    continue;
+                }
+            }
+            out.push(v);
+        }
+    }
+    out
+}
+
 /// Initialise the audit writer. Call once at startup with the logs dir.
 pub fn init(log_dir: &Path) {
     let appender = tracing_appender::rolling::Builder::new()

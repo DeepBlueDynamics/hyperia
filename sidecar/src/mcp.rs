@@ -26,6 +26,18 @@ fn forwarded_auth(ctx: &RequestContext<RoleServer>) -> Option<String> {
 // -- Tool request schemas --
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct AuditSearchRequest {
+    /// Filter by identity (case-insensitive substring), e.g. "Claude" or a pane prefix.
+    pub identity: Option<String>,
+    /// Filter by request path substring, e.g. "/api/pane" or "/api/notes".
+    pub path: Option<String>,
+    /// Filter by exact HTTP status (200 allow, 202 consent, 401 soft-wall, 403 denied).
+    pub status: Option<u16>,
+    /// Max rows to return (newest first, default 100).
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct KeysRequest {
     /// Keystrokes to type into the terminal. Use \n for Enter, \t for Tab, \x03 for Ctrl-C (interrupt).
     pub keys: String,
@@ -1095,6 +1107,33 @@ impl HyperiaMcp {
     async fn sidecar_logs(&self) -> Result<CallToolResult, ErrorData> {
         let text = self.get("/api/logs").await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(description = "Search the Hyperia audit log — who did what, when, and the decision. Every gated/identified call is recorded {ts, identity, action (method+path), status}. Filter by identity (substring), path (substring), status code, and limit. Read-only.")]
+    async fn audit_search(
+        &self,
+        Parameters(req): Parameters<AuditSearchRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut q: Vec<String> = Vec::new();
+        if let Some(i) = &req.identity {
+            q.push(format!("identity={}", urlencoding::encode(i)));
+        }
+        if let Some(p) = &req.path {
+            q.push(format!("path={}", urlencoding::encode(p)));
+        }
+        if let Some(s) = req.status {
+            q.push(format!("status={s}"));
+        }
+        if let Some(l) = req.limit {
+            q.push(format!("limit={l}"));
+        }
+        let path = if q.is_empty() {
+            "/api/audit/search".to_string()
+        } else {
+            format!("/api/audit/search?{}", q.join("&"))
+        };
+        let resp = self.get(&path).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
     #[tool(description = "Get the current Hyperia version. Returns the sidecar version and the Electron app version.")]

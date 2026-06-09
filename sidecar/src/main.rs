@@ -987,6 +987,24 @@ async fn get_perm_state(State(state): State<AppState>) -> Json<serde_json::Value
     Json(state.bridge.perms().snapshot().await)
 }
 
+/// Search the audit log (read-only). Filters: identity, path (substrings),
+/// status, since_ms, limit.
+async fn get_audit_search(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let identity = params.get("identity").map(|s| s.as_str());
+    let path_q = params.get("path").map(|s| s.as_str());
+    let status = params.get("status").and_then(|s| s.parse::<u16>().ok());
+    let since = params.get("since_ms").and_then(|s| s.parse::<u64>().ok());
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(100)
+        .min(2000);
+    let results = audit::search(identity, path_q, status, since, limit);
+    Json(serde_json::json!({ "count": results.len(), "results": results }))
+}
+
 /// Mint/return the access token for a pane. The pane menu copies this and the
 /// human hands it to an external agent (→ MCP Authorization header).
 async fn get_perm_token(
@@ -1965,6 +1983,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/perms/request", axum::routing::post(post_perm_request))
         .route("/api/perms/respond", axum::routing::post(post_perm_respond))
         .route("/api/perms/state", axum::routing::get(get_perm_state))
+        .route("/api/audit/search", axum::routing::get(get_audit_search))
         .route("/api/perms/check", axum::routing::post(post_perm_check))
         .route("/api/perms/token", axum::routing::get(get_perm_token))
         .route("/api/perms/enforce", axum::routing::post(post_perm_enforce))
