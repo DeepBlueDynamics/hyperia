@@ -2,14 +2,23 @@ import React from 'react';
 
 import {subscribeToasts, clearToast, type ToastRequest} from '../permissions-bus';
 
-// action → friendly surface name for the prompt text.
-const SURFACE: Record<string, string> = {
-  create_pane: 'a new pane',
-  create_tab: 'a new tab',
-  create_window: 'a new window',
-  create_web: 'a web pane',
-  create_sticky: 'a sticky note'
+// action → full verb phrase for the prompt ("wants to <phrase>").
+const CREATE_SURFACE: Record<string, string> = {
+  create_pane: 'open a new pane',
+  create_tab: 'open a new tab',
+  create_window: 'open a new window',
+  create_web: 'open a web pane',
+  create_sticky: 'create a sticky note'
 };
+const CAP_PHRASE: Record<string, string> = {
+  'cap:files': 'edit files on disk',
+  'cap:settings': 'change Hyperia settings',
+  'cap:web_eval': 'run JavaScript in a web pane',
+  'cap:manage': 'close / manage panes & tabs'
+};
+function actionPhrase(action: string): string {
+  return CREATE_SURFACE[action] || CAP_PHRASE[action] || 'perform an action';
+}
 
 function respond(id: string, body: Record<string, unknown>): void {
   const port = (process.env.HYPERIA_PORT as string) || '9800';
@@ -85,7 +94,7 @@ export default function AgentToast(): React.ReactElement | null {
             <span style={{fontSize: '15px'}}>🤖</span>
             <span>
               <b>{r.requester}</b>
-              <span style={{color: 'var(--text-secondary, #9a9aa2)'}}> wants to open {SURFACE[r.action] || 'something'}.</span>
+              <span style={{color: 'var(--text-secondary, #9a9aa2)'}}> wants to {actionPhrase(r.action)}.</span>
             </span>
           </div>
           <div style={{display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap'}}>

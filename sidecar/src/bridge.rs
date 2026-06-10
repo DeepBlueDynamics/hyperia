@@ -246,6 +246,36 @@ impl Bridge {
         }
     }
 
+    /// Decide whether `id` may use a named capability (files / settings /
+    /// web_eval / manage / ...). Mirrors authorize_create: system bypasses,
+    /// anonymous is soft-walled, a held capability allows, a recent denial
+    /// reports back, otherwise NeedConsent.
+    pub async fn authorize_capability(
+        &self,
+        id: &crate::identity::CallerIdentity,
+        cap: &str,
+    ) -> crate::perms::AuthDecision {
+        use crate::identity::CallerIdentity;
+        use crate::perms::AuthDecision;
+        if !self.inner.perms.enforced() {
+            return AuthDecision::Allow;
+        }
+        match id {
+            CallerIdentity::System => AuthDecision::Allow,
+            CallerIdentity::Anonymous => AuthDecision::SoftWall,
+            _ => {
+                let label = id.label();
+                if self.inner.perms.has_cap(&label, cap).await {
+                    AuthDecision::Allow
+                } else if self.inner.perms.recently_denied(&label, &format!("cap:{cap}")).await {
+                    AuthDecision::Denied
+                } else {
+                    AuthDecision::NeedConsent
+                }
+            }
+        }
+    }
+
     /// The active pane of the focused window — context for the create toast.
     pub async fn focused_pane(&self) -> Option<String> {
         let focused = *self.inner.focused_window_id.lock().await;

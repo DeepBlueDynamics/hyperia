@@ -917,6 +917,58 @@ async fn enforce_create(
     }
 }
 
+/// Gate a named capability action (file edit / settings / web-eval / manage /
+/// …) on the caller's identity + capability grant. Mirrors enforce_create.
+async fn enforce_capability(
+    state: &AppState,
+    headers: &HeaderMap,
+    cap: &str,
+) -> Result<(), (StatusCode, String)> {
+    use identity::CallerIdentity;
+    use perms::AuthDecision;
+    let id = state.bridge.resolve_caller(bearer_token(headers).as_deref()).await;
+    match state.bridge.authorize_capability(&id, cap).await {
+        AuthDecision::Allow | AuthDecision::RefuseHome => Ok(()),
+        AuthDecision::SoftWall => Err((
+            StatusCode::UNAUTHORIZED,
+            format!("No identity. Send an Authorization token (Bearer <token>) to use the '{cap}' capability."),
+        )),
+        AuthDecision::Denied => Err((
+            StatusCode::FORBIDDEN,
+            format!("The '{cap}' capability was denied by the user. Don't retry."),
+        )),
+        AuthDecision::NeedConsent => {
+            let label = id.label();
+            if state.bridge.perms().has_pending_cap(&label, cap).await {
+                return Err((
+                    StatusCode::ACCEPTED,
+                    serde_json::json!({"ok": false, "pending": true, "message": format!("Still awaiting approval for '{cap}'.")}).to_string(),
+                ));
+            }
+            let focus = state.bridge.focused_pane().await.unwrap_or_default();
+            let requester_pane = match &id {
+                CallerIdentity::Pane { pane, .. } => pane.clone(),
+                _ => String::new(),
+            };
+            let req = state
+                .bridge
+                .perms()
+                .create_request(&label, &requester_pane, &focus, &format!("cap:{cap}"))
+                .await;
+            let _ = state
+                .bridge
+                .notify(serde_json::json!({
+                    "type": "AgentToast", "id": req.id, "requester": req.requester, "action": req.action,
+                }))
+                .await;
+            Err((
+                StatusCode::ACCEPTED,
+                serde_json::json!({"ok": false, "pending": true, "requestId": req.id, "message": format!("'{cap}' requested — awaiting your approval (toast).")}).to_string(),
+            ))
+        }
+    }
+}
+
 async fn post_perm_request(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1028,7 +1080,14 @@ async fn post_perm_check(State(state): State<AppState>, body: String) -> (Status
     (StatusCode::OK, serde_json::json!({"allowed": allowed}).to_string())
 }
 
-async fn post_close(State(state): State<AppState>, body: String) -> (StatusCode, String) {
+async fn post_close(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    if let Err(resp) = enforce_capability(&state, &headers, "manage").await {
+        return resp;
+    }
     let uid = serde_json::from_str::<serde_json::Value>(&body)
         .ok()
         .and_then(|v| v["uid"].as_str().map(|s| s.to_string()));
@@ -1277,9 +1336,14 @@ async fn post_web_pane_click(
 
 async fn post_web_pane_eval(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(addr): Query<PaneAddress>,
     body: String,
 ) -> (StatusCode, String) {
+    // Arbitrary JS in a webview — gate on "web_eval".
+    if let Err(resp) = enforce_capability(&state, &headers, "web_eval").await {
+        return resp;
+    }
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let js = parsed["js"].as_str().unwrap_or("").to_string();
     if js.is_empty() {
@@ -1607,8 +1671,17 @@ async fn post_note_schedule(
 /// Body: { path, edits: [{start_line,start_col,end_line,end_col,text}], preview? }.
 /// Reads the file → LOPT Document → applies disjoint edits back-to-front → writes
 /// atomically (temp + rename). On any validation error nothing is written.
-async fn post_edit_apply(body: String) -> (StatusCode, String) {
+async fn post_edit_apply(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
     use aegis_edit::{Document, TextEdit};
+    // Editing files on disk is one of the most powerful things an agent can do
+    // — gate it on the "files" capability.
+    if let Err(resp) = enforce_capability(&state, &headers, "files").await {
+        return resp;
+    }
     let err = |code: StatusCode, msg: String| (code, serde_json::json!({"ok": false, "error": msg}).to_string());
 
     let parsed: serde_json::Value = match serde_json::from_str(&body) {

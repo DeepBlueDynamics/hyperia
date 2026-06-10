@@ -967,8 +967,10 @@ impl HyperiaMcp {
     }
 
     #[tool(description = "Close the currently focused pane.")]
-    async fn terminal_close(&self) -> Result<CallToolResult, ErrorData> {
-        let resp = self.post_json("/api/pane/close", &serde_json::json!({})).await?;
+    async fn terminal_close(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let resp = self
+            .post_json_as("/api/pane/close", &serde_json::json!({}), forwarded_auth(&ctx).as_deref())
+            .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -1082,9 +1084,12 @@ impl HyperiaMcp {
     async fn web_pane_eval(
         &self,
         Parameters(req): Parameters<WebEvalRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let path = self.pane_path("/api/web-pane/eval", req.window, req.tab.as_deref(), req.pane.as_deref());
-        let resp = self.post_json(&path, &serde_json::json!({"js": req.js})).await?;
+        let resp = self
+            .post_json_as(&path, &serde_json::json!({"js": req.js}), forwarded_auth(&ctx).as_deref())
+            .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -1770,6 +1775,7 @@ impl HyperiaMcp {
     async fn apply_text_edits(
         &self,
         Parameters(req): Parameters<ApplyEditsRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let body = serde_json::json!({
             "path": req.path,
@@ -1782,7 +1788,7 @@ impl HyperiaMcp {
             })).collect::<Vec<_>>(),
             "preview": req.preview.unwrap_or(false),
         });
-        let resp = self.post_json("/api/edit/apply", &body).await?;
+        let resp = self.post_json_as("/api/edit/apply", &body, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 

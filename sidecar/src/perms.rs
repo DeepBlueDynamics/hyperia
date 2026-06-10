@@ -90,6 +90,10 @@ pub struct PermStore {
     denials: Mutex<HashMap<(String, String), Instant>>,
     /// Per-agent create-capability grants (capability="create", no pane scope).
     create_grants: Mutex<Vec<CreateGrant>>,
+    /// Per-agent capability grants for the non-create/non-drive gated actions:
+    /// identity label → set of capability names ("files", "settings", "web_eval",
+    /// "manage", ...). In-memory → reset on restart, like all grants.
+    cap_grants: Mutex<HashMap<String, std::collections::HashSet<String>>>,
     /// Master enforcement switch. ON by default — every boot comes up gated
     /// (home-refusal / ownership / grants / consent / soft-wall). Grants reset
     /// each start, identities persist, so agents re-earn access every session.
@@ -107,6 +111,7 @@ impl Default for PermStore {
             owners: Mutex::default(),
             denials: Mutex::default(),
             create_grants: Mutex::default(),
+            cap_grants: Mutex::default(),
             enforce: AtomicBool::new(true), // gated out of the box
             next_id: AtomicU64::default(),
         }
@@ -146,10 +151,21 @@ impl PermStore {
     ) -> Option<PermRequest> {
         let req = self.pending.lock().await.remove(id)?;
         let is_create = req.action.starts_with("create");
-        // Drive denials/grants key on the target pane; create on the sentinel.
-        let key = if is_create { CREATE_KEY.to_string() } else { req.target_pane.clone() };
+        let is_cap = req.action.starts_with("cap:");
+        // Denials/grants key: create on the sentinel, cap on its action string,
+        // drive on the target pane.
+        let key = if is_create {
+            CREATE_KEY.to_string()
+        } else if is_cap {
+            req.action.clone()
+        } else {
+            req.target_pane.clone()
+        };
         if allow {
-            if is_create {
+            if is_cap {
+                let cap = req.action.strip_prefix("cap:").unwrap_or("");
+                self.grant_cap(&req.requester, cap).await;
+            } else if is_create {
                 // For create, `scope == "once"` flags a one-shot; else duration
                 // (None == always).
                 let once = scope == "once";
@@ -192,6 +208,38 @@ impl PermStore {
             expires_at,
             once,
         });
+    }
+
+    /// Grant `agent` a named capability ("files", "settings", "web_eval", ...).
+    pub async fn grant_cap(&self, agent: &str, cap: &str) {
+        if agent.is_empty() || cap.is_empty() {
+            return;
+        }
+        self.cap_grants
+            .lock()
+            .await
+            .entry(agent.to_string())
+            .or_default()
+            .insert(cap.to_string());
+    }
+
+    /// Does `agent` hold capability `cap`?
+    pub async fn has_cap(&self, agent: &str, cap: &str) -> bool {
+        self.cap_grants
+            .lock()
+            .await
+            .get(agent)
+            .map_or(false, |s| s.contains(cap))
+    }
+
+    /// Is there already a pending capability prompt for this (requester, cap)?
+    pub async fn has_pending_cap(&self, requester: &str, cap: &str) -> bool {
+        let action = format!("cap:{cap}");
+        self.pending
+            .lock()
+            .await
+            .values()
+            .any(|r| r.requester == requester && r.action == action)
     }
 
     /// Does `agent` currently hold a create grant? Prunes expired grants and
