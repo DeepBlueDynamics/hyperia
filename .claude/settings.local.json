@@ -35,7 +35,20 @@
       "Read(//Applications/Hyperia.app/Contents/Resources/sidecar/**)",
       "Bash(pkill:*)",
       "Bash(xargs lsof -p)",
-      "Bash(log show --predicate 'process == \"\"\"\"hyperia-sidecar\"\"\"\"' --last 10m --info --debug)"
+      "Bash(log show --predicate 'process == \"\"\"\"hyperia-sidecar\"\"\"\"' --last 10m --info --debug)",
+      "mcp__hyperia__terminal_screen",
+      "mcp__hyperia__terminal_status",
+      "mcp__hyperia__tab_snapshot",
+      "mcp__hyperia__tab_image",
+      "mcp__hyperia__terminal_where_pane",
+      "mcp__hyperia__shell_state",
+      "mcp__hyperia__terminal_run",
+      "mcp__hyperia__terminal_keys",
+      "mcp__hyperia__terminal_split",
+      "mcp__hyperia__terminal_focus",
+      "mcp__hyperia__web_pane_content",
+      "mcp__hyperia__sticky_note_list",
+      "mcp__hyperia__sticky_note_read"
     ],
     "deny": [],
     "ask": []

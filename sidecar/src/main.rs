@@ -1241,8 +1241,12 @@ async fn post_open_web_pane(
 
 async fn post_web_pane_reload(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(addr): Query<PaneAddress>,
 ) -> (StatusCode, String) {
+    if let Err(resp) = enforce_capability(&state, &headers, "web_nav").await {
+        return resp;
+    }
     let uid = match state
         .bridge
         .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
@@ -1262,8 +1266,12 @@ async fn post_web_pane_reload(
 
 async fn post_web_pane_content(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(addr): Query<PaneAddress>,
 ) -> (StatusCode, String) {
+    if let Err(resp) = enforce_capability(&state, &headers, "web_nav").await {
+        return resp;
+    }
     let uid = match state
         .bridge
         .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
@@ -1300,9 +1308,13 @@ async fn post_web_pane_content(
 
 async fn post_web_pane_click(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(addr): Query<PaneAddress>,
     body: String,
 ) -> (StatusCode, String) {
+    if let Err(resp) = enforce_capability(&state, &headers, "web_nav").await {
+        return resp;
+    }
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let text = parsed["text"].as_str().map(|s| s.to_string());
     let selector = parsed["selector"].as_str().map(|s| s.to_string());
@@ -1366,9 +1378,13 @@ async fn post_web_pane_eval(
 
 async fn post_web_pane_mouse(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(addr): Query<PaneAddress>,
     body: String,
 ) -> (StatusCode, String) {
+    if let Err(resp) = enforce_capability(&state, &headers, "web_nav").await {
+        return resp;
+    }
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let x = parsed["x"].as_f64().unwrap_or(0.0);
     let y = parsed["y"].as_f64().unwrap_or(0.0);

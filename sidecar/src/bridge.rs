@@ -460,6 +460,29 @@ impl Bridge {
         let focused_window_id = *self.inner.focused_window_id.lock().await;
         let sessions = self.inner.sessions.lock().await;
 
+        // A paneId (session uid) is globally unique — it IS the sessions map
+        // key — so an exact match is the canonical, layout-stable handle and
+        // must resolve regardless of which window/tab is active. Short-circuit
+        // before the window→tab→pane narrowing below: without this, the lookup
+        // is scoped to the default (active) tab, so a correct full paneId for a
+        // pane in a *different* tab fails with "No pane at that address". (#78)
+        if let Some(p) = pane {
+            if sessions.contains_key(p) {
+                return Some(p.to_string());
+            }
+            // A uid PREFIX (the pane-band copy emits an 8-char prefix) is just
+            // as safe to resolve globally when it matches exactly one uid. If
+            // ambiguous, fall through to the tab-scoped matching below.
+            if p.len() >= 4 {
+                let mut hits = sessions.keys().filter(|uid| uid.starts_with(p));
+                if let Some(first) = hits.next() {
+                    if hits.next().is_none() {
+                        return Some(first.clone());
+                    }
+                }
+            }
+        }
+
         let mut windows_map: std::collections::BTreeMap<u32, Vec<(&String, &SessionInfo)>> =
             std::collections::BTreeMap::new();
         for (uid, info) in sessions.iter() {

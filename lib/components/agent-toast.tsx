@@ -14,6 +14,7 @@ const CAP_PHRASE: Record<string, string> = {
   'cap:files': 'edit files on disk',
   'cap:settings': 'change Hyperia settings',
   'cap:web_eval': 'run JavaScript in a web pane',
+  'cap:web_nav': 'read & interact with web panes',
   'cap:manage': 'close / manage panes & tabs'
 };
 function actionPhrase(action: string): string {

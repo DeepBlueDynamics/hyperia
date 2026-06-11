@@ -140,6 +140,9 @@ export default class Session extends EventEmitter {
     // Mint this pane's identity token and inject it so an in-pane agent can
     // present it to the sidecar (via its MCP Authorization header).
     this.agentToken = `hyp_pane_${randomBytes(16).toString('hex')}`;
+    // Connection contract for tools/orchestrators launched from this pane (e.g.
+    // nemesis8 wiring a container agent): the MCP endpoint and this pane's uid.
+    const hyperiaPort = process.env.HYPERIA_PORT || '9800';
 
     const cleanEnv =
       process.env['APPIMAGE'] && process.env['APPDIR'] ? shellEnv.sync(_shell || defaultShell) : process.env;
@@ -151,6 +154,8 @@ export default class Session extends EventEmitter {
       TERM_PROGRAM: productName,
       TERM_PROGRAM_VERSION: version,
       HYPERIA_AGENT_TOKEN: this.agentToken,
+      HYPERIA_MCP_URL: `http://localhost:${hyperiaPort}/mcp`,
+      HYPERIA_PANE: uid,
       ...envFromConfig
     };
     // path to AppImage mount point is added to PATH environment variable automatically

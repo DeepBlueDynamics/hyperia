@@ -1050,9 +1050,10 @@ impl HyperiaMcp {
     async fn terminal_web_reload(
         &self,
         Parameters(req): Parameters<WebReloadRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let path = self.pane_path("/api/web-pane/reload", req.window, req.tab.as_deref(), req.pane.as_deref());
-        let resp = self.post_text(&path, "").await?;
+        let resp = self.post_text_as(&path, "", None, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -1060,13 +1061,14 @@ impl HyperiaMcp {
     async fn terminal_web_click(
         &self,
         Parameters(req): Parameters<WebClickRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let path = self.pane_path("/api/web-pane/click", req.window, req.tab.as_deref(), req.pane.as_deref());
         let body = serde_json::json!({
             "text": req.text,
             "selector": req.selector,
         });
-        let resp = self.post_json(&path, &body).await?;
+        let resp = self.post_json_as(&path, &body, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -1074,9 +1076,10 @@ impl HyperiaMcp {
     async fn web_pane_content(
         &self,
         Parameters(req): Parameters<WebReloadRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let path = self.pane_path("/api/web-pane/content", req.window, req.tab.as_deref(), req.pane.as_deref());
-        let resp = self.post_text(&path, "").await?;
+        let resp = self.post_text_as(&path, "", None, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -1097,6 +1100,7 @@ impl HyperiaMcp {
     async fn web_pane_mouse(
         &self,
         Parameters(req): Parameters<WebMouseRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let path = self.pane_path("/api/web-pane/mouse", req.window, req.tab.as_deref(), req.pane.as_deref());
         let body = serde_json::json!({
@@ -1104,7 +1108,7 @@ impl HyperiaMcp {
             "y": req.y,
             "action": req.action.unwrap_or_else(|| "move".into()),
         });
-        let resp = self.post_json(&path, &body).await?;
+        let resp = self.post_json_as(&path, &body, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 

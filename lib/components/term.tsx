@@ -1092,8 +1092,13 @@ export default class Term extends React.PureComponent<
       this.navigateForward();
       return false;
     }
-    // Intercept Ctrl+O (or Ctrl+Shift+O) to toggle directory navigator
-    if (e.ctrlKey && e.key.toUpperCase() === 'O') {
+    // Intercept Ctrl+Shift+O to toggle the directory navigator. Bare Ctrl+O is
+    // deliberately left alone — it collides with Claude Code (and nano, bash
+    // operate-and-get-next, etc.) which bind it, and our screen-scrape program
+    // detection (detectInteractiveProgram) is too flaky to reliably know when
+    // an inline-rendering agent like Claude Code is focused, so it would steal
+    // the key whenever the heuristic momentarily lost the program.
+    if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'O') {
       if (!this.state.activeProgram) {
         e.preventDefault();
         this.toggleDirNavigator();
@@ -2554,7 +2559,7 @@ export default class Term extends React.PureComponent<
                   title={
                     this.state.activeProgram
                       ? `Directory browsing locked while ${this.state.activeProgram} is running`
-                      : 'Click to browse directories (Ctrl+O)'
+                      : 'Click to browse directories (Ctrl+Shift+O)'
                   }
                 >
                   <i
