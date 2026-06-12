@@ -1,6 +1,6 @@
 {
   "name": "hyperia",
-  "version": "0.10.34",
+  "version": "0.11.0",
   "repository": "deepbluedynamics/hyperia",
   "scripts": {
     "start": "concurrently -n \"Webpack,TypeScript,App\" -c \"cyan.bold,blue.bold,green.bold\" \"webpack -w\" \"tsc --build -v --pretty --watch --preserveWatchOutput\" \"cross-env ELECTRONMON_LOGLEVEL=error electronmon target\" -k",
@@ -18,7 +18,7 @@
     "clean": "node ./bin/rimraf-standalone.js node_modules && node ./bin/rimraf-standalone.js ./app/node_modules && node ./bin/rimraf-standalone.js ./app/renderer",
     "generate-schema": "typescript-json-schema ./typings/config.d.ts rawConfig -o ./app/config/schema.json --required"
   },
-  "license": "MIT",
+  "license": "BSD-2-Clause",
   "author": {
     "name": "Deep Blue Dynamics",
     "email": "kord@deepbluedynamics.com"

@@ -140,6 +140,6 @@ Electron (UI + PTY sessions)
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+BSD 2-Clause — see [LICENSE](LICENSE).
 
 Based on [Hyper](https://github.com/vercel/hyper) by Vercel.
