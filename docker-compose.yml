@@ -1,3 +1,11 @@
+# Hyperia server stack: sidecar (brain) + ferricula (memory tier).
+# Spec: deploy/hyperia-docker-deployment-spec.md — Topology A (local drop-in).
+#
+# TRANSITION NOTE: while the desktop app still spawns its own embedded sidecar
+# (spec §11.2 — no "use external sidecar" setting yet), starting this stack on
+# a workstation with Hyperia open will fail to bind 127.0.0.1:9800. Either quit
+# the desktop app first, or wait for the embedded-spawn gate before adopting
+# the containerized sidecar on a dev box.
 services:
   ferricula:
     # Build from the sibling ferricula checkout. Once ferricula is published
@@ -6,9 +14,13 @@ services:
       context: ../ferricula
       dockerfile: Dockerfile
     container_name: hyperia-ferricula
+    expose:
+      - "8765" # REST — internal only; the sidecar reaches it by Compose DNS
     ports:
-      - "8765:8765" # REST API — what hyperia sidecar talks to
-      - "8766:8766" # MCP server — optional, for external agents
+      - "127.0.0.1:8766:8766" # MCP — optional, external agents; drop if unused
+      # Transition only: the EMBEDDED (host-spawned) sidecar needs REST on the
+      # host. Uncomment until the desktop app can use the external sidecar.
+      # - "127.0.0.1:8765:8765"
     volumes:
       - ferricula-data:/data
     environment:
@@ -20,6 +32,36 @@ services:
       timeout: 3s
       retries: 3
 
+  sidecar:
+    build:
+      context: .
+      dockerfile: deploy/sidecar.Dockerfile
+    # Once published: image: deepbluedynamics/hyperia-sidecar:0.11.0
+    container_name: hyperia-sidecar
+    depends_on:
+      ferricula:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:9800:9800" # Topology A: local Electron connects here unchanged.
+                              # Topology B/C: "9800:9800" ONLY behind an external
+                              # TLS+auth proxy — the sidecar does NOT protect
+                              # itself off-loopback (spec Draft 2 §7).
+    environment:
+      - HYPERIA_BIND=0.0.0.0
+      - FERRICULA_URL=http://ferricula:8765
+      - RUST_LOG=info
+      # Secret comes from .env (gitignored) — see .env.example. Never bake
+      # it into the image.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # NOTE: do NOT set HYPERIA_SYSTEM_TOKEN here — it is the consent-BYPASS
+      # system identity, not an auth lock (spec Draft 2 §4.3/§6). Electron
+      # mints its own over loopback; the container needs none.
+    volumes:
+      - hyperia-state:/home/app/.hyperia
+    restart: unless-stopped
+
 volumes:
   ferricula-data:
     name: hyperia-ferricula-data
+  hyperia-state:
+    name: hyperia-sidecar-state

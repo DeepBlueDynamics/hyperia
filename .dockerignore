@@ -1,0 +1,11 @@
+# Keep the repo-root build context lean (deploy/sidecar.Dockerfile copies only
+# the four crates it lists; everything else is dead weight or secrets).
+.git
+node_modules
+**/node_modules
+**/target
+dist
+out
+release
+*.zip
+.env

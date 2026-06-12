@@ -50,3 +50,4 @@ issue91.txt
 /signed_build.log
 /tsc_check.log
 /certificate-next-steps-*.md
+.env
