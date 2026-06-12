@@ -27,6 +27,13 @@ type rootConfigOptions = {
   autoUpdatePlugins: boolean | string;
   /** if `true` hyper will be set as the default protocol client for SSH */
   defaultSSHApp: boolean;
+  /**
+   * if `true`, Hyperia does NOT spawn its own sidecar — it connects the bridge
+   * to an externally-managed sidecar on port 9800 (e.g. the Docker container in
+   * `deploy/`). Also settable via the `HYPERIA_USE_EXTERNAL_SIDECAR` env var.
+   * See `deploy/hyperia-docker-deployment-spec.md` §11.2.
+   */
+  useExternalSidecar?: boolean;
   /** if `true` hyper will not check for updates */
   disableAutoUpdates: boolean;
   /** choose either `'stable'` for receiving highly polished, or `'canary'` for less polished but more frequent updates */

@@ -220,7 +220,33 @@ function killExistingSidecars(): Promise<void> {
   });
 }
 
+// Topology A (container deploy): when "use external sidecar" is set, Hyperia
+// does NOT spawn or kill its own sidecar. An externally-managed sidecar (e.g.
+// the Docker container in deploy/) owns port 9800; the bridge just connects to
+// it. Toggle via the HYPERIA_USE_EXTERNAL_SIDECAR env var or the
+// `useExternalSidecar` config flag. See deploy/hyperia-docker-deployment-spec.md §11.2.
+function useExternalSidecar(): boolean {
+  const env = process.env.HYPERIA_USE_EXTERNAL_SIDECAR;
+  if (env && /^(1|true|yes|on)$/i.test(env.trim())) {
+    return true;
+  }
+  try {
+    return config.getConfig().useExternalSidecar === true;
+  } catch {
+    return false;
+  }
+}
+
 async function spawnSidecar() {
+  // External-sidecar mode: do not spawn or kill anything — leave port 9800 to
+  // the externally-managed sidecar. startBridge() still runs after this resolves
+  // and connects to it (it auto-reconnects until the container is up).
+  if (useExternalSidecar()) {
+    console.log(
+      `[sidecar] External sidecar mode — not spawning; bridge will connect to the externally-managed sidecar on port ${SIDECAR_PORT}`
+    );
+    return;
+  }
   const sidecarPath = findSidecarBinary();
   if (!sidecarPath) return;
 
