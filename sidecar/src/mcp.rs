@@ -1367,7 +1367,9 @@ impl HyperiaMcp {
         Parameters(req): Parameters<SettingsGetRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let cfg = self.read_config().await?;
-        let value = walk_path(&cfg, &req.path);
+        // Mask secrets (provider API keys, tokens) before returning — a config
+        // read must never disclose credentials to a caller. (#93)
+        let value = walk_path(&redact_secrets(&cfg), &req.path);
         let body = serde_json::to_string_pretty(&value)
             .unwrap_or_else(|_| "null".into());
         Ok(CallToolResult::success(vec![Content::text(body)]))
@@ -2141,6 +2143,48 @@ fn unescape_keys(raw: &str) -> String {
 /// Walk a dot-separated path into a JSON value, returning a clone of the
 /// matching subtree (or Null if the path doesn't exist). Empty path = the
 /// whole document.
+/// Recursively mask secret-looking values so a config read (settings_get) never
+/// hands an API key or token to ANY caller. Matches by secret-ish key NAME or by
+/// known secret value PREFIX (sk-, hyp_, ghp_/gho_/ghs_, AIza, xox, "Bearer ").
+/// Applied to the whole config BEFORE walk_path so even a path-targeted read like
+/// `config.providers.openai.token` resolves to the redacted value. (#93)
+fn redact_secrets(value: &serde_json::Value) -> serde_json::Value {
+    fn secret_key(k: &str) -> bool {
+        let k = k.to_ascii_lowercase();
+        k.contains("token") || k.contains("secret") || k.contains("password") || k.contains("apikey") || k.contains("api_key")
+    }
+    fn secret_val(v: &str) -> bool {
+        let t = v.trim();
+        t.starts_with("sk-")
+            || t.starts_with("hyp_")
+            || t.starts_with("ghp_")
+            || t.starts_with("gho_")
+            || t.starts_with("ghs_")
+            || t.starts_with("AIza")
+            || t.starts_with("xox")
+            || t.starts_with("Bearer ")
+    }
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::with_capacity(map.len());
+            for (k, v) in map {
+                match v {
+                    serde_json::Value::String(s) if !s.is_empty() && (secret_key(k) || secret_val(s)) => {
+                        out.insert(k.clone(), serde_json::Value::String("***REDACTED***".into()));
+                    }
+                    _ => {
+                        out.insert(k.clone(), redact_secrets(v));
+                    }
+                }
+            }
+            serde_json::Value::Object(out)
+        }
+        serde_json::Value::Array(arr) => serde_json::Value::Array(arr.iter().map(redact_secrets).collect()),
+        serde_json::Value::String(s) if secret_val(s) => serde_json::Value::String("***REDACTED***".into()),
+        other => other.clone(),
+    }
+}
+
 fn walk_path(value: &serde_json::Value, path: &str) -> serde_json::Value {
     if path.trim().is_empty() {
         return value.clone();

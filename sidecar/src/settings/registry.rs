@@ -13,7 +13,7 @@ impl SettingsRegistry {
         let defs: Vec<serde_json::Value> = serde_json::from_value(serde_json::json!([
             {
                 "name": "read_config",
-                "description": "Read the current Hyperia configuration from disk. Returns the JSON contents of ~/.hyperia/hyperia.json, with the agentToken redacted for safety.",
+                "description": "Read the current Hyperia configuration from disk. Returns the JSON contents of ~/.hyperia/hyperia.json with ALL secrets (API keys, tokens, passwords) redacted as ***REDACTED*** for safety.",
                 "input_schema": {
                     "type": "object",
                     "properties": {}
