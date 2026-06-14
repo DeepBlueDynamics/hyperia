@@ -201,9 +201,13 @@ async fn get_mcp_python() -> impl axum::response::IntoResponse {
     )
 }
 
-async fn get_logs(State(state): State<AppState>) -> Json<Vec<String>> {
+async fn get_logs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<String>>, (StatusCode, String)> {
+    enforce_identified(&state, &headers).await?;
     let lines = state.log_buffer.lock().unwrap();
-    Json(lines.iter().cloned().collect())
+    Ok(Json(lines.iter().cloned().collect()))
 }
 
 #[derive(serde::Deserialize)]
@@ -919,6 +923,23 @@ async fn enforce_create(
 
 /// Gate a named capability action (file edit / settings / web-eval / manage /
 /// …) on the caller's identity + capability grant. Mirrors enforce_create.
+/// Soft-wall anonymous callers from sensitive reads (logs, audit). Any
+/// non-anonymous identity (system/agent/pane) passes. Respects the global
+/// enforcement toggle — when enforcement is off, reads are open. (#96)
+async fn enforce_identified(state: &AppState, headers: &HeaderMap) -> Result<(), (StatusCode, String)> {
+    if !state.bridge.perms().enforced() {
+        return Ok(());
+    }
+    let id = state.bridge.resolve_caller(bearer_token(headers).as_deref()).await;
+    if id.is_anonymous() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "This read requires identity. Send 'Authorization: Bearer <token>' — your pane token is in the HYPERIA_AGENT_TOKEN env var.".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 async fn enforce_capability(
     state: &AppState,
     headers: &HeaderMap,
@@ -1042,8 +1063,11 @@ async fn get_perm_state(State(state): State<AppState>) -> Json<serde_json::Value
 /// Search the audit log (read-only). Filters: identity, path (substrings),
 /// status, since_ms, limit.
 async fn get_audit_search(
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<std::collections::HashMap<String, String>>,
-) -> Json<serde_json::Value> {
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    enforce_identified(&state, &headers).await?;
     let identity = params.get("identity").map(|s| s.as_str());
     let path_q = params.get("path").map(|s| s.as_str());
     let status = params.get("status").and_then(|s| s.parse::<u16>().ok());
@@ -1054,7 +1078,7 @@ async fn get_audit_search(
         .unwrap_or(100)
         .min(2000);
     let results = audit::search(identity, path_q, status, since, limit);
-    Json(serde_json::json!({ "count": results.len(), "results": results }))
+    Ok(Json(serde_json::json!({ "count": results.len(), "results": results })))
 }
 
 /// Mint/return the access token for a pane. The pane menu copies this and the

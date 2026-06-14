@@ -1113,8 +1113,8 @@ impl HyperiaMcp {
     }
 
     #[tool(description = "Read sidecar logs.")]
-    async fn sidecar_logs(&self) -> Result<CallToolResult, ErrorData> {
-        let text = self.get("/api/logs").await?;
+    async fn sidecar_logs(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let text = self.get_as("/api/logs", forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -1122,6 +1122,7 @@ impl HyperiaMcp {
     async fn audit_search(
         &self,
         Parameters(req): Parameters<AuditSearchRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let mut q: Vec<String> = Vec::new();
         if let Some(i) = &req.identity {
@@ -1141,7 +1142,7 @@ impl HyperiaMcp {
         } else {
             format!("/api/audit/search?{}", q.join("&"))
         };
-        let resp = self.get(&path).await?;
+        let resp = self.get_as(&path, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -2332,6 +2333,22 @@ impl HyperiaMcp {
             .await
             .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
         resp.text().await
+            .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
+    }
+
+    /// GET that forwards a caller Authorization header so gated read endpoints
+    /// (enforce_identified) see the real identity instead of anonymous. (#96)
+    async fn get_as(&self, path: &str, auth: Option<&str>) -> Result<String, ErrorData> {
+        let mut rb = self.client.get(format!("{}{}", self.base_url, path));
+        if let Some(a) = auth {
+            rb = rb.header(reqwest::header::AUTHORIZATION, a);
+        }
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+        resp.text()
+            .await
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
     }
 
