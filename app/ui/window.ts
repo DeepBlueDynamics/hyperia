@@ -1,8 +1,8 @@
 import {existsSync, readFileSync, writeFileSync} from 'fs';
-import {isAbsolute, normalize, sep} from 'path';
+import {dirname, isAbsolute, join, normalize, sep} from 'path';
 import {URL, fileURLToPath} from 'url';
 
-import {app, BrowserWindow, shell, Menu, dialog, ipcMain} from 'electron';
+import {app, BrowserWindow, shell, Menu, dialog, ipcMain, nativeImage} from 'electron';
 import type {BrowserWindowConstructorOptions} from 'electron';
 
 import {enable as remoteEnable} from '@electron/remote/main';
@@ -60,7 +60,11 @@ function chromeHeaderSet() {
   const major = full.split('.')[0];
   const isMac = process.platform === 'darwin';
   const isLinux = process.platform === 'linux';
-  const uaPlat = isMac ? 'Macintosh; Intel Mac OS X 10_15_7' : isLinux ? 'X11; Linux x86_64' : 'Windows NT 10.0; Win64; x64';
+  const uaPlat = isMac
+    ? 'Macintosh; Intel Mac OS X 10_15_7'
+    : isLinux
+      ? 'X11; Linux x86_64'
+      : 'Windows NT 10.0; Win64; x64';
   const chPlat = isMac ? '"macOS"' : isLinux ? '"Linux"' : '"Windows"';
   const platVersion = isMac ? '"13.0.0"' : isLinux ? '"6.0.0"' : '"10.0.0"';
   return {
@@ -74,6 +78,11 @@ function chromeHeaderSet() {
 function configureWebPaneSession(sess: Electron.Session) {
   if (!sess || configuredWebPaneSessions.has(sess)) return;
   configuredWebPaneSessions.add(sess);
+  try {
+    sess.setSpellCheckerEnabled(true);
+  } catch (err) {
+    console.error('[web-pane] failed to enable spellchecker:', err);
+  }
   const {ua, brands, fullVersionList, platform, platformVersion} = chromeHeaderSet();
   sess.webRequest.onBeforeSendHeaders((details, callback) => {
     const h = details.requestHeaders;
@@ -120,10 +129,33 @@ function fallbackShell(): string {
   return '/bin/sh';
 }
 
-// (makeLetterIcon removed — it built a NativeImage from raw SVG bytes, which
-// Electron's nativeImage can't decode; createFromBuffer handles PNG/JPEG only.
-// It returned an EMPTY image, so the per-session setIcon below WIPED the window
-// icon and Windows fell back to electron.exe's default atom in dev.)
+// Decode the app icon into a NativeImage for the window/taskbar. Passing the raw
+// .ico STRING path to BrowserWindow.icon is unreliable on Windows — and from
+// inside app.asar it doesn't resolve at all — which is why the window kept
+// falling back to the default Electron atom. nativeImage decodes it in-process;
+// if the .ico won't load we fall back to the 256px PNG read straight through fs
+// (fs reads inside asar). Cached after first successful build.
+let cachedWindowIcon: Electron.NativeImage | undefined | null = null;
+function windowIcon(): Electron.NativeImage | string {
+  if (cachedWindowIcon === null) {
+    cachedWindowIcon = undefined;
+    try {
+      const img = nativeImage.createFromPath(icon);
+      if (!img.isEmpty()) cachedWindowIcon = img;
+    } catch {
+      /* fall through to PNG */
+    }
+    if (!cachedWindowIcon) {
+      try {
+        const img = nativeImage.createFromBuffer(readFileSync(join(dirname(icon), 'icon.png')));
+        if (!img.isEmpty()) cachedWindowIcon = img;
+      } catch {
+        /* fall through to string path */
+      }
+    }
+  }
+  return cachedWindowIcon ?? icon;
+}
 
 export function newWindow(
   options_: BrowserWindowConstructorOptions,
@@ -152,7 +184,7 @@ export function newWindow(
           }
         }
       : {}),
-    icon,
+    icon: windowIcon(),
     show: Boolean(process.env.HYPER_DEBUG || process.env.HYPERTERM_DEBUG || isDev),
     acceptFirstMouse: true,
     webPreferences: {
@@ -724,14 +756,63 @@ export function newWindow(
     // directly. (The renderer tried to reach it via @electron/remote's
     // webContents.fromId, which silently returned nothing — so there was no
     // in-page menu at all.) inspectElement docks DevTools at the bottom.
-    webviewContents.on('context-menu', (_e: any, params: any) => {
-      const wc: any = webviewContents;
-      const items: Electron.MenuItemConstructorOptions[] = [
-        {label: 'Back', enabled: wc.canGoBack(), click: () => wc.goBack()},
-        {label: 'Forward', enabled: wc.canGoForward(), click: () => wc.goForward()},
-        {label: 'Reload', click: () => wc.reload()},
+    webviewContents.on('context-menu', (_e: any, params: Electron.ContextMenuParams) => {
+      const guestWc: Electron.WebContents = webviewContents as any;
+      const items: Electron.MenuItemConstructorOptions[] = [];
+      if (params.misspelledWord) {
+        if (params.dictionarySuggestions && params.dictionarySuggestions.length > 0) {
+          for (const suggestion of params.dictionarySuggestions) {
+            items.push({
+              label: suggestion,
+              click: () => {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+                (guestWc as any).replaceMisspelledWord(suggestion);
+              }
+            });
+          }
+        } else {
+          items.push({
+            label: 'No spelling suggestions',
+            enabled: false
+          });
+        }
+        items.push(
+          {
+            label: 'Add to Dictionary',
+            click: () => {
+              try {
+                guestWc.session.addWordToSpellCheckerDictionary(params.misspelledWord);
+              } catch (err) {
+                console.error('[web-pane] failed to add word to dictionary:', err);
+              }
+            }
+          },
+          {type: 'separator'}
+        );
+      }
+      items.push(
+        {
+          label: 'Back',
+          enabled: guestWc.canGoBack(),
+          click: () => {
+            guestWc.goBack();
+          }
+        },
+        {
+          label: 'Forward',
+          enabled: guestWc.canGoForward(),
+          click: () => {
+            guestWc.goForward();
+          }
+        },
+        {
+          label: 'Reload',
+          click: () => {
+            guestWc.reload();
+          }
+        },
         {type: 'separator'}
-      ];
+      );
       if (params.linkURL) {
         items.push(
           {label: 'Copy Link', click: () => require('electron').clipboard.writeText(params.linkURL)},
@@ -767,17 +848,17 @@ export function newWindow(
               // {mode:'bottom'} silently no-ops. Detach opens a real DevTools
               // window for the guest, which works. Open first, then inspect the
               // clicked element once DevTools is up.
-              if (!wc.isDevToolsOpened()) {
-                wc.openDevTools({mode: 'detach'});
-                wc.once('devtools-opened', () => {
+              if (!guestWc.isDevToolsOpened()) {
+                guestWc.openDevTools({mode: 'detach'});
+                guestWc.once('devtools-opened', () => {
                   try {
-                    wc.inspectElement(params.x, params.y);
+                    guestWc.inspectElement(params.x, params.y);
                   } catch (err) {
                     console.error('inspectElement failed:', err);
                   }
                 });
               } else {
-                wc.inspectElement(params.x, params.y);
+                guestWc.inspectElement(params.x, params.y);
               }
             } catch (err) {
               console.error('Inspect failed:', err);
