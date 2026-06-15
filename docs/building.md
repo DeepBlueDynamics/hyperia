@@ -20,6 +20,16 @@ For the end-to-end release flow (CI + signing + GitHub release + auto-update cha
 The build replaces `sidecar/target/release/hyperia-sidecar.exe`. If Hyperia is running it holds
 that file open and the Rust build will fail with "Access is denied." Close Hyperia first.
 
+**Closing the window is not enough in dev.** A `yarn start` session runs an `electronmon`
+watcher that **respawns `electron` every time you kill it** — and the respawned app re-locks
+both `hyperia-sidecar.exe` and `node-pty`'s native `.node` files. Kill the whole chain, not
+just the windows. On Windows:
+
+```bash
+# kill every node/electron/cmd process whose command line mentions this repo, plus the sidecar
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { (\$_.Name -eq 'hyperia-sidecar.exe') -or ((\$_.Name -in 'node.exe','electron.exe','cmd.exe') -and \$_.CommandLine -like '*hyperia*') } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }"
+```
+
 ## Step 1 — Bump the Version
 
 Before every release build, increment the patch version in **all three** files:
@@ -77,6 +87,42 @@ cd sidecar && cargo build --release && cd ..
 set AZURE_CLIENT_SECRET=<your secret>
 yarn run dist
 ```
+
+---
+
+## Troubleshooting build hangs & failures
+
+These have each cost real time. Check here before assuming a build is "stuck."
+
+### `yarn run dist` hangs for minutes in the native-module rebuild
+
+`electron-builder` defaults to `npmRebuild: true`, which **recompiles native modules
+(`node-pty`) from source** against the Electron headers on every package. That step can stall
+indefinitely (node-gyp / network / file locks) and produces no output — the build looks frozen.
+The native modules are already built for the pinned Electron during `postinstall`
+(`electron-builder install-app-deps`), so the rebuild is redundant. **Skip it:**
+
+```bash
+# build the renderer/sidecar once (yarn run build), then package with the rebuild disabled:
+npx electron-builder --config.npmRebuild=false
+```
+
+This is the single biggest cause of "the build won't finish." Watch the live phase with
+`Get-CimInstance Win32_Process | ? { $_.CommandLine -like '*hyperia*' }` — if it sits in
+`@electron/rebuild` / `app-builder-lib...remote-rebuild` for more than ~1 min, it's this.
+
+### `EACCES: permission denied, lstat '...\.antigravitycli\*.json'` (Windows)
+
+The electron-builder file walker dies on a **broken symlink** in the repo root —
+`.antigravitycli/<uuid>.json → /opt/nemesis8/.gemini/...` — a Gemini/antigravity-CLI artifact
+that points at a Unix path which doesn't resolve on Windows. It's gitignored but still on disk.
+Remove it before packaging: `rm -rf .antigravitycli`.
+
+### "Access is denied" replacing `hyperia-sidecar.exe`
+
+A running Hyperia (or the respawning `electronmon` dev app) still holds the binary. See
+**Close Hyperia Before Building** above — kill the whole `electronmon`/`electron` chain, not
+just the windows.
 
 ---
 

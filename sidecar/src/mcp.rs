@@ -961,7 +961,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Split a pane into two. Returns the new pane's stable paneId UUID. Direction: 'horizontal' (top/bottom) or 'vertical' (left/right, default). Pass window/tab/pane to split a SPECIFIC pane (recommended — splitting that pane does not depend on UI focus); omit them to split the focused pane. The new split is a SHELL by default — pick which shell with `profile`, and optionally run a startup `command` in it. To instead open a WEB PANE (embedded browser) in the new split, pass `url` (profile/command are then ignored). If no profile is specified, the shell defaults to the 'default' profile.")]
+    #[tool(description = "Split a pane into two. Returns the new pane's stable paneId UUID. Direction: 'horizontal' (top/bottom) or 'vertical' (left/right, default). Pass window/tab/pane to split a SPECIFIC pane (recommended — splitting that pane does not depend on UI focus); omit them to split the focused pane. The new split is a SHELL by default — pick which shell with `profile`, and optionally run a startup `command` in it. To instead open a WEB PANE (embedded browser) in the new split, pass `url` (profile/command are then ignored). If no profile is specified, the shell defaults to the 'default' profile. PREFER this over terminal_new_tab for one-off commands/diagnostics — it stays next to the active work and doesn't steal focus; terminal_close it when you're done to restore the layout.")]
     async fn terminal_split(
         &self,
         Parameters(req): Parameters<SplitRequest>,
@@ -1022,7 +1022,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Open a new tab. Returns the new tab's root pane stable paneId UUID. Optionally specify a startup command to run in it and a shell profile. If no profile is specified, it uses default shell.")]
+    #[tool(description = "Open a new tab (a separate, persistent workspace — it STEALS focus and adds to the tab bar). Returns the new tab's root pane stable paneId UUID. Optionally specify a startup command and a shell profile (default shell otherwise). PREFER terminal_split for one-off commands and diagnostics — it runs next to the active work without shifting focus, targets an exact pane, and you close it when done. Also note: a new tab whose startup command finishes will auto-close before you can read the output; use terminal_split + terminal_run (which keeps the shell alive) for anything you need to inspect.")]
     async fn terminal_new_tab(
         &self,
         Parameters(req): Parameters<NewTabRequest>,
@@ -2585,6 +2585,15 @@ impl ServerHandler for HyperiaMcp {
                  any time via `terminal_screen`, and closing the pane closes the process. The \
                  `terminal_run` tool refuses these patterns by default — set `force=true` only if \
                  you genuinely need OS-level backgrounding and not a Hyperia pane. \
+                 \n\nSPLIT, DON'T SPAWN TABS: For a one-off command or diagnostic, PREFER \
+                 `terminal_split` over `terminal_new_tab`. A split runs right next to the active \
+                 work without stealing focus or cluttering the tab bar, and you pass window/tab/pane \
+                 to land it exactly where you want — it does NOT depend on UI focus. Reserve \
+                 `terminal_new_tab` / `terminal_new_window` for a genuinely separate, persistent \
+                 workspace. A new tab that runs a one-shot command and then exits will AUTO-CLOSE \
+                 before you can read the output; a split + `terminal_run` keeps the shell alive so \
+                 you can read it with `terminal_screen`. Clean up after yourself: when a diagnostic \
+                 split has served its purpose, `terminal_close` it to restore the layout. \
                  \n\nIDENTITY & PERMISSIONS: If you're running inside a Hyperia pane, your identity is \
                  in the HYPERIA_AGENT_TOKEN env var. Present it as your MCP Authorization header \
                  (Bearer ${HYPERIA_AGENT_TOKEN}) so Hyperia knows which pane you are. This is your \
