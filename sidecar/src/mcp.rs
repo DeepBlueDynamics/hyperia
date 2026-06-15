@@ -130,6 +130,18 @@ pub struct CloseRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RequestAccessRequest {
+    /// Window ID of the pane you want access to. Omit for the focused window.
+    pub window: Option<u32>,
+    /// Tab name of the pane you want access to. Omit for the active tab.
+    pub tab: Option<String>,
+    /// Pane you want access to — its name or paneId from terminal_status. Omit for the focused pane.
+    pub pane: Option<String>,
+    /// Why you need access — a short human-readable reason (shown to the user / logged).
+    pub purpose: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct NewTabRequest {
     /// Shell command to run after the tab opens (e.g. "cd /my/project && claude")
     pub command: Option<String>,
@@ -1000,6 +1012,26 @@ impl HyperiaMcp {
         let body = serde_json::json!({"window": req.window, "tab": req.tab, "pane": req.pane});
         let resp = self
             .post_json_as("/api/pane/close", &body, forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Ask the human to GRANT YOU ACCESS to a pane/tab so you can act on it (type, run commands, etc.). \
+        IDENTITY and ACCESS are different things: your Authorization token says WHO you are; this requests the human's \
+        CONSENT to act on a specific pane. Do NOT go hunting for tokens in files or env — if you're blocked on a pane, \
+        call this. It raises an approval prompt in Hyperia and WAITS for the human's decision, then returns granted or \
+        denied. If you already have access it says so. Pass the target pane by name/paneId (omit for the focused pane) \
+        and a short `purpose` explaining why.")]
+    async fn request_access(
+        &self,
+        Parameters(req): Parameters<RequestAccessRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({
+            "window": req.window, "tab": req.tab, "pane": req.pane, "purpose": req.purpose,
+        });
+        let resp = self
+            .post_json_as("/api/perms/request-access", &body, forwarded_auth(&ctx).as_deref())
             .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
@@ -2606,6 +2638,12 @@ impl ServerHandler for HyperiaMcp {
                  You CANNOT drive the pane you're running in — you're already there; split or open a \
                  new pane for a worker shell. If a call returns a 'No identity' message, wire the \
                  Authorization header as above and retry. \
+                 \n\nIDENTITY vs ACCESS — these are DIFFERENT, don't confuse them: your token says WHO \
+                 you are (identity); ACCESS is the human's consent to act on a specific pane. If you're \
+                 blocked on a pane (soft-walled / awaiting), DO NOT hunt for a 'tab token' in files, \
+                 env, or logs — there isn't one. Call `request_access(pane, purpose)`: it raises the \
+                 approval prompt and WAITS for the human, then returns granted or denied. That is the \
+                 'ask for permission to use this tab' verb. \
                  \n\nEXTERNAL AGENTS (not spawned inside a pane — e.g. Claude Code or another CLI \
                  talking to this server over HTTP): you have NO HYPERIA_AGENT_TOKEN in your env. \
                  Instead present a PERSISTENT AGENT TOKEN (looks like `hyp_agent_...`) as your \

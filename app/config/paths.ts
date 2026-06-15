@@ -58,12 +58,13 @@ const yarn = resolve(__dirname, '../../bin/yarn-standalone.js');
 const cliScriptPath = resolve(__dirname, '../../bin/hyperia');
 const cliLinkPath = '/usr/local/bin/hyperia';
 
-// Windows taskbar wants a multi-resolution .ico; a single 96px PNG renders
-// poorly / inconsistently there. macOS/Linux use the PNG.
-const icon = resolve(
-  __dirname,
-  process.platform === 'win32' ? '../static/icon.ico' : '../static/icon96x96.png'
-);
+// BrowserWindow.icon must be a PNG: a .ico string path doesn't load reliably as
+// a window/taskbar icon (and not at all from inside app.asar) — switching win32
+// to .ico in 323c6598 is what made the running window fall back to the default
+// Electron atom. The 256px PNG loads everywhere (as it did pre-323c6598). The
+// multi-res .ico is still used for the EXE/shortcut icon via electron-builder
+// (win.icon = build/icon.ico) — that's the right place for it.
+const icon = resolve(__dirname, '../static/icon.png');
 
 const keymapPath = resolve(__dirname, '../keymaps');
 const darwinKeys = join(keymapPath, 'darwin.json');

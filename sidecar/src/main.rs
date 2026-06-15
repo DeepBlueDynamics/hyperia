@@ -677,6 +677,54 @@ async fn post_focus(
     }
 }
 
+/// Proactively request the human's consent to act on a pane (the "ask for perms"
+/// verb agents kept failing to find). Resolves the target pane (window/tab/pane,
+/// or the focused pane), then runs the SAME gate a real drive uses — which raises
+/// the consent prompt and WAITS for the human's decision — and reports the
+/// outcome. This separates ACCESS (consent on a pane) from IDENTITY (who you are):
+/// the caller is already identified via its token; this asks to be let in.
+async fn post_request_access(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let uid = if parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string() {
+        match state
+            .bridge
+            .resolve_pane_uid(
+                parsed["window"].as_u64().map(|v| v as u32),
+                parsed["tab"].as_str(),
+                parsed["pane"].as_str(),
+            )
+            .await
+        {
+            Some(u) => u,
+            None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
+        }
+    } else {
+        match state.bridge.focused_pane().await {
+            Some(u) => u,
+            None => return (StatusCode::NOT_FOUND, "No focused pane to request access to.".into()),
+        }
+    };
+    // Same gate as a real drive: Allow / RefuseHome / SoftWall(401) / Denied(403)
+    // / NeedConsent → raises the prompt and waits ~15s for the human, returning
+    // the real decision (Ok once approved) instead of a fire-and-forget 202.
+    match enforce_drive(&state, &headers, &uid).await {
+        Ok(()) => (
+            StatusCode::OK,
+            serde_json::json!({
+                "granted": true,
+                "pane": uid,
+                "message": "Access granted — you can now drive this pane (terminal_run / terminal_keys / split / close)."
+            })
+            .to_string(),
+        ),
+        Err((status, msg)) => (status, msg),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Cross-pane permissions — consent prompts + grants.
 //
@@ -2173,6 +2221,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/type-and-collect", axum::routing::post(post_type_and_collect))
         .route("/api/pane/split", axum::routing::post(post_split))
         .route("/api/pane/focus", axum::routing::post(post_focus))
+        .route("/api/perms/request-access", axum::routing::post(post_request_access))
         .route("/api/perms/request", axum::routing::post(post_perm_request))
         .route("/api/perms/respond", axum::routing::post(post_perm_respond))
         .route("/api/perms/state", axum::routing::get(get_perm_state))

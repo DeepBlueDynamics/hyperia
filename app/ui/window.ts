@@ -139,19 +139,32 @@ let cachedWindowIcon: Electron.NativeImage | undefined | null = null;
 function windowIcon(): Electron.NativeImage | string {
   if (cachedWindowIcon === null) {
     cachedWindowIcon = undefined;
+    // TEMP DIAGNOSTIC: write exactly what happens to ~/.hyperia/icon-debug.log
+    // so we get runtime ground truth instead of guessing.
+    const dbg: string[] = [`[icon] ts=${Date.now()}`, `[icon] icon path = ${icon}`, `[icon] icon exists = ${existsSync(icon)}`];
     try {
       const img = nativeImage.createFromPath(icon);
+      dbg.push(`[icon] createFromPath: empty=${img.isEmpty()} size=${JSON.stringify(img.getSize())}`);
       if (!img.isEmpty()) cachedWindowIcon = img;
-    } catch {
-      /* fall through to PNG */
+    } catch (e) {
+      dbg.push(`[icon] createFromPath threw: ${(e as Error).message}`);
     }
     if (!cachedWindowIcon) {
       try {
-        const img = nativeImage.createFromBuffer(readFileSync(join(dirname(icon), 'icon.png')));
+        const png = join(dirname(icon), 'icon.png');
+        dbg.push(`[icon] png path = ${png} exists=${existsSync(png)}`);
+        const img = nativeImage.createFromBuffer(readFileSync(png));
+        dbg.push(`[icon] createFromBuffer(png): empty=${img.isEmpty()} size=${JSON.stringify(img.getSize())}`);
         if (!img.isEmpty()) cachedWindowIcon = img;
-      } catch {
-        /* fall through to string path */
+      } catch (e) {
+        dbg.push(`[icon] png fallback threw: ${(e as Error).message}`);
       }
+    }
+    dbg.push(`[icon] RESULT = ${cachedWindowIcon ? 'nativeImage (logo)' : 'STRING-FALLBACK (likely broken)'}`);
+    try {
+      writeFileSync(join(dirname(cfgPath), 'icon-debug.log'), dbg.join('\n') + '\n');
+    } catch {
+      /* best-effort diagnostic */
     }
   }
   return cachedWindowIcon ?? icon;
