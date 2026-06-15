@@ -1,10 +1,6 @@
 import React from 'react';
 
-import {
-  subscribe as subscribePermission,
-  clearRequest as clearPermission,
-  type PermRequest
-} from '../permissions-bus';
+import {subscribe as subscribePermission, clearRequest as clearPermission, type PermRequest} from '../permissions-bus';
 
 type PaneBandProps = {
   paneType: 'shell' | 'web' | 'ai';
@@ -64,7 +60,7 @@ const getTextFromNode = (node: React.ReactNode): string => {
     return node.map(getTextFromNode).join('');
   }
   if (React.isValidElement(node)) {
-    const props = node.props as any;
+    const props = node.props;
     if (props) {
       if (props.className === 'term_labelFull') {
         return getTextFromNode(props.children);
@@ -232,7 +228,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   fetch(`http://localhost:${port}/api/perms/token?pane=${encodeURIComponent(paneId)}`)
                     .then((r) => r.json())
                     .then((d) => {
-                      if (d && d.token) {
+                      if (d?.token) {
                         // Hand the agent everything it needs in one paste: the
                         // pane it's identifying as + the token for its
                         // Authorization header. Name line is a human comment.
@@ -297,40 +293,60 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             className="pane-band-name-cluster"
             onClick={handleNameClick}
             onContextMenu={handleNameContextMenu}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 'var(--space-6)',
-            fontSize: '11px',
-            fontWeight: 500,
-            flexShrink: 1,
-            minWidth: 0,
-            cursor: 'pointer',
-            position: 'relative',
-            padding: '2px var(--space-4)',
-            borderRadius: 'var(--radius-4)',
-            transition: 'background 0.15s ease',
-            overflowX: 'auto',
-            whiteSpace: 'nowrap'
-          }}
-          title="Click to copy name (scroll to view full)"
-        >
-          {!isPlaceholder && resolvedIcon && (
-            <span style={{display: 'flex', alignItems: 'center', flexShrink: 0}}>{resolvedIcon}</span>
-          )}
-          {isPlaceholder ? (
-            <span style={{color: 'var(--text-tertiary)', fontStyle: 'italic', fontWeight: 400, whiteSpace: 'nowrap', flexShrink: 0}}>{copied ? 'Copied ✓' : label}</span>
-          ) : (
-            <span style={{display: 'inline-flex', alignItems: 'center', gap: 'var(--space-4)', whiteSpace: 'nowrap', flexShrink: 0}}>
-              {copied ? 'Copied ✓' : (
-                <>
-                  {label}
-                  {profileChip}
-                </>
-              )}
-            </span>
-          )}
-        </div>
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 'var(--space-6)',
+              fontSize: '11px',
+              fontWeight: 500,
+              flexShrink: 1,
+              minWidth: 0,
+              cursor: 'pointer',
+              position: 'relative',
+              padding: '2px var(--space-4)',
+              borderRadius: 'var(--radius-4)',
+              transition: 'background 0.15s ease',
+              overflowX: 'auto',
+              whiteSpace: 'nowrap'
+            }}
+            title="Click to copy name (scroll to view full)"
+          >
+            {!isPlaceholder && resolvedIcon && (
+              <span style={{display: 'flex', alignItems: 'center', flexShrink: 0}}>{resolvedIcon}</span>
+            )}
+            {isPlaceholder ? (
+              <span
+                style={{
+                  color: 'var(--text-tertiary)',
+                  fontStyle: 'italic',
+                  fontWeight: 400,
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0
+                }}
+              >
+                {copied ? 'Copied ✓' : label}
+              </span>
+            ) : (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-4)',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0
+                }}
+              >
+                {copied ? (
+                  'Copied ✓'
+                ) : (
+                  <>
+                    {label}
+                    {profileChip}
+                  </>
+                )}
+              </span>
+            )}
+          </div>
 
           {/* Nav Cluster */}
           {navCluster}
@@ -500,15 +516,18 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             onClick={(e) => e.stopPropagation()}
             style={{
               position: 'absolute',
-              top: '100%',
-              left: 0,
-              right: 0,
+              top: 'calc(100% + 6px)',
+              left: 8,
               zIndex: 60,
+              // Contained card, not full-width: cap at 360px (and never wider than
+              // the pane minus margins on a narrow split).
+              width: 'min(360px, calc(100% - 16px))',
+              maxWidth: 360,
               padding: '12px 14px',
               boxSizing: 'border-box',
               background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',
-              borderTop: '1px solid var(--accent-primary, #6ea8fe)',
-              borderBottom: '1px solid var(--border-neutral, rgba(255,255,255,0.08))',
+              border: '1px solid var(--accent-primary, #6ea8fe)',
+              borderRadius: 10,
               boxShadow: '0 10px 24px rgba(0,0,0,0.45)',
               color: 'var(--text-primary, #e8e8ea)',
               fontFamily: 'var(--font-sans)',
@@ -533,13 +552,14 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 Access
               </span>
               <div style={{display: 'flex', gap: '4px'}}>
-                {([['pane', 'This pane'], ['tab', 'This tab'], ['any', 'Any pane']] as const).map(([val, lbl]) => (
-                  <button
-                    key={val}
-                    type="button"
-                    onClick={() => setPermScope(val)}
-                    style={segStyle(permScope === val)}
-                  >
+                {(
+                  [
+                    ['pane', 'This pane'],
+                    ['tab', 'This tab'],
+                    ['any', 'Any pane']
+                  ] as const
+                ).map(([val, lbl]) => (
+                  <button key={val} type="button" onClick={() => setPermScope(val)} style={segStyle(permScope === val)}>
                     {lbl}
                   </button>
                 ))}
@@ -552,7 +572,13 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 For
               </span>
               <div style={{display: 'flex', gap: '4px'}}>
-                {([['15 min', 900], ['1 hour', 3600], ['Always', null]] as const).map(([lbl, secs]) => (
+                {(
+                  [
+                    ['15 min', 900],
+                    ['1 hour', 3600],
+                    ['Always', null]
+                  ] as const
+                ).map(([lbl, secs]) => (
                   <button
                     key={lbl}
                     type="button"
@@ -678,17 +704,17 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             display: block;
           }
 
-           .pane-band-name-cluster {
-             scrollbar-width: none !important;
-           }
+          .pane-band-name-cluster {
+            scrollbar-width: none !important;
+          }
 
-           .pane-band-name-cluster::-webkit-scrollbar {
-             display: none !important;
-           }
+          .pane-band-name-cluster::-webkit-scrollbar {
+            display: none !important;
+          }
 
-           .pane-band-name-cluster:hover {
-             background: rgba(255, 255, 255, 0.08) !important;
-           }
+          .pane-band-name-cluster:hover {
+            background: rgba(255, 255, 255, 0.08) !important;
+          }
 
           .pane-band-copied-badge {
             position: absolute;
