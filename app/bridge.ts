@@ -378,11 +378,17 @@ function handleCommand(msg: Record<string, unknown>) {
     }
 
     case 'Split': {
-      const win = getFocusedHyperiaWindow();
+      // If the caller named a pane to split, target the window that owns it so
+      // the split lands there regardless of UI focus. No uid → focused window.
+      const splitTargetUid = msg.uid as string | undefined;
+      const splitTracked = splitTargetUid ? trackedSessions.get(splitTargetUid) : undefined;
+      const win =
+        (splitTracked ? getHyperiaWindowById(splitTracked.windowId) : null) ?? getFocusedHyperiaWindow();
       if (win) {
         const dir = (msg.direction as string) || 'vertical';
         const profile = (msg.profile as string) || 'default'; // Programmatic split defaults to 'default' shell, not 'picker'
         const command = (msg.command as string) || '';
+        const url = (msg.url as string) || ''; // If set, the new split is a web pane (no shell), not a PTY.
 
         clearPendingSessionCallback();
         if (seq !== undefined) {
@@ -413,10 +419,21 @@ function handleCommand(msg: Record<string, unknown>) {
           pendingCommand = onNewSession;
         }
 
-        if (dir === 'horizontal') {
-          win.rpc.emit('split request horizontal', {profile});
+        if (url) {
+          // Clean web-pane split — no shell/PTY dragged along. Honors the same
+          // direction as a shell split (horizontal = below, vertical = right).
+          win.rpc.emit('split web pane req', {
+            activeUid: splitTargetUid ?? undefined,
+            url,
+            direction: dir === 'horizontal' ? 'HORIZONTAL' : 'VERTICAL'
+          });
         } else {
-          win.rpc.emit('split request vertical', {profile});
+          const splitOpts = {profile, activeUid: splitTargetUid ?? undefined};
+          if (dir === 'horizontal') {
+            win.rpc.emit('split request horizontal', splitOpts);
+          } else {
+            win.rpc.emit('split request vertical', splitOpts);
+          }
         }
       } else {
         sendResult(seq, 'No focused window');
@@ -1193,8 +1210,16 @@ export function updateSessionLayout(
 
   for (const [uid, tracked] of trackedSessions) {
     if (seen.has(uid)) continue;
-    if (tracked.name === 'web' || tracked.name === 'ai') {
+    // Reap a pane that's vanished from the layout when it can't host anything:
+    // web/ai panes (no PTY by design) and shell panes whose PTY is dead or never
+    // spawned (pid:0 husks — e.g. a stillborn split). Otherwise terminal_status
+    // keeps reporting a ghost pane with no tile in the UI. A LIVE shell (real pid)
+    // that's only transiently absent from the layout is preserved below.
+    const hasLivePty = !!tracked.session?.pty?.pid;
+    if (tracked.name === 'web' || tracked.name === 'ai' || !hasLivePty) {
       trackedSessions.delete(uid);
+      lastUserActivity.delete(uid);
+      agentQueues.delete(uid);
       send({type: 'SessionExit', uid});
     } else {
       tracked.splitLabel = '';

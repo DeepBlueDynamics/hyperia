@@ -201,9 +201,13 @@ async fn get_mcp_python() -> impl axum::response::IntoResponse {
     )
 }
 
-async fn get_logs(State(state): State<AppState>) -> Json<Vec<String>> {
+async fn get_logs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<String>>, (StatusCode, String)> {
+    enforce_identified(&state, &headers).await?;
     let lines = state.log_buffer.lock().unwrap();
-    Json(lines.iter().cloned().collect())
+    Ok(Json(lines.iter().cloned().collect()))
 }
 
 #[derive(serde::Deserialize)]
@@ -580,11 +584,35 @@ async fn post_split(
     let profile = parsed["profile"].as_str().unwrap_or("").to_string();
     let command = parsed["command"].as_str().unwrap_or("").to_string();
 
+    // Resolve an explicit split target (window/tab/pane) to a session uid so the
+    // split lands on the pane the caller named instead of whatever the UI happens
+    // to have focused. Omitting all three keeps the old focused-pane behavior.
+    let target_uid = if parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string() {
+        match state
+            .bridge
+            .resolve_pane_uid(
+                parsed["window"].as_u64().map(|v| v as u32),
+                parsed["tab"].as_str(),
+                parsed["pane"].as_str(),
+            )
+            .await
+        {
+            Some(u) => Some(u),
+            None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
+        }
+    } else {
+        None
+    };
+
+    let url = parsed["url"].as_str().unwrap_or("").to_string();
+
     let cmd = serde_json::json!({
         "type": "Split",
         "direction": direction,
         "profile": profile,
-        "command": command
+        "command": command,
+        "uid": target_uid,
+        "url": url
     });
     match state.bridge.send_command(cmd).await {
         Ok(r) => {
@@ -806,49 +834,68 @@ async fn enforce_drive(
         )),
         AuthDecision::NeedConsent => {
             let label = id.label();
-            // Dedupe: if a prompt for this (caller, pane) is already pending,
-            // don't stack another — just report it's still awaiting approval.
-            if state.bridge.perms().has_pending(&label, target_uid).await {
-                return Err((
-                    StatusCode::ACCEPTED,
-                    serde_json::json!({
-                        "ok": false, "pending": true,
-                        "message": "Still awaiting approval in the target pane."
-                    })
-                    .to_string(),
-                ));
+            // Raise the consent prompt once; a retry arriving while one is
+            // already pending skips re-raising and just resumes waiting below.
+            if !state.bridge.perms().has_pending(&label, target_uid).await {
+                let requester_pane = match &id {
+                    CallerIdentity::Pane { pane, .. } => pane.clone(),
+                    _ => String::new(),
+                };
+                let req = state
+                    .bridge
+                    .perms()
+                    .create_request(&label, &requester_pane, target_uid, "drive")
+                    .await;
+                let _ = state
+                    .bridge
+                    .notify(serde_json::json!({
+                        "type": "PermissionRequest",
+                        "id": req.id,
+                        "requester": req.requester,
+                        "requesterPane": req.requester_pane,
+                        "targetPane": req.target_pane,
+                    }))
+                    .await;
             }
-            let requester_pane = match &id {
-                CallerIdentity::Pane { pane, .. } => pane.clone(),
-                _ => String::new(),
-            };
-            let req = state
-                .bridge
-                .perms()
-                .create_request(&label, &requester_pane, target_uid, "drive")
-                .await;
-            let _ = state
-                .bridge
-                .notify(serde_json::json!({
-                    "type": "PermissionRequest",
-                    "id": req.id,
-                    "requester": req.requester,
-                    "requesterPane": req.requester_pane,
-                    "targetPane": req.target_pane,
-                }))
-                .await;
-            Err((
-                StatusCode::ACCEPTED,
-                serde_json::json!({
-                    "ok": false,
-                    "pending": true,
-                    "requestId": req.id,
-                    "message": "Permission requested — awaiting approval in the target pane."
-                })
-                .to_string(),
-            ))
+            // Wait for the human's decision so THIS call completes instead of
+            // bouncing the agent with a bare "pending" it has to guess how to
+            // poll. ~15s covers a prompt approval; on timeout we 202 with
+            // explicit retry guidance so the agent knows exactly what to do.
+            for _ in 0..30 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                match state.bridge.authorize_drive(&id, target_uid).await {
+                    AuthDecision::Allow => return Ok(()),
+                    AuthDecision::Denied => {
+                        return Err((
+                            StatusCode::FORBIDDEN,
+                            "Access to this pane was denied by the user. Don't retry — ask the user directly."
+                                .to_string(),
+                        ))
+                    }
+                    _ => {}
+                }
+            }
+            Err(pending_202())
         }
     }
+}
+
+/// The 202 returned when the human hasn't decided within the wait window. Tells
+/// the agent the action did NOT run and to simply re-call the same tool once
+/// approved — not to go hunting around or improvise a workaround.
+fn pending_202() -> (StatusCode, String) {
+    (
+        StatusCode::ACCEPTED,
+        serde_json::json!({
+            "ok": false,
+            "pending": true,
+            "message": "Still awaiting your approval in the Hyperia UI. This action has NOT run — \
+                        approving the prompt does not auto-execute it. Call the SAME tool again to \
+                        complete it once you've approved; it succeeds when approved (or reports denied). \
+                        Don't read files or run other commands to work around it — just re-call."
+        })
+        .to_string(),
+    )
 }
 
 /// Gate a CREATE action (split / new tab / window / web-pane / sticky) on the
@@ -880,41 +927,68 @@ async fn enforce_create(
         )),
         AuthDecision::NeedConsent => {
             let label = id.label();
-            if state.bridge.perms().has_pending_create(&label).await {
-                return Err((
-                    StatusCode::ACCEPTED,
-                    serde_json::json!({"ok": false, "pending": true, "message": "Still awaiting create approval."}).to_string(),
-                ));
+            // Raise the create-consent toast once; a retry while one is already
+            // pending skips re-raising and resumes waiting below.
+            if !state.bridge.perms().has_pending_create(&label).await {
+                let focus = state.bridge.focused_pane().await.unwrap_or_default();
+                let requester_pane = match &id {
+                    CallerIdentity::Pane { pane, .. } => pane.clone(),
+                    _ => String::new(),
+                };
+                let req = state
+                    .bridge
+                    .perms()
+                    .create_request(&label, &requester_pane, &focus, action)
+                    .await;
+                let _ = state
+                    .bridge
+                    .notify(serde_json::json!({
+                        "type": "AgentToast",
+                        "id": req.id,
+                        "requester": req.requester,
+                        "action": req.action,
+                    }))
+                    .await;
             }
-            let focus = state.bridge.focused_pane().await.unwrap_or_default();
-            let requester_pane = match &id {
-                CallerIdentity::Pane { pane, .. } => pane.clone(),
-                _ => String::new(),
-            };
-            let req = state
-                .bridge
-                .perms()
-                .create_request(&label, &requester_pane, &focus, action)
-                .await;
-            let _ = state
-                .bridge
-                .notify(serde_json::json!({
-                    "type": "AgentToast",
-                    "id": req.id,
-                    "requester": req.requester,
-                    "action": req.action,
-                }))
-                .await;
-            Err((
-                StatusCode::ACCEPTED,
-                serde_json::json!({
-                    "ok": false, "pending": true, "requestId": req.id,
-                    "message": "Create requested — awaiting your approval (toast)."
-                })
-                .to_string(),
-            ))
+            // Wait for the human's decision so the create COMPLETES on approval
+            // instead of returning a bare 202 the agent has to chase.
+            for _ in 0..30 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                match state.bridge.authorize_create(&id).await {
+                    AuthDecision::Allow | AuthDecision::RefuseHome => return Ok(()),
+                    AuthDecision::Denied => {
+                        return Err((
+                            StatusCode::FORBIDDEN,
+                            "Creating panes/tabs was denied by the user. Don't retry — ask the user directly."
+                                .to_string(),
+                        ))
+                    }
+                    _ => {}
+                }
+            }
+            Err(pending_202())
         }
     }
+}
+
+/// Soft-wall anonymous callers from sensitive reads (sidecar logs, audit log).
+/// Any non-anonymous identity (system / agent / pane) passes. Respects the
+/// global enforcement toggle — when enforcement is off, these reads are open. (#96)
+async fn enforce_identified(state: &AppState, headers: &HeaderMap) -> Result<(), (StatusCode, String)> {
+    if !state.bridge.perms().enforced() {
+        return Ok(());
+    }
+    let id = state.bridge.resolve_caller(bearer_token(headers).as_deref()).await;
+    if id.is_anonymous() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "This read requires identity. Send 'Authorization: Bearer <token>' — your pane/agent \
+             token is in the HYPERIA_AGENT_TOKEN env var (external agents: a persistent hyp_agent_… \
+             token in the MCP client's Authorization header)."
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Gate a named capability action (file edit / settings / web-eval / manage /
@@ -939,32 +1013,41 @@ async fn enforce_capability(
         )),
         AuthDecision::NeedConsent => {
             let label = id.label();
-            if state.bridge.perms().has_pending_cap(&label, cap).await {
-                return Err((
-                    StatusCode::ACCEPTED,
-                    serde_json::json!({"ok": false, "pending": true, "message": format!("Still awaiting approval for '{cap}'.")}).to_string(),
-                ));
+            // Raise the capability-consent toast once; a retry while one is
+            // already pending skips re-raising and resumes waiting below.
+            if !state.bridge.perms().has_pending_cap(&label, cap).await {
+                let focus = state.bridge.focused_pane().await.unwrap_or_default();
+                let requester_pane = match &id {
+                    CallerIdentity::Pane { pane, .. } => pane.clone(),
+                    _ => String::new(),
+                };
+                let req = state
+                    .bridge
+                    .perms()
+                    .create_request(&label, &requester_pane, &focus, &format!("cap:{cap}"))
+                    .await;
+                let _ = state
+                    .bridge
+                    .notify(serde_json::json!({
+                        "type": "AgentToast", "id": req.id, "requester": req.requester, "action": req.action,
+                    }))
+                    .await;
             }
-            let focus = state.bridge.focused_pane().await.unwrap_or_default();
-            let requester_pane = match &id {
-                CallerIdentity::Pane { pane, .. } => pane.clone(),
-                _ => String::new(),
-            };
-            let req = state
-                .bridge
-                .perms()
-                .create_request(&label, &requester_pane, &focus, &format!("cap:{cap}"))
-                .await;
-            let _ = state
-                .bridge
-                .notify(serde_json::json!({
-                    "type": "AgentToast", "id": req.id, "requester": req.requester, "action": req.action,
-                }))
-                .await;
-            Err((
-                StatusCode::ACCEPTED,
-                serde_json::json!({"ok": false, "pending": true, "requestId": req.id, "message": format!("'{cap}' requested — awaiting your approval (toast).")}).to_string(),
-            ))
+            // Wait for the human's decision so the action COMPLETES on approval.
+            for _ in 0..30 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                match state.bridge.authorize_capability(&id, cap).await {
+                    AuthDecision::Allow | AuthDecision::RefuseHome => return Ok(()),
+                    AuthDecision::Denied => {
+                        return Err((
+                            StatusCode::FORBIDDEN,
+                            format!("The '{cap}' capability was denied by the user. Don't retry — ask the user directly."),
+                        ))
+                    }
+                    _ => {}
+                }
+            }
+            Err(pending_202())
         }
     }
 }
@@ -1042,8 +1125,11 @@ async fn get_perm_state(State(state): State<AppState>) -> Json<serde_json::Value
 /// Search the audit log (read-only). Filters: identity, path (substrings),
 /// status, since_ms, limit.
 async fn get_audit_search(
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Query(params): Query<std::collections::HashMap<String, String>>,
-) -> Json<serde_json::Value> {
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    enforce_identified(&state, &headers).await?;
     let identity = params.get("identity").map(|s| s.as_str());
     let path_q = params.get("path").map(|s| s.as_str());
     let status = params.get("status").and_then(|s| s.parse::<u16>().ok());
@@ -1054,7 +1140,7 @@ async fn get_audit_search(
         .unwrap_or(100)
         .min(2000);
     let results = audit::search(identity, path_q, status, since, limit);
-    Json(serde_json::json!({ "count": results.len(), "results": results }))
+    Ok(Json(serde_json::json!({ "count": results.len(), "results": results })))
 }
 
 /// Mint/return the access token for a pane. The pane menu copies this and the
@@ -1088,9 +1174,27 @@ async fn post_close(
     if let Err(resp) = enforce_capability(&state, &headers, "manage").await {
         return resp;
     }
-    let uid = serde_json::from_str::<serde_json::Value>(&body)
-        .ok()
-        .and_then(|v| v["uid"].as_str().map(|s| s.to_string()));
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    // Accept either a literal uid, or a window/tab/pane address to resolve — so an
+    // agent can close a SPECIFIC pane without first focusing it (focus races the UI).
+    let uid = if let Some(u) = parsed["uid"].as_str() {
+        Some(u.to_string())
+    } else if parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string() {
+        match state
+            .bridge
+            .resolve_pane_uid(
+                parsed["window"].as_u64().map(|v| v as u32),
+                parsed["tab"].as_str(),
+                parsed["pane"].as_str(),
+            )
+            .await
+        {
+            Some(u) => Some(u),
+            None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
+        }
+    } else {
+        None
+    };
     // No activity gate on close either: agents can check userActiveSecsAgo
     // via terminal_status if they care to warn before tearing down a pane.
     let mut cmd = serde_json::json!({"type": "Close"});

@@ -13,7 +13,7 @@ impl SettingsRegistry {
         let defs: Vec<serde_json::Value> = serde_json::from_value(serde_json::json!([
             {
                 "name": "read_config",
-                "description": "Read the current Hyperia configuration from disk. Returns the JSON contents of ~/.hyperia/hyperia.json, with the agentToken redacted for safety.",
+                "description": "Read the current Hyperia configuration from disk. Returns the JSON contents of ~/.hyperia/hyperia.json with ALL secrets (API keys, tokens, passwords) redacted as ***REDACTED*** for safety.",
                 "input_schema": {
                     "type": "object",
                     "properties": {}
@@ -46,17 +46,14 @@ impl SettingsRegistry {
             Err(e) => return format!("Error reading config: {}", e),
         };
 
-        let mut json: serde_json::Value = match serde_json::from_str(&content) {
+        let json: serde_json::Value = match serde_json::from_str(&content) {
             Ok(v) => v,
             Err(e) => return format!("Error parsing config: {}", e),
         };
 
-        // Redact the API token
-        if let Some(token) = json.pointer_mut("/config/agentToken") {
-            if token.as_str().map(|s| !s.is_empty()).unwrap_or(false) {
-                *token = serde_json::Value::String("[REDACTED]".into());
-            }
-        }
+        // Redact ALL secrets (provider API keys, tokens, passwords) — not just
+        // agentToken — so a config read can never disclose credentials. (#93)
+        let json = crate::mcp::redact_secrets(&json);
 
         serde_json::to_string_pretty(&json).unwrap_or_else(|e| format!("Error serializing: {}", e))
     }

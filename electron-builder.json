@@ -18,7 +18,9 @@
     }
   ],
   "asarUnpack": [
-    "**/node_modules/node-pty/**"
+    "**/node_modules/node-pty/**",
+    "static/*.ico",
+    "static/*.png"
   ],
   "artifactName": "${productName}-${version}-${arch}.${ext}",
   "linux": {
@@ -32,6 +34,7 @@
     ]
   },
   "win": {
+    "icon": "build/icon.ico",
     "extraResources": [
       {
         "from": "./sidecar/target/release/hyperia-sidecar.exe",

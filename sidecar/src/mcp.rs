@@ -97,6 +97,16 @@ pub struct SplitRequest {
     pub command: Option<String>,
     /// Shell profile to use for the new split pane. If omitted, uses default shell.
     pub profile: Option<String>,
+    /// Window ID of the pane to split — the `id` field from terminal_status. Omit to use the focused window.
+    pub window: Option<u32>,
+    /// Tab name of the pane to split. Omit for the active tab.
+    pub tab: Option<String>,
+    /// Pane to split — a paneId from terminal_status (or its 4+ char prefix). Omit to split the focused
+    /// pane. ALWAYS pass this to target a specific pane: splitting does NOT depend on UI focus when set.
+    pub pane: Option<String>,
+    /// If set, the new split opens a WEB PANE at this URL (an embedded browser, no shell/PTY) instead of a
+    /// terminal. The `profile`/`command` fields are ignored in that case. e.g. "https://news.ycombinator.com".
+    pub url: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -106,6 +116,16 @@ pub struct FocusRequest {
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
     /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
+    pub pane: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CloseRequest {
+    /// Window ID of the pane to close — the `id` field from terminal_status. Omit to use the focused window.
+    pub window: Option<u32>,
+    /// Tab name of the pane to close. Omit for the active tab.
+    pub tab: Option<String>,
+    /// Pane to close — a paneId from terminal_status (or its 4+ char prefix). Omit to close the focused pane.
     pub pane: Option<String>,
 }
 
@@ -941,7 +961,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Split the currently focused pane into two. Returns the new pane's stable paneId UUID. Direction: 'horizontal' (top/bottom) or 'vertical' (left/right, default). You can optionally provide a startup command to run in the new split pane, and specify a shell profile. If no profile is specified, it defaults to the 'default' shell profile.")]
+    #[tool(description = "Split a pane into two. Returns the new pane's stable paneId UUID. Direction: 'horizontal' (top/bottom) or 'vertical' (left/right, default). Pass window/tab/pane to split a SPECIFIC pane (recommended — splitting that pane does not depend on UI focus); omit them to split the focused pane. The new split is a SHELL by default — pick which shell with `profile`, and optionally run a startup `command` in it. To instead open a WEB PANE (embedded browser) in the new split, pass `url` (profile/command are then ignored). If no profile is specified, the shell defaults to the 'default' profile.")]
     async fn terminal_split(
         &self,
         Parameters(req): Parameters<SplitRequest>,
@@ -951,6 +971,10 @@ impl HyperiaMcp {
             "direction": req.direction.unwrap_or_else(|| "vertical".into()),
             "command": req.command,
             "profile": req.profile,
+            "window": req.window,
+            "tab": req.tab,
+            "pane": req.pane,
+            "url": req.url,
         });
         let resp = self.post_json_as("/api/pane/split", &body, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
@@ -966,10 +990,15 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Close the currently focused pane.")]
-    async fn terminal_close(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+    #[tool(description = "Close a pane. Pass window/tab/pane to close a SPECIFIC pane (recommended — does not depend on UI focus); omit them to close the focused pane.")]
+    async fn terminal_close(
+        &self,
+        Parameters(req): Parameters<CloseRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"window": req.window, "tab": req.tab, "pane": req.pane});
         let resp = self
-            .post_json_as("/api/pane/close", &serde_json::json!({}), forwarded_auth(&ctx).as_deref())
+            .post_json_as("/api/pane/close", &body, forwarded_auth(&ctx).as_deref())
             .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
@@ -1113,8 +1142,8 @@ impl HyperiaMcp {
     }
 
     #[tool(description = "Read sidecar logs.")]
-    async fn sidecar_logs(&self) -> Result<CallToolResult, ErrorData> {
-        let text = self.get("/api/logs").await?;
+    async fn sidecar_logs(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let text = self.get_as("/api/logs", forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
@@ -1122,6 +1151,7 @@ impl HyperiaMcp {
     async fn audit_search(
         &self,
         Parameters(req): Parameters<AuditSearchRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let mut q: Vec<String> = Vec::new();
         if let Some(i) = &req.identity {
@@ -1141,7 +1171,7 @@ impl HyperiaMcp {
         } else {
             format!("/api/audit/search?{}", q.join("&"))
         };
-        let resp = self.get(&path).await?;
+        let resp = self.get_as(&path, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -1367,7 +1397,11 @@ impl HyperiaMcp {
         Parameters(req): Parameters<SettingsGetRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let cfg = self.read_config().await?;
-        let value = walk_path(&cfg, &req.path);
+        // Mask secrets (provider API keys, tokens, passwords) before returning —
+        // a config read must NEVER disclose credentials to a caller. Applied to
+        // the whole doc before walk_path so even a targeted read like
+        // `config.providers.openai.token` resolves to the redacted value. (#93)
+        let value = walk_path(&redact_secrets(&cfg), &req.path);
         let body = serde_json::to_string_pretty(&value)
             .unwrap_or_else(|_| "null".into());
         Ok(CallToolResult::success(vec![Content::text(body)]))
@@ -2141,6 +2175,57 @@ fn unescape_keys(raw: &str) -> String {
 /// Walk a dot-separated path into a JSON value, returning a clone of the
 /// matching subtree (or Null if the path doesn't exist). Empty path = the
 /// whole document.
+/// Recursively mask secret-looking values so a config read (settings_get) never
+/// hands an API key or token to ANY caller. Matches by secret-ish key NAME or by
+/// known secret value PREFIX (sk-, hyp_, ghp_/gho_/ghs_, AIza, xox, "Bearer ").
+/// (#93)
+pub(crate) fn redact_secrets(value: &serde_json::Value) -> serde_json::Value {
+    fn secret_key(k: &str) -> bool {
+        let k = k.to_ascii_lowercase();
+        k.contains("token")
+            || k.contains("secret")
+            || k.contains("password")
+            || k.contains("apikey")
+            || k.contains("api_key")
+    }
+    fn secret_val(v: &str) -> bool {
+        let t = v.trim();
+        t.starts_with("sk-")
+            || t.starts_with("hyp_")
+            || t.starts_with("ghp_")
+            || t.starts_with("gho_")
+            || t.starts_with("ghs_")
+            || t.starts_with("AIza")
+            || t.starts_with("xox")
+            || t.starts_with("Bearer ")
+    }
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::with_capacity(map.len());
+            for (k, v) in map {
+                match v {
+                    serde_json::Value::String(s)
+                        if !s.is_empty() && (secret_key(k) || secret_val(s)) =>
+                    {
+                        out.insert(k.clone(), serde_json::Value::String("***REDACTED***".into()));
+                    }
+                    _ => {
+                        out.insert(k.clone(), redact_secrets(v));
+                    }
+                }
+            }
+            serde_json::Value::Object(out)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(redact_secrets).collect())
+        }
+        serde_json::Value::String(s) if secret_val(s) => {
+            serde_json::Value::String("***REDACTED***".into())
+        }
+        other => other.clone(),
+    }
+}
+
 fn walk_path(value: &serde_json::Value, path: &str) -> serde_json::Value {
     if path.trim().is_empty() {
         return value.clone();
@@ -2335,6 +2420,23 @@ impl HyperiaMcp {
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
     }
 
+    /// GET that forwards a caller Authorization header so identity-gated read
+    /// endpoints (enforce_identified) resolve the real caller instead of
+    /// anonymous. Used by sidecar_logs / audit_search. (#96)
+    async fn get_as(&self, path: &str, auth: Option<&str>) -> Result<String, ErrorData> {
+        let mut rb = self.client.get(format!("{}{}", self.base_url, path));
+        if let Some(a) = auth {
+            rb = rb.header(reqwest::header::AUTHORIZATION, a);
+        }
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+        resp.text()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
+    }
+
     async fn post_text(&self, path: &str, body: &str) -> Result<String, ErrorData> {
         self.post_text_with_timeout(path, body, None).await
     }
@@ -2494,6 +2596,16 @@ impl ServerHandler for HyperiaMcp {
                  You CANNOT drive the pane you're running in — you're already there; split or open a \
                  new pane for a worker shell. If a call returns a 'No identity' message, wire the \
                  Authorization header as above and retry. \
+                 \n\nEXTERNAL AGENTS (not spawned inside a pane — e.g. Claude Code or another CLI \
+                 talking to this server over HTTP): you have NO HYPERIA_AGENT_TOKEN in your env. \
+                 Instead present a PERSISTENT AGENT TOKEN (looks like `hyp_agent_...`) as your \
+                 Authorization header. These are decoupled from panes and survive restarts (unlike \
+                 pane tokens). They are stored in `~/.hyperia/agents.json` and minted via the \
+                 identity endpoint (POST /api/identity/agent {name}) or the Authorize screen. Wire it \
+                 ONCE into your MCP client config, e.g. for this server's entry set \
+                 headers.Authorization = \"Bearer hyp_agent_...\" (Claude Code: the `hyperia` block in \
+                 ~/.claude.json; other clients: the equivalent MCP server headers). Until that header \
+                 is set you resolve to anonymous and every mutating call is soft-walled. \
                  \n\nAddressing: Hyperia organizes sessions as windows > tabs > panes. \
                  Call terminal_status to see the full hierarchy. Most tools accept optional \
                  window (id), tab (name), and pane (label) parameters: \

@@ -85,7 +85,7 @@ export type MainEvents = {
   'web-pane-mouse-result': {uid: string; result: any};
   'split request vertical': {activeUid?: string | null; profile?: string | null; url?: string};
   'split request horizontal': {activeUid?: string | null; profile?: string | null; url?: string};
-  'split web pane req': {activeUid?: string | null; url?: string};
+  'split web pane req': {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'};
   'clone request vertical': any;
   'clone request horizontal': any;
   'layout-state-reply': any;
@@ -135,7 +135,7 @@ export type RendererEvents = {
   reload: never;
   'session clear req': never;
   'split request horizontal': {activeUid?: string | null; profile?: string | null; url?: string};
-  'split web pane req': {activeUid?: string | null; url?: string};
+  'split web pane req': {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'};
   'split request vertical': {activeUid?: string | null; profile?: string | null; url?: string};
   'clone request vertical': any;
   'clone request horizontal': any;

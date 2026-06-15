@@ -537,12 +537,15 @@ rpc.on('reload', () => {
   plugins.reload();
 });
 
-rpc.on('split web pane req', ({activeUid, url}: {activeUid?: string | null; url?: string}) => {
-  if (url) {
-    const full = /^[a-z]+:\/\//i.test(url) ? url : 'https://' + url;
-    store_.dispatch(termGroupActions.splitWebPaneBelow(activeUid ?? undefined, full) as any);
+rpc.on(
+  'split web pane req',
+  ({activeUid, url, direction}: {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'}) => {
+    if (url) {
+      const full = /^[a-z]+:\/\//i.test(url) ? url : 'https://' + url;
+      store_.dispatch(termGroupActions.splitWebPane(activeUid ?? undefined, full, direction ?? 'HORIZONTAL') as any);
+    }
   }
-});
+);
 
 rpc.on('open web pane req', ({url}: {url?: string}) => {
   if (url) {

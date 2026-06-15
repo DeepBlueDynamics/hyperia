@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <style>
 * { margin: 0; padding: 0; }
-body { background: #000; overflow: hidden; cursor: none; }
+body { background: transparent; overflow: hidden; cursor: none; }
 canvas { display: block; }
 #title {
   position: absolute;
@@ -240,8 +240,13 @@ function step() {
 }
 
 function draw() {
+  // Fade the previous frame toward TRANSPARENT (not black) so the splash window
+  // stays see-through. 'destination-out' erases ~15% alpha per frame, preserving
+  // the motion-blur trail look without painting an opaque background.
+  ctx.globalCompositeOperation = 'destination-out';
   ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
   ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'source-over';
 
   // Draw field lines (connections between nearby opposite charges)
   ctx.lineWidth = 0.5;

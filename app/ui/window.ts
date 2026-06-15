@@ -546,9 +546,12 @@ export function newWindow(
   rpc.on('split request horizontal', (options: {activeUid?: string | null; profile?: string | null}) => {
     rpc.emit('split request horizontal', options);
   });
-  rpc.on('split web pane req', (options: {activeUid?: string | null; url?: string}) => {
-    rpc.emit('split web pane req', options);
-  });
+  rpc.on(
+    'split web pane req',
+    (options: {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'}) => {
+      rpc.emit('split web pane req', options);
+    }
+  );
   rpc.on('clone request vertical', () => {
     rpc.emit('clone request vertical', undefined as any);
   });
