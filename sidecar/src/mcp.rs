@@ -45,7 +45,7 @@ pub struct KeysRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
+    /// Which pane in the tab — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
     pub pane: Option<String>,
     /// Set true to send immediately even when the human is active in this pane — use this to interrupt a running process (e.g. Ctrl-C). When the human is active and this is false/omitted, the keys are queued and you get a notice telling you to resend with interrupt=true.
     pub interrupt: Option<bool>,
@@ -59,7 +59,7 @@ pub struct RunRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
+    /// Which pane in the tab — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
     pub pane: Option<String>,
     /// Milliseconds to wait for output before reading screen (default: 2000)
     pub wait_ms: Option<u64>,
@@ -81,7 +81,7 @@ pub struct ScreenRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
+    /// Which pane in the tab — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
     pub pane: Option<String>,
     /// What you're looking for on the screen — Maximus extracts just that. Example: "last error", "current directory", "running process name".
     pub focus: Option<String>,
@@ -115,7 +115,7 @@ pub struct FocusRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
+    /// Which pane in the tab — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
     pub pane: Option<String>,
 }
 
@@ -209,7 +209,7 @@ pub struct WebReloadRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
+    /// Which pane in the tab — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
     pub pane: Option<String>,
 }
 
@@ -223,7 +223,7 @@ pub struct WebClickRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
+    /// Which pane in the tab — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
     pub pane: Option<String>,
 }
 
@@ -236,7 +236,7 @@ pub struct WebEvalRequest {
     pub window: Option<u32>,
     /// Tab name. Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label / paneId (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
+    /// Which pane — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
     pub pane: Option<String>,
 }
 
@@ -252,7 +252,7 @@ pub struct WebMouseRequest {
     pub window: Option<u32>,
     /// Tab name. Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label / paneId (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
+    /// Which pane — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
     pub pane: Option<String>,
 }
 
@@ -286,7 +286,7 @@ pub struct AgentStatusRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
+    /// Which pane in the tab — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
     pub pane: Option<String>,
 }
 
@@ -344,7 +344,7 @@ pub struct ShellConfirmRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
+    /// Which pane in the tab — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
     pub pane: Option<String>,
 }
 
@@ -354,7 +354,7 @@ pub struct AutoDescribeRequest {
     pub window: Option<u32>,
     /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Pane label / paneId within the tab (DEPRECATED for alphabetical labels like "a", "b"; please use the stable paneId UUID or its 4+ char prefix instead). Omit for first pane.
+    /// Which pane in the tab — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
     pub pane: Option<String>,
 }
 
@@ -380,9 +380,9 @@ pub struct NoteOpenRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct WherePaneRequest {
-    /// Label of the reference pane (e.g. "a")
+    /// The reference pane — its name or paneId from terminal_status.
     pub a: String,
-    /// Label of the pane to locate relative to a (e.g. "b")
+    /// The pane to locate relative to `a` — its name or paneId from terminal_status.
     pub b: String,
 }
 
@@ -577,8 +577,9 @@ impl HyperiaMcp {
         let Some(tab_obj) = tab_obj else { return String::new(); };
         let panes_arr = tab_obj["panes"].as_array().cloned().unwrap_or_default();
         let pane_obj = if let Some(p) = pane {
-            // Try label match first, then paneId (or paneId prefix).
-            panes_arr.iter().find(|x| x["label"].as_str() == Some(p))
+            // Match by name, then paneId (or paneId prefix). Panes are addressed
+            // by name or id only — there is no positional a/b/c label.
+            panes_arr.iter().find(|x| x["name"].as_str() == Some(p))
                 .or_else(|| panes_arr.iter().find(|x| {
                     x["paneId"].as_str().map(|pid| pid.starts_with(p)).unwrap_or(false)
                 }))
@@ -676,7 +677,7 @@ impl HyperiaMcp {
         lines.join("\n")
     }
 
-    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab, \\x03 for Ctrl-C. These are unescaped automatically. Address panes with window/tab/pane. The pane field accepts either a pane label or the paneId from terminal_status; if the label is empty, use paneId. If the human is currently active in the target pane, the keys are queued and the reply tells you so — resend with interrupt=true to send immediately (use this to interrupt a running process). The response includes a [hyperia:meta] envelope describing the target process so you can detect Ink/TUI agents that need LF (\\n) instead of CR (\\r) for submit.")]
+    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab, \\x03 for Ctrl-C. These are unescaped automatically. Address panes with window/tab/pane. Panes are addressed by name or paneId (from terminal_status). If the human is currently active in the target pane, the keys are queued and the reply tells you so — resend with interrupt=true to send immediately (use this to interrupt a running process). The response includes a [hyperia:meta] envelope describing the target process so you can detect Ink/TUI agents that need LF (\\n) instead of CR (\\r) for submit.")]
     async fn terminal_keys(
         &self,
         Parameters(req): Parameters<KeysRequest>,
@@ -797,7 +798,7 @@ impl HyperiaMcp {
         }
     }
 
-    #[tool(description = "Read the current screen content of a terminal pane. Address panes with window/tab/pane. The pane field accepts either a pane label or the paneId from terminal_status; if the label is empty, use paneId. Pass focus= to receive only the relevant part — Maximus filters the output. Pass raw=true to bypass Maximus.")]
+    #[tool(description = "Read the current screen content of a terminal pane. Address panes with window/tab/pane. Panes are addressed by name or paneId (from terminal_status). Pass focus= to receive only the relevant part — Maximus filters the output. Pass raw=true to bypass Maximus.")]
     async fn terminal_screen(
         &self,
         Parameters(req): Parameters<ScreenRequest>,
@@ -807,7 +808,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(out)]))
     }
 
-    #[tool(description = "List all open windows, tabs, and panes in a nested hierarchy. Each window has an `id` field — pass that exact value as the `window` parameter in other tools (it is NOT 0-based; the first window is typically id=1). Each pane includes both a label (DEPRECATED; do not use as it shifts when splits are added/removed) and a paneId. When addressing a pane in other tools, always use the stable paneId or its 4+ character prefix instead of the label.")]
+    #[tool(description = "List all open windows, tabs, and panes in a nested hierarchy. Each window has an `id` field — pass that exact value as the `window` parameter in other tools (it is NOT 0-based; the first window is typically id=1). Each pane has a friendly `name` and a stable `paneId`. Address panes and tabs in other tools by their NAME or by paneId (full UUID or its 4+ char prefix) — there is no positional a/b/c label.")]
     async fn terminal_status(&self) -> Result<CallToolResult, ErrorData> {
         let text = self.get("/api/status").await?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
@@ -980,7 +981,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Focus a specific pane by window/tab/pane address. The pane field accepts either a pane label or the paneId from terminal_status; if the label is empty, use paneId.")]
+    #[tool(description = "Focus a specific pane by window/tab/pane address. Panes are addressed by name or paneId (from terminal_status).")]
     async fn terminal_focus(
         &self,
         Parameters(req): Parameters<FocusRequest>,
@@ -1013,7 +1014,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Describe the spatial relationship between two split panes — e.g. 'pane b is below and to the right of pane a'. Pass pane identifiers from terminal_status. Use pane labels when present; otherwise use paneId.")]
+    #[tool(description = "Describe the spatial relationship between two split panes — e.g. 'Generous Egret is below and to the right of Brilliant Peacock'. Pass two pane identifiers (name or paneId) from terminal_status.")]
     async fn terminal_where_pane(
         &self,
         Parameters(req): Parameters<WherePaneRequest>,
@@ -1075,7 +1076,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Reload a web pane browser page. Address panes with window/tab/pane. The pane field accepts either a pane label or the paneId from terminal_status.")]
+    #[tool(description = "Reload a web pane browser page. Address panes with window/tab/pane. Panes are addressed by name or paneId (from terminal_status).")]
     async fn terminal_web_reload(
         &self,
         Parameters(req): Parameters<WebReloadRequest>,
@@ -2617,11 +2618,12 @@ impl ServerHandler for HyperiaMcp {
                  is set you resolve to anonymous and every mutating call is soft-walled. \
                  \n\nAddressing: Hyperia organizes sessions as windows > tabs > panes. \
                  Call terminal_status to see the full hierarchy. Most tools accept optional \
-                 window (id), tab (name), and pane (label) parameters: \
+                 window (id), tab (name), and pane (name or paneId) parameters: \
                  - Omit all three to target the focused window's active tab's first pane. \
                  - Specify window using the `id` field from terminal_status (NOT 0-based; first window is typically id=1). \
-                 - Specify tab to pick a tab by name (e.g. \"Capybara\"). \
-                 - Specify pane to pick a split pane by label (\"a\", \"b\", \"c\"). \
+                 - Specify tab by its name (e.g. \"Capybara\"). \
+                 - Specify pane by its NAME (e.g. \"Brilliant Peacock\") or its paneId (full UUID or 4+ char prefix). \
+                 Panes and tabs are addressed by name or id ONLY — there is no positional a/b/c pane label. \
                  For a full view of all pane contents, use tab_snapshot. \
                  \n\nDiscovery: call skills to list Hyperia's capability areas and the tools that perform each. \
                  \n\nTerminal: terminal_keys, terminal_run, terminal_screen, terminal_status, \

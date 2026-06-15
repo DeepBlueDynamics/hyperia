@@ -543,17 +543,15 @@ impl Bridge {
                 //      prefix, not the full UUID — accept it.
                 //   3. friendly `name` (e.g. "Suspicious Marlin 🧄"), matched
                 //      case-insensitively and tolerant of a missing trailing
-                //      emoji/whitespace — this is the STABLE human handle and
-                //      the one agents should prefer.
-                //   4. split_label (a/b/c) LAST — positional and volatile (a
-                //      pane's letter changes when siblings open/close), kept
-                //      only for back-compat. Prefer name or paneId.
+                //      emoji/whitespace — the STABLE human handle.
+                // Panes are addressed by NAME or paneId only. The positional
+                // a/b/c split letter is intentionally NOT a match key — it shifts
+                // when siblings open/close, so it's never exposed to agents.
                 .find(|(uid, info)| {
                     uid.as_str() == label
                         || (label.len() >= 4 && uid.starts_with(label))
                         || name_matches(&info.shell_name, label)
                         || name_matches(&info.title, label)
-                        || info.split_label == label
                 })
                 .map(|(uid, _)| uid.clone())
         } else {
@@ -659,7 +657,6 @@ impl Bridge {
                         serde_json::json!({
                             "paneId": uid,
                             "name": friendly,
-                            "label": info.split_label,
                             "shell": shell,
                             "process": process,
                             "cols": info.cols,
