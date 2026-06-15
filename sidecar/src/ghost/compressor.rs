@@ -491,37 +491,63 @@ impl ContextCompressor {
             end -= 1;
         }
         let snippet = &content[..end];
+        // Structured output: constrain the model to a JSON object with a single
+        // `content_type` field. This is what stops chatty/weaker models (e.g.
+        // gemma) from replying "Okay, I understand…" instead of a label — they
+        // physically can't emit anything but the schema. temperature 0 = stable.
         let body = serde_json::json!({
             "model": self.get_model(),
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a content type classifier. Given text, output ONLY a 2-4 word \
-                        kebab-case label for the content type. Examples: cargo-test-output, json-blob, \
-                        git-diff, rust-compiler-output, http-response, shell-session, log-output, \
-                        file-contents, terminal-screen. Output the label only, no explanation."
+                    "content": "Classify the content type of the text. Fill the `content_type` field with a \
+                        2-4 word kebab-case label (e.g. cargo-test-output, json-blob, git-diff, \
+                        rust-compiler-output, http-response, shell-session, log-output, file-contents, \
+                        terminal-screen)."
                 },
                 {"role": "user", "content": snippet}
             ],
-            "stream": false
+            "stream": false,
+            "options": {"temperature": 0},
+            "format": {
+                "type": "object",
+                "properties": {"content_type": {"type": "string", "description": "2-4 word kebab-case content-type label"}},
+                "required": ["content_type"]
+            }
         });
 
+        let json = self.chat_structured(&body, "classify").await?;
+        json["content_type"]
+            .as_str()
+            .map(|s| s.trim().to_lowercase().replace(' ', "-"))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("no content_type in classify response"))
+    }
+
+    /// POST a /api/chat request whose `format` is a JSON schema, and parse the
+    /// model's (schema-constrained) reply into a Value. Structured outputs are
+    /// what make extraction reliable across models: the reply can ONLY match the
+    /// schema, so a chatty model physically can't preamble ("Okay, I understand…").
+    async fn chat_structured(&self, body: &Value, what: &str) -> anyhow::Result<Value> {
         let resp = self
             .client
             .post(format!("{}/api/chat", self.get_url()))
-            .json(&body)
+            .json(body)
             .send()
             .await?;
-
         if !resp.status().is_success() {
-            anyhow::bail!("Ollama classify returned HTTP {}", resp.status());
+            anyhow::bail!("Ollama {what} returned HTTP {}", resp.status());
         }
-
-        let json: Value = resp.json().await?;
-        json["message"]["content"]
+        let envelope: Value = resp.json().await?;
+        let content = envelope["message"]["content"]
             .as_str()
-            .map(|s| s.trim().to_lowercase().replace(' ', "-"))
-            .ok_or_else(|| anyhow::anyhow!("no content in classify response"))
+            .ok_or_else(|| anyhow::anyhow!("no message content in {what} response"))?;
+        serde_json::from_str::<Value>(content).map_err(|e| {
+            anyhow::anyhow!(
+                "{what}: model did not return schema JSON ({e}): {}",
+                crate::util::safe_prefix(content, 120)
+            )
+        })
     }
 
     async fn derive_strategy(&self, content: &str, content_type: &str) -> anyhow::Result<String> {
@@ -531,35 +557,29 @@ impl ContextCompressor {
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a compression strategist. Given content and its type, \
-                        output ONE sentence describing exactly what to extract when summarizing. \
-                        Be specific about which fields, lines, or patterns matter. \
-                        Output only the strategy sentence, no preamble."
+                    "content": "Decide what to extract when summarizing this content. Fill `strategy` \
+                        with ONE specific sentence naming which fields, lines, or patterns matter."
                 },
                 {
                     "role": "user",
                     "content": format!("Content type: {content_type}\n\nContent:\n{snippet}")
                 }
             ],
-            "stream": false
+            "stream": false,
+            "options": {"temperature": 0},
+            "format": {
+                "type": "object",
+                "properties": {"strategy": {"type": "string", "description": "one specific extraction-strategy sentence"}},
+                "required": ["strategy"]
+            }
         });
 
-        let resp = self
-            .client
-            .post(format!("{}/api/chat", self.get_url()))
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            anyhow::bail!("Ollama strategize returned HTTP {}", resp.status());
-        }
-
-        let json: Value = resp.json().await?;
-        json["message"]["content"]
+        let json = self.chat_structured(&body, "strategize").await?;
+        json["strategy"]
             .as_str()
             .map(str::to_string)
-            .ok_or_else(|| anyhow::anyhow!("no content in strategy response"))
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("no strategy in response"))
     }
 
     async fn apply_strategy(
@@ -571,7 +591,7 @@ impl ContextCompressor {
         let focus_clause = if focus.trim().is_empty() {
             String::new()
         } else {
-            format!(" Specific focus: {focus}.")
+            format!(" The caller is specifically looking for: {focus}.")
         };
         let body = serde_json::json!({
             "model": self.get_model(),
@@ -579,32 +599,38 @@ impl ContextCompressor {
                 {
                     "role": "system",
                     "content": format!(
-                        "You are a precision extractor. Apply this strategy to the content: {strategy}.{focus_clause} \
-                         Return ONLY the extracted information. No preamble, no explanation. \
-                         If the requested information is not present, respond with: Not found: <topic>"
+                        "Apply this extraction strategy to the content: {strategy}.{focus_clause} \
+                         Put ONLY the extracted information (verbatim where possible) in `extracted`. \
+                         Set `found` to true if the requested information is present in the content, \
+                         false if it is not."
                     )
                 },
                 {"role": "user", "content": content}
             ],
-            "stream": false
+            "stream": false,
+            "options": {"temperature": 0},
+            "format": {
+                "type": "object",
+                "properties": {
+                    "extracted": {"type": "string", "description": "the extracted information, verbatim where possible"},
+                    "found": {"type": "boolean", "description": "true if the requested info was present"}
+                },
+                "required": ["extracted", "found"]
+            }
         });
 
-        let resp = self
-            .client
-            .post(format!("{}/api/chat", self.get_url()))
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            anyhow::bail!("Ollama apply returned HTTP {}", resp.status());
+        let json = self.chat_structured(&body, "apply").await?;
+        let found = json["found"].as_bool().unwrap_or(true);
+        let extracted = json["extracted"].as_str().unwrap_or("").trim().to_string();
+        // Don't SWALLOW output on a focus miss. The old prompt returned
+        // "Not found: <topic>" which discarded the real content — an agent then
+        // thought the command produced nothing. Instead, when the model couldn't
+        // find the requested info (or returned nothing), hand back the content
+        // unchanged so the agent still sees everything.
+        if !found || extracted.is_empty() {
+            return Ok(content.to_string());
         }
-
-        let json: Value = resp.json().await?;
-        json["message"]["content"]
-            .as_str()
-            .map(str::to_string)
-            .ok_or_else(|| anyhow::anyhow!("no content in apply response"))
+        Ok(extracted)
     }
 
     async fn summarize(&self, messages: &[Value]) -> anyhow::Result<String> {
