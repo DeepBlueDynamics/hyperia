@@ -2,7 +2,7 @@ import {existsSync, readFileSync, writeFileSync} from 'fs';
 import {isAbsolute, normalize, sep} from 'path';
 import {URL, fileURLToPath} from 'url';
 
-import {app, BrowserWindow, shell, Menu, nativeImage, dialog, ipcMain} from 'electron';
+import {app, BrowserWindow, shell, Menu, dialog, ipcMain} from 'electron';
 import type {BrowserWindowConstructorOptions} from 'electron';
 
 import {enable as remoteEnable} from '@electron/remote/main';
@@ -120,16 +120,10 @@ function fallbackShell(): string {
   return '/bin/sh';
 }
 
-function makeLetterIcon(letter: string): Electron.NativeImage {
-  // Generate a 32x32 PNG with a single letter via canvas-free SVG→PNG
-  const ch = (letter || 'H').charAt(0).toUpperCase();
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
-    <rect width="32" height="32" rx="6" fill="#1a1a2e"/>
-    <text x="16" y="23" text-anchor="middle" font-family="sans-serif"
-          font-size="20" font-weight="bold" fill="#fff">${ch}</text>
-  </svg>`;
-  return nativeImage.createFromBuffer(Buffer.from(svg));
-}
+// (makeLetterIcon removed — it built a NativeImage from raw SVG bytes, which
+// Electron's nativeImage can't decode; createFromBuffer handles PNG/JPEG only.
+// It returned an EMPTY image, so the per-session setIcon below WIPED the window
+// icon and Windows fell back to electron.exe's default atom in dev.)
 
 export function newWindow(
   options_: BrowserWindowConstructorOptions,
@@ -542,17 +536,9 @@ export function newWindow(
   // Update Electron window title + taskbar icon when active session title changes
   rpc.on('session set xterm title', ({uid, title, manual}: {uid: string; title: string; manual?: boolean}) => {
     // Only update window chrome — tab names come from renderer via 'session set tab name'
-    if (title) {
-      window.setTitle(`${title} — Hyperia`);
-      if (process.platform === 'win32') {
-        window.setIcon(makeLetterIcon(title));
-      }
-    } else {
-      window.setTitle('Hyperia');
-      if (process.platform === 'win32') {
-        window.setIcon(icon);
-      }
-    }
+    // Update only the window TITLE. Do NOT override the taskbar icon per-session
+    // — the window keeps the proper Hyperia icon set at creation (winOpts.icon).
+    window.setTitle(title ? `${title} — Hyperia` : 'Hyperia');
   });
   rpc.on('split request vertical', (options: {activeUid?: string | null; profile?: string | null}) => {
     rpc.emit('split request vertical', options);

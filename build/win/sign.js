@@ -11,7 +11,25 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-const SIGNTOOL = 'C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x64\\signtool.exe';
+// Resolve signtool.exe from the newest installed Windows 10/11 SDK rather than
+// hardcoding an SDK build number — the GitHub runner image bumps that version
+// periodically, and a stale path would make signtool "not found" (which used to
+// be swallowed → unsigned build shipped green). Falls back to the last-known path.
+function resolveSigntool() {
+  const base = 'C:\\Program Files (x86)\\Windows Kits\\10\\bin';
+  try {
+    const vers = fs.readdirSync(base).filter((d) => /^10\./.test(d)).sort().reverse();
+    for (const v of vers) {
+      const cand = path.join(base, v, 'x64', 'signtool.exe');
+      if (fs.existsSync(cand)) return cand;
+    }
+  } catch {
+    /* fall through to the hardcoded path */
+  }
+  return path.join(base, '10.0.26100.0', 'x64', 'signtool.exe');
+}
+
+const SIGNTOOL = resolveSigntool();
 const DLIB = path.join(__dirname, 'trustedsigning', 'bin', 'x64', 'Azure.CodeSigning.Dlib.dll');
 
 // Load .signing.env from the repo root if AZURE_CLIENT_SECRET isn't already set
@@ -36,7 +54,12 @@ exports.default = async function (config) {
 
   const clientSecret = process.env.AZURE_CLIENT_SECRET;
   if (!clientSecret) {
-    console.warn('AZURE_CLIENT_SECRET not set — skipping signing');
+    // In CI a tagged release MUST be signed — fail loudly instead of silently
+    // shipping an unsigned installer. Locally, allow an unsigned dev build.
+    if (process.env.CI) {
+      throw new Error('AZURE_CLIENT_SECRET not set in CI — refusing to ship an UNSIGNED build');
+    }
+    console.warn('AZURE_CLIENT_SECRET not set — skipping signing (local dev build)');
     return;
   }
 
@@ -66,11 +89,17 @@ exports.default = async function (config) {
       {env, encoding: 'utf8', timeout: 60000}
     );
 
+    // A non-zero exit OR a spawn error (e.g. signtool not found) means this file
+    // is UNSIGNED. Throw so electron-builder fails the build — never let an
+    // unsigned artifact pass as a successful release.
+    if (result.error) {
+      throw new Error(`signtool could not be run (${SIGNTOOL}): ${result.error.message}`);
+    }
     if (result.status === 0) {
       console.log('Signed:', path.basename(file));
     } else {
-      const msg = (result.stderr || result.stdout || '').slice(0, 400);
-      console.warn('Signing failed:', msg);
+      const msg = (result.stderr || result.stdout || '').slice(0, 600);
+      throw new Error(`Signing FAILED for ${path.basename(file)} (signtool exit ${result.status}): ${msg}`);
     }
   } finally {
     try { fs.unlinkSync(configPath); } catch { /* ignore */ }

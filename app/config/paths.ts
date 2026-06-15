@@ -58,7 +58,12 @@ const yarn = resolve(__dirname, '../../bin/yarn-standalone.js');
 const cliScriptPath = resolve(__dirname, '../../bin/hyperia');
 const cliLinkPath = '/usr/local/bin/hyperia';
 
-const icon = resolve(__dirname, '../static/icon96x96.png');
+// Windows taskbar wants a multi-resolution .ico; a single 96px PNG renders
+// poorly / inconsistently there. macOS/Linux use the PNG.
+const icon = resolve(
+  __dirname,
+  process.platform === 'win32' ? '../static/icon.ico' : '../static/icon96x96.png'
+);
 
 const keymapPath = resolve(__dirname, '../keymaps');
 const darwinKeys = join(keymapPath, 'darwin.json');

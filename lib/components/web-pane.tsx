@@ -1048,6 +1048,15 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
       if (url && url !== 'about:blank') {
         this.addToHistory('url', url);
+        // Persist the LIVE url into the group's redux webUrl so it survives a
+        // remount. Closing a SIBLING pane collapses the BSP tree and reparents
+        // this pane, which unmounts+remounts the <webview>; without this the
+        // remount reloads the ORIGINAL props.url and the pane jumps back to its
+        // first page (#92). Guard on a real change so did-navigate-in-page spam
+        // (SPA hash churn) doesn't thrash redux.
+        if (url !== this.props.url) {
+          this.props.onSetUrl?.(url);
+        }
       }
     };
 

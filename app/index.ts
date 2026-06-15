@@ -32,6 +32,21 @@ import {app, BrowserWindow, Menu, screen, ipcMain} from 'electron';
 app.name = 'Hyperia';
 app.setName('Hyperia');
 
+// A broken stdout/stderr pipe must NEVER crash the main process. When Hyperia is
+// launched detached (or the parent terminal/pipe that captured its output
+// closes), a later console.* write throws an uncaught EPIPE — which Electron
+// surfaces as a fatal "A JavaScript error occurred in the main process" dialog
+// (seen via the sidecar-stderr logger). Swallow EPIPE on the std streams so
+// logging can never take the app down; re-throw anything else.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on('error', (err: NodeJS.ErrnoException) => {
+    if (err && err.code === 'EPIPE') {
+      return;
+    }
+    throw err;
+  });
+}
+
 import isDev from 'electron-is-dev';
 import {gitDescribe} from 'git-describe';
 import parseUrl from 'parse-url';
