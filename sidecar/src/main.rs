@@ -909,7 +909,7 @@ async fn enforce_drive(
             // bouncing the agent with a bare "pending" it has to guess how to
             // poll. ~15s covers a prompt approval; on timeout we 202 with
             // explicit retry guidance so the agent knows exactly what to do.
-            for _ in 0..30 {
+            for _ in 0..16 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 match state.bridge.authorize_drive(&id, target_uid).await {
                     AuthDecision::Allow => return Ok(()),
@@ -1000,7 +1000,7 @@ async fn enforce_create(
             }
             // Wait for the human's decision so the create COMPLETES on approval
             // instead of returning a bare 202 the agent has to chase.
-            for _ in 0..30 {
+            for _ in 0..16 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 match state.bridge.authorize_create(&id).await {
                     AuthDecision::Allow | AuthDecision::RefuseHome => return Ok(()),
@@ -1082,7 +1082,7 @@ async fn enforce_capability(
                     .await;
             }
             // Wait for the human's decision so the action COMPLETES on approval.
-            for _ in 0..30 {
+            for _ in 0..16 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 match state.bridge.authorize_capability(&id, cap).await {
                     AuthDecision::Allow | AuthDecision::RefuseHome => return Ok(()),
