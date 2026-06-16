@@ -1,7 +1,7 @@
 import {randomBytes} from 'crypto';
 import {app} from 'electron';
 import {EventEmitter} from 'events';
-import {mkdirSync, writeFileSync} from 'fs';
+import {copyFileSync, existsSync, mkdirSync, writeFileSync} from 'fs';
 import {dirname, join, resolve} from 'path';
 import {StringDecoder} from 'string_decoder';
 
@@ -175,28 +175,52 @@ export default class Session extends EventEmitter {
 
     const userConfig = config.getConfig();
     const shellIntegrationEnabled = userConfig.shellIntegration !== false;
-    const integrationDir = resolve(__dirname, 'static/shell-integration');
+    const staticIntegrationDir = resolve(__dirname, 'static/shell-integration');
+    const integrationDir = join(app.getPath('userData'), 'shell-integration');
     const ctlDir = join(app.getPath('userData'), 'panes', uid);
 
     mkdirSync(ctlDir, { recursive: true });
 
     if (shellIntegrationEnabled) {
-      baseEnv.HYPERIA_SHELL_INTEGRATION = '1';
-      baseEnv.HYPERIA_INTEGRATION_DIR = integrationDir;
-      baseEnv.HYPERIA_CTL_DIR = ctlDir;
+      try {
+        mkdirSync(integrationDir, { recursive: true });
+        const integrationFiles = ['hyperia.bash', 'hyperia.fish', 'hyperia.ps1', 'hyperia.zsh'];
+        for (const file of integrationFiles) {
+          const srcPath = join(staticIntegrationDir, file);
+          const destPath = join(integrationDir, file);
+          if (existsSync(srcPath)) {
+            copyFileSync(srcPath, destPath);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to copy shell integration scripts:', err);
+      }
 
       const shellLower = shell.toLowerCase();
       const isBash = shellLower.endsWith('bash') || shellLower.endsWith('bash.exe');
       const isZsh = shellLower.endsWith('zsh') || shellLower.endsWith('zsh.exe');
       const isFish = shellLower.endsWith('fish') || shellLower.endsWith('fish.exe');
       const isPwsh = shellLower.endsWith('pwsh') || shellLower.endsWith('pwsh.exe') || shellLower.endsWith('powershell.exe');
+      const isWsl = shellLower.endsWith('wsl') || shellLower.endsWith('wsl.exe');
+
+      let finalIntegrationDir = integrationDir;
+      let finalCtlDir = ctlDir;
+
+      if (process.platform === 'win32' && (isBash || isZsh || isFish)) {
+        finalIntegrationDir = integrationDir.replace(/\\/g, '/');
+        finalCtlDir = ctlDir.replace(/\\/g, '/');
+      }
+
+      baseEnv.HYPERIA_SHELL_INTEGRATION = '1';
+      baseEnv.HYPERIA_INTEGRATION_DIR = finalIntegrationDir;
+      baseEnv.HYPERIA_CTL_DIR = finalCtlDir;
 
       if (isZsh) {
         const zdotdir = join(ctlDir, 'zdotdir');
         mkdirSync(zdotdir, { recursive: true });
         const oldZdotdir = baseEnv.ZDOTDIR || process.env.HOME || '';
-        baseEnv.OLD_ZDOTDIR = oldZdotdir;
-        baseEnv.ZDOTDIR = zdotdir;
+        baseEnv.OLD_ZDOTDIR = process.platform === 'win32' ? oldZdotdir.replace(/\\/g, '/') : oldZdotdir;
+        baseEnv.ZDOTDIR = process.platform === 'win32' ? zdotdir.replace(/\\/g, '/') : zdotdir;
         writeFileSync(join(zdotdir, '.zshrc'), `
 if [ -f "$OLD_ZDOTDIR/.zshrc" ]; then
   ZDOTDIR="$OLD_ZDOTDIR"
@@ -224,11 +248,33 @@ if [ -f "$HYPERIA_INTEGRATION_DIR/hyperia.bash" ]; then
   source "$HYPERIA_INTEGRATION_DIR/hyperia.bash"
 fi
 `);
-        shellArgs = ['--rcfile', bashrcPath];
+        shellArgs = ['--rcfile', process.platform === 'win32' ? bashrcPath.replace(/\\/g, '/') : bashrcPath];
       } else if (isFish) {
-        shellArgs = ['--init-command', `source "${join(integrationDir, 'hyperia.fish')}"`].concat(_shellArgs || []);
+        const fishScript = join(integrationDir, 'hyperia.fish');
+        shellArgs = ['--init-command', `source "${process.platform === 'win32' ? fishScript.replace(/\\/g, '/') : fishScript}"`].concat(_shellArgs || []);
       } else if (isPwsh) {
         shellArgs = ['-NoExit', '-Command', `. "${join(integrationDir, 'hyperia.ps1')}"`].concat(_shellArgs || []);
+      } else if (isWsl) {
+        // Write the bashrc file on the Windows side
+        const bashrcPath = join(ctlDir, 'bashrc');
+        writeFileSync(bashrcPath, `
+if [ -f /etc/bash.bashrc ]; then
+  source /etc/bash.bashrc
+fi
+if [ -f ~/.bashrc ]; then
+  source ~/.bashrc
+fi
+if [ -f "$HYPERIA_INTEGRATION_DIR/hyperia.bash" ]; then
+  source "$HYPERIA_INTEGRATION_DIR/hyperia.bash"
+fi
+`);
+        // Share variables and translate paths from Windows to WSL via WSLENV /p flag
+        const wslenv = process.env.WSLENV || '';
+        const vars = ['HYPERIA_SHELL_INTEGRATION', 'HYPERIA_INTEGRATION_DIR/p', 'HYPERIA_CTL_DIR/p', 'HYPERIA_AGENT_TOKEN', 'HYPERIA_MCP_URL', 'HYPERIA_PANE'];
+        baseEnv.WSLENV = Array.from(new Set(wslenv.split(':').concat(vars))).filter(Boolean).join(':');
+
+        const distroArgs = _shellArgs ? [..._shellArgs] : [];
+        shellArgs = distroArgs.concat(['--', 'bash', '-c', 'exec bash -i --rcfile "$HYPERIA_CTL_DIR/bashrc"']);
       }
     }
 

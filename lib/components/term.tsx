@@ -178,6 +178,7 @@ export default class Term extends React.PureComponent<
     findText: string;
     activeProgram: string | null;
     customCommandInput: string;
+    navigatorStatus?: string | null;
     newEnvKey: string;
     newEnvVal: string;
     isCustomModalOpen: boolean;
@@ -193,6 +194,7 @@ export default class Term extends React.PureComponent<
   termOptions: ITerminalOptions;
   disposableListeners: IDisposable[];
   defaultBellSound: HTMLAudioElement | null;
+  pendingCdPath?: string;
   bellSound: HTMLAudioElement | null;
   fitAddon: FitAddon;
   searchAddon: SearchAddon;
@@ -237,6 +239,7 @@ export default class Term extends React.PureComponent<
     findText: '',
     pickerZoom: 1.0,
     activeProgram: null as string | null,
+    navigatorStatus: null as string | null,
     customCommandInput: '',
     newEnvKey: '',
     newEnvVal: '',
@@ -488,6 +491,7 @@ export default class Term extends React.PureComponent<
     rpc.on('picker-zoom-in', this.handlePickerZoomIn);
     rpc.on('picker-zoom-out', this.handlePickerZoomOut);
     rpc.on('picker-zoom-reset', this.handlePickerZoomReset);
+    rpc.on('session-cd-reply', this.handleSessionCdReply);
 
     this.termOptions = getTermOptions(props);
     this.term = props.term || new Terminal(this.termOptions);
@@ -1290,7 +1294,8 @@ export default class Term extends React.PureComponent<
     } else {
       this.setState(
         {
-          isDirNavigatorOpen: false
+          isDirNavigatorOpen: false,
+          navigatorStatus: null
         },
         () => {
           setTimeout(() => {
@@ -1399,7 +1404,8 @@ export default class Term extends React.PureComponent<
     this.setState({
       navigatorCurrentPath: targetPath,
       searchBuffer: '',
-      focusedIndex: -1
+      focusedIndex: -1,
+      navigatorStatus: null
     });
     fetch(`http://localhost:${port}/api/fs/dirs?path=${encodeURIComponent(targetPath)}`)
       .then((r) => r.json())
@@ -1459,9 +1465,33 @@ export default class Term extends React.PureComponent<
       (p) => this.normDir(p) !== current && (!home || this.normDir(p) !== this.normDir(home))
     );
 
+    const query = this.state.searchBuffer.toLowerCase();
+    const matchesQuery = (p: string) => {
+      const full = p.toLowerCase();
+      const base = path.basename(p).toLowerCase();
+      return full.includes(query) || base.includes(query);
+    };
+
     const items: {path: string; accent: boolean}[] = [];
-    if (home) items.push({path: home, accent: true});
-    recents.slice(0, 12).forEach((p) => items.push({path: p, accent: false}));
+    if (query.length > 0) {
+      if (home && matchesQuery(home)) {
+        items.push({path: home, accent: true});
+      }
+      recents
+        .filter(matchesQuery)
+        .slice(0, 12)
+        .forEach((p) => {
+          items.push({path: p, accent: false});
+        });
+    } else {
+      if (home) {
+        items.push({path: home, accent: true});
+      }
+      recents.slice(0, 12).forEach((p) => {
+        items.push({path: p, accent: false});
+      });
+    }
+
     if (items.length === 0) return null;
 
     return (
@@ -1602,81 +1632,45 @@ export default class Term extends React.PureComponent<
     const target = this.state.navigatorCurrentPath;
     if (!target || !this.props.onData) return;
 
-    // 1. Extract the full terminal screen text
-    const screenText = this.getTerminalScreenText();
-    const activeProgram = this.detectInteractiveProgram(screenText);
+    this.pendingCdPath = target;
+    this.setState({navigatorStatus: 'Requesting directory change...'});
+    rpc.emit('session-cd', {uid: this.props.uid, path: target});
+  };
 
-    // 2. Extract active line to check for existing typed prompt entry
-    let hasTypedEntry = false;
-    if (this.term) {
-      const buffer = this.term.buffer.active;
-      const line = buffer.getLine(buffer.baseY + buffer.cursorY);
-      const lineText = line ? line.translateToString(true) : '';
+  handleSessionCdReply = (data: {
+    uid: string;
+    applied?: boolean;
+    queued?: boolean;
+    refused?: boolean;
+    reason?: string;
+  }) => {
+    if (data.uid !== this.props.uid) return;
 
-      const promptSymbols = ['❯', '$', '%', '#', '>'];
-      let promptSymbolIndex = -1;
-      for (const sym of promptSymbols) {
-        const idx = lineText.lastIndexOf(sym);
-        if (idx > promptSymbolIndex) {
-          promptSymbolIndex = idx;
-        }
-      }
-      if (promptSymbolIndex !== -1) {
-        const afterPrompt = lineText.slice(promptSymbolIndex + 1).trim();
-        if (afterPrompt.length > 0) {
-          hasTypedEntry = true;
-        }
-      } else {
-        if (lineText.trim().length > 0) {
-          hasTypedEntry = true;
-        }
-      }
-    }
-
-    const performCd = () => {
-      this.props.onData(`cd "${target}"\r`);
-      if ((this.props as any).onCwd) {
-        (this.props as any).onCwd(target);
-      }
+    if (data.applied) {
+      const target = this.pendingCdPath || this.state.navigatorCurrentPath;
       this.setState(
         {
-          isDirNavigatorOpen: false
+          isDirNavigatorOpen: false,
+          navigatorStatus: null
         },
         () => {
+          if ((this.props as any).onCwd && target) {
+            (this.props as any).onCwd(target);
+          }
           setTimeout(() => {
             this.focus();
           }, 50);
         }
       );
-    };
-
-    if (activeProgram) {
-      console.log(`[navigator] Active program detected: ${activeProgram}. Sending attention message to path...`);
-      this.props.onData(`from hyperia: user wanting to set attention on path: ${target}\r`);
-      this.setState(
-        {
-          isDirNavigatorOpen: false
-        },
-        () => {
-          setTimeout(() => {
-            this.focus();
-          }, 50);
-        }
-      );
-      return;
+    } else if (data.queued) {
+      this.setState({
+        navigatorStatus: 'Will change directory when program exits'
+      });
+    } else if (data.refused) {
+      this.setState({
+        navigatorStatus: `Directory change refused: ${data.reason || 'unknown'}`
+      });
     }
-
-    if (hasTypedEntry) {
-      console.log('[navigator] Prompt has typed entry. Hitting Enter first...');
-      this.props.onData('\r');
-      setTimeout(() => {
-        performCd();
-      }, 150);
-      return;
-    }
-
-    // Default case: empty prompt, no program running
-    performCd();
   };
 
   renderNavigatorBreadcrumbs = () => {
@@ -2256,6 +2250,7 @@ export default class Term extends React.PureComponent<
     rpc.removeListener('picker-zoom-in', this.handlePickerZoomIn);
     rpc.removeListener('picker-zoom-out', this.handlePickerZoomOut);
     rpc.removeListener('picker-zoom-reset', this.handlePickerZoomReset);
+    rpc.removeListener('session-cd-reply', this.handleSessionCdReply);
 
     window.removeEventListener('resize', this.onWindowResize);
     rpc.removeListener('move', this.onWindowMove);
@@ -2687,6 +2682,36 @@ export default class Term extends React.PureComponent<
 
             {/* Recent dirs — quick-jump button row */}
             {this.renderNavigatorRecent()}
+
+            {/* Status bar */}
+            {this.state.navigatorStatus && (
+              <div
+                style={{
+                  padding: '6px var(--space-12)',
+                  fontSize: '10px',
+                  color: this.state.navigatorStatus.startsWith('Directory change refused')
+                    ? 'var(--danger-text)'
+                    : 'var(--info-text)',
+                  fontFamily: 'var(--font-sans)',
+                  borderTop: '0.5px solid var(--border-neutral)',
+                  background: 'var(--bg-secondary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <i
+                  className={
+                    this.state.navigatorStatus.startsWith('Directory change refused')
+                      ? 'ti ti-alert-triangle'
+                      : 'ti ti-clock'
+                  }
+                  style={{fontSize: '11px'}}
+                  aria-hidden="true"
+                />
+                <span style={{fontWeight: 500}}>{this.state.navigatorStatus}</span>
+              </div>
+            )}
 
             {/* Footer */}
             {this.renderNavigatorFooter()}

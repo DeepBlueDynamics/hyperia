@@ -338,65 +338,8 @@ function handleCommand(msg: Record<string, unknown>) {
       const path = msg.path as string;
       const sidecarState = msg.state as 'idle' | 'running';
 
-      const tracked = trackedSessions.get(uid);
-      if (!tracked) {
-        sendResult(seq, JSON.stringify({ refused: true, reason: `No session: ${uid}` }));
-        break;
-      }
-
-      if (tracked.session.shellState) {
-        // Shell integration is active!
-        try {
-          const fs = require('fs');
-          const pathMod = require('path');
-          const ctlDir = pathMod.join(app.getPath('userData'), 'panes', uid);
-          const cdFilePath = pathMod.join(ctlDir, 'cd');
-          const tmpPath = `${cdFilePath}.tmp`;
-
-          fs.writeFileSync(tmpPath, path, 'utf8');
-          fs.renameSync(tmpPath, cdFilePath);
-
-          // Immediacy nudge if loose and no user activity
-          if (tracked.session.shellState.state === 'idle' && !isUserActive(uid)) {
-            tracked.session.write('\r');
-            sendResult(seq, JSON.stringify({ applied: true }));
-          } else if (tracked.session.shellState.state === 'idle') {
-            sendResult(seq, JSON.stringify({ queued: true, reason: 'human active' }));
-          } else {
-            sendResult(seq, JSON.stringify({ queued: true, reason: 'foreground app running' }));
-          }
-        } catch (err: any) {
-          sendResult(seq, JSON.stringify({ refused: true, reason: err.message }));
-        }
-      } else {
-        // Fallback mechanism (no shell integration)
-        const shell = (tracked.session.shell || '').toLowerCase();
-        const escapedPath = path.replace(/'/g, "'\\''");
-        let keys = `cd '${escapedPath}'\r`;
-        if (shell.endsWith('cmd.exe') || shell.endsWith('cmd')) {
-          keys = `cd /d "${path}"\r`;
-        }
-
-        if (sidecarState === 'idle' && !isUserActive(uid)) {
-          // Safe to inject keys immediately
-          tracked.session.write(keys);
-          sendResult(seq, JSON.stringify({ applied: true }));
-        } else {
-          // Queued fallback
-          let queue = agentQueues.get(uid);
-          if (!queue) {
-            queue = [];
-            agentQueues.set(uid, queue);
-          }
-          if (queue.length >= MAX_QUEUE_DEPTH) {
-            sendResult(seq, JSON.stringify({ refused: true, reason: 'Queue full' }));
-          } else {
-            queue.push({ keys, seq: undefined });
-            ensureDrainTimer();
-            sendResult(seq, JSON.stringify({ queued: true, reason: 'foreground app running or human active' }));
-          }
-        }
-      }
+      const result = executeSessionCd(uid, path, sidecarState, false);
+      sendResult(seq, JSON.stringify(result));
       break;
     }
 
@@ -1365,4 +1308,78 @@ export function notifyUserActivity(uid: string) {
 /** Set an external command handler for custom downstream messages. */
 export function setCommandHandler(handler: CommandHandler) {
   commandHandler = handler;
+}
+
+/** Execute a cd command on a session/pane, safely gating, queueing, or applying it immediately. */
+export function executeSessionCd(
+  uid: string,
+  path: string,
+  sidecarState?: 'idle' | 'running',
+  bypassUserActiveCheck = false
+): { applied?: boolean; queued?: boolean; refused?: boolean; reason?: string } {
+  const tracked = trackedSessions.get(uid);
+  if (!tracked) {
+    return { refused: true, reason: `No session: ${uid}` };
+  }
+
+  if (tracked.session.shellState) {
+    // Shell integration is active!
+    try {
+      const fs = require('fs');
+      const pathMod = require('path');
+      const ctlDir = pathMod.join(app.getPath('userData'), 'panes', uid);
+      const cdFilePath = pathMod.join(ctlDir, 'cd');
+      const tmpPath = `${cdFilePath}.tmp`;
+
+      fs.writeFileSync(tmpPath, path, 'utf8');
+      fs.renameSync(tmpPath, cdFilePath);
+
+      const isIdle = tracked.session.shellState.state === 'idle';
+      const userActive = isUserActive(uid);
+      if (isIdle && (bypassUserActiveCheck || !userActive)) {
+        tracked.session.write('\r');
+        return { applied: true };
+      } else if (isIdle) {
+        return { queued: true, reason: 'human active' };
+      } else {
+        return { queued: true, reason: 'foreground app running' };
+      }
+    } catch (err: any) {
+      return { refused: true, reason: err.message };
+    }
+  } else {
+    // Fallback mechanism (no shell integration)
+    const shell = (tracked.session.shell || '').toLowerCase();
+    const escapedPath = path.replace(/'/g, "'\\''");
+    let keys = `cd '${escapedPath}'\r`;
+    if (shell.endsWith('cmd.exe') || shell.endsWith('cmd')) {
+      keys = `cd /d "${path}"\r`;
+    }
+
+    const isIdle = sidecarState === 'idle';
+    const userActive = isUserActive(uid);
+    // bypassUserActiveCheck relaxes ONLY the human-active gate (the human
+    // explicitly asked — e.g. via the directory picker). It must NEVER skip the
+    // idle check: writing keys while a foreground app owns the tty injects `cd`
+    // into that app instead of the shell (the bug #116 closes). When there is no
+    // idle signal here — the renderer RPC passes sidecarState=undefined for a
+    // pane without shell integration — isIdle is false, so we queue, never write.
+    if (isIdle && (bypassUserActiveCheck || !userActive)) {
+      tracked.session.write(keys);
+      return { applied: true };
+    } else {
+      let queue = agentQueues.get(uid);
+      if (!queue) {
+        queue = [];
+        agentQueues.set(uid, queue);
+      }
+      if (queue.length >= MAX_QUEUE_DEPTH) {
+        return { refused: true, reason: 'Queue full' };
+      } else {
+        queue.push({ keys, seq: undefined });
+        ensureDrainTimer();
+        return { queued: true, reason: 'foreground app running or human active' };
+      }
+    }
+  }
 }

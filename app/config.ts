@@ -194,17 +194,20 @@ const applyDetectedProfiles = (configObj: parsedConfig) => {
     // user-saved custom profile (those carry a `kind`).
     const normalizeShell = (shell: string): string => {
       if (!shell) return defaultShell.toLowerCase();
-      const lower = shell.toLowerCase();
-      if (lower === 'powershell.exe' || lower === 'powershell') {
-        return 'c:\\windows\\system32\\windowspowershell\\v1.0\\powershell.exe';
+      let resolved = shell.trim().toLowerCase();
+      if (process.platform === 'win32') {
+        resolved = resolved.replace(/\//g, '\\').replace(/\\+/g, '\\');
+        if (resolved === 'powershell.exe' || resolved === 'powershell') {
+          return 'c:\\windows\\system32\\windowspowershell\\v1.0\\powershell.exe';
+        }
+        if (resolved === 'pwsh.exe' || resolved === 'pwsh') {
+          return 'c:\\program files\\powershell\\7\\pwsh.exe';
+        }
+        if (resolved === 'cmd.exe' || resolved === 'cmd') {
+          return 'c:\\windows\\system32\\cmd.exe';
+        }
       }
-      if (lower === 'pwsh.exe' || lower === 'pwsh') {
-        return 'c:\\program files\\powershell\\7\\pwsh.exe';
-      }
-      if (lower === 'cmd.exe' || lower === 'cmd') {
-        return 'c:\\windows\\system32\\cmd.exe';
-      }
-      return lower;
+      return resolved;
     };
     const hasSpecificWsl = configObj.config.profiles.some((p) => p.name.startsWith('WSL:'));
     if (hasSpecificWsl) {
@@ -213,9 +216,12 @@ const applyDetectedProfiles = (configObj: parsedConfig) => {
 
     const seenShell = new Set<string>();
     configObj.config.profiles = configObj.config.profiles.filter((p: any) => {
-      if (p.kind) return true;
       const resolvedShell = normalizeShell(p.config?.shell);
       const key = `${resolvedShell} ${JSON.stringify(p.config?.shellArgs || [])}`;
+      if (p.kind) {
+        seenShell.add(key);
+        return true;
+      }
       if (seenShell.has(key)) return false;
       seenShell.add(key);
       return true;

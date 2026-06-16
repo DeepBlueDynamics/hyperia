@@ -3,6 +3,7 @@ import {app, ipcMain, Notification, Tray, Menu, nativeImage} from 'electron';
 import isDev from 'electron-is-dev';
 
 import {icon} from './config/paths';
+import {getAppIcon} from './utils/icon';
 
 let tray: Tray | null = null;
 const logRing: string[] = []; // Last N notifications
@@ -11,7 +12,10 @@ const MAX_LOG_RING = 50;
 export function initTray() {
   if (tray) return;
   try {
-    const trayIcon = nativeImage.createFromPath(icon).resize({width: 16, height: 16});
+    const iconImage = getAppIcon();
+    const trayIcon = typeof iconImage === 'string'
+      ? nativeImage.createFromPath(iconImage).resize({width: 16, height: 16})
+      : iconImage.resize({width: 16, height: 16});
     tray = new Tray(trayIcon);
     tray.setToolTip('Hyperia');
 

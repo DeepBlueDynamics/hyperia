@@ -95,9 +95,11 @@ export type MainEvents = {
   'picker-zoom-in': {uid: string};
   'picker-zoom-out': {uid: string};
   'picker-zoom-reset': {uid: string};
+  'session-cd': {uid: string; path: string};
 };
 
 export type RendererEvents = {
+  'session-cd-reply': {uid: string; applied?: boolean; queued?: boolean; refused?: boolean; reason?: string};
   ready: never;
   'session rename': {uid: string; name: string};
   'session set active': {uid: string};

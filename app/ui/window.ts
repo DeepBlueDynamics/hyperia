@@ -28,11 +28,13 @@ import {
   updateSessionActive,
   updateWindowFocus,
   getSessionRootTab,
-  forceRemoveSession
+  forceRemoveSession,
+  executeSessionCd
 } from '../bridge';
 import {execCommand} from '../commands';
 import {getDefaultProfile} from '../config';
 import {icon, homeDirectory, cfgPath} from '../config/paths';
+import {getAppIcon} from '../utils/icon';
 import fetchNotifications from '../notifications';
 import notify from '../notify';
 import {decorateSessionOptions, decorateSessionClass} from '../plugins';
@@ -135,39 +137,8 @@ function fallbackShell(): string {
 // falling back to the default Electron atom. nativeImage decodes it in-process;
 // if the .ico won't load we fall back to the 256px PNG read straight through fs
 // (fs reads inside asar). Cached after first successful build.
-let cachedWindowIcon: Electron.NativeImage | undefined | null = null;
 function windowIcon(): Electron.NativeImage | string {
-  if (cachedWindowIcon === null) {
-    cachedWindowIcon = undefined;
-    // TEMP DIAGNOSTIC: write exactly what happens to ~/.hyperia/icon-debug.log
-    // so we get runtime ground truth instead of guessing.
-    const dbg: string[] = [`[icon] ts=${Date.now()}`, `[icon] icon path = ${icon}`, `[icon] icon exists = ${existsSync(icon)}`];
-    try {
-      const img = nativeImage.createFromPath(icon);
-      dbg.push(`[icon] createFromPath: empty=${img.isEmpty()} size=${JSON.stringify(img.getSize())}`);
-      if (!img.isEmpty()) cachedWindowIcon = img;
-    } catch (e) {
-      dbg.push(`[icon] createFromPath threw: ${(e as Error).message}`);
-    }
-    if (!cachedWindowIcon) {
-      try {
-        const png = join(dirname(icon), 'icon.png');
-        dbg.push(`[icon] png path = ${png} exists=${existsSync(png)}`);
-        const img = nativeImage.createFromBuffer(readFileSync(png));
-        dbg.push(`[icon] createFromBuffer(png): empty=${img.isEmpty()} size=${JSON.stringify(img.getSize())}`);
-        if (!img.isEmpty()) cachedWindowIcon = img;
-      } catch (e) {
-        dbg.push(`[icon] png fallback threw: ${(e as Error).message}`);
-      }
-    }
-    dbg.push(`[icon] RESULT = ${cachedWindowIcon ? 'nativeImage (logo)' : 'STRING-FALLBACK (likely broken)'}`);
-    try {
-      writeFileSync(join(dirname(cfgPath), 'icon-debug.log'), dbg.join('\n') + '\n');
-    } catch {
-      /* best-effort diagnostic */
-    }
-  }
-  return cachedWindowIcon ?? icon;
+  return getAppIcon();
 }
 
 export function newWindow(
@@ -687,6 +658,10 @@ export function newWindow(
   rpc.on('command', (command) => {
     const focusedWindow = BrowserWindow.getFocusedWindow();
     execCommand(command, focusedWindow!);
+  });
+  rpc.on('session-cd', ({uid, path}) => {
+    const result = executeSessionCd(uid, path, undefined, true);
+    rpc.emit('session-cd-reply', { uid, ...result });
   });
   // pass on the full screen events from the window to react
   rpc.win.on('enter-full-screen', () => {

@@ -59,6 +59,7 @@ import * as plugins from './plugins';
 import {initSettings} from './settings';
 import {initSticky} from './sticky';
 import {newWindow} from './ui/window';
+import {getAppIcon} from './utils/icon';
 import {installCLI} from './utils/cli-install';
 import * as windowUtils from './utils/window-utils';
 import {restoreFor} from './window-state';
@@ -99,8 +100,6 @@ function _showSplash(
   mainWin: BrowserWindow
 ): Promise<void> {
   return new Promise((resolve_) => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const {icon: appIcon} = require('./config/paths');
     const splash = new BrowserWindow({
       x: winBounds.x,
       y: winBounds.y,
@@ -112,7 +111,7 @@ function _showSplash(
       skipTaskbar: true,
       backgroundColor: '#00000000',
       alwaysOnTop: true,
-      icon: appIcon,
+      icon: getAppIcon(),
       title: 'Hyperia',
       webPreferences: {
         nodeIntegration: false,
