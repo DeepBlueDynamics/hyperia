@@ -23,7 +23,20 @@ import {keys} from '../utils/object';
 import findBySession from '../utils/term-groups';
 
 export function addSession(data: Session) {
-  const {uid, shell, pid, cols = null, rows = null, splitDirection, activeUid, profile, groupUid, url, cwd, isNewGroup} = data;
+  const {
+    uid,
+    shell,
+    pid,
+    cols = null,
+    rows = null,
+    splitDirection,
+    activeUid,
+    profile,
+    groupUid,
+    url,
+    cwd,
+    isNewGroup
+  } = data;
   const isRestore = (data as any).isRestore;
   const lastCommand = (data as any).lastCommand;
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
@@ -53,8 +66,10 @@ export function addSession(data: Session) {
       setTimeout(() => {
         const state = getState();
         if (state.sessions.sessions[uid]) {
-          console.log(`[sessions] Pre-populating terminal buffer for restored session ${uid} with command: ${lastCommand}`);
-          rpc.emit('data', { uid, data: lastCommand });
+          console.log(
+            `[sessions] Pre-populating terminal buffer for restored session ${uid} with command: ${lastCommand}`
+          );
+          rpc.emit('data', {uid, data: lastCommand});
         }
       }, 500);
     }

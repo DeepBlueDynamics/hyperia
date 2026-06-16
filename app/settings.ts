@@ -32,7 +32,10 @@ export function initSettings() {
       writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
       event.sender.send('set-default-profile-done', {ok: true, name});
     } catch (e) {
-      event.sender.send('set-default-profile-done', {ok: false, error: String(e)});
+      event.sender.send('set-default-profile-done', {
+        ok: false,
+        error: String(e)
+      });
     }
   });
 
@@ -131,39 +134,72 @@ export function initSettings() {
       title: 'Select Shell Executable',
       properties: ['openFile'],
       filters: [
-        {name: 'Executables', extensions: ['exe', 'bat', 'cmd', 'sh', 'bash', 'zsh', 'fish', '*']}
+        {
+          name: 'Executables',
+          extensions: ['exe', 'bat', 'cmd', 'sh', 'bash', 'zsh', 'fish', '*']
+        }
       ]
     });
     return res.canceled || !res.filePaths.length ? null : res.filePaths[0];
   });
 
-  ipcMain.on('add-profile', (event, profile: {name: string; shell: string; shellArgs?: string[]; env?: Record<string, string>; kind?: string}) => {
-    try {
-      const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
-      if (!cfg.config) cfg.config = {};
-      if (!cfg.config.profiles) cfg.config.profiles = [];
-
-      // Remove duplicate if it exists
-      cfg.config.profiles = cfg.config.profiles.filter((p: any) => p.name !== profile.name);
-
-      cfg.config.profiles.push({
-        name: profile.name,
-        // 'agent' custom profiles surface under "pick an agent"; everything else
-        // (default) shows with the shell buttons.
-        kind: profile.kind === 'agent' ? 'agent' : 'shell',
-        config: {
-          shell: profile.shell,
-          shellArgs: profile.shellArgs || [],
-          env: profile.env || {}
-        }
+  ipcMain.handle(
+    'confirm-remove-profile',
+    async (event, {type, displayName}: {type: 'shell' | 'agent'; displayName: string}) => {
+      const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+      const message =
+        type === 'agent' ? `Delete custom agent "${displayName}"?` : `Delete custom shell "${displayName}"?`;
+      const res = await dialog.showMessageBox(win!, {
+        type: 'question',
+        buttons: ['Cancel', 'Delete'],
+        defaultId: 1,
+        cancelId: 0,
+        title: type === 'agent' ? 'Delete Custom Agent' : 'Delete Custom Shell',
+        message
       });
-      
-      writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
-      event.sender.send('add-profile-done', {ok: true});
-    } catch (e) {
-      event.sender.send('add-profile-done', {ok: false, error: String(e)});
+      return res.response === 1;
     }
-  });
+  );
+
+  ipcMain.on(
+    'add-profile',
+    (
+      event,
+      profile: {
+        name: string;
+        shell: string;
+        shellArgs?: string[];
+        env?: Record<string, string>;
+        kind?: string;
+      }
+    ) => {
+      try {
+        const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+        if (!cfg.config) cfg.config = {};
+        if (!cfg.config.profiles) cfg.config.profiles = [];
+
+        // Remove duplicate if it exists
+        cfg.config.profiles = cfg.config.profiles.filter((p: any) => p.name !== profile.name);
+
+        cfg.config.profiles.push({
+          name: profile.name,
+          // 'agent' custom profiles surface under "pick an agent"; everything else
+          // (default) shows with the shell buttons.
+          kind: profile.kind === 'agent' ? 'agent' : 'shell',
+          config: {
+            shell: profile.shell,
+            shellArgs: profile.shellArgs || [],
+            env: profile.env || {}
+          }
+        });
+
+        writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+        event.sender.send('add-profile-done', {ok: true});
+      } catch (e) {
+        event.sender.send('add-profile-done', {ok: false, error: String(e)});
+      }
+    }
+  );
 
   // Remove a (custom) profile by name. The config watcher reloads on write,
   // which re-runs detection + pushes the new profiles list to the renderer, so

@@ -233,7 +233,10 @@ export function userExitTermGroup(uid: string) {
         }
 
         const activeSessionUid = termGroups.activeSessions[termGroups.activeRootGroup!];
-        const isActive = termGroups.activeRootGroup === uid || activeSessionUid === group.sessionUid || termGroups.activeTermGroup === uid;
+        const isActive =
+          termGroups.activeRootGroup === uid ||
+          activeSessionUid === group.sessionUid ||
+          termGroups.activeTermGroup === uid;
 
         if (isActive) {
           const nextPaneUid = findNextPaneUid(termGroups, group);
@@ -305,7 +308,9 @@ export function exitActiveTermGroup() {
       type: TERM_GROUP_EXIT_ACTIVE,
       effect() {
         const {sessions, termGroups} = getState();
-        const activeUid = termGroups.activeTermGroup || (sessions.activeUid ? findBySession(termGroups, sessions.activeUid)?.uid : null);
+        const activeUid =
+          termGroups.activeTermGroup ||
+          (sessions.activeUid ? findBySession(termGroups, sessions.activeUid)?.uid : null);
         if (activeUid) {
           dispatch(userExitTermGroup(activeUid));
         }
@@ -346,4 +351,3 @@ export function popOutPane(uid: string) {
     } as any);
   };
 }
-

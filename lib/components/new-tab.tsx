@@ -91,11 +91,7 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
     <div className="new_tab_wrapper" ref={ref}>
       <div className="new_tab_split" onDoubleClick={(e) => e.stopPropagation()}>
         {/* +> New terminal tab */}
-        <div
-          className="new_tab_btn"
-          onClick={handleClick}
-          title="New Tab"
-        >
+        <div className="new_tab_btn" onClick={handleClick} title="New Tab">
           <span className="new_tab_icon">+</span>
         </div>
         {/* New window */}

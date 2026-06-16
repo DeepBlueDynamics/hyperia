@@ -1,7 +1,9 @@
 import React from 'react';
-import type { WebHistoryEntry } from './web-pane';
-import { faviconForUrl, historyRootKey, isValidUrl } from '../utils/web-pane-helpers';
+
 import rpc from '../rpc';
+import {faviconForUrl, historyRootKey, isValidUrl} from '../utils/web-pane-helpers';
+
+import type {WebHistoryEntry} from './web-pane';
 
 export interface UrlNavigatorProps {
   url: string;
@@ -13,12 +15,12 @@ export interface UrlNavigatorProps {
   navigatorInputVal: string;
   navigatorFocusedIndex: number;
   navigatorError: string | null;
-  aiConversations: Array<{ id: string; title: string; messages: any[] }>;
+  aiConversations: Array<{id: string; title: string; messages: any[]}>;
   webHistory: WebHistoryEntry[];
   saveHistory: boolean;
   loading: boolean;
   hasAiConfigured: boolean;
-  expandedHistoryRoots: { [key: string]: boolean };
+  expandedHistoryRoots: {[key: string]: boolean};
 
   navigatorInputRef: React.RefObject<HTMLInputElement>;
   urlNavigatorRef: React.RefObject<HTMLDivElement>;
@@ -34,7 +36,7 @@ export interface UrlNavigatorProps {
 }
 
 export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
-  const { url } = props;
+  const {url} = props;
   const isAi = !!(url && url.startsWith('ai://'));
   const val = props.navigatorInputVal;
   const query = val.toLowerCase().trim();
@@ -56,7 +58,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
     return (
       <span>
         {before}
-        <span style={{ textDecoration: 'underline', textUnderlineOffset: '2px' }}>{matched}</span>
+        <span style={{textDecoration: 'underline', textUnderlineOffset: '2px'}}>{matched}</span>
         {after}
       </span>
     );
@@ -69,7 +71,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
     return (
       <span>
         {text.substring(0, idx)}
-        <span style={{ textDecoration: 'underline', textUnderlineOffset: '2px' }}>
+        <span style={{textDecoration: 'underline', textUnderlineOffset: '2px'}}>
           {text.substring(idx, idx + q.length)}
         </span>
         {text.substring(idx + q.length)}
@@ -81,12 +83,11 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
     const filtered = q
       ? props.webHistory.filter(
           (item) =>
-            item.value.toLowerCase().includes(q) ||
-            (item.titleAtVisit && item.titleAtVisit.toLowerCase().includes(q))
+            item.value.toLowerCase().includes(q) || (item.titleAtVisit && item.titleAtVisit.toLowerCase().includes(q))
         )
       : props.webHistory;
     const order: string[] = [];
-    const groups: { [k: string]: WebHistoryEntry[] } = {};
+    const groups: {[k: string]: WebHistoryEntry[]} = {};
     for (const item of filtered) {
       const key = item.kind === 'url' ? historyRootKey(item.value) : `__solo__${item.value}-${item.visitedAt}`;
       if (!groups[key]) {
@@ -96,17 +97,17 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
       groups[key].push(item);
     }
     const rows: Array<
-      | { type: 'single' | 'child'; item: WebHistoryEntry }
-      | { type: 'root'; key: string; label: string; entries: WebHistoryEntry[] }
+      | {type: 'single' | 'child'; item: WebHistoryEntry}
+      | {type: 'root'; key: string; label: string; entries: WebHistoryEntry[]}
     > = [];
     for (const key of order) {
       const entries = groups[key];
       if (entries.length === 1) {
-        rows.push({ type: 'single', item: entries[0] });
+        rows.push({type: 'single', item: entries[0]});
       } else {
-        rows.push({ type: 'root', key, label: key.replace(/^https?:\/\//, ''), entries });
+        rows.push({type: 'root', key, label: key.replace(/^https?:\/\//, ''), entries});
         if (props.expandedHistoryRoots[key] || !!q) {
-          for (const item of entries) rows.push({ type: 'child', item });
+          for (const item of entries) rows.push({type: 'child', item});
         }
       }
     }
@@ -126,21 +127,20 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
-      props.onUpdateState({ isUrlNavigatorOpen: false });
+      props.onUpdateState({isUrlNavigatorOpen: false});
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       e.stopPropagation();
       if (filtered.length > 0) {
         const nextIndex = (props.navigatorFocusedIndex + 1) % filtered.length;
-        props.onUpdateState({ navigatorFocusedIndex: nextIndex });
+        props.onUpdateState({navigatorFocusedIndex: nextIndex});
       }
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       e.stopPropagation();
       if (filtered.length > 0) {
-        const prevIndex =
-          props.navigatorFocusedIndex <= 0 ? filtered.length - 1 : props.navigatorFocusedIndex - 1;
-        props.onUpdateState({ navigatorFocusedIndex: prevIndex });
+        const prevIndex = props.navigatorFocusedIndex <= 0 ? filtered.length - 1 : props.navigatorFocusedIndex - 1;
+        props.onUpdateState({navigatorFocusedIndex: prevIndex});
       }
     } else if (e.key === 'Enter') {
       e.preventDefault();
@@ -169,7 +169,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
         } else {
           props.onNavigate(item.value);
         }
-        props.onUpdateState({ isUrlNavigatorOpen: false });
+        props.onUpdateState({isUrlNavigatorOpen: false});
       } else {
         const trimmed = val.trim();
         if (trimmed) {
@@ -186,10 +186,10 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
               }
             }
             props.onNavigate(finalUrl);
-            props.onUpdateState({ isUrlNavigatorOpen: false });
+            props.onUpdateState({isUrlNavigatorOpen: false});
           } else {
             if (!props.hasAiConfigured) {
-              props.onUpdateState({ navigatorError: 'AI not configured — please check settings' });
+              props.onUpdateState({navigatorError: 'AI not configured — please check settings'});
               return;
             }
 
@@ -206,7 +206,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
                 url: `ai://${conversationId}`
               });
             }
-            props.onUpdateState({ isUrlNavigatorOpen: false });
+            props.onUpdateState({isUrlNavigatorOpen: false});
           }
         }
       }
@@ -252,7 +252,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
           props.onNavigate(finalUrl);
         } else {
           if (!props.hasAiConfigured) {
-            props.onUpdateState({ navigatorError: 'AI not configured — please check settings' });
+            props.onUpdateState({navigatorError: 'AI not configured — please check settings'});
             return;
           }
           const conversationId = 'conv-' + Date.now();
@@ -261,7 +261,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
         }
       }
     }
-    props.onUpdateState({ isUrlNavigatorOpen: false });
+    props.onUpdateState({isUrlNavigatorOpen: false});
   };
 
   const renderUrlBreadcrumbs = () => {
@@ -287,10 +287,10 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
             userSelect: 'none'
           }}
         >
-          <i className="ti ti-sparkles" style={{ color: 'var(--color-ai-purple, #7F77DD)', marginRight: '4px' }} />
+          <i className="ti ti-sparkles" style={{color: 'var(--color-ai-purple, #7F77DD)', marginRight: '4px'}} />
           <span>AI Chat</span>
-          <span style={{ color: 'var(--text-tertiary)' }}>&gt;</span>
-          <span style={{ color: 'var(--text-primary)' }}>{title}</span>
+          <span style={{color: 'var(--text-tertiary)'}}>&gt;</span>
+          <span style={{color: 'var(--text-primary)'}}>{title}</span>
         </div>
       );
     }
@@ -331,8 +331,8 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
             userSelect: 'none'
           }}
         >
-          <i className="ti ti-world" style={{ color: 'var(--info-text)', marginRight: '4px' }} />
-          <span style={{ color: 'var(--text-primary)', wordBreak: 'break-all', overflowWrap: 'anywhere', minWidth: 0 }}>
+          <i className="ti ti-world" style={{color: 'var(--info-text)', marginRight: '4px'}} />
+          <span style={{color: 'var(--text-primary)', wordBreak: 'break-all', overflowWrap: 'anywhere', minWidth: 0}}>
             {currentUrl}
           </span>
         </div>
@@ -354,7 +354,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
 
     const hostParts = hostname.split('.').filter(Boolean);
     for (let i = hostParts.length - 1; i >= 0; i--) {
-      hops.push({ name: hostParts[i], url: rootUrl, title: `Go to ${rootUrl}` });
+      hops.push({name: hostParts[i], url: rootUrl, title: `Go to ${rootUrl}`});
     }
 
     if (port) {
@@ -377,7 +377,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
     });
 
     if (hash) {
-      hops.push({ name: hash, url: currentUrl, title: `Fragment ${hash}` });
+      hops.push({name: hash, url: currentUrl, title: `Fragment ${hash}`});
     }
 
     const varKeys: string[] = [];
@@ -414,18 +414,18 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
         <span
           onClick={() => {
             props.onNavigate(rootUrl);
-            props.onUpdateState({ isUrlNavigatorOpen: false });
+            props.onUpdateState({isUrlNavigatorOpen: false});
           }}
-          style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: 'var(--text-secondary)' }}
+          style={{cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: 'var(--text-secondary)'}}
           title={`Go to root site: ${rootUrl}`}
         >
-          <i className="ti ti-world" style={{ fontSize: '13px' }} aria-hidden="true" />
+          <i className="ti ti-world" style={{fontSize: '13px'}} aria-hidden="true" />
         </span>
         {hops.map((hop, index) => {
           const isLast = index === hops.length - 1;
           return (
             <React.Fragment key={index}>
-              <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>/</span>
+              <span style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>/</span>
               {isLast ? (
                 <span
                   style={{
@@ -445,7 +445,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
                 <span
                   onClick={() => {
                     props.onNavigate(hop.url);
-                    props.onUpdateState({ isUrlNavigatorOpen: false });
+                    props.onUpdateState({isUrlNavigatorOpen: false});
                   }}
                   style={{
                     fontSize: '11px',
@@ -513,10 +513,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
     );
   };
 
-  const renderHistoryRootRow = (
-    row: { key: string; label: string; entries: WebHistoryEntry[] },
-    index: number
-  ) => {
+  const renderHistoryRootRow = (row: {key: string; label: string; entries: WebHistoryEntry[]}, index: number) => {
     const isFocused = index === props.navigatorFocusedIndex;
     const expanded = !!props.expandedHistoryRoots[row.key];
     const sample = row.entries[0];
@@ -550,7 +547,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
       >
         <i
           className={expanded ? 'ti ti-chevron-down' : 'ti ti-chevron-right'}
-          style={{ fontSize: '12px', color: 'var(--text-tertiary)', flexShrink: 0 }}
+          style={{fontSize: '12px', color: 'var(--text-tertiary)', flexShrink: 0}}
           aria-hidden="true"
         />
         <span
@@ -566,7 +563,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
         >
           <i
             className="ti ti-world"
-            style={{ fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--text-tertiary)' }}
+            style={{fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--text-tertiary)'}}
             aria-hidden="true"
           />
           <img
@@ -574,7 +571,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
             width={14}
             height={14}
             alt=""
-            style={{ position: 'absolute', inset: 0, borderRadius: '2px', objectFit: 'contain' }}
+            style={{position: 'absolute', inset: 0, borderRadius: '2px', objectFit: 'contain'}}
             onError={(e) => {
               (e.currentTarget as HTMLImageElement).style.display = 'none';
             }}
@@ -609,12 +606,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
     );
   };
 
-  const renderHistoryRow = (
-    item: WebHistoryEntry,
-    index: number,
-    q: string,
-    indent = false
-  ) => {
+  const renderHistoryRow = (item: WebHistoryEntry, index: number, q: string, indent = false) => {
     const isFocused = index === props.navigatorFocusedIndex;
     const isAiRow = item.kind === 'ai-query';
     return (
@@ -679,7 +671,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
           >
             <i
               className="ti ti-world"
-              style={{ fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--text-tertiary)' }}
+              style={{fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--text-tertiary)'}}
               aria-hidden="true"
             />
             <img
@@ -687,7 +679,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
               width={14}
               height={14}
               alt=""
-              style={{ position: 'absolute', inset: 0, borderRadius: '2px', objectFit: 'contain' }}
+              style={{position: 'absolute', inset: 0, borderRadius: '2px', objectFit: 'contain'}}
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).style.display = 'none';
               }}
@@ -774,7 +766,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
           }}
           title="Delete from history"
         >
-          <i className="ti ti-x" style={{ fontSize: '10px' }} aria-hidden="true" />
+          <i className="ti ti-x" style={{fontSize: '10px'}} aria-hidden="true" />
         </div>
       </div>
     );
@@ -864,6 +856,11 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
           <input
             ref={props.navigatorInputRef}
             type="text"
+            // The navigator mounts fresh each time it pops open — autoFocus puts
+            // the cursor straight in the search/URL box so you can type
+            // immediately (more reliable than the rAF focus, which can miss).
+            autoFocus
+            onFocus={(e) => e.currentTarget.select()}
             style={{
               flex: 1,
               background: 'transparent',
@@ -885,13 +882,13 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
               try {
                 props.navigatorInputRef.current?.focus();
                 // eslint-disable-next-line @typescript-eslint/no-var-requires
-                const { Menu, MenuItem } = require('@electron/remote');
+                const {Menu, MenuItem} = require('@electron/remote');
                 const menu = new Menu();
-                menu.append(new MenuItem({ role: 'cut' }));
-                menu.append(new MenuItem({ role: 'copy' }));
-                menu.append(new MenuItem({ role: 'paste' }));
-                menu.append(new MenuItem({ type: 'separator' }));
-                menu.append(new MenuItem({ role: 'selectAll' }));
+                menu.append(new MenuItem({role: 'cut'}));
+                menu.append(new MenuItem({role: 'copy'}));
+                menu.append(new MenuItem({role: 'paste'}));
+                menu.append(new MenuItem({type: 'separator'}));
+                menu.append(new MenuItem({role: 'selectAll'}));
                 menu.popup();
               } catch (err) {
                 console.error('URL input context menu failed:', err);
@@ -951,10 +948,10 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
           <div
             onClick={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', marginRight: '12px' }}
+            style={{display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', marginRight: '12px'}}
             title={props.saveHistory ? 'History saving is enabled' : 'History saving is disabled (Private mode)'}
           >
-            <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>Save History</span>
+            <span style={{fontSize: '9px', color: 'var(--text-secondary)'}}>Save History</span>
             <label
               className="web_historyToggle"
               style={{
@@ -1008,7 +1005,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
             </label>
           </div>
 
-          <span style={{ color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>Esc to close</span>
+          <span style={{color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>Esc to close</span>
         </div>
       </div>
     );
@@ -1128,7 +1125,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
                     key={item.id}
                     onClick={() => {
                       props.onNavigate(`ai://${item.id}`);
-                      props.onUpdateState({ isUrlNavigatorOpen: false });
+                      props.onUpdateState({isUrlNavigatorOpen: false});
                     }}
                     style={{
                       display: 'flex',
@@ -1184,7 +1181,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
                       }}
                       title="Delete thread"
                     >
-                      <i className="ti ti-x" style={{ fontSize: '10px' }} aria-hidden="true" />
+                      <i className="ti ti-x" style={{fontSize: '10px'}} aria-hidden="true" />
                     </div>
                   </div>
                 );

@@ -150,6 +150,7 @@ impl ToolRegistry {
         if is_small_ollama {
             let allowed_tools = [
                 "terminal_run",
+                "terminal_cd",
                 "terminal_keys",
                 "terminal_screen",
                 "terminal_status",
@@ -617,6 +618,24 @@ impl ToolRegistry {
                 match self.client
                     .post(build_target_url("/api/type-and-collect"))
                     .body(keys.to_string())
+                    .send()
+                    .await
+                {
+                    Ok(resp) => return resp.text().await.unwrap_or_default(),
+                    Err(e) => return format!("Error: {}", e),
+                }
+            }
+            "terminal_cd" => {
+                let path = input["path"].as_str().unwrap_or("");
+                let body = serde_json::json!({
+                    "window": input["window"].as_u64(),
+                    "tab": input["tab"].as_str(),
+                    "pane": input["pane"].as_str(),
+                    "path": path
+                });
+                match self.client
+                    .post(build_target_url("/api/pane/cd"))
+                    .json(&body)
                     .send()
                     .await
                 {
@@ -1794,6 +1813,20 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                     "pane": { "type": "string", "description": "Pane identifier from terminal_status: use the pane label when present, otherwise use paneId (optional)" }
                 },
                 "required": ["keys"]
+            }
+        },
+        {
+            "name": "terminal_cd",
+            "description": "Change the working directory of a shell. If a foreground process is running, the change is queued and applied automatically when the shell returns to the prompt. If the shell is idle, it is applied immediately. Only works on local shells.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Absolute path to the directory to switch to" },
+                    "window": { "type": "integer", "description": "Window id (optional)" },
+                    "tab": { "type": "string", "description": "Tab name (optional)" },
+                    "pane": { "type": "string", "description": "Pane identifier from terminal_status: use the pane label when present, otherwise use paneId (optional)" }
+                },
+                "required": ["path"]
             }
         },
         {

@@ -33,10 +33,13 @@ function rootKeyForUrl(u: string): string {
     const p = new URL(/^[a-z]+:\/\//i.test(u) ? u : 'https://' + u);
     let path = p.pathname;
     const m = path.match(/[!?@#&=;,~*+$%^]/);
-    if (m && m.index !== undefined && m.index > 0) path = path.slice(0, m.index);
+    if (m?.index !== undefined && m.index > 0) path = path.slice(0, m.index);
     return `${p.protocol}//${p.host}${path}`.replace(/\/+$/, '').toLowerCase();
   } catch {
-    return u.split(/[!?@#&=;,~*+$%^]/)[0].trim().toLowerCase();
+    return u
+      .split(/[!?@#&=;,~*+$%^]/)[0]
+      .trim()
+      .toLowerCase();
   }
 }
 
@@ -158,7 +161,11 @@ export default class UrlPicker extends React.Component<Props, State> {
             boxSizing: 'border-box'
           }}
         >
-          <i className="ti ti-world" style={{fontSize: '14px', color: 'var(--text-tertiary)', flexShrink: 0}} aria-hidden="true" />
+          <i
+            className="ti ti-world"
+            style={{fontSize: '14px', color: 'var(--text-tertiary)', flexShrink: 0}}
+            aria-hidden="true"
+          />
           <input
             ref={this.inputRef}
             type="text"
@@ -221,6 +228,17 @@ export default class UrlPicker extends React.Component<Props, State> {
             }}
           />
           <span
+            // The "enter" badge looked like a button but did nothing — clicking it
+            // now submits exactly like pressing Enter, so both work.
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const r = focusedIndex >= 0 ? rows[focusedIndex] : undefined;
+              if (r && r.type === 'root') this.toggleRoot(r.key);
+              else if (r) onNavigate(r.entry.value);
+              else if (value.trim()) onNavigate(value.trim());
+              else this.inputRef.current?.focus();
+            }}
             style={{
               fontFamily: 'var(--font-mono)',
               fontSize: '10px',
@@ -231,7 +249,8 @@ export default class UrlPicker extends React.Component<Props, State> {
               color: 'var(--text-tertiary)',
               userSelect: 'none',
               lineHeight: '1.2',
-              whiteSpace: 'nowrap'
+              whiteSpace: 'nowrap',
+              cursor: 'pointer'
             }}
           >
             enter
@@ -283,8 +302,22 @@ export default class UrlPicker extends React.Component<Props, State> {
                         style={{fontSize: '12px', color: 'var(--text-tertiary)', flexShrink: 0}}
                         aria-hidden="true"
                       />
-                      <span style={{position: 'relative', width: '14px', height: '14px', flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}>
-                        <i className="ti ti-world" style={{fontSize: '13px', color: 'var(--text-tertiary)'}} aria-hidden="true" />
+                      <span
+                        style={{
+                          position: 'relative',
+                          width: '14px',
+                          height: '14px',
+                          flexShrink: 0,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                      >
+                        <i
+                          className="ti ti-world"
+                          style={{fontSize: '13px', color: 'var(--text-tertiary)'}}
+                          aria-hidden="true"
+                        />
                         <img
                           src={faviconForUrl(row.entries[0].value)}
                           width={14}
@@ -297,11 +330,23 @@ export default class UrlPicker extends React.Component<Props, State> {
                         />
                       </span>
                       <span
-                        style={{flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '11px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)'}}
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          color: 'var(--text-primary)',
+                          fontFamily: 'var(--font-mono)'
+                        }}
                       >
                         {row.label}
                       </span>
-                      <span style={{fontSize: '10px', color: 'var(--text-tertiary)', flexShrink: 0}}>{row.entries.length}</span>
+                      <span style={{fontSize: '10px', color: 'var(--text-tertiary)', flexShrink: 0}}>
+                        {row.entries.length}
+                      </span>
                     </div>
                   );
                 }
@@ -338,7 +383,11 @@ export default class UrlPicker extends React.Component<Props, State> {
                         justifyContent: 'center'
                       }}
                     >
-                      <i className="ti ti-world" style={{fontSize: '13px', color: 'var(--text-tertiary)'}} aria-hidden="true" />
+                      <i
+                        className="ti ti-world"
+                        style={{fontSize: '13px', color: 'var(--text-tertiary)'}}
+                        aria-hidden="true"
+                      />
                       <img
                         src={faviconForUrl(e.value)}
                         width={14}

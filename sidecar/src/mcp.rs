@@ -52,6 +52,18 @@ pub struct KeysRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CdRequest {
+    /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
+    pub window: Option<u32>,
+    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
+    pub tab: Option<String>,
+    /// Which pane in the tab — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
+    pub pane: Option<String>,
+    /// Absolute path to the directory to switch to.
+    pub path: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RunRequest {
     /// Shell command or text to type
     pub command: String,
@@ -718,6 +730,24 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(out)]))
     }
 
+    #[tool(description = "Change the working directory of a shell. If a foreground process is running, the change is queued and applied automatically when the shell returns to the prompt. If the shell is idle, it is applied immediately. Only works on local shells.")]
+    async fn terminal_cd(
+        &self,
+        Parameters(req): Parameters<CdRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({
+            "window": req.window,
+            "tab": req.tab,
+            "pane": req.pane,
+            "path": req.path
+        });
+        let resp = self
+            .post_json_as("/api/pane/cd", &body, forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
     #[tool(description = "Type text into a terminal pane and press Enter. Works for shell commands and interactive programs (Codex, Python REPL, vim, etc.). Picks the submit byte per target: CR for shells (PowerShell, bash, cmd), LF for Node/Ink TUI agents (claude-code, codex, aider, gemini-cli) — so neither a phantom continuation prompt nor a silently-absorbed Enter occurs. Set submit=false to type without pressing Enter — useful to let the human review before submitting. Pass focus= to receive only the relevant part of the output — Maximus filters the result so you only see what you asked for. Pass raw=true to bypass Maximus and see the full output. Refuses shell-level backgrounding patterns (Start-Process, nohup, & at end, tmux) and points you to terminal_split / terminal_new_tab; set force=true to bypass. The response includes a [hyperia:meta] envelope when the target didn't appear to respond — telling you whether the input is still sitting unsubmitted and what to do next.")]
     async fn terminal_run(
         &self,
@@ -1235,7 +1265,7 @@ impl HyperiaMcp {
             {
                 "name": "terminal",
                 "description": "Drive terminal panes: open windows/tabs, split panes, run commands, read screens, and send keystrokes. Hyperia gives unlimited visible panes — prefer a dedicated pane over shell backgrounding.",
-                "tools": ["terminal_status", "terminal_new_tab", "terminal_new_window", "terminal_split", "terminal_run", "terminal_keys", "terminal_screen", "terminal_focus", "terminal_rename", "terminal_close"]
+                "tools": ["terminal_status", "terminal_cd", "terminal_new_tab", "terminal_new_window", "terminal_split", "terminal_run", "terminal_keys", "terminal_screen", "terminal_focus", "terminal_rename", "terminal_close"]
             },
             {
                 "name": "web",

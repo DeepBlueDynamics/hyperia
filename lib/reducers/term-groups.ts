@@ -122,7 +122,7 @@ const splitGroup = (state: ITermState, action: SessionAddAction) => {
     uid: uuidv4(),
     sessionUid: uid,
     parentUid: parentGroup.uid,
-    webUrl: (action as any).profile === 'Web Pane' ? ((action as any).url || '') : undefined
+    webUrl: (action as any).profile === 'Web Pane' ? (action as any).url || '' : undefined
   });
 
   state = state.setIn(['termGroups', newSession.uid], newSession);
@@ -339,7 +339,7 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       const termGroup = TermGroup({
         uid,
         sessionUid: act.uid,
-        webUrl: act.profile === 'Web Pane' ? (act.url || '') : undefined
+        webUrl: act.profile === 'Web Pane' ? act.url || '' : undefined
       });
 
       return state
@@ -394,9 +394,7 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
     }
     case TERM_GROUP_ACTIVATE_WEB_TAB: {
       const {uid} = act;
-      return state
-        .set('activeRootGroup', uid)
-        .set('activeTermGroup', uid);
+      return state.set('activeRootGroup', uid).set('activeTermGroup', uid);
     }
     case TERM_GROUP_SET_WEB_NAME: {
       const {uid, name} = act;
@@ -483,9 +481,7 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       }
 
       state = state.setIn(['activeSessions', uid], sessionUid || (null as any));
-      return state
-        .set('activeRootGroup', uid)
-        .set('activeTermGroup', uid);
+      return state.set('activeRootGroup', uid).set('activeTermGroup', uid);
     }
     case TERM_GROUP_REORDER: {
       const {fromUid, toIndex} = act;

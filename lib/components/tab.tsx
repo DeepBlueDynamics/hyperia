@@ -3,17 +3,41 @@ import React, {forwardRef, useState, useRef, useEffect} from 'react';
 import type {TabProps} from '../../typings/hyper';
 import rpc from '../rpc';
 
-const PICKER_EMOJIS = ['🌐', '📌', '⭐', '🔥', '🚀', '🧠', '💻', '🎮', '🍎', '🐱', '🦄', '🦖', '🐼', '👻', '👺', '🧟', '👾', '🌪️', '⚡', '🥑', '🍩', '🌵', '🎈'];
+const PICKER_EMOJIS = [
+  '🌐',
+  '📌',
+  '⭐',
+  '🔥',
+  '🚀',
+  '🧠',
+  '💻',
+  '🎮',
+  '🍎',
+  '🐱',
+  '🦄',
+  '🦖',
+  '🐼',
+  '👻',
+  '👺',
+  '🧟',
+  '👾',
+  '🌪️',
+  '⚡',
+  '🥑',
+  '🍩',
+  '🌵',
+  '🎈'
+];
 
 const EMOJI_REGEX = /^([\p{Extended_Pictographic}\u200d\uFE0F]+)\s*(.*)$/u;
 
 const parseTabName = (name: string, isWeb?: boolean, hasCustomName?: boolean) => {
-  if (!name) return { emoji: isWeb && !hasCustomName ? '🌐' : '', text: '' };
+  if (!name) return {emoji: isWeb && !hasCustomName ? '🌐' : '', text: ''};
   const match = EMOJI_REGEX.exec(name);
   if (match) {
-    return { emoji: match[1], text: match[2] };
+    return {emoji: match[1], text: match[2]};
   }
-  return { emoji: isWeb && !hasCustomName ? '🌐' : '', text: name };
+  return {emoji: isWeb && !hasCustomName ? '🌐' : '', text: name};
 };
 
 const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
@@ -64,13 +88,13 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const startRename = () => {
     const currentName = pendingName ?? (tabName || description || props.text) ?? '';
     const parsed = parseTabName(currentName, isWebPane);
-    
+
     let finalEmoji = parsed.emoji;
     if (parsed.emoji === '🌐' || !parsed.emoji) {
       const randomIndex = Math.floor(Math.random() * PICKER_EMOJIS.length);
       finalEmoji = PICKER_EMOJIS[randomIndex];
     }
-    
+
     setRenameValue(`${finalEmoji} ${parsed.text}`.trim());
     setPendingName(null);
     renamingRef.current = true;
@@ -198,11 +222,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const rawText = pendingName ?? (tabName || description || props.text) ?? '';
   const parsed = parseTabName(rawText, isWebPane);
   // Optimistically show pendingName to avoid any flicker while Redux propagates.
-  const displayText = copied
-    ? 'Copied ✓'
-    : isFirstRun
-      ? 'untitled'
-      : parsed.text;
+  const displayText = copied ? 'Copied ✓' : isFirstRun ? 'untitled' : parsed.text;
 
   // Agent dot color
   const agentDotColor = agentStatus?.working
@@ -279,7 +299,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
                       className="tab_pickerEmoji"
                       onMouseDown={(e) => {
                         e.preventDefault();
-                        const { text } = parseTabName(renameValue, isWebPane);
+                        const {text} = parseTabName(renameValue, isWebPane);
                         setRenameValue(`${emoji} ${text}`.trim());
                         inputRef.current?.focus();
                       }}
@@ -627,7 +647,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           cursor: pointer;
           padding: 2px;
           border-radius: 4px;
-          transition: background 0.15s, transform 0.1s;
+          transition:
+            background 0.15s,
+            transform 0.1s;
           user-select: none;
         }
 

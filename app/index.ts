@@ -60,8 +60,8 @@ import {initSettings} from './settings';
 import {initSticky} from './sticky';
 import {newWindow} from './ui/window';
 import {installCLI} from './utils/cli-install';
-import {restoreFor} from './window-state';
 import * as windowUtils from './utils/window-utils';
+import {restoreFor} from './window-state';
 
 const windowSet = new Set<BrowserWindow>([]);
 

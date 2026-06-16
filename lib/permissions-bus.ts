@@ -45,8 +45,8 @@ export function subscribe(paneId: string, cb: Listener): () => void {
   set.add(cb);
   cb(current.get(paneId) || null);
   return () => {
-    set!.delete(cb);
-    if (set!.size === 0) listeners.delete(paneId);
+    set.delete(cb);
+    if (set.size === 0) listeners.delete(paneId);
   };
 }
 

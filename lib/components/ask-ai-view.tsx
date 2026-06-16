@@ -199,7 +199,7 @@ export const AskAiView: React.FC<AskAiViewProps> = (props) => {
 
         {/* Tool executions accordion */}
         {searchState === 'searching' && searchLogs.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
             {searchLogs.map((log) => {
               const isRunning = log.status === 'running';
               const isFail = log.status === 'fail';
@@ -231,9 +231,9 @@ export const AskAiView: React.FC<AskAiViewProps> = (props) => {
                       fontFamily: 'var(--font-mono)'
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ color: statusColor }}>{icon}</span>
-                      <span style={{ color: isRunning ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
+                      <span style={{color: statusColor}}>{icon}</span>
+                      <span style={{color: isRunning ? 'var(--text-primary)' : 'var(--text-secondary)'}}>
                         {isRunning ? `running ${log.name}...` : `${log.name}`}
                       </span>
                     </div>
@@ -242,7 +242,7 @@ export const AskAiView: React.FC<AskAiViewProps> = (props) => {
                         onClick={() => {
                           onUpdateState({
                             searchLogs: searchLogs.map((item) =>
-                              item.id === log.id ? { ...item, expanded: !item.expanded } : item
+                              item.id === log.id ? {...item, expanded: !item.expanded} : item
                             )
                           });
                         }}
@@ -345,7 +345,7 @@ export const AskAiView: React.FC<AskAiViewProps> = (props) => {
           boxSizing: 'border-box'
         }}
       >
-        <span style={{ fontSize: '12px', color: 'var(--color-ai-purple, #7F77DD)' }}>✨</span>
+        <span style={{fontSize: '12px', color: 'var(--color-ai-purple, #7F77DD)'}}>✨</span>
         <input
           type="text"
           style={{
@@ -360,7 +360,7 @@ export const AskAiView: React.FC<AskAiViewProps> = (props) => {
           }}
           placeholder="Ask a follow-up question..."
           value={aiInputVal}
-          onChange={(e) => onUpdateState({ aiInputVal: e.target.value })}
+          onChange={(e) => onUpdateState({aiInputVal: e.target.value})}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
@@ -389,9 +389,7 @@ export const AskAiView: React.FC<AskAiViewProps> = (props) => {
             [Stop]
           </button>
         ) : (
-          <span style={{ fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
-            ↵
-          </span>
+          <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>↵</span>
         )}
       </div>
     </div>

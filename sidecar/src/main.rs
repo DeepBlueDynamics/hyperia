@@ -1214,6 +1214,98 @@ async fn post_perm_check(State(state): State<AppState>, body: String) -> (Status
     (StatusCode::OK, serde_json::json!({"allowed": allowed}).to_string())
 }
 
+async fn post_cd(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let uid = if let Some(u) = parsed["uid"].as_str() {
+        Some(u.to_string())
+    } else if parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string() {
+        match state
+            .bridge
+            .resolve_pane_uid(
+                parsed["window"].as_u64().map(|v| v as u32),
+                parsed["tab"].as_str(),
+                parsed["pane"].as_str(),
+            )
+            .await
+        {
+            Some(u) => Some(u),
+            None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
+        }
+    } else {
+        match state.bridge.focused_pane().await {
+            Some(u) => Some(u),
+            None => return (StatusCode::NOT_FOUND, "No focused pane to cd in".into()),
+        }
+    };
+
+    let uid = match uid {
+        Some(u) => u,
+        None => return (StatusCode::NOT_FOUND, "No pane identified".into()),
+    };
+
+    // Gate on authorization / consent
+    if let Err(resp) = enforce_drive(&state, &headers, &uid).await {
+        return resp;
+    }
+
+    let path = match parsed["path"].as_str() {
+        Some(p) => p.to_string(),
+        None => return (StatusCode::BAD_REQUEST, "Missing path parameter".into()),
+    };
+
+    let path_buf = std::path::PathBuf::from(&path);
+    if !path_buf.is_dir() {
+        return (StatusCode::BAD_REQUEST, format!("Path is not a directory: {path}"));
+    }
+
+    use sysinfo::{ProcessesToUpdate, System};
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+
+    let (pid, name, shell_has_integration, shell_state, last_user_activity) = {
+        let sessions = state.bridge.sessions().await;
+        let info = match sessions.get(&uid) {
+            Some(i) => i,
+            None => return (StatusCode::NOT_FOUND, "Pane not found in sessions".into()),
+        };
+        (info.pid, info.name.clone(), info.shell_has_integration, info.shell_state.clone(), info.last_user_activity)
+    };
+
+    let process = if pid > 0 {
+        crate::process::foreground_process_with(&sys, pid)
+    } else {
+        String::new()
+    };
+    let shell = std::path::Path::new(&name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&name)
+        .trim_end_matches(".exe")
+        .to_string();
+    let user_active_secs_ago = last_user_activity.map(|t| t.elapsed().as_secs());
+
+    let is_fallback_idle = (process.is_empty() || process.to_lowercase() == shell.to_lowercase()) && user_active_secs_ago.unwrap_or(999) > 15;
+    let is_idle = if shell_has_integration { shell_state == "idle" } else { is_fallback_idle };
+
+    let state_str = if is_idle { "idle" } else { "running" };
+
+    let cmd = serde_json::json!({
+        "type": "Cd",
+        "uid": uid,
+        "path": path,
+        "state": state_str
+    });
+
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
 async fn post_close(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2233,6 +2325,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/identity/whoami", axum::routing::get(get_identity_whoami))
         .route("/api/identity/agents", axum::routing::get(get_identity_agents))
         .route("/api/pane/close", axum::routing::post(post_close))
+        .route("/api/pane/cd", axum::routing::post(post_cd))
         .route("/api/pane/new", axum::routing::post(post_new_tab))
         .route("/api/window/new", axum::routing::post(post_new_window))
         .route("/api/window/size", axum::routing::post(post_window_size))

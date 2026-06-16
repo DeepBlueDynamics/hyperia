@@ -5,8 +5,6 @@ import React, {useState, useRef, useEffect} from 'react';
 import type {configOptions} from '../../typings/config';
 import {ipcRenderer} from '../utils/ipc';
 
-
-
 export interface Props {
   defaultProfile: string;
   profiles: configOptions['profiles'];
@@ -55,16 +53,11 @@ const Toolbar = ({defaultProfile, profiles, openNewTab, openWebPane}: Props) => 
     ipcRenderer.send('new-sticky');
   };
 
-
   return (
     <div className="toolbar_wrap" ref={ref}>
       <div className="toolbar_bar">
         {/* +> New terminal tab */}
-        <div
-          className="toolbar_btn"
-          onClick={handleNewTab}
-          title="New Tab"
-        >
+        <div className="toolbar_btn" onClick={handleNewTab} title="New Tab">
           <span className="toolbar_plus">+</span>
         </div>
 
@@ -90,8 +83,6 @@ const Toolbar = ({defaultProfile, profiles, openNewTab, openWebPane}: Props) => 
             <line x1="4" y1="7.5" x2="8" y2="7.5" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
           </svg>
         </div>
-
-
       </div>
 
       <style jsx>{`

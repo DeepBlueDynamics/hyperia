@@ -128,10 +128,9 @@ export const historyRootKey = (value: string): string => {
     const u = new URL(/^[a-z]+:\/\//i.test(value) ? value : 'https://' + value);
     let path = u.pathname;
     const m = path.match(/[!?@#&=;,~*+$%^]/);
-    if (m && m.index !== undefined && m.index > 0) path = path.slice(0, m.index);
+    if (m?.index !== undefined && m.index > 0) path = path.slice(0, m.index);
     return `${u.protocol}//${u.host}${path}`.replace(/\/+$/, '').toLowerCase();
   } catch {
     return value.split(/[!?@#&=;,~*+$%^]/)[0].toLowerCase();
   }
 };
-

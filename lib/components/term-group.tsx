@@ -167,7 +167,7 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
     const isRoot = !(this.props as any).splitLabel && !splitOffset;
 
     if ((termGroup as any).webUrl !== undefined && (termGroup as any).webUrl !== null) {
-      const label = (this.props as any).splitLabel as string | undefined || 'a';
+      const label = ((this.props as any).splitLabel as string | undefined) || 'a';
       return (
         <WebPane
           url={(termGroup as any).webUrl}
@@ -181,7 +181,7 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
     }
 
     if (termGroup.sessionUid) {
-      const label = (this.props as any).splitLabel as string | undefined || 'a';
+      const label = ((this.props as any).splitLabel as string | undefined) || 'a';
       return this.renderTerm(termGroup.sessionUid, label);
     }
 
@@ -210,7 +210,7 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
           this.props.parentProps,
           Object.assign({}, this.props, {
             termGroup: child,
-            splitLabel: (child.sessionUid || (child as any).webUrl) ? label : undefined,
+            splitLabel: child.sessionUid || (child as any).webUrl ? label : undefined,
             splitOffset: offset
           })
         );

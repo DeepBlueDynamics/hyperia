@@ -16,6 +16,14 @@ use crate::AppState;
 // Session info tracked per Electron PTY session
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ShellAppInfo {
+    pub name: String,
+    pub path: String,
+    pub cmdline: String,
+    pub pid: u32,
+}
+
 pub struct SessionInfo {
     pub name: String,
     /// Friendly, layout-stable pane name (e.g. "Suspicious Marlin 🧄"),
@@ -43,6 +51,10 @@ pub struct SessionInfo {
     pub cwd: String,
     pub last_user_activity: Option<std::time::Instant>,
     pub title: String,
+    pub shell_state: String,
+    pub shell_app: Option<ShellAppInfo>,
+    pub shell_last_exit: Option<i32>,
+    pub shell_has_integration: bool,
 }
 
 /// Match a pane's friendly `name` (e.g. "Suspicious Marlin 🧄") against an
@@ -654,6 +666,26 @@ impl Bridge {
                         } else {
                             info.shell_name.clone()
                         };
+                        let is_fallback_idle = (process.is_empty() || process.to_lowercase() == shell.to_lowercase()) && user_active_secs_ago.unwrap_or(999) > 15;
+                        let state = if info.shell_has_integration { &info.shell_state } else if is_fallback_idle { "idle" } else { "running" };
+
+                        let app_val = if state == "idle" {
+                            serde_json::Value::Null
+                        } else if let Some(ref app_info) = info.shell_app {
+                            serde_json::to_value(app_info).unwrap_or(serde_json::Value::Null)
+                        } else {
+                            if !process.is_empty() {
+                                serde_json::json!({
+                                    "name": process,
+                                    "path": "",
+                                    "cmdline": "",
+                                    "pid": 0
+                                })
+                            } else {
+                                serde_json::Value::Null
+                            }
+                        };
+
                         serde_json::json!({
                             "paneId": uid,
                             "name": friendly,
@@ -667,6 +699,9 @@ impl Bridge {
                             "userActiveSecsAgo": user_active_secs_ago,
                             "cwd": info.cwd,
                             "title": info.title,
+                            "state": state,
+                            "app": app_val,
+                            "lastExit": info.shell_last_exit,
                             // BSP bounding box in 0–100 % — lets tab_image
                             // draw the layout to scale.
                             "bspX": info.bsp_x,
@@ -760,6 +795,10 @@ impl Bridge {
                         cwd: String::new(),
                         last_user_activity: None,
                         title,
+                        shell_state: "idle".to_string(),
+                        shell_app: None,
+                        shell_last_exit: None,
+                        shell_has_integration: false,
                     },
                 );
             }
@@ -795,6 +834,31 @@ impl Bridge {
                 if let Some(info) = self.inner.sessions.lock().await.get_mut(uid) {
                     info.cwd = cwd.clone();
                     tracing::info!("Session {uid} cwd updated: {cwd}");
+                }
+            }
+
+            "SessionShellState" => {
+                let uid = msg["uid"].as_str().unwrap_or("");
+                let state = msg["state"].as_str().unwrap_or("idle").to_string();
+                let last_exit = msg["lastExit"].as_i64().map(|x| x as i32);
+                let app = if msg["app"].is_null() {
+                    None
+                } else {
+                    msg["app"].as_object().map(|obj| {
+                        ShellAppInfo {
+                            name: obj.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            path: obj.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            cmdline: obj.get("cmdline").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            pid: obj.get("pid").and_then(|v| v.as_u64()).map(|p| p as u32).unwrap_or(0),
+                        }
+                    })
+                };
+                if let Some(info) = self.inner.sessions.lock().await.get_mut(uid) {
+                    info.shell_has_integration = true;
+                    info.shell_state = state.clone();
+                    info.shell_app = app.clone();
+                    info.shell_last_exit = last_exit;
+                    tracing::info!("Session {uid} shell state updated: state={state}, app={app:?}, last_exit={last_exit:?}");
                 }
             }
 
@@ -1048,6 +1112,10 @@ mod tests {
             cwd: String::new(),
             last_user_activity: None,
             title: String::new(),
+            shell_state: "idle".to_string(),
+            shell_app: None,
+            shell_last_exit: None,
+            shell_has_integration: false,
         }
     }
 

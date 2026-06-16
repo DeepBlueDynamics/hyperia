@@ -1257,7 +1257,7 @@ export default class Term extends React.PureComponent<
           const parentRect = termFit.getBoundingClientRect();
           navigatorLeft = rect.left - parentRect.left;
           navigatorTop = rect.bottom - parentRect.top + 4; // 4px margin below the path bar
-          
+
           const widthToUse = Math.min(Math.max(rect.width, 320), parentRect.width - 16);
           navigatorWidth = widthToUse;
           if (navigatorLeft + widthToUse > parentRect.width) {
@@ -1337,15 +1337,15 @@ export default class Term extends React.PureComponent<
     const val = this.state.newEnvVal.trim();
     if (!key) return;
 
-    const currentEnv = { ...((this.props as any).env || {}) };
+    const currentEnv = {...((this.props as any).env || {})};
     currentEnv[key] = val;
 
     ipcRenderer.send('set-config-env', currentEnv);
-    this.setState({ newEnvKey: '', newEnvVal: '' });
+    this.setState({newEnvKey: '', newEnvVal: ''});
   };
 
   deleteEnvVar = (key: string) => {
-    const currentEnv = { ...((this.props as any).env || {}) };
+    const currentEnv = {...((this.props as any).env || {})};
     delete currentEnv[key];
     ipcRenderer.send('set-config-env', currentEnv);
   };
@@ -1396,11 +1396,18 @@ export default class Term extends React.PureComponent<
     const port = process.env.HYPERIA_PORT || '9800';
     // Reflect the requested path immediately; the fetch corrects it to the
     // sidecar's resolved path (e.g. home) when it returns.
-    this.setState({navigatorCurrentPath: targetPath, searchBuffer: '', focusedIndex: -1});
+    this.setState({
+      navigatorCurrentPath: targetPath,
+      searchBuffer: '',
+      focusedIndex: -1
+    });
     fetch(`http://localhost:${port}/api/fs/dirs?path=${encodeURIComponent(targetPath)}`)
       .then((r) => r.json())
       .then((data: {path: string; parent: string | null; dirs: (string | SubdirInfo)[]}) => {
-        this.setState({navigatorCurrentPath: data.path, navigatorDirs: data.dirs});
+        this.setState({
+          navigatorCurrentPath: data.path,
+          navigatorDirs: data.dirs
+        });
         // Navigating into a folder (row/breadcrumb click) blurs the search input;
         // re-focus it so the user can keep typing to filter immediately.
         if (this.state.isDirNavigatorOpen) {
@@ -1479,7 +1486,12 @@ export default class Term extends React.PureComponent<
         </div>
         <div
           className="term_navigatorRecentRow"
-          style={{display: 'flex', flexWrap: 'wrap', gap: 'var(--space-6)', paddingBottom: '2px'}}
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 'var(--space-6)',
+            paddingBottom: '2px'
+          }}
         >
           {items.map(({path, accent}) => (
             <span
@@ -1707,7 +1719,12 @@ export default class Term extends React.PureComponent<
         <span
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => handleHopClick(rootPath)}
-          style={{cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: 'var(--text-secondary)'}}
+          style={{
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            color: 'var(--text-secondary)'
+          }}
           title="Root directory"
         >
           <i className="ti ti-home" style={{fontSize: '13px'}} aria-hidden="true" />
@@ -1721,7 +1738,13 @@ export default class Term extends React.PureComponent<
           return (
             <React.Fragment key={hop.path}>
               {showSep && (
-                <span style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    color: 'var(--text-tertiary)',
+                    fontFamily: 'var(--font-mono)'
+                  }}
+                >
                   {sep}
                 </span>
               )}
@@ -1841,7 +1864,13 @@ export default class Term extends React.PureComponent<
                   }}
                 >
                   <span>{beforePart}</span>
-                  <span style={{textDecoration: 'underline', textUnderlineOffset: '2px', fontWeight: 'bold'}}>
+                  <span
+                    style={{
+                      textDecoration: 'underline',
+                      textUnderlineOffset: '2px',
+                      fontWeight: 'bold'
+                    }}
+                  >
                     {matchedPart}
                   </span>
                   <span>{afterPart}</span>
@@ -1866,7 +1895,15 @@ export default class Term extends React.PureComponent<
                 transition: 'background 0.1s ease'
               }}
             >
-              <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-6)', minWidth: 0, flex: 1}}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-6)',
+                  minWidth: 0,
+                  flex: 1
+                }}
+              >
                 <i
                   className="ti ti-folder term_folderIcon"
                   style={{
@@ -2045,7 +2082,11 @@ export default class Term extends React.PureComponent<
       >
         <i
           className="ti ti-search"
-          style={{fontSize: '13px', color: 'var(--text-tertiary)', flexShrink: 0}}
+          style={{
+            fontSize: '13px',
+            color: 'var(--text-tertiary)',
+            flexShrink: 0
+          }}
           aria-hidden="true"
         />
         <input
@@ -2352,23 +2393,18 @@ export default class Term extends React.PureComponent<
       : !isPicker && sessionShellName
         ? `${sessionShellName} | ${shellType}`
         : labelText;
-    const labelShort = isPicker
-      ? 'new pane'
-      : sessionShellName
-        ? sessionShellName
-        : labelText;
+    const labelShort = isPicker ? 'new pane' : sessionShellName ? sessionShellName : labelText;
 
     const nameLower = (sessionProfile || '').toLowerCase();
-    let icon = isPicker ? '⚙️' : '⚡';
-    if (nameLower.includes('powershell') || nameLower.includes('pwsh')) icon = '🐚';
-    else if (nameLower.includes('wsl') || nameLower.includes('ubuntu') || nameLower.includes('debian')) icon = '🐧';
-    else if (nameLower.includes('bash') || nameLower.includes('git')) icon = '⌥';
-    else if (nameLower.includes('cmd') || nameLower.includes('command')) icon = '💻';
-    else if (nameLower.includes('claude')) icon = '🤖';
+    // Terminal panes show the classic ">_" shell-prompt glyph (rendered mono in
+    // the band) instead of per-shell emojis. Agents (claude) keep a distinct
+    // marker; the new-pane picker keeps its gear.
+    let icon = isPicker ? '⚙️' : '>_';
+    if (nameLower.includes('claude')) icon = '🤖';
 
     const getStartIdx = (termGroups: Record<string, any>, groupUid: string): number => {
       let currentUid = groupUid;
-      while (termGroups[currentUid] && termGroups[currentUid].parentUid) {
+      while (termGroups[currentUid]?.parentUid) {
         currentUid = termGroups[currentUid].parentUid;
       }
       const hashCode = (str: string): number => {
@@ -2391,9 +2427,7 @@ export default class Term extends React.PureComponent<
     const groupUid = this.props.groupUid || '';
     const startIdx = getStartIdx(allTermGroups, groupUid);
 
-    const tint = isPicker
-      ? 'picker'
-      : getPaneTint(startIdx, splitLabel);
+    const tint = isPicker ? 'picker' : getPaneTint(startIdx, splitLabel);
     const showLabelStrip = !!splitLabel || isPicker;
 
     return (
@@ -2450,7 +2484,7 @@ export default class Term extends React.PureComponent<
                 </span>
               )
             }
-            icon={<span>{icon}</span>}
+            icon={<span style={{fontFamily: 'var(--font-mono)', fontWeight: 700}}>{icon}</span>}
             navCluster={
               <div
                 style={{
@@ -2477,7 +2511,13 @@ export default class Term extends React.PureComponent<
                 >
                   <i className="ti ti-arrow-left" style={{fontSize: '14px'}} aria-hidden="true" />
                   <div className="term_tooltip" style={{minWidth: '160px'}}>
-                    <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        color: 'var(--text-primary)',
+                        fontWeight: 500
+                      }}
+                    >
                       Previous directory
                     </div>
                     <div
@@ -2513,7 +2553,15 @@ export default class Term extends React.PureComponent<
                 >
                   <i className="ti ti-arrow-right" style={{fontSize: '14px'}} aria-hidden="true" />
                   <div className="term_tooltip" style={{minWidth: '160px'}}>
-                    <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Next directory</div>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        color: 'var(--text-primary)',
+                        fontWeight: 500
+                      }}
+                    >
+                      Next directory
+                    </div>
                     <div
                       style={{
                         fontSize: '11px',
@@ -2567,8 +2615,8 @@ export default class Term extends React.PureComponent<
                       this.state.activeProgram
                         ? 'ti ti-lock'
                         : this.state.isDirNavigatorOpen
-                        ? 'ti ti-folder-open'
-                        : 'ti ti-folder'
+                          ? 'ti ti-folder-open'
+                          : 'ti ti-folder'
                     }
                     style={{
                       fontSize: '12px',
@@ -2595,7 +2643,11 @@ export default class Term extends React.PureComponent<
               ) : null
             }
             onSplitRight={() => rpc.emit('split request vertical', {activeUid: this.props.uid})}
-            onSplitDown={() => rpc.emit('split request horizontal', {activeUid: this.props.uid})}
+            onSplitDown={() =>
+              rpc.emit('split request horizontal', {
+                activeUid: this.props.uid
+              })
+            }
             onClose={() => {
               if (this.props.onClosePane && this.props.groupUid) {
                 this.props.onClosePane(this.props.groupUid);
@@ -2643,7 +2695,7 @@ export default class Term extends React.PureComponent<
         {isPicker ? (
           <div
             className="term_pickerContainer"
-            style={{ zoom: this.state.pickerZoom }}
+            style={{zoom: this.state.pickerZoom}}
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -2682,11 +2734,29 @@ export default class Term extends React.PureComponent<
                   maxWidth: '560px'
                 }}
               >
-                <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
-                <div style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
+                <div
+                  style={{
+                    flex: 1,
+                    height: '0.5px',
+                    background: 'var(--border-neutral)'
+                  }}
+                />
+                <div
+                  style={{
+                    fontSize: '11px',
+                    color: 'var(--text-tertiary)',
+                    fontFamily: 'var(--font-sans)'
+                  }}
+                >
                   pick a shell
                 </div>
-                <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
+                <div
+                  style={{
+                    flex: 1,
+                    height: '0.5px',
+                    background: 'var(--border-neutral)'
+                  }}
+                />
               </div>
 
               <div className="term_pickerGrid_rev">
@@ -2743,24 +2813,42 @@ export default class Term extends React.PureComponent<
                             ? (e) => {
                                 // Custom shells only: right-click to delete.
                                 e.preventDefault();
-                                if (window.confirm(`Delete custom shell "${displayName}"?`)) {
-                                  ipcRenderer.send('remove-profile', p.name);
-                                }
+                                void (async () => {
+                                  const confirmed = await ipcRenderer.invoke('confirm-remove-profile', {
+                                    type: 'shell',
+                                    displayName
+                                  });
+                                  if (confirmed) {
+                                    ipcRenderer.send('remove-profile', p.name);
+                                  }
+                                })();
                               }
                             : undefined
                         }
                       >
                         <i className={iconClass} style={{fontSize: '14px'}} aria-hidden="true" />
-                        <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                        <span
+                          style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
                           {displayName}
                         </span>
                       </button>
                     );
                   })}
                 <button
-                  className={'term_pickerButton_rev term_pickerButton_custom_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
+                  className={
+                    'term_pickerButton_rev term_pickerButton_custom_rev ' +
+                    (this.state.isGlimmerActive ? 'term_glimmer' : '')
+                  }
                   onClick={() => {
-                    this.setState({isCustomModalOpen: true, customKind: 'shell'});
+                    this.setState({
+                      isCustomModalOpen: true,
+                      customKind: 'shell'
+                    });
                   }}
                 >
                   <i className="ti ti-plus" style={{fontSize: '14px'}} aria-hidden="true" />
@@ -2778,11 +2866,29 @@ export default class Term extends React.PureComponent<
                   marginTop: 'var(--space-4)'
                 }}
               >
-                <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
-                <div style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
+                <div
+                  style={{
+                    flex: 1,
+                    height: '0.5px',
+                    background: 'var(--border-neutral)'
+                  }}
+                />
+                <div
+                  style={{
+                    fontSize: '11px',
+                    color: 'var(--text-tertiary)',
+                    fontFamily: 'var(--font-sans)'
+                  }}
+                >
                   or pick an agent
                 </div>
-                <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
+                <div
+                  style={{
+                    flex: 1,
+                    height: '0.5px',
+                    background: 'var(--border-neutral)'
+                  }}
+                />
               </div>
 
               <div className="term_pickerGrid_rev">
@@ -2799,7 +2905,11 @@ export default class Term extends React.PureComponent<
                     });
                   }}
                 >
-                  <i className="ti ti-sparkles" style={{fontSize: '14px', color: 'var(--info-text)'}} aria-hidden="true" />
+                  <i
+                    className="ti ti-sparkles"
+                    style={{fontSize: '14px', color: 'var(--info-text)'}}
+                    aria-hidden="true"
+                  />
                   <span>Claude Code</span>
                 </button>
                 {((this.props as any).profiles || []).some((p: any) => p.name.toLowerCase() === 'nemesis8') && (
@@ -2818,7 +2928,11 @@ export default class Term extends React.PureComponent<
                       });
                     }}
                   >
-                    <i className="ti ti-robot" style={{fontSize: '14px', color: 'var(--danger-text)'}} aria-hidden="true" />
+                    <i
+                      className="ti ti-robot"
+                      style={{fontSize: '14px', color: 'var(--danger-text)'}}
+                      aria-hidden="true"
+                    />
                     <span>Nemesis8</span>
                   </button>
                 )}
@@ -2858,19 +2972,39 @@ export default class Term extends React.PureComponent<
                       onContextMenu={(e) => {
                         // Custom agents: right-click to delete.
                         e.preventDefault();
-                        if (window.confirm(`Delete custom agent "${p.name}"?`)) {
-                          ipcRenderer.send('remove-profile', p.name);
-                        }
+                        void (async () => {
+                          const confirmed = await ipcRenderer.invoke('confirm-remove-profile', {
+                            type: 'agent',
+                            displayName: p.name
+                          });
+                          if (confirmed) {
+                            ipcRenderer.send('remove-profile', p.name);
+                          }
+                        })();
                       }}
                     >
                       <i className="ti ti-robot" style={{fontSize: '14px'}} aria-hidden="true" />
-                      <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{p.name}</span>
+                      <span
+                        style={{
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        {p.name}
+                      </span>
                     </button>
                   ))}
                 <button
-                  className={'term_pickerButton_rev term_pickerButton_custom_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
+                  className={
+                    'term_pickerButton_rev term_pickerButton_custom_rev ' +
+                    (this.state.isGlimmerActive ? 'term_glimmer' : '')
+                  }
                   onClick={() => {
-                    this.setState({isCustomModalOpen: true, customKind: 'agent'});
+                    this.setState({
+                      isCustomModalOpen: true,
+                      customKind: 'agent'
+                    });
                   }}
                 >
                   <i className="ti ti-plus" style={{fontSize: '14px'}} aria-hidden="true" />
@@ -2888,14 +3022,39 @@ export default class Term extends React.PureComponent<
                   marginTop: 'var(--space-4)'
                 }}
               >
-                <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
-                <div style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
+                <div
+                  style={{
+                    flex: 1,
+                    height: '0.5px',
+                    background: 'var(--border-neutral)'
+                  }}
+                />
+                <div
+                  style={{
+                    fontSize: '11px',
+                    color: 'var(--text-tertiary)',
+                    fontFamily: 'var(--font-sans)'
+                  }}
+                >
                   or type a URL
                 </div>
-                <div style={{flex: 1, height: '0.5px', background: 'var(--border-neutral)'}} />
+                <div
+                  style={{
+                    flex: 1,
+                    height: '0.5px',
+                    background: 'var(--border-neutral)'
+                  }}
+                />
               </div>
 
-              <div style={{display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '340px'}}>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  width: '100%',
+                  maxWidth: '340px'
+                }}
+              >
                 <UrlPicker
                   value={this.state.urlInput || ''}
                   onChange={(v) => this.setState({urlInput: v, urlError: ''})}
@@ -2965,7 +3124,13 @@ export default class Term extends React.PureComponent<
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header — Back returns to the picker buttons + URL bar */}
-              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                }}
+              >
                 <button
                   type="button"
                   onClick={() => this.setState({isCustomModalOpen: false})}
@@ -2992,12 +3157,20 @@ export default class Term extends React.PureComponent<
 
               {/* Profile Name */}
               <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-                <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Profile Name</label>
+                <label
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    color: 'var(--text-secondary)'
+                  }}
+                >
+                  Profile Name
+                </label>
                 <input
                   type="text"
                   placeholder="e.g. My Shell"
                   value={this.state.profileName}
-                  onChange={(e) => this.setState({ profileName: e.target.value })}
+                  onChange={(e) => this.setState({profileName: e.target.value})}
                   style={{
                     background: 'var(--bg-primary)',
                     border: '0.5px solid var(--border-neutral)',
@@ -3011,7 +3184,15 @@ export default class Term extends React.PureComponent<
 
               {/* Shell Executable Path — pick from detected shells, or type/browse a custom one */}
               <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-                <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Shell Path</label>
+                <label
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    color: 'var(--text-secondary)'
+                  }}
+                >
+                  Shell Path
+                </label>
                 <select
                   value={this.state.shellPath}
                   onChange={(e) => this.setState({shellPath: e.target.value})}
@@ -3041,7 +3222,7 @@ export default class Term extends React.PureComponent<
                     type="text"
                     placeholder="e.g. /bin/bash or C:\Windows\System32\cmd.exe"
                     value={this.state.shellPath}
-                    onChange={(e) => this.setState({ shellPath: e.target.value })}
+                    onChange={(e) => this.setState({shellPath: e.target.value})}
                     style={{
                       flex: 1,
                       background: 'var(--bg-primary)',
@@ -3057,8 +3238,8 @@ export default class Term extends React.PureComponent<
                     type="button"
                     onClick={async () => {
                       try {
-                        const res = (await ipcRenderer.invoke('pick-shell-executable')) as any;
-                        if (res) this.setState({ shellPath: res });
+                        const res = await ipcRenderer.invoke('pick-shell-executable');
+                        if (res) this.setState({shellPath: res});
                       } catch (err) {
                         console.error(err);
                       }
@@ -3080,12 +3261,20 @@ export default class Term extends React.PureComponent<
 
               {/* Shell Arguments */}
               <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-                <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Arguments (comma separated)</label>
+                <label
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    color: 'var(--text-secondary)'
+                  }}
+                >
+                  Arguments (comma separated)
+                </label>
                 <input
                   type="text"
                   placeholder="e.g. --login, -i"
                   value={this.state.shellArgs}
-                  onChange={(e) => this.setState({ shellArgs: e.target.value })}
+                  onChange={(e) => this.setState({shellArgs: e.target.value})}
                   style={{
                     background: 'var(--bg-primary)',
                     border: '0.5px solid var(--border-neutral)',
@@ -3100,7 +3289,15 @@ export default class Term extends React.PureComponent<
 
               {/* Environment Variables */}
               <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-                <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Environment Variables</label>
+                <label
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    color: 'var(--text-secondary)'
+                  }}
+                >
+                  Environment Variables
+                </label>
                 <div
                   style={{
                     background: 'var(--bg-primary)',
@@ -3113,9 +3310,25 @@ export default class Term extends React.PureComponent<
                   }}
                 >
                   {/* Env list */}
-                  <div style={{maxHeight: '80px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                  <div
+                    style={{
+                      maxHeight: '80px',
+                      overflowY: 'auto',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '6px'
+                    }}
+                  >
                     {this.state.envVars.length === 0 ? (
-                      <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontStyle: 'italic'}}>No environment variables added.</span>
+                      <span
+                        style={{
+                          fontSize: '10px',
+                          color: 'var(--text-tertiary)',
+                          fontStyle: 'italic'
+                        }}
+                      >
+                        No environment variables added.
+                      </span>
                     ) : (
                       this.state.envVars.map((v, i) => (
                         <div
@@ -3131,12 +3344,22 @@ export default class Term extends React.PureComponent<
                             fontFamily: 'var(--font-mono)'
                           }}
                         >
-                          <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                          <span
+                            style={{
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
                             <span style={{color: 'var(--info-text)'}}>{v.key}</span>={v.val}
                           </span>
                           <button
                             type="button"
-                            onClick={() => this.setState({ envVars: this.state.envVars.filter((_, idx) => idx !== i) })}
+                            onClick={() =>
+                              this.setState({
+                                envVars: this.state.envVars.filter((_, idx) => idx !== i)
+                              })
+                            }
                             style={{
                               background: 'none',
                               border: 'none',
@@ -3158,7 +3381,11 @@ export default class Term extends React.PureComponent<
                       type="text"
                       placeholder="KEY"
                       value={this.state.newEnvKey}
-                      onChange={(e) => this.setState({ newEnvKey: e.target.value.replace(/[^a-zA-Z0-9_]/g, '') })}
+                      onChange={(e) =>
+                        this.setState({
+                          newEnvKey: e.target.value.replace(/[^a-zA-Z0-9_]/g, '')
+                        })
+                      }
                       style={{
                         flex: 1,
                         background: 'var(--bg-secondary)',
@@ -3174,7 +3401,7 @@ export default class Term extends React.PureComponent<
                       type="text"
                       placeholder="VALUE"
                       value={this.state.newEnvVal}
-                      onChange={(e) => this.setState({ newEnvVal: e.target.value })}
+                      onChange={(e) => this.setState({newEnvVal: e.target.value})}
                       style={{
                         flex: 1.5,
                         background: 'var(--bg-secondary)',
@@ -3193,7 +3420,7 @@ export default class Term extends React.PureComponent<
                         const v = this.state.newEnvVal.trim();
                         if (k) {
                           this.setState({
-                            envVars: [...this.state.envVars.filter(item => item.key !== k), {key: k, val: v}],
+                            envVars: [...this.state.envVars.filter((item) => item.key !== k), {key: k, val: v}],
                             newEnvKey: '',
                             newEnvVal: ''
                           });
@@ -3216,10 +3443,17 @@ export default class Term extends React.PureComponent<
               </div>
 
               {/* Actions */}
-              <div style={{display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px'}}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  gap: '10px',
+                  marginTop: '10px'
+                }}
+              >
                 <button
                   type="button"
-                  onClick={() => this.setState({ isCustomModalOpen: false })}
+                  onClick={() => this.setState({isCustomModalOpen: false})}
                   style={{
                     background: 'var(--bg-primary)',
                     border: '0.5px solid var(--border-neutral)',
@@ -3237,14 +3471,17 @@ export default class Term extends React.PureComponent<
                   disabled={!this.state.profileName.trim() || !this.state.shellPath.trim()}
                   onClick={this.saveCustomProfile}
                   style={{
-                    background: (this.state.profileName.trim() && this.state.shellPath.trim()) ? 'var(--info-text)' : 'var(--border-neutral)',
+                    background:
+                      this.state.profileName.trim() && this.state.shellPath.trim()
+                        ? 'var(--info-text)'
+                        : 'var(--border-neutral)',
                     color: 'var(--bg-primary)',
                     border: 'none',
                     borderRadius: '4px',
                     padding: '8px 14px',
                     fontSize: '12px',
-                    cursor: (this.state.profileName.trim() && this.state.shellPath.trim()) ? 'pointer' : 'default',
-                    opacity: (this.state.profileName.trim() && this.state.shellPath.trim()) ? 1 : 0.6
+                    cursor: this.state.profileName.trim() && this.state.shellPath.trim() ? 'pointer' : 'default',
+                    opacity: this.state.profileName.trim() && this.state.shellPath.trim() ? 1 : 0.6
                   }}
                 >
                   Save Profile

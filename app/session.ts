@@ -1,6 +1,8 @@
 import {randomBytes} from 'crypto';
+import {app} from 'electron';
 import {EventEmitter} from 'events';
-import {dirname} from 'path';
+import {mkdirSync, writeFileSync} from 'fs';
+import {dirname, join, resolve} from 'path';
 import {StringDecoder} from 'string_decoder';
 
 import defaultShell from 'default-shell';
@@ -102,6 +104,16 @@ export default class Session extends EventEmitter {
   initTimestamp: number;
   profile!: string;
   cwd!: string;
+  shellState?: {
+    state: 'idle' | 'running';
+    lastExit?: number;
+    app?: {
+      name: string;
+      path: string;
+      cmdline: string;
+      pid: number;
+    };
+  };
   // Per-pane identity token injected into the PTY env as HYPERIA_AGENT_TOKEN.
   // An agent running in this pane forwards it to the sidecar (MCP Authorization
   // header) so it's identified as THIS pane — gets consent prompts instead of
@@ -131,11 +143,13 @@ export default class Session extends EventEmitter {
       this.ended = false;
       return;
     }
+    this.shellState = { state: 'idle' };
+
     const envFromConfig = config.getProfileConfig(profile).env || {};
     const defaultShellArgs = ['--login'];
 
-    const shell = _shell || defaultShell;
-    const shellArgs = _shellArgs || defaultShellArgs;
+    let shell = _shell || defaultShell;
+    let shellArgs = _shellArgs ? [..._shellArgs] : defaultShellArgs;
 
     // Mint this pane's identity token and inject it so an in-pane agent can
     // present it to the sidecar (via its MCP Authorization header).
@@ -145,7 +159,7 @@ export default class Session extends EventEmitter {
     const hyperiaPort = process.env.HYPERIA_PORT || '9800';
 
     const cleanEnv =
-      process.env['APPIMAGE'] && process.env['APPDIR'] ? shellEnv.sync(_shell || defaultShell) : process.env;
+      process.env['APPIMAGE'] && process.env['APPDIR'] ? shellEnv.sync(shell) : process.env;
     const baseEnv: Record<string, string> = {
       ...cleanEnv,
       LANG: `${osLocale.sync().replace(/-/, '_')}.UTF-8`,
@@ -158,19 +172,64 @@ export default class Session extends EventEmitter {
       HYPERIA_PANE: uid,
       ...envFromConfig
     };
-    // path to AppImage mount point is added to PATH environment variable automatically
-    // which conflicts with the cli
-    if (baseEnv['APPIMAGE'] && baseEnv['APPDIR']) {
-      baseEnv['PATH'] = [dirname(cliScriptPath)]
-        .concat((baseEnv['PATH'] || '').split(':').filter((val) => !val.startsWith(baseEnv['APPDIR'])))
-        .join(':');
-    }
 
-    // Electron has a default value for process.env.GOOGLE_API_KEY
-    // We don't want to leak this to the shell
-    // See https://github.com/vercel/hyper/issues/696
-    if (baseEnv.GOOGLE_API_KEY && process.env.GOOGLE_API_KEY === baseEnv.GOOGLE_API_KEY) {
-      delete baseEnv.GOOGLE_API_KEY;
+    const userConfig = config.getConfig();
+    const shellIntegrationEnabled = userConfig.shellIntegration !== false;
+    const integrationDir = resolve(__dirname, 'static/shell-integration');
+    const ctlDir = join(app.getPath('userData'), 'panes', uid);
+
+    mkdirSync(ctlDir, { recursive: true });
+
+    if (shellIntegrationEnabled) {
+      baseEnv.HYPERIA_SHELL_INTEGRATION = '1';
+      baseEnv.HYPERIA_INTEGRATION_DIR = integrationDir;
+      baseEnv.HYPERIA_CTL_DIR = ctlDir;
+
+      const shellLower = shell.toLowerCase();
+      const isBash = shellLower.endsWith('bash') || shellLower.endsWith('bash.exe');
+      const isZsh = shellLower.endsWith('zsh') || shellLower.endsWith('zsh.exe');
+      const isFish = shellLower.endsWith('fish') || shellLower.endsWith('fish.exe');
+      const isPwsh = shellLower.endsWith('pwsh') || shellLower.endsWith('pwsh.exe') || shellLower.endsWith('powershell.exe');
+
+      if (isZsh) {
+        const zdotdir = join(ctlDir, 'zdotdir');
+        mkdirSync(zdotdir, { recursive: true });
+        const oldZdotdir = baseEnv.ZDOTDIR || process.env.HOME || '';
+        baseEnv.OLD_ZDOTDIR = oldZdotdir;
+        baseEnv.ZDOTDIR = zdotdir;
+        writeFileSync(join(zdotdir, '.zshrc'), `
+if [ -f "$OLD_ZDOTDIR/.zshrc" ]; then
+  ZDOTDIR="$OLD_ZDOTDIR"
+  source "$OLD_ZDOTDIR/.zshrc"
+elif [ -f "$HOME/.zshrc" ]; then
+  ZDOTDIR="$HOME"
+  source "$HOME/.zshrc"
+else
+  ZDOTDIR="$HOME"
+fi
+if [ -f "$HYPERIA_INTEGRATION_DIR/hyperia.zsh" ]; then
+  source "$HYPERIA_INTEGRATION_DIR/hyperia.zsh"
+fi
+`);
+      } else if (isBash) {
+        const bashrcPath = join(ctlDir, 'bashrc');
+        writeFileSync(bashrcPath, `
+if [ -f /etc/bash.bashrc ]; then
+  source /etc/bash.bashrc
+fi
+if [ -f ~/.bashrc ]; then
+  source ~/.bashrc
+fi
+if [ -f "$HYPERIA_INTEGRATION_DIR/hyperia.bash" ]; then
+  source "$HYPERIA_INTEGRATION_DIR/hyperia.bash"
+fi
+`);
+        shellArgs = ['--rcfile', bashrcPath];
+      } else if (isFish) {
+        shellArgs = ['--init-command', `source "${join(integrationDir, 'hyperia.fish')}"`].concat(_shellArgs || []);
+      } else if (isPwsh) {
+        shellArgs = ['-NoExit', '-Command', `. "${join(integrationDir, 'hyperia.ps1')}"`].concat(_shellArgs || []);
+      }
     }
 
     const options: IWindowsPtyForkOptions = {
@@ -210,40 +269,123 @@ export default class Session extends EventEmitter {
     }
 
     this.batcher = new DataBatcher(uid);
-    let osc7Buffer = '';
+    let oscBuffer = '';
     this.pty.onData((chunk) => {
       if (this.ended) {
         return;
       }
 
-      // Parse OSC 7 current working directory sequences. The control
+      // Parse OSC 7, 133, and 697 sequences. The control
       // characters (ESC \x1b, BEL \x07) are an intrinsic part of the OSC
-      // 7 wire format, so no-control-regex is intentionally disabled here.
-      osc7Buffer += chunk;
+      // wire format, so no-control-regex is intentionally disabled here.
+      oscBuffer += chunk;
+      let match;
+      // RegExp to match OSC sequences: \x1b] (code) ; (content) BEL or ST
       // eslint-disable-next-line no-control-regex
-      const osc7Match = /\x1b\]7;file:\/\/[^/\x07\x1b]*(.*?)(?:\x07|\x1b\\)/.exec(osc7Buffer);
-      if (osc7Match) {
-        const uriPath = osc7Match[1];
-        try {
-          let rawPath = decodeURIComponent(uriPath);
-          if (process.platform === 'win32') {
-            if (/^\/[a-zA-Z]:/.test(rawPath)) {
-              rawPath = rawPath.slice(1);
+      const oscRegex = /\x1b\](7|133|697);(.*?)(?:\x07|\x1b\\)/g;
+
+      let lastIndex = 0;
+      while ((match = oscRegex.exec(oscBuffer)) !== null) {
+        const code = match[1];
+        const content = match[2];
+        lastIndex = oscRegex.lastIndex;
+
+        if (code === '7') {
+          // eslint-disable-next-line no-control-regex
+          const fileMatch = /^file:\/\/[^/\x07\x1b]*(.*)/.exec(content);
+          if (fileMatch) {
+            const uriPath = fileMatch[1];
+            try {
+              let rawPath = decodeURIComponent(uriPath);
+              if (process.platform === 'win32') {
+                if (/^\/[a-zA-Z]:/.test(rawPath)) {
+                  rawPath = rawPath.slice(1);
+                }
+                rawPath = rawPath.replace(/\//g, '\\');
+              }
+              if (rawPath && rawPath !== this.cwd) {
+                this.cwd = rawPath;
+                this.emit('cwd', rawPath);
+              }
+            } catch (e) {
+              console.error('Failed to decode OSC 7 URI:', uriPath, e);
             }
-            rawPath = rawPath.replace(/\//g, '\\');
           }
-          if (rawPath && rawPath !== this.cwd) {
-            this.cwd = rawPath;
-            this.emit('cwd', rawPath);
+        } else if (code === '133') {
+          const parts = content.split(';');
+          const action = parts[0].trim();
+          if (action === 'A' || action === 'B') {
+            this.shellState = {
+              state: 'idle',
+              lastExit: this.shellState?.lastExit
+            };
+            this.emit('shellstate', this.shellState);
+          } else if (action === 'C') {
+            this.shellState = {
+              state: 'running',
+              lastExit: this.shellState?.lastExit
+            };
+            this.emit('shellstate', this.shellState);
+          } else if (action === 'D') {
+            const exitCodeStr = parts[1]?.trim();
+            const lastExit = exitCodeStr ? parseInt(exitCodeStr, 10) : undefined;
+            this.shellState = {
+              state: 'idle',
+              lastExit: !isNaN(lastExit as any) ? lastExit : this.shellState?.lastExit,
+              app: undefined
+            };
+            this.emit('shellstate', this.shellState);
           }
-        } catch (e) {
-          console.error('Failed to decode OSC 7 URI:', uriPath, e);
+        } else if (code === '697') {
+          const pairs = content.split(';');
+          const data: Record<string, string> = {};
+          for (const pair of pairs) {
+            const idx = pair.indexOf('=');
+            if (idx !== -1) {
+              const k = pair.substring(0, idx).trim();
+              const v = pair.substring(idx + 1).trim();
+              data[k] = v;
+            }
+          }
+
+          const decodeBase64 = (s: string | undefined): string => {
+            if (!s) return '';
+            try {
+              return Buffer.from(s, 'base64').toString('utf8');
+            } catch {
+              return '';
+            }
+          };
+
+          const cmd = decodeBase64(data['cmd']);
+          const appPath = decodeBase64(data['app']);
+          const argv0 = decodeBase64(data['argv0']);
+          const pid = data['pid'] ? parseInt(data['pid'], 10) : undefined;
+
+          let name = argv0 || '';
+          if (!name && appPath) {
+            name = appPath.split(/[/\\]/).pop() || '';
+          }
+
+          this.shellState = {
+            state: this.shellState?.state || 'idle',
+            lastExit: this.shellState?.lastExit,
+            app: appPath || cmd || name ? {
+              name,
+              path: appPath,
+              cmdline: cmd,
+              pid: pid || 0
+            } : undefined
+          };
+          this.emit('shellstate', this.shellState);
         }
-        const matchIndex = osc7Buffer.indexOf(osc7Match[0]);
-        osc7Buffer = osc7Buffer.slice(matchIndex + osc7Match[0].length);
       }
-      if (osc7Buffer.length > 4096) {
-        osc7Buffer = osc7Buffer.slice(-4096);
+
+      if (lastIndex > 0) {
+        oscBuffer = oscBuffer.slice(lastIndex);
+      }
+      if (oscBuffer.length > 16384) {
+        oscBuffer = oscBuffer.slice(-16384);
       }
 
       this.batcher?.write(chunk);
@@ -319,8 +461,6 @@ No fallback available, please check the shell config.
       console.warn('Warning: Attempted to resize a session with no pty');
     }
   }
-
-
 
   destroy() {
     if (this.pty) {

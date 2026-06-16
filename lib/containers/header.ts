@@ -105,12 +105,7 @@ const getTabs = createSelector(
         // Align tab colors directly with the pane's rotating TINTS
         const splitLabel = leaf ? leaf.splitLabel : '';
         const paneIdx = splitLabel ? splitLabel.charCodeAt(0) - 97 : idx;
-        const TINTS = [
-          'var(--text-success)',
-          'var(--text-info)',
-          'var(--text-warning)',
-          'var(--text-danger)'
-        ];
+        const TINTS = ['var(--text-success)', 'var(--text-info)', 'var(--text-warning)', 'var(--text-danger)'];
         return TINTS[(startIdx + paneIdx) % TINTS.length];
       };
       const paneColors = leaves.map((leaf, idx) => mapLeafToColor(leaf, idx));

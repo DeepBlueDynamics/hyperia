@@ -8,8 +8,8 @@ import {
   closeSearch,
   setSessionCwd
 } from '../actions/sessions';
-import {markTabBell, openContextMenu} from '../actions/ui';
 import {userExitTermGroup, popOutPane} from '../actions/term-groups';
+import {markTabBell, openContextMenu} from '../actions/ui';
 import Terms from '../components/terms';
 import {getRootGroups} from '../selectors';
 import {connect} from '../utils/plugins';
@@ -59,7 +59,11 @@ const mapStateToProps = (state: HyperState) => {
     windowsPty: state.ui.windowsPty,
     imageSupport: state.ui.imageSupport,
     defaultProfile: state.ui.defaultProfile,
-    profiles: state.ui.profiles ? (state.ui.profiles.asMutable ? state.ui.profiles.asMutable({deep: true}) : state.ui.profiles) : [],
+    profiles: state.ui.profiles
+      ? state.ui.profiles.asMutable
+        ? state.ui.profiles.asMutable({deep: true})
+        : state.ui.profiles
+      : [],
     env: state.ui.env ? (state.ui.env.asMutable ? state.ui.env.asMutable({deep: true}) : state.ui.env) : {}
   };
 };
@@ -77,7 +81,6 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
     setWebPaneUrl(groupUid: string, url: string | null) {
       dispatch({type: 'TERM_GROUP_SET_WEB_URL', uid: groupUid, url} as any);
     },
-
 
     onData(uid: string, data: string) {
       dispatch(sendSessionData(uid, data));

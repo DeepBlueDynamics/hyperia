@@ -85,7 +85,7 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
         if (
           term &&
           ((outerRef && (outerRef.contains(target) || outerRef === target)) ||
-           (wrapperRef && (wrapperRef.contains(target) || wrapperRef === target)))
+            (wrapperRef && (wrapperRef.contains(target) || wrapperRef === target)))
         ) {
           clickedTerm = term;
           clickedUid = key;

@@ -257,7 +257,11 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       ) : paneType === 'web' ? (
         <span>🌐</span>
       ) : (
-        <span>⚡</span>
+        // Terminal panes: the classic shell prompt glyph (no clean emoji exists
+        // for ">_", so render it in mono so it reads as a console).
+        <span style={{fontFamily: 'var(--font-mono)', fontSize: '11px', fontWeight: 700, opacity: 0.85}}>
+          {'>_'}
+        </span>
       );
 
     return (
@@ -288,68 +292,119 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             minWidth: 0
           }}
         >
-          {/* Name Cluster */}
-          <div
-            className="pane-band-name-cluster"
-            onClick={handleNameClick}
-            onContextMenu={handleNameContextMenu}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 'var(--space-6)',
-              fontSize: '11px',
-              fontWeight: 500,
-              flexShrink: 1,
-              minWidth: 0,
-              cursor: 'pointer',
-              position: 'relative',
-              padding: '2px var(--space-4)',
-              borderRadius: 'var(--radius-4)',
-              transition: 'background 0.15s ease',
-              overflowX: 'auto',
-              whiteSpace: 'nowrap'
-            }}
-            title="Click to copy name (scroll to view full)"
-          >
-            {!isPlaceholder && resolvedIcon && (
-              <span style={{display: 'flex', alignItems: 'center', flexShrink: 0}}>{resolvedIcon}</span>
-            )}
-            {isPlaceholder ? (
-              <span
+          {paneType !== 'shell' ? (
+            /* Web / AI: ONE tight, left-anchored icon row — the globe and the nav
+               arrows sit together. No title text: it's variable-length, shoved the
+               arrows sideways on every navigation, and didn't fit the narrow band
+               (even "Hyperia" barely fits). The URL bar shows the page identity;
+               the globe stays click-to-copy the pane name (transient confirm). */
+            <>
+              {/* Left-anchored icon row: globe + nav arrows, fixed (flexShrink:0). */}
+              <div
+                onClick={(e) => e.stopPropagation()}
                 style={{
-                  color: 'var(--text-tertiary)',
-                  fontStyle: 'italic',
-                  fontWeight: 400,
-                  whiteSpace: 'nowrap',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-2)',
                   flexShrink: 0
+                }}
+              >
+                {resolvedIcon && (
+                  <span style={{display: 'flex', alignItems: 'center', flexShrink: 0}}>{resolvedIcon}</span>
+                )}
+                {navCluster}
+              </div>
+              {/* Page title — TRUNCATED. The icons above are left-anchored, so this
+                  shrinks/ellipsizes first and can never shove the arrows on
+                  navigation. Click to copy the full name; full title on hover. */}
+              <span
+                className="pane-band-name-cluster"
+                onClick={handleNameClick}
+                onContextMenu={handleNameContextMenu}
+                title={copied ? 'Copied ✓' : 'Click to copy name'}
+                style={{
+                  flex: '0 1 auto',
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                  opacity: 0.75,
+                  cursor: 'pointer',
+                  padding: '2px var(--space-4)',
+                  borderRadius: 'var(--radius-4)'
                 }}
               >
                 {copied ? 'Copied ✓' : label}
               </span>
-            ) : (
-              <span
+            </>
+          ) : (
+            <>
+              {/* Name Cluster */}
+              <div
+                className="pane-band-name-cluster"
+                onClick={handleNameClick}
+                onContextMenu={handleNameContextMenu}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: 'var(--space-4)',
-                  whiteSpace: 'nowrap',
-                  flexShrink: 0
+                  gap: 'var(--space-6)',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                  flexShrink: 1,
+                  minWidth: 0,
+                  cursor: 'pointer',
+                  position: 'relative',
+                  padding: '2px var(--space-4)',
+                  borderRadius: 'var(--radius-4)',
+                  transition: 'background 0.15s ease',
+                  overflowX: 'auto',
+                  whiteSpace: 'nowrap'
                 }}
+                title="Click to copy name (scroll to view full)"
               >
-                {copied ? (
-                  'Copied ✓'
-                ) : (
-                  <>
-                    {label}
-                    {profileChip}
-                  </>
+                {!isPlaceholder && resolvedIcon && (
+                  <span style={{display: 'flex', alignItems: 'center', flexShrink: 0}}>{resolvedIcon}</span>
                 )}
-              </span>
-            )}
-          </div>
+                {isPlaceholder ? (
+                  <span
+                    style={{
+                      color: 'var(--text-tertiary)',
+                      fontStyle: 'italic',
+                      fontWeight: 400,
+                      whiteSpace: 'nowrap',
+                      flexShrink: 0
+                    }}
+                  >
+                    {copied ? 'Copied ✓' : label}
+                  </span>
+                ) : (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 'var(--space-4)',
+                      whiteSpace: 'nowrap',
+                      flexShrink: 0
+                    }}
+                  >
+                    {copied ? (
+                      'Copied ✓'
+                    ) : (
+                      <>
+                        {label}
+                        {profileChip}
+                      </>
+                    )}
+                  </span>
+                )}
+              </div>
 
-          {/* Nav Cluster */}
-          {navCluster}
+              {/* Nav Cluster */}
+              {navCluster}
+            </>
+          )}
 
           {/* Location Bar */}
           {locationBar}

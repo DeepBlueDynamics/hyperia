@@ -12,7 +12,10 @@ export function countHorizontalStacks(groupUid: string, termGroups: Record<strin
   if (!group) return 0;
   if (!group.children || group.children.length === 0) return 1;
   if (group.direction === 'HORIZONTAL') {
-    return group.children.reduce((total: number, childUid: string) => total + countHorizontalStacks(childUid, termGroups), 0);
+    return group.children.reduce(
+      (total: number, childUid: string) => total + countHorizontalStacks(childUid, termGroups),
+      0
+    );
   } else {
     return Math.max(...group.children.map((childUid: string) => countHorizontalStacks(childUid, termGroups)));
   }
@@ -38,4 +41,3 @@ export function countPathHorizontalStacks(groupUid: string, termGroups: Record<s
   }
   return stacks;
 }
-

@@ -515,7 +515,9 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
 
             {/* Shell Arguments */}
             <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-              <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Arguments (comma separated)</label>
+              <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>
+                Arguments (comma separated)
+              </label>
               <input
                 type="text"
                 placeholder="e.g. --login, -i"
@@ -535,7 +537,9 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
 
             {/* Environment Variables (Secrets Manager) */}
             <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-              <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Environment Variables</label>
+              <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>
+                Environment Variables
+              </label>
               <div
                 style={{
                   background: 'var(--bg-primary)',
@@ -548,9 +552,13 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                 }}
               >
                 {/* Env list */}
-                <div style={{maxHeight: '80px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                <div
+                  style={{maxHeight: '80px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px'}}
+                >
                   {envVars.length === 0 ? (
-                    <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontStyle: 'italic'}}>No environment variables added.</span>
+                    <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontStyle: 'italic'}}>
+                      No environment variables added.
+                    </span>
                   ) : (
                     envVars.map((v, i) => (
                       <div
@@ -627,7 +635,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                       const k = newKey.trim();
                       const v = newVal.trim();
                       if (k) {
-                        setEnvVars([...envVars.filter(item => item.key !== k), {key: k, val: v}]);
+                        setEnvVars([...envVars.filter((item) => item.key !== k), {key: k, val: v}]);
                         setNewKey('');
                         setNewVal('');
                       }
@@ -695,14 +703,14 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                   }
                 }}
                 style={{
-                  background: (profileName.trim() && shellPath.trim()) ? 'var(--info-text)' : 'var(--border-neutral)',
+                  background: profileName.trim() && shellPath.trim() ? 'var(--info-text)' : 'var(--border-neutral)',
                   color: 'var(--bg-primary)',
                   border: 'none',
                   borderRadius: '4px',
                   padding: '8px 14px',
                   fontSize: '12px',
-                  cursor: (profileName.trim() && shellPath.trim()) ? 'pointer' : 'default',
-                  opacity: (profileName.trim() && shellPath.trim()) ? 1 : 0.6
+                  cursor: profileName.trim() && shellPath.trim() ? 'pointer' : 'default',
+                  opacity: profileName.trim() && shellPath.trim() ? 1 : 0.6
                 }}
               >
                 Save Profile

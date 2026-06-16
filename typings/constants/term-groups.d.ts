@@ -95,4 +95,3 @@ export type TermGroupActions =
   | TermGroupToggleTitleInheritanceAction
   | RestoreLayoutStateAction
   | TermGroupPopOutPaneAction;
-

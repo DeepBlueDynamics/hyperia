@@ -14,7 +14,14 @@ import WebSocket from 'ws';
 
 import {getProfiles, getConfig} from './config';
 import type Session from './session';
-import {createStickyNote, closeStickyNote, deleteStickyNote, updateStickyNote, scheduleSticky, unscheduleSticky} from './sticky';
+import {
+  createStickyNote,
+  closeStickyNote,
+  deleteStickyNote,
+  updateStickyNote,
+  scheduleSticky,
+  unscheduleSticky
+} from './sticky';
 
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
@@ -51,7 +58,7 @@ interface TrackedSession {
   manualTitle?: boolean;
 }
 const trackedSessions = new Map<string, TrackedSession>();
-let focusedWindowId: number | null = null; // eslint-disable-line @typescript-eslint/no-unused-vars
+let focusedWindowId: number | null = null;
 
 // Agent input queue: per-session deferral when user is active
 const lastUserActivity = new Map<string, number>();
@@ -326,12 +333,79 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'Cd': {
+      const uid = msg.uid as string;
+      const path = msg.path as string;
+      const sidecarState = msg.state as 'idle' | 'running';
+
+      const tracked = trackedSessions.get(uid);
+      if (!tracked) {
+        sendResult(seq, JSON.stringify({ refused: true, reason: `No session: ${uid}` }));
+        break;
+      }
+
+      if (tracked.session.shellState) {
+        // Shell integration is active!
+        try {
+          const fs = require('fs');
+          const pathMod = require('path');
+          const ctlDir = pathMod.join(app.getPath('userData'), 'panes', uid);
+          const cdFilePath = pathMod.join(ctlDir, 'cd');
+          const tmpPath = `${cdFilePath}.tmp`;
+
+          fs.writeFileSync(tmpPath, path, 'utf8');
+          fs.renameSync(tmpPath, cdFilePath);
+
+          // Immediacy nudge if loose and no user activity
+          if (tracked.session.shellState.state === 'idle' && !isUserActive(uid)) {
+            tracked.session.write('\r');
+            sendResult(seq, JSON.stringify({ applied: true }));
+          } else if (tracked.session.shellState.state === 'idle') {
+            sendResult(seq, JSON.stringify({ queued: true, reason: 'human active' }));
+          } else {
+            sendResult(seq, JSON.stringify({ queued: true, reason: 'foreground app running' }));
+          }
+        } catch (err: any) {
+          sendResult(seq, JSON.stringify({ refused: true, reason: err.message }));
+        }
+      } else {
+        // Fallback mechanism (no shell integration)
+        const shell = (tracked.session.shell || '').toLowerCase();
+        const escapedPath = path.replace(/'/g, "'\\''");
+        let keys = `cd '${escapedPath}'\r`;
+        if (shell.endsWith('cmd.exe') || shell.endsWith('cmd')) {
+          keys = `cd /d "${path}"\r`;
+        }
+
+        if (sidecarState === 'idle' && !isUserActive(uid)) {
+          // Safe to inject keys immediately
+          tracked.session.write(keys);
+          sendResult(seq, JSON.stringify({ applied: true }));
+        } else {
+          // Queued fallback
+          let queue = agentQueues.get(uid);
+          if (!queue) {
+            queue = [];
+            agentQueues.set(uid, queue);
+          }
+          if (queue.length >= MAX_QUEUE_DEPTH) {
+            sendResult(seq, JSON.stringify({ refused: true, reason: 'Queue full' }));
+          } else {
+            queue.push({ keys, seq: undefined });
+            ensureDrainTimer();
+            sendResult(seq, JSON.stringify({ queued: true, reason: 'foreground app running or human active' }));
+          }
+        }
+      }
+      break;
+    }
+
     case 'SaveLayoutState': {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       const windows: any[] = Array.from((app as any).getWindows?.() || []);
       if (windows.length > 0) {
         for (const w of windows) {
-          if (w && w.rpc) {
+          if (w?.rpc) {
             w.rpc.emit('get-layout-state-req', undefined);
           }
         }
@@ -382,8 +456,7 @@ function handleCommand(msg: Record<string, unknown>) {
       // the split lands there regardless of UI focus. No uid → focused window.
       const splitTargetUid = msg.uid as string | undefined;
       const splitTracked = splitTargetUid ? trackedSessions.get(splitTargetUid) : undefined;
-      const win =
-        (splitTracked ? getHyperiaWindowById(splitTracked.windowId) : null) ?? getFocusedHyperiaWindow();
+      const win = (splitTracked ? getHyperiaWindowById(splitTracked.windowId) : null) ?? getFocusedHyperiaWindow();
       if (win) {
         const dir = (msg.direction as string) || 'vertical';
         const profile = (msg.profile as string) || 'default'; // Programmatic split defaults to 'default' shell, not 'picker'
@@ -391,15 +464,20 @@ function handleCommand(msg: Record<string, unknown>) {
         const url = (msg.url as string) || ''; // If set, the new split is a web pane (no shell), not a PTY.
 
         clearPendingSessionCallback();
-        if (seq !== undefined) {
+        // Only a SHELL split spawns a PTY whose SessionRegister resolves this seq.
+        // A web-pane split (url set) never emits a PTY registration, so arming the
+        // wait would always fire a bogus "Timeout waiting for pane registration"
+        // even though the web pane opened fine. Skip it for url splits; they reply
+        // ok:true immediately below.
+        if (!url && seq !== undefined) {
           const currentSeq = seq;
           const timer = setTimeout(() => {
             if (pendingSessionCallback && pendingSessionCallback.seq === currentSeq) {
-              sendResult(currentSeq, JSON.stringify({ ok: false, error: 'Timeout waiting for pane registration' }));
+              sendResult(currentSeq, JSON.stringify({ok: false, error: 'Timeout waiting for pane registration'}));
               pendingSessionCallback = null;
             }
           }, 5000);
-          pendingSessionCallback = { seq: currentSeq, timer };
+          pendingSessionCallback = {seq: currentSeq, timer};
         }
 
         // If a startup command was provided, write it to the new session once it's ready
@@ -427,6 +505,8 @@ function handleCommand(msg: Record<string, unknown>) {
             url,
             direction: dir === 'horizontal' ? 'HORIZONTAL' : 'VERTICAL'
           });
+          // Web pane has no PTY to wait on — acknowledge the open immediately.
+          sendResult(seq, JSON.stringify({ok: true, type: 'web-pane', url}));
         } else {
           const splitOpts = {profile, activeUid: splitTargetUid ?? undefined};
           if (dir === 'horizontal') {
@@ -465,7 +545,7 @@ function handleCommand(msg: Record<string, unknown>) {
         targetPane: msg.targetPane as string
       };
       for (const w of (app as any).getWindows?.() || []) {
-        if (w && w.rpc) w.rpc.emit('permission request', payload);
+        if (w?.rpc) w.rpc.emit('permission request', payload);
       }
       break;
     }
@@ -477,7 +557,7 @@ function handleCommand(msg: Record<string, unknown>) {
         decision: (msg.decision as string) || 'deny'
       };
       for (const w of (app as any).getWindows?.() || []) {
-        if (w && w.rpc) w.rpc.emit('permission resolved', payload);
+        if (w?.rpc) w.rpc.emit('permission resolved', payload);
       }
       break;
     }
@@ -490,7 +570,7 @@ function handleCommand(msg: Record<string, unknown>) {
         action: (msg.action as string) || 'create'
       };
       for (const w of (app as any).getWindows?.() || []) {
-        if (w && w.rpc) w.rpc.emit('agent toast', payload);
+        if (w?.rpc) w.rpc.emit('agent toast', payload);
       }
       break;
     }
@@ -530,11 +610,11 @@ function handleCommand(msg: Record<string, unknown>) {
           const currentSeq = seq;
           const timer = setTimeout(() => {
             if (pendingSessionCallback && pendingSessionCallback.seq === currentSeq) {
-              sendResult(currentSeq, JSON.stringify({ ok: false, error: 'Timeout waiting for pane registration' }));
+              sendResult(currentSeq, JSON.stringify({ok: false, error: 'Timeout waiting for pane registration'}));
               pendingSessionCallback = null;
             }
           }, 5000);
-          pendingSessionCallback = { seq: currentSeq, timer };
+          pendingSessionCallback = {seq: currentSeq, timer};
         }
 
         win.rpc.emit('termgroup add req', profile ? {profile} : {});
@@ -734,7 +814,7 @@ function handleCommand(msg: Record<string, unknown>) {
       // webview. Mirrors WebPaneClick: ask the renderer, await the result.
       const uid = msg.uid as string | undefined;
       if (!uid) {
-        sendResult(seq, JSON.stringify({ success: false, error: 'No uid provided' }));
+        sendResult(seq, JSON.stringify({success: false, error: 'No uid provided'}));
         break;
       }
       const tracked = trackedSessions.get(uid);
@@ -742,7 +822,7 @@ function handleCommand(msg: Record<string, unknown>) {
       if (win && (win as any).rpc) {
         const timeout = setTimeout(() => {
           (win as any).rpc.emitter.off('web-pane-read-result', onResult);
-          sendResult(seq, JSON.stringify({ success: false, error: 'Timeout waiting for page content' }));
+          sendResult(seq, JSON.stringify({success: false, error: 'Timeout waiting for page content'}));
         }, 8000);
 
         const onResult = (res: any) => {
@@ -754,9 +834,9 @@ function handleCommand(msg: Record<string, unknown>) {
         };
 
         (win as any).rpc.emitter.on('web-pane-read-result', onResult);
-        (win as any).rpc.emit('web-pane-read', { uid });
+        (win as any).rpc.emit('web-pane-read', {uid});
       } else {
-        sendResult(seq, JSON.stringify({ success: false, error: 'No matching window or RPC connection found' }));
+        sendResult(seq, JSON.stringify({success: false, error: 'No matching window or RPC connection found'}));
       }
       break;
     }
@@ -766,7 +846,7 @@ function handleCommand(msg: Record<string, unknown>) {
       const uid = msg.uid as string | undefined;
       const js = msg.js as string | undefined;
       if (!uid || !js) {
-        sendResult(seq, JSON.stringify({ success: false, error: 'uid and js are required' }));
+        sendResult(seq, JSON.stringify({success: false, error: 'uid and js are required'}));
         break;
       }
       const tracked = trackedSessions.get(uid);
@@ -774,7 +854,7 @@ function handleCommand(msg: Record<string, unknown>) {
       if (win && (win as any).rpc) {
         const timeout = setTimeout(() => {
           (win as any).rpc.emitter.off('web-pane-eval-result', onResult);
-          sendResult(seq, JSON.stringify({ success: false, error: 'Timeout waiting for eval result' }));
+          sendResult(seq, JSON.stringify({success: false, error: 'Timeout waiting for eval result'}));
         }, 15000);
         const onResult = (res: any) => {
           if (res && res.uid === uid) {
@@ -784,9 +864,9 @@ function handleCommand(msg: Record<string, unknown>) {
           }
         };
         (win as any).rpc.emitter.on('web-pane-eval-result', onResult);
-        (win as any).rpc.emit('web-pane-eval', { uid, js });
+        (win as any).rpc.emit('web-pane-eval', {uid, js});
       } else {
-        sendResult(seq, JSON.stringify({ success: false, error: 'No matching window or RPC connection found' }));
+        sendResult(seq, JSON.stringify({success: false, error: 'No matching window or RPC connection found'}));
       }
       break;
     }
@@ -795,7 +875,7 @@ function handleCommand(msg: Record<string, unknown>) {
       // Move / click at a pixel coordinate, with the 👻 ghost cursor.
       const uid = msg.uid as string | undefined;
       if (!uid) {
-        sendResult(seq, JSON.stringify({ success: false, error: 'No uid provided' }));
+        sendResult(seq, JSON.stringify({success: false, error: 'No uid provided'}));
         break;
       }
       const x = Number(msg.x) || 0;
@@ -806,7 +886,7 @@ function handleCommand(msg: Record<string, unknown>) {
       if (win && (win as any).rpc) {
         const timeout = setTimeout(() => {
           (win as any).rpc.emitter.off('web-pane-mouse-result', onResult);
-          sendResult(seq, JSON.stringify({ success: false, error: 'Timeout waiting for mouse result' }));
+          sendResult(seq, JSON.stringify({success: false, error: 'Timeout waiting for mouse result'}));
         }, 8000);
         const onResult = (res: any) => {
           if (res && res.uid === uid) {
@@ -816,9 +896,9 @@ function handleCommand(msg: Record<string, unknown>) {
           }
         };
         (win as any).rpc.emitter.on('web-pane-mouse-result', onResult);
-        (win as any).rpc.emit('web-pane-mouse', { uid, x, y, action });
+        (win as any).rpc.emit('web-pane-mouse', {uid, x, y, action});
       } else {
-        sendResult(seq, JSON.stringify({ success: false, error: 'No matching window or RPC connection found' }));
+        sendResult(seq, JSON.stringify({success: false, error: 'No matching window or RPC connection found'}));
       }
       break;
     }
@@ -828,11 +908,11 @@ function handleCommand(msg: Record<string, unknown>) {
       const text = msg.text as string | undefined;
       const selector = msg.selector as string | undefined;
       if (!uid) {
-        sendResult(seq, JSON.stringify({ success: false, error: 'No uid provided' }));
+        sendResult(seq, JSON.stringify({success: false, error: 'No uid provided'}));
         break;
       }
       if (!text && !selector) {
-        sendResult(seq, JSON.stringify({ success: false, error: 'Either text or selector is required' }));
+        sendResult(seq, JSON.stringify({success: false, error: 'Either text or selector is required'}));
         break;
       }
 
@@ -842,7 +922,7 @@ function handleCommand(msg: Record<string, unknown>) {
       if (win && (win as any).rpc) {
         const timeout = setTimeout(() => {
           (win as any).rpc.emitter.off('web-pane-click-result', onResult);
-          sendResult(seq, JSON.stringify({ success: false, error: 'Timeout waiting for click result' }));
+          sendResult(seq, JSON.stringify({success: false, error: 'Timeout waiting for click result'}));
         }, 8000);
 
         const onResult = (res: any) => {
@@ -854,9 +934,9 @@ function handleCommand(msg: Record<string, unknown>) {
         };
 
         (win as any).rpc.emitter.on('web-pane-click-result', onResult);
-        (win as any).rpc.emit('web-pane-click', { uid, text, selector });
+        (win as any).rpc.emit('web-pane-click', {uid, text, selector});
       } else {
-        sendResult(seq, JSON.stringify({ success: false, error: 'No matching window or RPC connection found' }));
+        sendResult(seq, JSON.stringify({success: false, error: 'No matching window or RPC connection found'}));
       }
       break;
     }
@@ -866,7 +946,7 @@ function handleCommand(msg: Record<string, unknown>) {
       const color = msg.color as string | undefined;
       const filePath = msg.filePath as string | undefined;
       const res = createStickyNote({text, color, filePath}) as any;
-      if (res && res.error) {
+      if (res?.error) {
         // e.g. an unreachable code-sticky file — report it instead of "ok".
         sendResult(seq, JSON.stringify({ok: false, error: res.error}));
       } else {
@@ -1005,6 +1085,16 @@ export function registerSession(
     isDev && console.warn(`[bridge] No PTY on session ${uid} at registration time`);
   }
 
+  session.on('shellstate', (state: any) => {
+    send({
+      type: 'SessionShellState',
+      uid,
+      state: state.state,
+      lastExit: state.lastExit,
+      app: state.app || null
+    });
+  });
+
   // Clean up on exit
   session.on('exit', () => {
     const exitingSession = trackedSessions.get(uid);
@@ -1028,10 +1118,13 @@ export function registerSession(
   if (pendingSessionCallback) {
     const seq = pendingSessionCallback.seq;
     clearPendingSessionCallback();
-    sendResult(seq, JSON.stringify({
-      ok: true,
-      paneId: uid
-    }));
+    sendResult(
+      seq,
+      JSON.stringify({
+        ok: true,
+        paneId: uid
+      })
+    );
   }
 
   // Execute pending startup command if one was set
@@ -1140,7 +1233,7 @@ export function updateSessionLayout(
       if (!tracked) {
         if (pane.isWeb) {
           const fakeTracked: any = {
-            session: { pty: null } as any,
+            session: {pty: null} as any,
             rows: 24,
             cols: 80,
             name: pane.isAi ? 'ai' : 'web',

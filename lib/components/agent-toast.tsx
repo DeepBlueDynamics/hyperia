@@ -91,7 +91,16 @@ export default function AgentToast(): React.ReactElement | null {
             animation: 'hyToastIn 160ms ease'
           }}
         >
-          <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', fontSize: '12.5px', lineHeight: 1.35}}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              marginBottom: '10px',
+              fontSize: '12.5px',
+              lineHeight: 1.35
+            }}
+          >
             <span style={{fontSize: '15px'}}>🤖</span>
             <span>
               <b>{r.requester}</b>
@@ -111,7 +120,11 @@ export default function AgentToast(): React.ReactElement | null {
             <button type="button" style={btn} onClick={() => respond(r.id, {decision: 'allow', durationSecs: 3600})}>
               1 hour
             </button>
-            <button type="button" style={allowBtn} onClick={() => respond(r.id, {decision: 'allow', durationSecs: null})}>
+            <button
+              type="button"
+              style={allowBtn}
+              onClick={() => respond(r.id, {decision: 'allow', durationSecs: null})}
+            >
               Always
             </button>
           </div>

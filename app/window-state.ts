@@ -5,10 +5,12 @@
 //
 // State file: ~/.hyperia/window-state.json
 
-import {BrowserWindow, screen} from 'electron';
 import {readFileSync, writeFileSync, mkdirSync} from 'fs';
 import {homedir} from 'os';
 import {dirname, join} from 'path';
+
+import {screen} from 'electron';
+import type {BrowserWindow} from 'electron';
 
 interface WindowState {
   x?: number;
@@ -74,12 +76,7 @@ export interface RestoreHandle {
  *   const win = new BrowserWindow(r.opts);
  *   r.attach(win);
  */
-export function restoreFor(defaults: {
-  x?: number;
-  y?: number;
-  width: number;
-  height: number;
-}): RestoreHandle {
+export function restoreFor(defaults: {x?: number; y?: number; width: number; height: number}): RestoreHandle {
   const state = readState();
 
   const opts: RestoreHandle['opts'] = {

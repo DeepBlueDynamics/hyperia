@@ -7,16 +7,6 @@ import type {HyperDispatch} from '../../typings/hyper';
 import {clearWebPane, userExitTermGroup, splitWebPane, popOutPane} from '../actions/term-groups';
 import rpc from '../rpc';
 import {countPathHorizontalStacks} from '../utils/term-groups';
-
-import FindBar from './find-bar';
-import {PaneBand} from './pane-band';
-import {UrlNavigator} from './url-navigator';
-import {AskAiView} from './ask-ai-view';
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const {ipcMain, ipcRenderer} = require('electron');
-
-import { clickFnStr, ghostMouseFnStr } from '../utils/webview-scripts';
 import {
   BROWSER_UA,
   getSecurityState,
@@ -25,6 +15,15 @@ import {
   isOAuthUrl,
   isValidUrl
 } from '../utils/web-pane-helpers';
+import {clickFnStr, ghostMouseFnStr} from '../utils/webview-scripts';
+
+import {AskAiView} from './ask-ai-view';
+import FindBar from './find-bar';
+import {PaneBand} from './pane-band';
+import {UrlNavigator} from './url-navigator';
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const {ipcMain, ipcRenderer} = require('electron');
 
 interface WebPaneProps {
   url: string;
@@ -262,8 +261,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   // when an embedded webview can't clear a bot wall (Cloudflare et al.).
   openInExternal = () => {
     const wv: any = this.webviewRef.current;
-    const u =
-      (wv && typeof wv.getURL === 'function' && wv.getURL()) || this.props.url || this.state.urlInputVal || '';
+    const u = (wv && typeof wv.getURL === 'function' && wv.getURL()) || this.props.url || this.state.urlInputVal || '';
     if (/^https?:\/\//i.test(u)) {
       try {
         shell.openExternal(u);
@@ -753,8 +751,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
   };
 
-
-
   addToHistory = (kind: 'url' | 'ai-query', value: string, extra: Partial<WebHistoryEntry> = {}) => {
     if (!this.state.saveHistory) {
       return;
@@ -874,8 +870,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
   };
 
-
-
   createConversation = (conversationId: string, initialQuery: string) => {
     const newConv = {
       id: conversationId,
@@ -892,8 +886,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       console.error('Failed to save conversation:', e);
     }
   };
-
-
 
   componentDidUpdate(prevProps: WebPaneProps, prevState: any) {
     if (this.props.url !== prevProps.url) {
@@ -1160,14 +1152,24 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
               }
 
               // Ctrl+Alt+Shift+D / Ctrl+Alt+Shift+| -> Clone Right
-              if ((input.control || input.meta) && input.alt && input.shift && (keyLower === 'd' || input.key === '|')) {
+              if (
+                (input.control || input.meta) &&
+                input.alt &&
+                input.shift &&
+                (keyLower === 'd' || input.key === '|')
+              ) {
                 event.preventDefault();
                 this.props.onSplitWebPane?.(this.state.activeUrl || this.props.url || '', 'VERTICAL');
                 return;
               }
 
               // Ctrl+Alt+Shift+_ / Ctrl+Alt+Shift+- -> Clone Down
-              if ((input.control || input.meta) && input.alt && input.shift && (input.key === '_' || input.key === '-')) {
+              if (
+                (input.control || input.meta) &&
+                input.alt &&
+                input.shift &&
+                (input.key === '_' || input.key === '-')
+              ) {
                 event.preventDefault();
                 this.props.onSplitWebPane?.(this.state.activeUrl || this.props.url || '', 'HORIZONTAL');
                 return;
@@ -1187,7 +1189,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
               // Ctrl+Shift+T -> new tab/term group
               if ((input.control || input.meta) && input.shift && keyLower === 't') {
                 event.preventDefault();
-                (rpc.emitter.emit as any)('termgroup add req', {activeUid: this.props.sessionUid || this.props.groupUid});
+                (rpc.emitter.emit as any)('termgroup add req', {
+                  activeUid: this.props.sessionUid || this.props.groupUid
+                });
                 return;
               }
 
@@ -1865,8 +1869,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     /* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
   };
 
-
-
   render() {
     let isSplitDownDisabled = false;
     const {groupUid, allTermGroups} = this.props as any;
@@ -1884,7 +1886,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     const isAi = url && url.startsWith('ai://');
     const getStartIdx = (termGroups: Record<string, any>, groupUid: string): number => {
       let currentUid = groupUid;
-      while (termGroups[currentUid] && termGroups[currentUid].parentUid) {
+      while (termGroups[currentUid]?.parentUid) {
         currentUid = termGroups[currentUid].parentUid;
       }
       const hashCode = (str: string): number => {
@@ -1907,9 +1909,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     const resolvedGroupUid = groupUid || '';
     const startIdx = getStartIdx(resolvedAllTermGroups, resolvedGroupUid);
 
-    const tint = isAi
-      ? 'ai'
-      : getPaneTint(startIdx, splitLabel);
+    const tint = isAi ? 'ai' : getPaneTint(startIdx, splitLabel);
     // Cap the toolbar title — page titles run long ("… Recipe From Scratch -
     // Budget Bytes") and PaneBand renders nowrap + no-shrink, so the full title
     // spans the whole bar. Trim to a reasonable length with an ellipsis.
@@ -1966,7 +1966,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 'var(--space-2)',
-                  marginLeft: 'var(--space-6)',
                   flexShrink: 0
                 }}
                 onClick={(e) => e.stopPropagation()}
@@ -2598,7 +2597,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 // main-process window-open handler runs — and the "split down +
                 // open in a new pane" never fires. Enabling it lets that handler
                 // intercept the popup and route it to a split.
-                {...({allowpopups: 'true'} as any)}
+                {...({allowpopups: 'true', webpreferences: 'spellcheck=yes'} as any)}
                 style={{
                   flex: 1,
                   display: error ? 'none' : 'flex',
