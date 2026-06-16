@@ -1,4 +1,6 @@
 import {app, ipcMain, Notification, Tray, Menu, nativeImage} from 'electron';
+import {existsSync} from 'fs';
+import {dirname, join} from 'path';
 
 import isDev from 'electron-is-dev';
 
@@ -12,10 +14,23 @@ const MAX_LOG_RING = 50;
 export function initTray() {
   if (tray) return;
   try {
-    const iconImage = getAppIcon();
-    const trayIcon = typeof iconImage === 'string'
-      ? nativeImage.createFromPath(iconImage).resize({width: 16, height: 16})
-      : iconImage.resize({width: 16, height: 16});
+    let trayIcon: Electron.NativeImage | string;
+    if (process.platform === 'win32') {
+      const icoPath = join(dirname(icon), 'icon.ico');
+      if (existsSync(icoPath)) {
+        trayIcon = nativeImage.createFromPath(icoPath);
+      } else {
+        const iconImage = getAppIcon();
+        trayIcon = typeof iconImage === 'string'
+          ? nativeImage.createFromPath(iconImage).resize({width: 16, height: 16})
+          : iconImage.resize({width: 16, height: 16});
+      }
+    } else {
+      const iconImage = getAppIcon();
+      trayIcon = typeof iconImage === 'string'
+        ? nativeImage.createFromPath(iconImage).resize({width: 16, height: 16})
+        : iconImage.resize({width: 16, height: 16});
+    }
     tray = new Tray(trayIcon);
     tray.setToolTip('Hyperia');
 
