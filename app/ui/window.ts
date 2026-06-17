@@ -763,8 +763,10 @@ export function newWindow(
             items.push({
               label: suggestion,
               click: () => {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-                (guestWc as any).replaceMisspelledWord(suggestion);
+                // Electron 41 dropped WebContents.replaceMisspelledWord. Right-
+                // clicking a misspelled word selects it, so insertText replaces
+                // that selection with the chosen suggestion.
+                void guestWc.insertText(suggestion);
               }
             });
           }

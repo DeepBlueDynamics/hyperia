@@ -2569,6 +2569,37 @@ export default class Term extends React.PureComponent<
                     </div>
                   </div>
                 </span>
+                <span
+                  className="term_controlIcon term_tooltipTrigger"
+                  onClick={() => {
+                    this.clear();
+                    this.focus();
+                  }}
+                  style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
+                >
+                  <i className="ti ti-clear-all" style={{fontSize: '14px'}} aria-hidden="true" />
+                  <div className="term_tooltip" style={{minWidth: '160px'}}>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        color: 'var(--text-primary)',
+                        fontWeight: 500
+                      }}
+                    >
+                      Clear buffer
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        fontFamily: 'var(--font-mono)',
+                        color: 'var(--text-secondary)',
+                        marginTop: 'var(--space-2)'
+                      }}
+                    >
+                      Wipe scrollback (keeps prompt)
+                    </div>
+                  </div>
+                </span>
               </div>
             }
             locationBar={

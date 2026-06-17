@@ -1962,6 +1962,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             isSplitDownDisabled={isSplitDownDisabled || hideSplits}
             navCluster={
               <div
+                className="web-nav-cluster"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -2676,6 +2677,15 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
           .term_tooltipTrigger:hover .term_tooltip {
             display: block;
+          }
+
+          /* The nav cluster sits at the far LEFT of the band; the default
+             tooltip is right-anchored (opens leftward), which runs off the left
+             edge of the screen here. Anchor these left so they open rightward
+             into the pane instead. */
+          .web-nav-cluster .term_tooltip {
+            left: -6px;
+            right: auto;
           }
 
           .web_pane_prompt_container {

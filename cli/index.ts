@@ -15,6 +15,7 @@ import ora from 'ora';
 import {version} from '../app/package.json';
 
 import * as api from './api';
+import {MCP_COMMANDS, runMcpCli} from './hyperia-mcp';
 
 let commandPromise: Promise<void> | undefined;
 
@@ -265,9 +266,22 @@ function eventuallyExit(code: number) {
   setTimeout(() => process.exit(code), 100);
 }
 
-main(process.argv)
-  .then(() => eventuallyExit(0))
-  .catch((err) => {
-    console.error(err.stack ? err.stack : err);
-    eventuallyExit(1);
-  });
+// Hyperia MCP client commands (epic #122, C1/C2): talk to the running sidecar
+// over HTTP instead of launching the app. Intercept before the legacy `args`
+// flow so the plugin commands and the bare-launch behaviour are untouched.
+const mcpCmd = process.argv[2];
+if (mcpCmd && MCP_COMMANDS.has(mcpCmd)) {
+  runMcpCli(process.argv.slice(2))
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error(err && err.stack ? err.stack : err);
+      process.exit(1);
+    });
+} else {
+  main(process.argv)
+    .then(() => eventuallyExit(0))
+    .catch((err) => {
+      console.error(err.stack ? err.stack : err);
+      eventuallyExit(1);
+    });
+}
