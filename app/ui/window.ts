@@ -181,6 +181,16 @@ export function newWindow(
   };
   const window = new BrowserWindow(app.plugins.getDecoratedBrowserOptions(winOpts));
 
+  // Belt-and-suspenders: explicitly re-apply the window icon onto the live OS
+  // handle after creation. winOpts.icon already sets it, but a fresh WM_SETICON
+  // here can dislodge a taskbar button that cached a stale icon at create time.
+  // Keep the PNG nativeImage — a .ico string regresses to the atom fallback
+  // (see config/paths.ts:61).
+  if (process.platform === 'win32') {
+    const winIco = getAppIcon();
+    window.setIcon(typeof winIco === 'string' ? nativeImage.createFromPath(winIco) : winIco);
+  }
+
   window.profileName = profileName;
   (window as any).tabCount = 1;
   (window as any).paneCount = 1;
