@@ -423,6 +423,82 @@ async function cmdRequestAccess(pos: string[], flags: Flags, wantJson: boolean):
   return invoke('request_access', args, wantJson);
 }
 
+// ---------- C5: doctor (reachable? identified? endpoint? token?) ----------
+async function cmdDoctor(wantJson: boolean): Promise<number> {
+  const base = baseUrl();
+  const tokenSource = process.env.HYPERIA_AGENT_TOKEN
+    ? 'env:HYPERIA_AGENT_TOKEN'
+    : process.env.HYPERIA_CLI_TOKEN
+      ? 'env:HYPERIA_CLI_TOKEN'
+      : loadToken()
+        ? 'cached ~/.hyperia/cli.json'
+        : 'none';
+  let reachable = false;
+  let identity: {kind?: string; label?: string; anonymous?: boolean} | null = null;
+  let err: string | undefined;
+  try {
+    const res = await got(`${base}/api/identity/whoami`, {
+      headers: authHeaders(),
+      responseType: 'json',
+      timeout: {request: 6000},
+      throwHttpErrors: false
+    });
+    reachable = true;
+    identity = res.body as {kind?: string; label?: string; anonymous?: boolean};
+  } catch (e) {
+    err = (e as Error)?.message;
+  }
+  const hint = !reachable
+    ? 'set HYPERIA_MCP_URL to the host — in a container use http://host.docker.internal:9800'
+    : identity?.anonymous
+      ? 'run `hyperia login` to get an identity'
+      : 'ok';
+  const code = !reachable ? 3 : identity?.anonymous ? 2 : 0;
+  if (wantJson) {
+    console.log(JSON.stringify({endpoint: base, reachable, error: err, tokenSource, identity, hint}, null, 2));
+    return code;
+  }
+  console.log(`endpoint:   ${base}`);
+  console.log(`reachable:  ${reachable ? 'yes' : `NO — ${err}`}`);
+  console.log(`token:      ${tokenSource}`);
+  console.log(`identity:   ${identity ? `${identity.kind} (${identity.label})${identity.anonymous ? ' — ANONYMOUS' : ''}` : 'unknown'}`);
+  console.log(`→ ${hint}`);
+  return code;
+}
+
+// ---------- C6: guide / help ----------
+function cmdGuide(): number {
+  console.log(
+    `Hyperia CLI — drive a running Hyperia from the shell.
+
+MODEL: window > tab > pane. A pane holds a terminal (shell) OR a web view.
+Target with --window <id> --tab <name> --pane <name|id>; omit to use the focused pane.
+
+SETUP
+  hyperia doctor                 check connectivity + identity + endpoint
+  hyperia login [name]           get an identity (mint + cache a token)
+  (endpoint = $HYPERIA_MCP_URL; in a container: http://host.docker.internal:9800)
+
+COMMON
+  hyperia status                 window/tab/pane tree
+  hyperia run "<cmd>" --pane <id>   run a command in a pane
+  hyperia cd <dir> --pane <id>      change a pane's dir (applies when idle)
+  hyperia open <url>                web pane in a NEW tab
+  hyperia split --url <url>         web pane in the CURRENT tab
+  hyperia split --command "<cmd>"   new shell split
+  hyperia screen --pane <id>        read a pane's screen
+  hyperia request-access <pane> --purpose "..."   ask the human for consent
+
+ANYTHING (generic, mirrors the live tool catalog)
+  hyperia tools                  list every tool
+  hyperia describe <tool>        its arguments
+  hyperia call <tool> '{json}'   invoke any tool
+
+Add --json to any command for machine-readable output.`
+  );
+  return 0;
+}
+
 // ---------- dispatch ----------
 export const MCP_COMMANDS = new Set([
   // C2 generic + identity
@@ -442,7 +518,11 @@ export const MCP_COMMANDS = new Set([
   'close',
   'focus',
   'rename',
-  'request-access'
+  'request-access',
+  // C5 / C6
+  'doctor',
+  'guide',
+  'help'
 ]);
 
 export async function runMcpCli(argv: string[]): Promise<number> {
@@ -483,6 +563,11 @@ export async function runMcpCli(argv: string[]): Promise<number> {
         return await cmdRename(pos, flags, wantJson);
       case 'request-access':
         return await cmdRequestAccess(pos, flags, wantJson);
+      case 'doctor':
+        return await cmdDoctor(wantJson);
+      case 'guide':
+      case 'help':
+        return cmdGuide();
       default:
         console.error(`unknown hyperia command: ${cmd}`);
         return 1;
