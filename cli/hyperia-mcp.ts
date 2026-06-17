@@ -244,6 +244,11 @@ async function cmdCall(pos: string[], flags: Record<string, string | boolean>, w
       args[k] = typeof v === 'string' ? coerce(v) : v;
     }
   }
+  return invoke(tool, args, wantJson);
+}
+
+// Shared tool invocation + result printing (used by `call` and the curated verbs).
+async function invoke(tool: string, args: Record<string, unknown>, wantJson: boolean): Promise<number> {
   const result = await mcp('tools/call', {name: tool, arguments: args});
   const isErr = !!result?.isError;
   if (wantJson) {
@@ -303,8 +308,142 @@ async function cmdLogin(name: string | undefined, wantJson: boolean): Promise<nu
   return 0;
 }
 
+// ---------- C3: curated verbs (friendly aliases over the generic layer) ----------
+type Flags = Record<string, string | boolean>;
+
+// Pull window/tab/pane targeting flags into a tool-arguments object.
+function target(flags: Flags): Record<string, unknown> {
+  const t: Record<string, unknown> = {};
+  if (flags.window !== undefined && flags.window !== true) t.window = coerce(String(flags.window));
+  if (typeof flags.tab === 'string') t.tab = flags.tab;
+  if (typeof flags.pane === 'string') t.pane = flags.pane;
+  return t;
+}
+
+// Render terminal_status as a readable window→tab→pane tree (dumb-agent friendly).
+function fmtStatus(raw: string): string {
+  let data: {windows?: any[]};
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  const lines: string[] = [];
+  for (const w of data.windows || []) {
+    lines.push(`window ${w.id}${w.focused ? ' (focused)' : ''}`);
+    for (const tab of w.tabs || []) {
+      lines.push(`  tab "${tab.name}"${tab.active ? ' (active)' : ''}`);
+      for (const p of tab.panes || []) {
+        const id = String(p.paneId || '').slice(0, 8);
+        const app = p.app && p.app.name ? ` ${p.app.name}` : '';
+        const cwd = p.cwd ? ` cwd=${p.cwd}` : '';
+        const focused = p.focused ? '  <focused>' : '';
+        lines.push(`    • ${p.name || p.title || '(pane)'}  [${id}]  ${p.state || ''} ${p.shell || ''}${app}${cwd}${focused}`);
+      }
+    }
+  }
+  return lines.join('\n') || raw;
+}
+
+async function cmdStatus(wantJson: boolean): Promise<number> {
+  const result = await mcp('tools/call', {name: 'terminal_status', arguments: {}});
+  if (wantJson) {
+    console.log(JSON.stringify(result, null, 2));
+    return 0;
+  }
+  const text = ((result?.content as Array<{text?: string}>) || []).map((c) => c?.text ?? '').join('').trim();
+  console.log(fmtStatus(text));
+  return 0;
+}
+
+async function cmdRun(pos: string[], flags: Flags, wantJson: boolean): Promise<number> {
+  const command = pos[0];
+  if (!command) throw new CliError('usage: hyperia run "<command>" [--pane <id>] [--window <id>] [--tab <name>]');
+  return invoke('terminal_run', {command, ...target(flags)}, wantJson);
+}
+
+async function cmdKeys(pos: string[], flags: Flags, wantJson: boolean): Promise<number> {
+  const keys = pos[0];
+  if (!keys) throw new CliError('usage: hyperia keys "<keys>" [--pane <id>]');
+  return invoke('terminal_keys', {keys, ...target(flags)}, wantJson);
+}
+
+async function cmdCd(pos: string[], flags: Flags, wantJson: boolean): Promise<number> {
+  const path = pos[0];
+  if (!path) throw new CliError('usage: hyperia cd <dir> [--pane <id>]');
+  return invoke('terminal_cd', {path, ...target(flags)}, wantJson);
+}
+
+async function cmdOpen(pos: string[], wantJson: boolean): Promise<number> {
+  const url = pos[0];
+  if (!url) {
+    throw new CliError(
+      'usage: hyperia open <url>   (opens a NEW web-pane tab; for a web pane in the CURRENT tab use `hyperia split --url <url>`)'
+    );
+  }
+  return invoke('open_web_pane', {url}, wantJson);
+}
+
+async function cmdSplit(flags: Flags, wantJson: boolean): Promise<number> {
+  const args: Record<string, unknown> = {...target(flags)};
+  if (typeof flags.url === 'string') args.url = flags.url;
+  if (typeof flags.command === 'string') args.command = flags.command;
+  if (typeof flags.profile === 'string') args.profile = flags.profile;
+  const dir = flags.direction ?? flags.dir;
+  if (typeof dir === 'string') args.direction = dir;
+  return invoke('terminal_split', args, wantJson);
+}
+
+async function cmdScreen(flags: Flags, wantJson: boolean): Promise<number> {
+  return invoke('terminal_screen', {...target(flags)}, wantJson);
+}
+
+async function cmdClose(flags: Flags, wantJson: boolean): Promise<number> {
+  // NOTE: `--force` (self-close override) lands with hyperia#118; harmless until then.
+  const args: Record<string, unknown> = {...target(flags)};
+  if (flags.force === true) args.force = true;
+  return invoke('terminal_close', args, wantJson);
+}
+
+async function cmdFocus(flags: Flags, wantJson: boolean): Promise<number> {
+  return invoke('terminal_focus', {...target(flags)}, wantJson);
+}
+
+async function cmdRename(pos: string[], flags: Flags, wantJson: boolean): Promise<number> {
+  const name = pos[0];
+  if (!name) throw new CliError('usage: hyperia rename <name> [--pane <id>]');
+  return invoke('terminal_rename', {name, ...target(flags)}, wantJson);
+}
+
+async function cmdRequestAccess(pos: string[], flags: Flags, wantJson: boolean): Promise<number> {
+  const args: Record<string, unknown> = {...target(flags)};
+  const pane = pos[0] ?? (typeof flags.pane === 'string' ? flags.pane : undefined);
+  if (pane) args.pane = pane;
+  args.purpose = typeof flags.purpose === 'string' ? flags.purpose : pos[1] || 'CLI access';
+  return invoke('request_access', args, wantJson);
+}
+
 // ---------- dispatch ----------
-export const MCP_COMMANDS = new Set(['tools', 'call', 'describe', 'whoami', 'login']);
+export const MCP_COMMANDS = new Set([
+  // C2 generic + identity
+  'tools',
+  'call',
+  'describe',
+  'whoami',
+  'login',
+  // C3 curated verbs
+  'status',
+  'run',
+  'keys',
+  'cd',
+  'open',
+  'split',
+  'screen',
+  'close',
+  'focus',
+  'rename',
+  'request-access'
+]);
 
 export async function runMcpCli(argv: string[]): Promise<number> {
   const cmd = argv[0];
@@ -322,6 +461,28 @@ export async function runMcpCli(argv: string[]): Promise<number> {
         return await cmdWhoami(wantJson);
       case 'login':
         return await cmdLogin(pos[0], wantJson);
+      case 'status':
+        return await cmdStatus(wantJson);
+      case 'run':
+        return await cmdRun(pos, flags, wantJson);
+      case 'keys':
+        return await cmdKeys(pos, flags, wantJson);
+      case 'cd':
+        return await cmdCd(pos, flags, wantJson);
+      case 'open':
+        return await cmdOpen(pos, wantJson);
+      case 'split':
+        return await cmdSplit(flags, wantJson);
+      case 'screen':
+        return await cmdScreen(flags, wantJson);
+      case 'close':
+        return await cmdClose(flags, wantJson);
+      case 'focus':
+        return await cmdFocus(flags, wantJson);
+      case 'rename':
+        return await cmdRename(pos, flags, wantJson);
+      case 'request-access':
+        return await cmdRequestAccess(pos, flags, wantJson);
       default:
         console.error(`unknown hyperia command: ${cmd}`);
         return 1;
