@@ -14,7 +14,7 @@ use super::super::ghost::types::{ChatRequest, GhostEvent, PendingToolCall, Provi
 
 const SYSTEM_PROMPT: &str = "\
 You are the Hyperia configuration agent. Your job is to help the user
-configure Hyperia by reading and writing ~/.hyperia/hyperia.json and
+configure Hyperia by reading and writing the shared Hyperia config and
 bringing up any local services they need.
 
 ## Your toolbox

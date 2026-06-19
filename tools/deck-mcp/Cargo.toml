@@ -1,0 +1,21 @@
+[package]
+name = "deck-mcp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hidapi = "2.6"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = { version = "0.7", features = ["macros", "ws"] }
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+image = "0.24"
+futures = "0.3"
+tokio-stream = "0.1"
+lazy_static = "1.4"
+rusttype = "0.9"
+base64 = "0.22"
+
+

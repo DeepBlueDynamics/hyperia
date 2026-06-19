@@ -54,6 +54,7 @@ export interface WebHistoryEntry {
 interface WebPaneState {
   error: string | null;
   loading: boolean;
+  httpStatus: number | null;
   canGoBack: boolean;
   canGoForward: boolean;
   activeUrl: string;
@@ -186,6 +187,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     this.state = {
       error: null,
       loading: true,
+      httpStatus: null,
       canGoBack: false,
       canGoForward: false,
       activeUrl: props.url || '',
@@ -977,7 +979,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     wv.addEventListener('did-start-loading', () => {
-      this.setState({loading: true, error: null, pageBgColor: null});
+      this.setState({loading: true, error: null, httpStatus: null, pageBgColor: null});
     });
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
@@ -1001,6 +1003,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           "(function(){try{var entries=performance.getEntriesByType('navigation');return entries.length?entries[0].responseStatus:0;}catch(e){return 0;}})()"
         );
         if (httpStatus === 404 || httpStatus >= 400) {
+          // Surface the bad status in the pane label ("404") instead of falling
+          // back to a meaningless split letter.
+          this.setState({httpStatus});
           const currentUrl = wv.getURL();
           if (currentUrl) {
             this.removeHistoryEntry('url', currentUrl);
@@ -1668,6 +1673,54 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
   };
 
+  // Screenshot the rendered web pane. Uses the <webview>'s own capturePage()
+  // (renderer-side, no right-click / no main-process round trip — works even on
+  // pages that suppress the context menu). Copies the PNG to the clipboard and
+  // saves a copy under ~/.hyperia/snapshots/. Brief icon flash as confirmation.
+  captureScreenshot = async (e: React.MouseEvent): Promise<void> => {
+    e.stopPropagation();
+    const wv: any = this.webviewRef.current;
+    if (!wv || typeof wv.capturePage !== 'function') return;
+    const iconEl = (e.currentTarget as HTMLElement).querySelector('i');
+    try {
+      const img = await wv.capturePage();
+      if (!img || img.isEmpty()) return;
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const {clipboard} = require('electron');
+      clipboard.writeImage(img);
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fs = require('fs');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const os = require('os');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const path = require('path');
+        const dir = path.join(os.homedir(), '.hyperia', 'snapshots');
+        fs.mkdirSync(dir, {recursive: true});
+        let host = 'page';
+        try {
+          host = new URL(this.state.activeUrl || this.props.url || '').hostname || 'page';
+        } catch {
+          /* keep 'page' */
+        }
+        fs.writeFileSync(path.join(dir, `webshot-${host}-${Date.now()}.png`), img.toPNG());
+      } catch (saveErr) {
+        // clipboard copy already succeeded; disk save is best-effort
+        console.error('[web-pane] screenshot save failed:', saveErr);
+      }
+      // Transient confirmation: swap the camera glyph to a check for ~1.4s.
+      if (iconEl) {
+        const prev = iconEl.className;
+        iconEl.className = 'ti ti-check';
+        setTimeout(() => {
+          iconEl.className = prev;
+        }, 1400);
+      }
+    } catch (err) {
+      console.error('[web-pane] capturePage failed:', err);
+    }
+  };
+
   // Create a new sticky note from the current page: title + URL + the selected
   // text (or a trimmed extract of the main content). Sent to the main process,
   // which owns sticky windows.
@@ -1826,7 +1879,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       new MenuItem({
         label: 'Rename Pane',
         click: () => {
-          const val = prompt('Enter pane name:', this.props.splitLabel ? `Pane ${this.props.splitLabel}` : 'Browser');
+          const val = prompt('Enter pane name:', ((this.props as any).webName as string) || 'Browser');
           if (val && (this.props as any).onSetTitle) {
             (this.props as any).onSetTitle(val.trim());
           }
@@ -1880,7 +1933,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
 
     const {url, onClose, hasSession} = this.props;
-    const {error, loading} = this.state;
+    const {error, loading, httpStatus} = this.state;
     const splitLabel = (this.props as any).splitLabel;
     const showStrip = !!splitLabel || hasSession;
     const isAi = url && url.startsWith('ai://');
@@ -1915,7 +1968,19 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     // spans the whole bar. Trim to a reasonable length with an ellipsis.
     const rawWebName = (this.props as any).webName as string | undefined;
     const webNameShort = rawWebName && rawWebName.length > 32 ? `${rawWebName.slice(0, 31).trimEnd()}…` : rawWebName;
-    const labelText = isAi ? 'ask' : webNameShort || (splitLabel ? `Pane ${splitLabel}` : 'Browser');
+    // Pane label priority — never the split letter ("Pane b"), which means
+    // nothing to the user and confuses agents reading pane data. A bad load
+    // shows its status ("404" / "Unreachable"), else the page title, else the
+    // URL host, else a neutral "Browser".
+    const hostLabel = (() => {
+      try {
+        return new URL(this.state.activeUrl || url || '').hostname.replace(/^www\./, '');
+      } catch {
+        return '';
+      }
+    })();
+    const statusLabel = httpStatus && httpStatus >= 400 ? String(httpStatus) : error ? 'Unreachable' : '';
+    const labelText = isAi ? 'ask' : statusLabel || webNameShort || hostLabel || 'Browser';
 
     // ── Toolbar collapse plan ────────────────────────────────────────────────
     // Priority, widest → narrowest:
@@ -2104,6 +2169,26 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     </div>
                   </span>
                 )}
+                <span
+                  className="term_controlIcon term_tooltipTrigger"
+                  onClick={this.captureScreenshot}
+                  style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
+                >
+                  <i className="ti ti-camera" style={{fontSize: '14px'}} aria-hidden="true" />
+                  <div className="term_tooltip" style={{minWidth: '200px'}}>
+                    <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Screenshot</div>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        fontFamily: 'var(--font-mono)',
+                        color: 'var(--text-secondary)',
+                        marginTop: 'var(--space-2)'
+                      }}
+                    >
+                      Copy to clipboard + save to ~/.hyperia/snapshots
+                    </div>
+                  </div>
+                </span>
                 {!isAi && (
                   <span
                     className="term_controlIcon term_tooltipTrigger"

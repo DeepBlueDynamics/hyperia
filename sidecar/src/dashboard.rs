@@ -239,18 +239,7 @@ pub async fn post_telemetry_event(
 
 // Helper to query and construct the system diagnostic snapshot
 async fn get_status_data(client: &reqwest::Client) -> serde_json::Value {
-    let home = if cfg!(windows) {
-        std::env::var("USERPROFILE").unwrap_or_default()
-    } else {
-        std::env::var("HOME").unwrap_or_default()
-    };
-    let cfg_path = std::path::PathBuf::from(home).join(".hyperia").join("hyperia.json");
-    
-    let raw_cfg: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&cfg_path) {
-        serde_json::from_str(&content).unwrap_or(serde_json::Value::Null)
-    } else {
-        serde_json::Value::Null
-    };
+    let raw_cfg: serde_json::Value = crate::util::read_shared_config().unwrap_or(serde_json::Value::Null);
 
     let active_provider = raw_cfg["config"]["agent"]["provider"]
         .as_str()

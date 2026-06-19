@@ -1,0 +1,1396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream Deck Plus - MCP Control Center</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0b0c10;
+            --bg-secondary: rgba(22, 24, 35, 0.7);
+            --border-glow: rgba(99, 102, 241, 0.2);
+            --accent-glow: #6366f1;
+            --accent-cyan: #06b6d4;
+            --accent-green: #10b981;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-main);
+            height: 100vh;
+            overflow: hidden;
+            background-image: 
+                radial-gradient(at 10% 20%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+                radial-gradient(at 90% 80%, rgba(6, 182, 212, 0.15) 0px, transparent 50%);
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(11, 12, 16, 0.6);
+            backdrop-filter: blur(10px);
+        }
+
+        .header-title h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            background: linear-gradient(to right, var(--accent-glow), var(--accent-cyan));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header-title p {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 6px 12px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef4444;
+            box-shadow: 0 0 8px #ef4444;
+            transition: all 0.3s ease;
+        }
+
+        .status-dot.connected {
+            background: var(--accent-green);
+            box-shadow: 0 0 8px var(--accent-green);
+        }
+
+        .device-status-banner {
+            background: rgba(239, 68, 68, 0.12);
+            border: 1px solid rgba(239, 68, 68, 0.25);
+            color: #f87171;
+            padding: 10px 16px;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            width: 100%;
+            max-width: 580px;
+            box-sizing: border-box;
+        }
+        
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(248, 113, 113, 0.2);
+            border-top-color: #f87171;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            flex-shrink: 0;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        main {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            overflow: hidden;
+        }
+
+        .workspace-panel {
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow-y: auto;
+        }
+
+        /* Virtual Stream Deck plus Layout */
+        .deck-frame {
+            background: linear-gradient(135deg, #181922 0%, #111217 100%);
+            border-radius: 24px;
+            padding: 2.5rem;
+            box-shadow: 
+                0 25px 50px -12px rgba(0, 0, 0, 0.7),
+                0 0 40px rgba(99, 102, 241, 0.05),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            width: 720px;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            position: relative;
+        }
+
+        .deck-brand {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.2);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        /* Key Grid */
+        .key-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.2rem;
+        }
+
+        .deck-key {
+            aspect-ratio: 1;
+            background: #1d1e26;
+            border-radius: 12px;
+            border: 2px solid #282a36;
+            box-shadow: 
+                inset 0 -4px 0 rgba(0, 0, 0, 0.4),
+                0 4px 6px rgba(0, 0, 0, 0.3);
+            cursor: pointer;
+            transition: all 0.1s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            padding: 8px;
+            gap: 4px;
+        }
+
+        .deck-key:active {
+            transform: scale(0.96);
+            box-shadow: 
+                inset 0 2px 4px rgba(0, 0, 0, 0.6),
+                0 1px 2px rgba(0, 0, 0, 0.3);
+            border-color: var(--accent-glow);
+        }
+
+        .deck-key img {
+            width: 52px;
+            height: 52px;
+            object-fit: contain;
+            border-radius: 8px;
+        }
+
+        .deck-key-app-label {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            text-align: center;
+            width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-weight: 500;
+        }
+
+        .window-badge {
+            position: absolute;
+            bottom: 6px;
+            right: 6px;
+            background: #ef4444;
+            color: white;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .deck-key-label {
+            position: absolute;
+            bottom: 4px;
+            right: 6px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.3);
+            pointer-events: none;
+        }
+
+        /* Touch Strip */
+        .touch-strip {
+            height: 90px;
+            background: #0d0e12;
+            border-radius: 8px;
+            border: 2px solid #20222b;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            overflow: hidden;
+            box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.8);
+            position: relative;
+        }
+
+        .scroll-arrow {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #8c8c96;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+            z-index: 10;
+        }
+
+        .scroll-arrow.scroll-left {
+            left: 8px;
+        }
+
+        .scroll-arrow.scroll-right {
+            right: 8px;
+        }
+
+        .scroll-arrow.visible {
+            opacity: 1;
+        }
+
+        .touch-slot {
+            border-right: 1px solid rgba(255, 255, 255, 0.05);
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            align-items: center;
+            padding: 4px 12px 0 12px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+            position: relative;
+        }
+
+        .touch-slot:last-child {
+            border-right: none;
+        }
+
+        .touch-slot:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .touch-slot.focused {
+            background: rgba(99, 102, 241, 0.08);
+            box-shadow: inset 0 0 10px rgba(99, 102, 241, 0.1);
+        }
+
+        .touch-title {
+            font-size: 1.75rem;
+            font-weight: 600;
+            color: inherit;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+        }
+
+        .touch-sub {
+            font-size: 0.85rem;
+            color: inherit;
+            opacity: 0.85;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-top: 3px;
+            text-align: center;
+            width: 100%;
+        }
+
+        .dial-function {
+            font-size: 0.6rem;
+            font-weight: 700;
+            color: #8c8c96;
+            text-align: center;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            position: absolute;
+            bottom: 6px;
+            left: 0;
+            right: 0;
+            pointer-events: none;
+        }
+
+        /* Knobs Layout */
+        .knobs-container {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.2rem;
+            justify-items: center;
+            padding-top: 0.5rem;
+        }
+
+        .knob-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            position: relative;
+        }
+
+        .knob-dial {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: radial-gradient(circle, #2c2e3d 0%, #1e1f29 70%, #15161d 100%);
+            border: 2px solid #34374a;
+            position: relative;
+            box-shadow: 
+                0 4px 10px rgba(0, 0, 0, 0.5),
+                inset 0 2px 2px rgba(255, 255, 255, 0.1);
+            cursor: pointer;
+            transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .knob-dial::after {
+            content: '';
+            position: absolute;
+            top: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 4px;
+            height: 12px;
+            background: rgba(255, 255, 255, 0.4);
+            border-radius: 2px;
+        }
+
+        .knob-dial.clicked {
+            transform: scale(0.93);
+            border-color: var(--accent-cyan);
+        }
+
+        .knob-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .knob-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .knob-action-btn {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 0.65rem;
+            cursor: pointer;
+        }
+
+        .knob-action-btn:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        /* Sidebar Panel */
+        .sidebar {
+            background: var(--bg-secondary);
+            backdrop-filter: blur(12px);
+            border-left: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            overflow-y: auto;
+        }
+
+        .sidebar-widget {
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            padding: 1.2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .widget-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: var(--accent-cyan);
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .control-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .control-row label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        input[type="range"] {
+            flex: 1;
+            accent-color: var(--accent-glow);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, var(--accent-glow) 0%, #4f46e5 100%);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
+            text-align: center;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(99, 102, 241, 0.35);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            color: var(--text-main);
+            box-shadow: none;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: none;
+        }
+
+        /* Log / Diagnostic Console */
+        .console-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #06070a;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            height: 250px;
+            overflow: hidden;
+        }
+
+        .console-header {
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.02);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .console-log {
+            flex: 1;
+            padding: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            color: #34d399;
+        }
+
+        .log-entry {
+            display: flex;
+            gap: 8px;
+        }
+
+        .log-time {
+            color: var(--text-muted);
+        }
+
+        .log-tag {
+            color: var(--accent-cyan);
+            font-weight: 600;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 8px;
+            margin-top: 4px;
+        }
+
+        .input-group input[type="text"] {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 6px;
+            color: var(--text-main);
+            padding: 6px 10px;
+            font-size: 0.85rem;
+        }
+
+        .input-group input[type="text"]:focus {
+            outline: none;
+            border-color: var(--accent-glow);
+        }
+
+        /* Modal Picker Styling */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(5, 5, 8, 0.75);
+            backdrop-filter: blur(8px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .modal-content {
+            background: rgba(20, 21, 30, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            width: 420px;
+            padding: 2rem;
+            box-shadow: 
+                0 20px 50px rgba(0, 0, 0, 0.6),
+                0 0 30px rgba(99, 102, 241, 0.15);
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            transform: scale(0.9);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .modal-overlay.active .modal-content {
+            transform: scale(1);
+        }
+
+        .modal-content h2 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            background: linear-gradient(to right, var(--accent-glow), var(--accent-cyan));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-align: center;
+        }
+
+        .tab-buttons {
+            display: flex;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 4px;
+        }
+
+        .tab-btn {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+        }
+
+        .tab-btn.active {
+            background: rgba(99, 102, 241, 0.2);
+            color: var(--text-main);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+        }
+
+        .modal-tab-content {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .modal-tab-content label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        .modal-tab-content select, .modal-tab-content input {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            color: var(--text-main);
+            padding: 10px 12px;
+            font-size: 0.95rem;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+        .modal-tab-content select:focus, .modal-tab-content input:focus {
+            border-color: var(--accent-glow);
+            box-shadow: 0 0 10px rgba(99, 102, 241, 0.15);
+        }
+
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            margin-top: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-title">
+            <h1>Elgato Stream Deck Plus</h1>
+            <p>MCP Hardware Server & Hyperia Orchestrator</p>
+        </div>
+        <div class="status-badge">
+            <span class="status-dot" id="status-dot"></span>
+            <span id="status-text">Disconnected</span>
+        </div>
+    </header>
+
+    <main>
+        <div class="workspace-panel">
+            <div id="device-status-banner" class="device-status-banner" style="display: none;">
+                <div class="spinner"></div>
+                <span>Trying to reconnect...</span>
+            </div>
+            <div class="deck-frame">
+                <div class="deck-brand">Stream Deck +</div>
+                
+                <!-- 8 Keys -->
+                <div class="key-grid">
+                    <button class="deck-key" id="key-0" onclick="pressKey(0)"><div class="deck-key-label">0</div></button>
+                    <button class="deck-key" id="key-1" onclick="pressKey(1)"><div class="deck-key-label">1</div></button>
+                    <button class="deck-key" id="key-2" onclick="pressKey(2)"><div class="deck-key-label">2</div></button>
+                    <button class="deck-key" id="key-3" onclick="pressKey(3)"><div class="deck-key-label">3</div></button>
+                    <button class="deck-key" id="key-4" onclick="pressKey(4)"><div class="deck-key-label">4</div></button>
+                    <button class="deck-key" id="key-5" onclick="pressKey(5)"><div class="deck-key-label">5</div></button>
+                    <button class="deck-key" id="key-6" onclick="pressKey(6)"><div class="deck-key-label">6</div></button>
+                    <button class="deck-key" id="key-7" onclick="pressKey(7)"><div class="deck-key-label">7</div></button>
+                </div>
+
+                <!-- LCD Touch bar -->
+                <div class="touch-strip">
+                    <div id="scroll-left-indicator" class="scroll-arrow scroll-left">&lt;</div>
+                    <div class="touch-slot" id="slot-0" onclick="touchSlot(0)">
+                        <div class="touch-title">--</div>
+                        <div class="touch-sub">Slot 0</div>
+                        <div class="dial-function">Scroll Pane</div>
+                    </div>
+                    <div class="touch-slot" id="slot-1" onclick="touchSlot(1)">
+                        <div class="touch-title">--</div>
+                        <div class="touch-sub">Slot 1</div>
+                        <div class="dial-function">Scroll Tabs</div>
+                    </div>
+                    <div class="touch-slot" id="slot-2" onclick="touchSlot(2)">
+                        <div class="touch-title">--</div>
+                        <div class="touch-sub">Slot 2</div>
+                        <div class="dial-function">Scroll App</div>
+                    </div>
+                    <div class="touch-slot" id="slot-3" onclick="touchSlot(3)">
+                        <div class="touch-title">--</div>
+                        <div class="touch-sub">Slot 3</div>
+                        <div class="dial-function">Brightness</div>
+                    </div>
+                    <div id="scroll-right-indicator" class="scroll-arrow scroll-right">&gt;</div>
+                </div>
+
+                <!-- 4 Knobs -->
+                <div class="knobs-container">
+                    <div class="knob-wrapper">
+                        <div class="knob-dial" id="knob-0" onclick="clickKnob(0)"></div>
+                        <div class="knob-label">Scroll Pane</div>
+                        <div class="knob-actions">
+                            <button class="knob-action-btn" onclick="rotateKnob(0, -1)">↺</button>
+                            <button class="knob-action-btn" onclick="rotateKnob(0, 1)">⟳</button>
+                        </div>
+                    </div>
+                    <div class="knob-wrapper">
+                        <div class="knob-dial" id="knob-1" onclick="clickKnob(1)"></div>
+                        <div class="knob-label">Scroll Tabs</div>
+                        <div class="knob-actions">
+                            <button class="knob-action-btn" onclick="rotateKnob(1, -1)">↺</button>
+                            <button class="knob-action-btn" onclick="rotateKnob(1, 1)">⟳</button>
+                        </div>
+                    </div>
+                    <div class="knob-wrapper">
+                        <div class="knob-dial" id="knob-2" onclick="clickKnob(2)"></div>
+                        <div class="knob-label">Scroll App</div>
+                        <div class="knob-actions">
+                            <button class="knob-action-btn" onclick="rotateKnob(2, -1)">↺</button>
+                            <button class="knob-action-btn" onclick="rotateKnob(2, 1)">⟳</button>
+                        </div>
+                    </div>
+                    <div class="knob-wrapper">
+                        <div class="knob-dial" id="knob-3" onclick="clickKnob(3)"></div>
+                        <div class="knob-label">Brightness</div>
+                        <div class="knob-actions">
+                            <button class="knob-action-btn" onclick="rotateKnob(3, -1)">↺</button>
+                            <button class="knob-action-btn" onclick="rotateKnob(3, 1)">⟳</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="sidebar-widget">
+                <div class="widget-title">General Settings</div>
+                <div class="control-row">
+                    <label>Brightness</label>
+                    <input type="range" id="brightness-slider" min="0" max="100" value="100" onchange="setBrightness(this.value)">
+                </div>
+                <button class="btn btn-secondary" onclick="triggerSync()">Sync Hyperia Panes</button>
+            </div>
+
+            <div class="sidebar-widget">
+                <div class="widget-title">Active Pane Execution</div>
+                <label style="font-size: 0.8rem; color: var(--text-muted);">Send command to focused pane:</label>
+                <div class="input-group">
+                    <input type="text" id="cmd-input" placeholder="e.g. cargo run, git status">
+                    <button class="btn" onclick="sendTerminalCommand()">Send</button>
+                </div>
+            </div>
+
+            <div class="sidebar-widget" style="flex: 1; min-height: 250px; display: flex; flex-direction: column;">
+                <div class="widget-title">Real-time Reports</div>
+                <div class="console-container">
+                    <div class="console-header">
+                        <span>Incoming Events</span>
+                        <span style="color: var(--accent-cyan)">Live</span>
+                    </div>
+                    <div class="console-log" id="console-log">
+                        <div style="color: var(--text-muted)">Waiting for connection...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Modal Picker for Adding Pane -->
+    <div id="picker-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <h2>Add New Pane</h2>
+            <div class="tab-buttons">
+                <button class="tab-btn active" onclick="switchModalTab('terminal')">Terminal</button>
+                <button class="tab-btn" onclick="switchModalTab('web')">Web Page</button>
+            </div>
+            
+            <div id="modal-tab-terminal" class="modal-tab-content">
+                <label for="profile-select">Terminal Profile:</label>
+                <select id="profile-select">
+                    <option value="default">Default Profile</option>
+                    <option value="pwsh">PowerShell (pwsh)</option>
+                    <option value="cmd">Command Prompt (cmd)</option>
+                    <option value="bash">Git Bash (bash)</option>
+                </select>
+            </div>
+            
+            <div id="modal-tab-web" class="modal-tab-content" style="display: none;">
+                <label for="url-input">Web URL:</label>
+                <input type="text" id="url-input" placeholder="https://example.com" value="https://">
+            </div>
+            
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closePanePicker()">Cancel</button>
+                <button class="btn" onclick="confirmSplitPane()">Split Pane</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws;
+        let serial = "";
+        let version = "";
+        let activePanes = [];
+        let paneScrollOffset = 0;
+        let totalItems = 0;
+        let runningApps = [];
+        let appScrollOffset = 0;
+
+        function connectWs() {
+            const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+            ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+
+            ws.onopen = () => {
+                document.getElementById("status-dot").className = "status-dot connected";
+                document.getElementById("status-text").innerText = "Connected";
+                logConsole("System", "WebSocket connection opened");
+                triggerSync(); // Initial sync
+            };
+
+            ws.onclose = () => {
+                document.getElementById("status-dot").className = "status-dot";
+                document.getElementById("status-text").innerText = "Disconnected";
+                logConsole("System", "WebSocket connection closed. Retrying...");
+                setTimeout(connectWs, 2000);
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleDeviceEvent(data);
+            };
+        }
+
+        function logConsole(tag, msg) {
+            const logBox = document.getElementById("console-log");
+            if (logBox.innerText === "Waiting for connection...") {
+                logBox.innerHTML = "";
+            }
+            
+            const entry = document.createElement("div");
+            entry.className = "log-entry";
+            
+            const time = new Date().toLocaleTimeString();
+            entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-tag">${tag}</span> <span>${msg}</span>`;
+            
+            logBox.appendChild(entry);
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        function handleDeviceEvent(event) {
+            logConsole("Device", JSON.stringify(event));
+
+            // Visual feedback based on event kind
+            if (event.type === "ButtonPress") {
+                const keyIndex = event.data.key;
+                const pressed = event.data.pressed;
+                const keys = document.querySelectorAll(".deck-key");
+                if (keys[keyIndex]) {
+                    if (pressed) {
+                        keys[keyIndex].style.borderColor = "var(--accent-glow)";
+                        keys[keyIndex].style.background = "#282a36";
+                    } else {
+                        keys[keyIndex].style.borderColor = "#282a36";
+                        keys[keyIndex].style.background = "#1d1e26";
+                    }
+                }
+            } else if (event.type === "DialPress") {
+                const dialIndex = event.data.dial;
+                const pressed = event.data.pressed;
+                const dial = document.getElementById(`knob-${dialIndex}`);
+                if (dial) {
+                    if (pressed) {
+                        dial.classList.add("clicked");
+                    } else {
+                        dial.classList.remove("clicked");
+                    }
+                }
+            } else if (event.type === "DialRotate") {
+                const dialIndex = event.data.dial;
+                const delta = event.data.delta;
+                const dial = document.getElementById(`knob-${dialIndex}`);
+                if (dial) {
+                    // Rotate effect
+                    const currentRotation = dial.style.transform ? parseInt(dial.style.transform.replace(/[^\d-]/g, '')) : 0;
+                    const newRotation = currentRotation + (delta * 15);
+                    dial.style.transform = `rotate(${newRotation}deg)`;
+                }
+            } else if (event.type === "TouchShortPress" || event.type === "TouchLongPress") {
+                // Flash the touch bar slot touched
+                const x = event.data.x;
+                const slotIndex = Math.floor(x / 200);
+                const slot = document.getElementById(`slot-${slotIndex}`);
+                if (slot) {
+                    slot.style.background = "rgba(99, 102, 241, 0.2)";
+                    setTimeout(() => {
+                        slot.style.background = slot.classList.contains("focused") ? "rgba(99, 102, 241, 0.08)" : "";
+                    }, 150);
+                }
+            } else if (event.type === "Flash") {
+                const color = event.data.color;
+                const strip = document.querySelector(".touch-strip");
+                if (strip) {
+                    const originalBg = strip.style.background;
+                    strip.style.background = color;
+                    setTimeout(() => {
+                        strip.style.background = originalBg;
+                    }, 150);
+                }
+            } else if (event.type === "Sync") {
+                activePanes = event.data.active_panes;
+                paneScrollOffset = event.data.pane_scroll_offset || 0;
+                totalItems = event.data.total_items || 0;
+                runningApps = event.data.running_apps || [];
+                appScrollOffset = event.data.app_scroll_offset || 0;
+                
+                const banner = document.getElementById("device-status-banner");
+                if (banner) {
+                    banner.style.display = event.data.connected ? "none" : "flex";
+                }
+                
+                updateTouchBarUI();
+                updateKeysUI();
+            }
+        }
+
+        function triggerSync() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: "sync" }));
+                logConsole("WebUI", "Requested Hyperia panes synchronization");
+            }
+            
+            // Query panes database via custom fetch
+            fetch("/mcp", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    jsonrpc: "2.0",
+                    method: "tools/call",
+                    params: {
+                        name: "sync_hyperia_panes",
+                        arguments: {}
+                    },
+                    id: 1
+                })
+            })
+            .then(res => res.json())
+            .then(res => {
+                if (res.result) {
+                    // Fetch state again to update touch screen bar text
+                    queryState();
+                }
+            });
+        }
+
+        function queryState() {
+            fetch("/mcp", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    jsonrpc: "2.0",
+                    method: "tools/call",
+                    params: {
+                        name: "get_device_status",
+                        arguments: {}
+                    },
+                    id: 1
+                })
+            })
+            .then(res => res.json())
+            .then(res => {
+                if (res.result && res.result.content) {
+                    const statusStr = res.result.content[0].text;
+                    const status = JSON.parse(statusStr);
+                    serial = status.serial_number;
+                    version = status.firmware_version;
+                    activePanes = status.active_panes;
+                    paneScrollOffset = status.pane_scroll_offset || 0;
+                    totalItems = status.total_items || 0;
+                    runningApps = status.running_apps || [];
+                    appScrollOffset = status.app_scroll_offset || 0;
+
+                    updateTouchBarUI();
+                    updateKeysUI();
+                }
+            });
+        }
+
+        function trimPaneName(name, maxLen) {
+            const chars = Array.from(name);
+            if (chars.length <= maxLen) {
+                return name;
+            }
+            
+            const lastChar = chars[chars.length - 1];
+            const endsWithEmoji = lastChar.charCodeAt(0) > 127;
+            
+            if (endsWithEmoji) {
+                const nameLimit = Math.max(0, maxLen - 3);
+                let truncated = chars.slice(0, nameLimit).join("");
+                return truncated + ".." + lastChar;
+            } else {
+                return chars.slice(0, maxLen).join("");
+            }
+        }
+
+        function updateTouchBarUI() {
+            // Update scroll arrow indicators
+            const leftIndicator = document.getElementById("scroll-left-indicator");
+            const rightIndicator = document.getElementById("scroll-right-indicator");
+            const maxOffset = Math.max(0, totalItems - 4);
+            
+            if (maxOffset > 0) {
+                if (paneScrollOffset > 0) {
+                    leftIndicator.classList.add("visible");
+                } else {
+                    leftIndicator.classList.remove("visible");
+                }
+                if (paneScrollOffset < maxOffset) {
+                    rightIndicator.classList.add("visible");
+                } else {
+                    rightIndicator.classList.remove("visible");
+                }
+            } else {
+                leftIndicator.classList.remove("visible");
+                rightIndicator.classList.remove("visible");
+            }
+
+            for (let i = 0; i < 4; i++) {
+                const slot = document.getElementById(`slot-${i}`);
+                if (i < activePanes.length) {
+                    const item = activePanes[i];
+                    if (item.item_type === "Pane") {
+                        const pane = item.data;
+                        const isTerminal = pane.shell !== "web";
+                        const emoji = isTerminal ? ">_" : "🌐";
+                        
+                        slot.querySelector(".touch-title").innerText = emoji;
+                        
+                        const trimmedName = trimPaneName(pane.name, 17);
+                        slot.querySelector(".touch-sub").innerText = trimmedName;
+                        
+                        if (pane.focused) {
+                            slot.classList.add("focused");
+                            slot.style.borderBottom = isTerminal ? "3px solid #32dc64" : "3px solid #0096ff";
+                            slot.style.background = isTerminal ? "rgba(50, 220, 100, 0.08)" : "rgba(0, 150, 255, 0.08)";
+                            slot.style.color = isTerminal ? "#32dc64" : "#0096ff";
+                        } else {
+                            slot.classList.remove("focused");
+                            slot.style.borderBottom = "";
+                            slot.style.background = "";
+                            slot.style.color = isTerminal ? "#1e8c46" : "#005ab4";
+                        }
+                    } else if (item.item_type === "AddPane") {
+                        slot.querySelector(".touch-title").innerText = "+";
+                        slot.querySelector(".touch-sub").innerText = "PANE";
+                        slot.classList.remove("focused");
+                        slot.style.borderBottom = "";
+                        slot.style.background = "";
+                        slot.style.color = "#e6b432";
+                    } else if (item.item_type === "AddTab") {
+                        slot.querySelector(".touch-title").innerText = "+";
+                        slot.querySelector(".touch-sub").innerText = "TAB";
+                        slot.classList.remove("focused");
+                        slot.style.borderBottom = "";
+                        slot.style.background = "";
+                        slot.style.color = "#e6b432";
+                    }
+                } else {
+                    slot.querySelector(".touch-title").innerText = "--";
+                    slot.querySelector(".touch-sub").innerText = `Empty Slot`;
+                    slot.classList.remove("focused");
+                    slot.style.borderBottom = "";
+                    slot.style.background = "";
+                    slot.style.color = "";
+                }
+            }
+        }
+
+        function pressKey(key) {
+            logConsole("WebUI", `Simulating button ${key} press`);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: "button_press", key: key, pressed: true }));
+                setTimeout(() => {
+                    ws.send(JSON.stringify({ action: "button_press", key: key, pressed: false }));
+                }, 100);
+            }
+        }
+
+        function cleanAppName(name) {
+            const lower = name.toLowerCase();
+            if (lower.includes("chrome")) return "Chrome";
+            if (lower.includes("terminal")) return "Terminal";
+            if (lower.includes("sonos")) return "Sonos";
+            if (lower.includes("docker")) return "Docker";
+            if (lower.includes("hyperia")) return "Hyperia";
+            if (lower.includes("clipchamp")) return "Clipchamp";
+            if (lower.includes("comfy")) return "Comfy";
+            if (lower.includes("explorer")) return "Explorer";
+            return name.charAt(0).toUpperCase() + name.slice(1);
+        }
+
+        function updateKeysUI() {
+            for (let i = 0; i < 8; i++) {
+                const btn = document.getElementById(`key-${i}`);
+                if (!btn) continue;
+                
+                const appIdx = appScrollOffset + i;
+                if (appIdx < runningApps.length) {
+                    const app = runningApps[appIdx];
+                    const isFullSize = app.name.toLowerCase().includes("hyperia") || app.name.toLowerCase().includes("sonos");
+                    let badgeHtml = "";
+                    if (app.window_count > 1) {
+                        badgeHtml = `<div class="window-badge">${app.window_count}</div>`;
+                    }
+                    if (isFullSize) {
+                        btn.innerHTML = `<img src="data:image/png;base64,${app.icon_base64}" alt="${app.name}" title="${app.title}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 8px;" />${badgeHtml}`;
+                    } else {
+                        const cleaned = cleanAppName(app.name);
+                        btn.innerHTML = `<img src="data:image/png;base64,${app.icon_base64}" alt="${app.name}" title="${app.title}" /><div class="deck-key-app-label">${cleaned}</div>${badgeHtml}`;
+                    }
+                } else {
+                    btn.innerHTML = `<div class="deck-key-label">${i}</div>`;
+                }
+            }
+        }
+
+        function clickKnob(dial) {
+            logConsole("WebUI", `Simulating dial ${dial} click`);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: "dial_press", dial: dial, pressed: true }));
+                setTimeout(() => {
+                    ws.send(JSON.stringify({ action: "dial_press", dial: dial, pressed: false }));
+                }, 100);
+            }
+        }
+
+        function rotateKnob(dial, delta) {
+            logConsole("WebUI", `Simulating dial ${dial} rotation: ${delta}`);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: "dial_rotate", dial: dial, delta: delta }));
+            }
+        }
+
+        let pendingPaneSlotIndex = null;
+        let modalTab = 'terminal';
+
+        function openPanePicker() {
+            const modal = document.getElementById("picker-modal");
+            modal.style.display = "flex";
+            setTimeout(() => modal.classList.add("active"), 10);
+            document.getElementById("profile-select").value = "default";
+            document.getElementById("url-input").value = "https://";
+            switchModalTab('terminal');
+        }
+
+        function closePanePicker() {
+            const modal = document.getElementById("picker-modal");
+            modal.classList.remove("active");
+            setTimeout(() => modal.style.display = "none", 300);
+            pendingPaneSlotIndex = null;
+        }
+
+        function switchModalTab(tab) {
+            modalTab = tab;
+            const termBtn = document.querySelector(".tab-btn:nth-child(1)");
+            const webBtn = document.querySelector(".tab-btn:nth-child(2)");
+            const termContent = document.getElementById("modal-tab-terminal");
+            const webContent = document.getElementById("modal-tab-web");
+            
+            if (tab === 'terminal') {
+                termBtn.classList.add("active");
+                webBtn.classList.remove("active");
+                termContent.style.display = "flex";
+                webContent.style.display = "none";
+            } else {
+                termBtn.classList.remove("active");
+                webBtn.classList.add("active");
+                termContent.style.display = "none";
+                webContent.style.display = "flex";
+            }
+        }
+
+        function confirmSplitPane() {
+            if (pendingPaneSlotIndex === null) return;
+            
+            let profile = null;
+            let url = null;
+            
+            if (modalTab === 'terminal') {
+                const val = document.getElementById("profile-select").value;
+                if (val !== 'default') {
+                    profile = val;
+                }
+            } else {
+                const val = document.getElementById("url-input").value.trim();
+                if (val && val !== 'https://' && val !== 'http://') {
+                    url = val;
+                }
+            }
+            
+            logConsole("WebUI", `Splitting pane at slot ${pendingPaneSlotIndex} with profile=${profile}, url=${url}`);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ 
+                    action: "touch_tap", 
+                    col: pendingPaneSlotIndex,
+                    profile: profile,
+                    url: url
+                }));
+            }
+            
+            closePanePicker();
+        }
+
+        function touchSlot(slotIndex) {
+            if (slotIndex < activePanes.length) {
+                const item = activePanes[slotIndex];
+                let label = "";
+                if (item.item_type === "Pane") {
+                    label = item.data.name;
+                    // Optimistically set focused class on Web UI immediately for highlight feedback
+                    document.querySelectorAll(".touch-slot").forEach((slot, idx) => {
+                        if (idx === slotIndex) {
+                            slot.classList.add("focused");
+                            const isTerminal = item.data.shell !== "web";
+                            slot.style.borderBottom = isTerminal ? "3px solid #32dc64" : "3px solid #0096ff";
+                            slot.style.background = isTerminal ? "rgba(50, 220, 100, 0.08)" : "rgba(0, 150, 255, 0.08)";
+                            slot.style.color = isTerminal ? "#32dc64" : "#0096ff";
+                        } else {
+                            if (activePanes[idx] && activePanes[idx].item_type === "Pane") {
+                                slot.classList.remove("focused");
+                                slot.style.borderBottom = "";
+                                slot.style.background = "";
+                                const term = activePanes[idx].data.shell !== "web";
+                                slot.style.color = term ? "#1e8c46" : "#005ab4";
+                            }
+                        }
+                    });
+                    logConsole("WebUI", `Simulating touch tap on: ${label}`);
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ action: "touch_tap", col: slotIndex }));
+                    }
+                }
+                else if (item.item_type === "AddPane") {
+                    label = "+ PANE";
+                    logConsole("WebUI", `Clicked + PANE. Opening profile picker...`);
+                    pendingPaneSlotIndex = slotIndex;
+                    openPanePicker();
+                }
+                else if (item.item_type === "AddTab") {
+                    label = "+ TAB";
+                    logConsole("WebUI", `Simulating touch tap on: ${label}`);
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ action: "touch_tap", col: slotIndex }));
+                    }
+                }
+            }
+        }
+
+        function setBrightness(val) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: "set_brightness", brightness: parseInt(val) }));
+            }
+        }
+
+        function sendTerminalCommand() {
+            const input = document.getElementById("cmd-input");
+            const cmd = input.value.trim();
+            if (!cmd) return;
+
+            // Find focused pane
+            const focusedPane = activePanes.find(p => p.focused);
+            if (!focusedPane) {
+                logConsole("Error", "No focused terminal pane to send command to!");
+                return;
+            }
+
+            logConsole("WebUI", `Sending command to ${focusedPane.name}: ${cmd}`);
+            
+            // To actually run it, we call focus_pane and run_command.
+            // Since we can trigger actions over WS:
+            ws.send(JSON.stringify({ action: "run_command", pane_id: focusedPane.pane_id, command: cmd }));
+            input.value = "";
+        }
+
+        // Touch & Mouse swipe gesture detection on the virtual touch strip
+        (function() {
+            const strip = document.querySelector(".touch-strip");
+            let startX = 0;
+            let isDragging = false;
+            
+            strip.addEventListener("touchstart", (e) => {
+                startX = e.touches[0].clientX;
+            }, { passive: true });
+            
+            strip.addEventListener("touchend", (e) => {
+                const endX = e.changedTouches[0].clientX;
+                const diff = endX - startX;
+                if (Math.abs(diff) > 60) {
+                    logConsole("WebUI", `Touch swipe detected: delta=${diff}`);
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            action: "touch_swipe",
+                            start_x: 100,
+                            end_x: 100 + diff
+                        }));
+                    }
+                }
+            }, { passive: true });
+            
+            strip.addEventListener("mousedown", (e) => {
+                isDragging = true;
+                startX = e.clientX;
+            });
+            
+            strip.addEventListener("mouseup", (e) => {
+                if (!isDragging) return;
+                isDragging = false;
+                const endX = e.clientX;
+                const diff = endX - startX;
+                if (Math.abs(diff) > 60) {
+                    logConsole("WebUI", `Mouse drag swipe simulated: delta=${diff}`);
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            action: "touch_swipe",
+                            start_x: 100,
+                            end_x: 100 + diff
+                        }));
+                    }
+                }
+            });
+            
+            strip.addEventListener("mouseleave", () => {
+                isDragging = false;
+            });
+        })();
+
+        connectWs();
+        setInterval(queryState, 3000); // Poll status every 3s
+    </script>
+</body>
+</html>

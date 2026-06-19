@@ -110,12 +110,39 @@ rpc.on('session cwd', ({uid, cwd}: {uid: string; cwd: string}) => {
   store_.dispatch(sessionActions.setSessionCwd(uid, cwd));
 });
 
+// Agent / Stream-Deck focus. The sidecar's /api/pane/focus (terminal_focus)
+// resolves a pane and has the bridge emit `session set active`. The renderer had
+// no listener for it, so a focus command reached the window and did nothing —
+// the tab/pane never moved. Dispatching setActiveSession fixes the whole chain:
+// the term-groups reducer selects the TAB that owns the pane (SESSION_SET_ACTIVE
+// → setActiveGroup), and the hyper container's activeSession effect gives that
+// pane keyboard focus. This is purely in-window — it never raises the OS window
+// over other apps (Chrome / terminal / Docker stay foreground), and a later user
+// click on any other pane or tab just takes over normally.
+rpc.on('session set active', ({uid}: {uid: string}) => {
+  store_.dispatch(sessionActions.setActiveSession(uid) as any);
+  // Focus explicitly too, covering the case where the pane was already the
+  // active session but the window had lost DOM focus to another app.
+  setTimeout(() => window.focusActiveTerm?.(uid), 0);
+});
+
 rpc.on('permission request', (req) => {
   permissionsBus.setRequest(req);
+  if (req?.targetPane) {
+    // Flash the tab that owns the target pane (per-tab attention/bell channel:
+    // persists while backgrounded, auto-clears when the tab is activated)...
+    store_.dispatch(uiActions.markTabBell(req.targetPane));
+    // ...and switch to that pane so its consent prompt is actually in view when
+    // an agent asks for access to a non-visible tab, rather than only flashing.
+    // Same in-window focus as terminal_focus — no OS window raise.
+    store_.dispatch(sessionActions.setActiveSession(req.targetPane) as any);
+    setTimeout(() => window.focusActiveTerm?.(req.targetPane), 0);
+  }
 });
 
 rpc.on('permission resolved', ({targetPane, id}: {targetPane: string; decision: string; id?: string}) => {
   permissionsBus.clearRequest(targetPane);
+  if (targetPane) store_.dispatch(uiActions.clearTabBell(targetPane));
   if (id) permissionsBus.clearToast(id);
 });
 

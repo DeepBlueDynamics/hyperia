@@ -85,6 +85,22 @@ export function markTabBell(uid: string) {
   };
 }
 
+// Clear a tab's attention marker — e.g. when a pending consent request resolves
+// while its tab is still in the background (otherwise the flash would linger).
+export function clearTabBell(uid: string) {
+  return (dispatch: HyperDispatch) => {
+    const existing = bellClearTimers.get(uid);
+    if (existing) {
+      clearTimeout(existing);
+      bellClearTimers.delete(uid);
+    }
+    dispatch({
+      type: UI_TAB_BELL_CLEAR,
+      uid
+    });
+  };
+}
+
 export function increaseFontSize() {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     dispatch({

@@ -421,7 +421,7 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
 
     // Auto-pick model: if the user hasn't explicitly chosen a model AND
     // provider=ollama AND ollama has at least one model installed, write
-    // the first installed model to ~/.hyperia/hyperia.json so the agent
+    // the first installed model to the shared Hyperia config so the agent
     // doesn't fall back to the hardcoded llama3.2 (which often isn't
     // pulled). Respects explicit user choices — only fires when the raw
     // JSON `agent.model` is empty. Picks the first model that isn't a
@@ -494,7 +494,7 @@ fn pick_default_ollama_model(installed: &[String]) -> String {
         .unwrap_or_default()
 }
 
-/// Write `config.agent.{provider, model}` to ~/.hyperia/hyperia.json,
+/// Write `config.agent.{provider, model}` to the shared Hyperia config,
 /// preserving all other config keys. Shared by /set-model and the
 /// capabilities auto-pick path.
 fn write_agent_model(provider: &str, model: &str) -> std::io::Result<()> {
@@ -512,16 +512,13 @@ fn write_agent_model(provider: &str, model: &str) -> std::io::Result<()> {
     }
     json["config"]["agent"]["provider"] = serde_json::json!(provider);
     json["config"]["agent"]["model"] = serde_json::json!(model);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap_or_default())
+    crate::util::write_json_file_atomic(&path, &json)
 }
 
 // ─── Set agent provider+model — small targeted writer for the shell picker ─
 
 /// POST /api/ghost/set-model — set `config.agent.provider` and
-/// `config.agent.model` in ~/.hyperia/hyperia.json. Used by the shell's
+/// `config.agent.model` in the shared Hyperia config. Used by the shell's
 /// model picker. Preserves all other config keys. Body:
 ///   { "provider": "ollama" | "anthropic" | "openai" | "gemini",
 ///     "model":    "gemma2:2b" | "claude-sonnet-4-6" | ... }
@@ -557,7 +554,7 @@ pub async fn ghost_set_model(
     }
 }
 
-/// POST /api/ghost/wipe-config — reset ~/.hyperia/hyperia.json to {"config": {}}.
+/// POST /api/ghost/wipe-config — reset the shared Hyperia config to {"config": {}}.
 pub async fn ghost_wipe_config(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let path = match config_raw_path() {
@@ -570,8 +567,7 @@ pub async fn ghost_wipe_config(
         }
     };
     let empty_cfg = serde_json::json!({ "config": {} });
-    let payload = serde_json::to_string_pretty(&empty_cfg).unwrap_or_default();
-    match std::fs::write(&path, payload) {
+    match crate::util::write_json_file_atomic(&path, &empty_cfg) {
         Ok(_) => Ok(Json(serde_json::json!({ "ok": true }))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -705,4 +701,3 @@ pub async fn ghost_bootchat(
 pub async fn ghost_shell_page() -> impl IntoResponse {
     Html(include_str!("../../static/shell.html"))
 }
-

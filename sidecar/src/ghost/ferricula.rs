@@ -3,7 +3,7 @@
 //! Hyperia talks to Ferricula over HTTP. Run Ferricula locally in Docker
 //! (`docker compose up ferricula`) or point at a remote URL.
 //!
-//! Config in ~/.hyperia/hyperia.json under config.ferricula:
+//! Config in the shared Hyperia config under config.ferricula:
 //!   { "url": "http://localhost:8765" }
 //! Or set the FERRICULA_URL env var. Defaults to http://localhost:8765.
 //!
@@ -421,7 +421,7 @@ impl FerriculaBackend {
 
 /// Load ferricula config. Resolution order:
 ///   1. FERRICULA_URL env var
-///   2. ~/.hyperia/hyperia.json → config.ferricula.url
+///   2. shared Hyperia config → config.ferricula.url
 ///   3. Default http://localhost:8765
 pub fn load_ferricula_config() -> FerriculaConfig {
     if let Ok(url) = std::env::var("FERRICULA_URL") {
@@ -431,25 +431,18 @@ pub fn load_ferricula_config() -> FerriculaConfig {
         }
     }
 
-    let cfg_path = {
-        let home = if cfg!(windows) {
-            std::env::var("USERPROFILE").unwrap_or_default()
-        } else {
-            std::env::var("HOME").unwrap_or_default()
-        };
-        std::path::PathBuf::from(home).join(".hyperia").join("hyperia.json")
-    };
-
-    if let Ok(content) = std::fs::read_to_string(&cfg_path) {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-            let fc = &json["config"]["ferricula"];
-            return FerriculaConfig {
-                url: fc["url"]
-                    .as_str()
-                    .unwrap_or("http://localhost:8765")
-                    .trim_end_matches('/')
-                    .to_string(),
-            };
+    if let Some(cfg_path) = crate::util::shared_config_path() {
+        if let Ok(content) = std::fs::read_to_string(&cfg_path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                let fc = &json["config"]["ferricula"];
+                return FerriculaConfig {
+                    url: fc["url"]
+                        .as_str()
+                        .unwrap_or("http://localhost:8765")
+                        .trim_end_matches('/')
+                        .to_string(),
+                };
+            }
         }
     }
 

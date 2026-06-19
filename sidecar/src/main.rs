@@ -2277,8 +2277,8 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("log dir: {} (daily rotation)", log_dir.display());
 
     // Ferricula no longer embedded. The ghost agent talks to ferricula over
-    // HTTP via FerriculaBackend (FERRICULA_URL env var or
-    // ~/.hyperia/hyperia.json). Run ferricula separately — Docker locally
+    // HTTP via FerriculaBackend (FERRICULA_URL env var or the shared Hyperia
+    // config). Run ferricula separately — Docker locally
     // (`docker compose up ferricula`) or remote in the cloud.
     let ferricula_url = std::env::var("FERRICULA_URL")
         .unwrap_or_else(|_| "http://localhost:8765".to_string());

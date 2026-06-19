@@ -1,5 +1,7 @@
 //! Small shared helpers.
 
+use std::path::PathBuf;
+
 /// Truncate a string to at most `max_bytes`, snapping DOWN to the nearest UTF-8
 /// char boundary. Plain `&s[..n]` panics with "byte index N is not a char
 /// boundary" when `n` lands in the middle of a multi-byte character — and
@@ -16,6 +18,125 @@ pub fn safe_prefix(s: &str, max_bytes: usize) -> &str {
         end -= 1;
     }
     &s[..end]
+}
+
+/// Resolve the shared Hyperia config file (`hyperia.json`).
+///
+/// Electron owns the authoritative path because it supports XDG config dirs
+/// and a dev-only repo-local override. When Electron spawns the sidecar it
+/// injects that resolved path as `HYPERIA_CONFIG_PATH`; use it first so config
+/// writes hit the file Electron watches.
+///
+/// `~/.hyperia` remains correct for sidecar-private data such as logs, assets,
+/// agents, snapshots, and tool scripts. This helper is only for the shared
+/// `hyperia.json`.
+pub fn shared_config_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("HYPERIA_CONFIG_PATH") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+
+    if let Ok(mock_home) = std::env::var("HYPERIA_MOCK_HOME") {
+        return Some(
+            PathBuf::from(mock_home)
+                .join(".hyperia")
+                .join("hyperia.json"),
+        );
+    }
+
+    if cfg!(test) {
+        return None;
+    }
+
+    if cfg!(windows) {
+        let home = std::env::var("USERPROFILE").ok()?;
+        return Some(PathBuf::from(home).join(".hyperia").join("hyperia.json"));
+    }
+
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        let trimmed = xdg.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed).join("Hyperia").join("hyperia.json"));
+        }
+    }
+
+    let home = std::env::var("HOME").ok()?;
+    let electron_path = PathBuf::from(&home)
+        .join(".config")
+        .join("Hyperia")
+        .join("hyperia.json");
+    let legacy_path = PathBuf::from(&home).join(".hyperia").join("hyperia.json");
+    if !electron_path.exists() && legacy_path.exists() {
+        return Some(legacy_path);
+    }
+
+    Some(electron_path)
+}
+
+pub fn read_shared_config() -> std::io::Result<serde_json::Value> {
+    let path = shared_config_path().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "could not resolve config path",
+        )
+    })?;
+    let content = std::fs::read_to_string(path)?;
+    serde_json::from_str(&content)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+pub fn write_shared_config_atomic(cfg: &serde_json::Value) -> std::io::Result<()> {
+    let path = shared_config_path().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "could not resolve config path",
+        )
+    })?;
+    write_json_file_atomic(&path, cfg)
+}
+
+pub fn write_json_file_atomic(
+    path: &std::path::Path,
+    cfg: &serde_json::Value,
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let data = serde_json::to_string_pretty(cfg)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = path.with_extension(format!(
+        "{}.tmp.{}.{}",
+        path.extension().and_then(|e| e.to_str()).unwrap_or("json"),
+        std::process::id(),
+        stamp
+    ));
+
+    std::fs::write(&tmp, data.as_bytes())?;
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(first_err) => {
+            if path.exists() {
+                let _ = std::fs::remove_file(path);
+                match std::fs::rename(&tmp, path) {
+                    Ok(()) => Ok(()),
+                    Err(second_err) => {
+                        let _ = std::fs::remove_file(&tmp);
+                        Err(second_err)
+                    }
+                }
+            } else {
+                let _ = std::fs::remove_file(&tmp);
+                Err(first_err)
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -54,7 +175,7 @@ pub async fn random_token(n_bytes: usize) -> String {
 
 /// Resolve the sdrrand relay base URL. Precedence:
 ///   1. `HYPERIA_SDRRAND_URL` env var (quick override)
-///   2. `config.sdrrand.url` in ~/.hyperia/hyperia.json (point at a local box
+///   2. `config.sdrrand.url` in the shared Hyperia config (point at a local box
 ///      running your own radio, e.g. "http://192.168.1.50:8088")
 ///   3. the public relay default
 /// Set it to "off" / "none" / "disabled" to skip the relay and use the OS
@@ -75,14 +196,9 @@ fn sdrrand_base_url() -> String {
     "https://sdrrand.nuts.services".to_string()
 }
 
-/// Read a string value from ~/.hyperia/hyperia.json by dot-path keys.
+/// Read a string value from the shared Hyperia config by dot-path keys.
 fn read_config_str(path: &[&str]) -> Option<String> {
-    let home = std::env::var("USERPROFILE")
-        .ok()
-        .or_else(|| std::env::var("HOME").ok())?;
-    let p = std::path::PathBuf::from(home).join(".hyperia").join("hyperia.json");
-    let txt = std::fs::read_to_string(p).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&txt).ok()?;
+    let v = read_shared_config().ok()?;
     let mut cur = &v;
     for k in path {
         cur = cur.get(*k)?;
@@ -119,4 +235,65 @@ async fn fetch_sdrrand(n: usize) -> Option<Vec<u8>> {
         out.push(u8::from_str_radix(pair, 16).ok()?);
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn restore_env(key: &str, value: Option<String>) {
+        if let Some(value) = value {
+            std::env::set_var(key, value);
+        } else {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[test]
+    fn shared_config_path_prefers_explicit_env() {
+        let _guard = env_lock().lock().unwrap();
+        let old_path = std::env::var("HYPERIA_CONFIG_PATH").ok();
+        let old_mock = std::env::var("HYPERIA_MOCK_HOME").ok();
+        let explicit = std::env::temp_dir().join("hyperia-explicit-config.json");
+
+        std::env::set_var("HYPERIA_CONFIG_PATH", &explicit);
+        std::env::set_var("HYPERIA_MOCK_HOME", "/tmp/ignored-mock-home");
+
+        assert_eq!(shared_config_path().as_deref(), Some(explicit.as_path()));
+
+        restore_env("HYPERIA_CONFIG_PATH", old_path);
+        restore_env("HYPERIA_MOCK_HOME", old_mock);
+    }
+
+    #[test]
+    fn shared_config_writer_creates_parent_and_round_trips_json() {
+        let _guard = env_lock().lock().unwrap();
+        let old_path = std::env::var("HYPERIA_CONFIG_PATH").ok();
+        let old_mock = std::env::var("HYPERIA_MOCK_HOME").ok();
+        let dir = std::env::temp_dir().join(format!(
+            "hyperia-config-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = dir.join("nested").join("hyperia.json");
+        let value = serde_json::json!({"config": {"fontSize": 18}});
+
+        std::env::set_var("HYPERIA_CONFIG_PATH", &path);
+        std::env::remove_var("HYPERIA_MOCK_HOME");
+
+        write_shared_config_atomic(&value).expect("write should succeed");
+        assert_eq!(read_shared_config().expect("read should succeed"), value);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        restore_env("HYPERIA_CONFIG_PATH", old_path);
+        restore_env("HYPERIA_MOCK_HOME", old_mock);
+    }
 }

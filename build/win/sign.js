@@ -32,6 +32,16 @@ function resolveSigntool() {
 const SIGNTOOL = resolveSigntool();
 const DLIB = path.join(__dirname, 'trustedsigning', 'bin', 'x64', 'Azure.CodeSigning.Dlib.dll');
 
+// nemesis8-style graceful degrade (see DeepBlueDynamics/nemesis8 release.yml's
+// `continue-on-error: true` on the Sign step): a flaky or billing-held Azure
+// Trusted Signing service must NOT block the entire cross-platform release —
+// Linux + macOS sign/build fine. On signing failure we ship the Windows artifact
+// UNSIGNED with a loud GitHub ::warning::; users get a SmartScreen "unknown
+// publisher" prompt until the next release signs cleanly once Azure recovers.
+function shipUnsigned(reason) {
+  console.warn(`::warning::Windows build is UNSIGNED — ${reason}`);
+}
+
 // Load .signing.env from the repo root if AZURE_CLIENT_SECRET isn't already set
 function loadSigningEnv() {
   const envFile = path.join(__dirname, '..', '..', '.signing.env');
@@ -54,12 +64,13 @@ exports.default = async function (config) {
 
   const clientSecret = process.env.AZURE_CLIENT_SECRET;
   if (!clientSecret) {
-    // In CI a tagged release MUST be signed — fail loudly instead of silently
-    // shipping an unsigned installer. Locally, allow an unsigned dev build.
+    // No secret → can't sign. Ship unsigned rather than blocking the release
+    // (local dev builds, or CI when the signing secret is unavailable).
     if (process.env.CI) {
-      throw new Error('AZURE_CLIENT_SECRET not set in CI — refusing to ship an UNSIGNED build');
+      shipUnsigned('AZURE_CLIENT_SECRET not set in CI');
+    } else {
+      console.warn('AZURE_CLIENT_SECRET not set — skipping signing (local dev build)');
     }
-    console.warn('AZURE_CLIENT_SECRET not set — skipping signing (local dev build)');
     return;
   }
 
@@ -89,17 +100,16 @@ exports.default = async function (config) {
       {env, encoding: 'utf8', timeout: 60000}
     );
 
-    // A non-zero exit OR a spawn error (e.g. signtool not found) means this file
-    // is UNSIGNED. Throw so electron-builder fails the build — never let an
-    // unsigned artifact pass as a successful release.
+    // A non-zero exit OR a spawn error (e.g. signtool not found, Azure 403 /
+    // operation status:Failed) means this file is UNSIGNED. Degrade to an
+    // unsigned build with a loud warning rather than failing the whole release.
     if (result.error) {
-      throw new Error(`signtool could not be run (${SIGNTOOL}): ${result.error.message}`);
-    }
-    if (result.status === 0) {
+      shipUnsigned(`signtool could not be run (${SIGNTOOL}): ${result.error.message}`);
+    } else if (result.status === 0) {
       console.log('Signed:', path.basename(file));
     } else {
       const msg = (result.stderr || result.stdout || '').slice(0, 600);
-      throw new Error(`Signing FAILED for ${path.basename(file)} (signtool exit ${result.status}): ${msg}`);
+      shipUnsigned(`signtool exit ${result.status} for ${path.basename(file)}: ${msg}`);
     }
   } finally {
     try { fs.unlinkSync(configPath); } catch { /* ignore */ }

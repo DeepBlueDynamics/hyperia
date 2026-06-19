@@ -83,7 +83,7 @@ pub enum ProviderEvent {
     ThinkingEnd { id: String },
 }
 
-/// Ghost agent config, loaded from ~/.hyperia/hyperia.json.
+/// Ghost agent config, loaded from the shared Hyperia config.
 ///
 /// Provider is explicit — no string-prefix detection. The renderer (or the
 /// settings agent via model_catalog/show_picker) writes both

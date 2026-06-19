@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use super::super::ghost::types::ToolDef;
 
 pub struct SettingsRegistry;
@@ -13,7 +11,7 @@ impl SettingsRegistry {
         let defs: Vec<serde_json::Value> = serde_json::from_value(serde_json::json!([
             {
                 "name": "read_config",
-                "description": "Read the current Hyperia configuration from disk. Returns the JSON contents of ~/.hyperia/hyperia.json with ALL secrets (API keys, tokens, passwords) redacted as ***REDACTED*** for safety.",
+                "description": "Read the current Hyperia configuration from disk. Returns the JSON contents with ALL secrets (API keys, tokens, passwords) redacted as ***REDACTED*** for safety.",
                 "input_schema": {
                     "type": "object",
                     "properties": {}
@@ -59,11 +57,6 @@ impl SettingsRegistry {
     }
 }
 
-fn config_path() -> Option<PathBuf> {
-    let home = if cfg!(windows) {
-        std::env::var("USERPROFILE").ok()
-    } else {
-        std::env::var("HOME").ok()
-    }?;
-    Some(PathBuf::from(home).join(".hyperia").join("hyperia.json"))
+fn config_path() -> Option<std::path::PathBuf> {
+    crate::util::shared_config_path()
 }

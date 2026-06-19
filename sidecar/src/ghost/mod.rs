@@ -33,7 +33,7 @@ fn default_endpoint(provider: &str) -> String {
     }
 }
 
-/// Load Ghost config from ~/.hyperia/hyperia.json.
+/// Load Ghost config from the shared Hyperia config file.
 ///
 /// Schema (the source of truth, no string-prefix magic):
 ///   {
@@ -227,16 +227,5 @@ fn legacy_provider_hint(legacy_model: &str) -> String {
 }
 
 pub(crate) fn config_path() -> Option<PathBuf> {
-    if let Ok(mock_home) = std::env::var("HYPERIA_MOCK_HOME") {
-        return Some(PathBuf::from(mock_home).join(".hyperia").join("hyperia.json"));
-    }
-    if cfg!(test) {
-        return None;
-    }
-    let home = if cfg!(windows) {
-        std::env::var("USERPROFILE").ok()
-    } else {
-        std::env::var("HOME").ok()
-    }?;
-    Some(PathBuf::from(home).join(".hyperia").join("hyperia.json"))
+    crate::util::shared_config_path()
 }

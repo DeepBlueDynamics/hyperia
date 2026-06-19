@@ -29,12 +29,12 @@ import {resolve} from 'path';
 
 // Packages
 import {app, BrowserWindow, Menu, screen, ipcMain} from 'electron';
-app.name = 'Hyperia';
-app.setName('Hyperia');
+app.name = 'Hyperia2';
+app.setName('Hyperia2');
 
 if (process.platform === 'win32') {
   try {
-    app.setAppUserModelId('com.deepbluedynamics.hyperia');
+    app.setAppUserModelId('com.deepbluedynamics.hyperia2');
   } catch {
     /* non-fatal */
   }
@@ -277,14 +277,19 @@ async function spawnSidecar() {
   // Kill any existing sidecar before spawning
   await killExistingSidecars();
 
-  // Hand the per-run system token (app/system-token.ts) to the sidecar via the
-  // CHILD's env only — NOT process.env. If it were on process.env, every PTY
-  // the terminal spawns would inherit it (app/session.ts → getDecoratedEnv) and
-  // any shell in any pane could read it and bypass ALL permission enforcement.
+  // Hand per-run/internal values to the sidecar via the CHILD's env only — NOT
+  // process.env. If the system token were on process.env, every PTY the
+  // terminal spawns would inherit it (app/session.ts → getDecoratedEnv) and any
+  // shell in any pane could read it and bypass ALL permission enforcement.
+  //
+  // HYPERIA_CONFIG_PATH is the one shared config file Electron already resolved
+  // (including XDG paths and the dev repo-local override). The sidecar must use
+  // this exact path for settings writes so Electron's existing chokidar reload
+  // sees the change.
   isDev && console.log(`[sidecar] Spawning: ${sidecarPath} --port ${SIDECAR_PORT}`);
   sidecarProcess = spawn(sidecarPath, ['--port', String(SIDECAR_PORT)], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: {...process.env, HYPERIA_SYSTEM_TOKEN: SYSTEM_TOKEN}
+    env: {...process.env, HYPERIA_SYSTEM_TOKEN: SYSTEM_TOKEN, HYPERIA_CONFIG_PATH: cfgPath}
   });
 
   sidecarProcess.stdout?.on('data', (data: Buffer) => {
@@ -413,7 +418,48 @@ app.on('second-instance', () => {
 });
 
 // eslint-disable-next-line @typescript-eslint/no-misused-promises
+// macOS: after a "drag to Applications" install, the .dmg stays mounted as a
+// /Volumes/Hyperia… volume. When we're running from a completed install (in
+// /Applications — NOT off the DMG), eject any leftover Hyperia DMG so the user
+// doesn't have to. No-op on Windows/Linux, when nothing is mounted, or when we
+// are still running from the DMG itself.
+function ejectInstallDmgOnMac(): void {
+  if (process.platform !== 'darwin') return;
+  try {
+    const exePath = process.execPath; // …/Hyperia.app/Contents/MacOS/Hyperia
+    if (!exePath.startsWith('/Applications/')) return;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const {execFile} = require('child_process');
+    let vols: string[] = [];
+    try {
+      vols = fs.readdirSync('/Volumes');
+    } catch {
+      return;
+    }
+    for (const v of vols) {
+      if (!/^Hyperia/i.test(v)) continue;
+      const volPath = `/Volumes/${v}`;
+      if (exePath.startsWith(volPath)) continue; // never eject what we're running from
+      try {
+        if (fs.existsSync(`${volPath}/Hyperia.app`)) {
+          execFile('hdiutil', ['eject', volPath], (err: unknown) => {
+            if (err) console.error('[install] hdiutil eject failed:', err);
+          });
+        }
+      } catch {
+        /* skip this volume, keep going */
+      }
+    }
+  } catch (err) {
+    console.error('[install] DMG eject check failed:', err);
+  }
+}
+
 app.on('ready', () => {
+  // macOS: tidy up a leftover install DMG once we're running from /Applications.
+  ejectInstallDmgOnMac();
 
   // System tray icon
   initTray();

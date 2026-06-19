@@ -1,8 +1,8 @@
 {
   "name": "hyperia",
-  "productName": "Hyperia",
-  "description": "She's a ghost in your shell.",
-  "version": "0.12.5",
+  "productName": "Hyperia2",
+  "description": "A modern agentic terminal.",
+  "version": "0.12.7",
   "license": "BSD-2-Clause",
   "author": {
     "name": "Deep Blue Dynamics",

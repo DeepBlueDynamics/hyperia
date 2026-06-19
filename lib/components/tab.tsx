@@ -254,14 +254,18 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         style={{borderColor}}
         className={`tab_tab ${isFirst ? 'tab_first' : ''} ${isActive ? 'tab_active' : ''} ${
           isFirst && isActive ? 'tab_firstActive' : ''
-        } ${hasActivity ? 'tab_hasActivity' : ''} ${isWebPane ? 'tab_webPane' : ''} ${isFirstRun ? 'tab_firstRun' : ''}`}
+        } ${hasActivity ? 'tab_hasActivity' : ''} ${hasBell && !isActive ? 'tab_attention' : ''} ${
+          isWebPane ? 'tab_webPane' : ''
+        } ${isFirstRun ? 'tab_firstRun' : ''}`}
         ref={ref}
       >
         <div
           className="tab_activeIndicator"
           style={{
             background: indicatorColor,
-            opacity: isActive ? 1 : 0
+            // Show the pane-color strip on EVERY tab (dimmer when inactive) so a
+            // tab's panes are identifiable at a glance, brightest on the active one.
+            opacity: isActive ? 1 : 0.5
           }}
         />
         {props.customChildrenBefore}
@@ -409,6 +413,22 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
 
         .tab_hasActivity:hover {
           color: #50e3c2;
+        }
+
+        /* A background tab with a pending consent/attention prompt pulses so the
+           user notices a toast they can't see in the active tab. */
+        .tab_attention {
+          animation: tabAttention 1.1s ease-in-out infinite;
+        }
+
+        @keyframes tabAttention {
+          0%,
+          100% {
+            background: var(--bg-secondary);
+          }
+          50% {
+            background: var(--info-bg, rgba(0, 170, 255, 0.22));
+          }
         }
 
         .tab_firstRun .tab_textContent {

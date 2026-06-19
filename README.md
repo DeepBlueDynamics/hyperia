@@ -105,6 +105,20 @@ Any client that supports the MCP streamable-HTTP transport works the same way �
 
 ---
 
+## macOS: file-access prompts
+
+On macOS you may see system prompts like **"‹App› would like to access files in your Documents folder"** (also Desktop, Downloads, or removable/network volumes) the first time you start an agent — whether you launch it inside Hyperia, run the Ghost agent, or start nemesis8 (n8) from a native terminal.
+
+This is macOS's **TCC** (Transparency, Consent & Control) privacy system — not Hyperia or n8. macOS protects those folders for *every* app, including terminal emulators and the command‑line tools they spawn, and prompts once (per app, per folder) the first time a process reads or writes there. Granting it lets the agent work with files in that location; denying just keeps that folder off‑limits.
+
+- **The prompt names the "responsible" app, not the agent.** Launch an agent inside Hyperia and the prompt says *Hyperia*; start n8 from Terminal.app or iTerm and it names *that terminal*. Approve it for the app you actually trust.
+- **n8 containers are scoped to the workspace you launched in** — the container only sees that directory tree, not your whole disk. The prompt is about the *host's* access to the underlying folder (needed to read/share it into the container), so macOS can still ask even though the container itself is sandboxed. Allow or deny per your needs; widening access to other folders is opt‑in.
+- **You can change your mind anytime** in **System Settings → Privacy & Security → Files and Folders** (and **Full Disk Access** for broader access) — toggle an app off there to revoke access you previously granted.
+
+This behavior is macOS‑only; Windows and Linux don't gate folder access this way.
+
+---
+
 ## Documentation
 
 | Document | Description |

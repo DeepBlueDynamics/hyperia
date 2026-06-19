@@ -25,6 +25,8 @@ plugins
 # per-machine config
 .mcp.json
 .signing.env
+check-signing.ps1
+fix-icon-cache.ps1
 .mcp.json.bak
 .mcp.json.host
 .nemesis8.toml
@@ -51,3 +53,18 @@ issue91.txt
 /tsc_check.log
 /certificate-next-steps-*.md
 .env
+
+# Session/build artifacts + scratch (not source)
+window.js
+build_local.log
+deck_build.log
+deck_run.log
+ollama_debug.log
+.dev-launch.log
+.ci_runid
+hyperia-integration-core.zip
+examples/
+__pycache__/
+
+# deck-mcp runtime cache
+tools/deck-mcp/apps.json

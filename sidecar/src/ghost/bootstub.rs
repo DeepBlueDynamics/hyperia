@@ -3,7 +3,7 @@
 //! Runs when the shell's `/api/ghost/capabilities` reports `level: "none"`
 //! (no frontier token AND no reachable Ollama). The user can still type in
 //! the shell; bootstub recognizes a small set of bootstrap intents and
-//! writes config to `~/.hyperia/hyperia.json`. Once a brain is wired,
+//! writes config to the shared Hyperia config. Once a brain is wired,
 //! capabilities flips to local/frontier/hybrid and bootstub steps aside.
 //!
 //! Recognized intents (all case-insensitive, substring match):
@@ -206,12 +206,7 @@ fn write_maximus_disabled(disabled: bool) -> BootReply {
 
     json["config"]["maximus"]["disabled"] = serde_json::json!(disabled);
 
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-
-    let payload = serde_json::to_string_pretty(&json).unwrap_or_default();
-    match fs::write(&path, payload) {
+    match crate::util::write_json_file_atomic(&path, &json) {
         Ok(_) => {
             let status_text = if disabled { "DISABLED" } else { "ENABLED" };
             BootReply {
@@ -283,12 +278,7 @@ fn write_token(provider: &str, token: &str) -> BootReply {
         }
     }
 
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-
-    let payload = serde_json::to_string_pretty(&json).unwrap_or_default();
-    match fs::write(&path, payload) {
+    match crate::util::write_json_file_atomic(&path, &json) {
         Ok(_) => {
             let preview = redact_token(token);
             let agent_provider = json["config"]["agent"]["provider"]
@@ -299,8 +289,8 @@ fn write_token(provider: &str, token: &str) -> BootReply {
                 .unwrap_or("");
             BootReply {
                 text: format!(
-                    "wrote {} token ({}) to ~/.hyperia/hyperia.json and set agent.provider={} model={}. say anything to start the real agent.",
-                    provider, preview, agent_provider, agent_model
+                    "wrote {} token ({}) to {} and set agent.provider={} model={}. say anything to start the real agent.",
+                    provider, preview, path.display(), agent_provider, agent_model
                 ),
                 system: vec![],
                 config_changed: true,
@@ -460,10 +450,9 @@ fn reply_wipe_config() -> BootReply {
         None => return BootReply { text: "could not find your home directory.".into(), system: vec![], config_changed: false },
     };
     let empty_cfg = serde_json::json!({ "config": {} });
-    let payload = serde_json::to_string_pretty(&empty_cfg).unwrap_or_default();
-    match fs::write(&path, payload) {
+    match crate::util::write_json_file_atomic(&path, &empty_cfg) {
         Ok(_) => BootReply {
-            text: "wiped configuration file ~/.hyperia/hyperia.json successfully. say anything or refresh to re-probe.".into(),
+            text: format!("wiped configuration file {} successfully. say anything or refresh to re-probe.", path.display()),
             system: vec![],
             config_changed: true,
         },
@@ -499,7 +488,7 @@ fn reply_unknown(raw: &str) -> BootReply {
              * `paste gemini token AIza…`\n\n\
              Other commands:\n\
              * `what's possible` — view options\n\
-             * `show config` — view current ~/.hyperia/hyperia.json\n\
+             * `show config` — view current shared Hyperia config\n\
              * `wipe config` — reset your configuration file\n\
              * `doctor` — check connection status",
             preview, reason
@@ -512,7 +501,7 @@ fn reply_unknown(raw: &str) -> BootReply {
              * `paste openai token sk-…`\n\
              * `paste gemini token AIza…`\n\
              * `what's possible` — boot options\n\
-             * `show config` — current ~/.hyperia/hyperia.json (token redacted)\n\
+             * `show config` — current shared Hyperia config (token redacted)\n\
              * `wipe config` — reset your configuration file\n\n\
              once a model is wired, you'll be talking to the real agent (which understands much more).",
             preview
@@ -1070,12 +1059,7 @@ fn redact_config_tokens(s: &str) -> String {
 }
 
 fn config_path() -> Option<PathBuf> {
-    let home = if cfg!(windows) {
-        std::env::var("USERPROFILE").ok()
-    } else {
-        std::env::var("HOME").ok()
-    }?;
-    Some(PathBuf::from(home).join(".hyperia").join("hyperia.json"))
+    crate::util::shared_config_path()
 }
 
 #[cfg(test)]
@@ -1127,7 +1111,7 @@ mod tests {
 
     /// Dry version of try_set_token — returns just the provider name
     /// without writing to disk. Used by tests so they don't clobber the
-    /// real ~/.hyperia/hyperia.json.
+    /// real shared Hyperia config.
     fn try_set_token_dry(raw: &str) -> Option<String> {
         let words: Vec<&str> = raw.split_whitespace().collect();
         let lower = raw.to_lowercase();

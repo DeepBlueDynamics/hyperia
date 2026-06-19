@@ -12,9 +12,13 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false # one platform (e.g. flaky Windows signing) failing shouldn't drop the others
       matrix:
         include:
-          - os: windows-latest
+          # Pinned to windows-2022 (VS 2022). windows-latest moved to an image
+          # with VS 18, which the bundled node-gyp can't detect → native rebuild
+          # (native-process-working-directory) fails in install-app-deps.
+          - os: windows-2022
             rust_target: x86_64-pc-windows-msvc
           - os: macos-latest
             rust_target: x86_64-apple-darwin
@@ -24,10 +28,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           # rcedit@5.0.2 (transitive via electron-builder) requires >= 22.12.
           node-version: 22
@@ -76,7 +80,7 @@ jobs:
 
       # Package installer
       - name: Build installer (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2022'
         run: npx electron-builder --win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -109,7 +113,7 @@ jobs:
 
       # Upload artifacts
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: hyperia-${{ matrix.os }}
           path: |
@@ -123,11 +127,13 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Release whatever built, even if one platform leg failed (mirrors nightly.yml's
+    # publish gate). A Windows signing outage no longer blocks the macOS/Linux release.
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 

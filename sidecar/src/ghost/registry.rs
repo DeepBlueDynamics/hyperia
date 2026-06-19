@@ -2243,7 +2243,7 @@ fn help_text() -> String {
         "- **Configure ferricula** — your memory backend. Tell me the URL (or that you want it local in Docker) and I'll set it.",
         "- **Run doctor** — I'll probe whether your token is set, whether ferricula is reachable, whether Ollama is running, etc., and tell you what's missing.",
         "- **Bring up local services in Docker** — I can run `docker run`/`docker compose` for you to spin up ferricula or other Hyperia services (tightly scoped — no general terminal access).",
-        "- **Read or set anything in your config** — `~/.hyperia/hyperia.json`. Just ask: *set my font size to 16*, *what's my agent model*, etc.",
+        "- **Read or set anything in your config**. Just ask: *set my font size to 16*, *what's my agent model*, etc.",
         "- **Set your default terminal profile** — *make WSL my default* and I'll persist it.",
         "",
         "Try one of these to start: *check my setup*, *change my model*, *what's my current config*.",
@@ -2295,16 +2295,12 @@ pub async fn run_doctor() -> serde_json::Value {
 }
 
 fn hyperia_config_path() -> std::path::PathBuf {
-    let home = if cfg!(windows) {
-        std::env::var("USERPROFILE").unwrap_or_default()
-    } else {
-        std::env::var("HOME").unwrap_or_default()
-    };
-    std::path::PathBuf::from(home).join(".hyperia").join("hyperia.json")
+    crate::util::shared_config_path()
+        .unwrap_or_else(|| std::path::PathBuf::from(".").join("hyperia.json"))
 }
 
 fn read_hyperia_config() -> Option<serde_json::Value> {
-    let path = hyperia_config_path();
+    let path = crate::util::shared_config_path()?;
     let data = std::fs::read_to_string(&path).ok()?;
     serde_json::from_str(&data).ok()
 }

@@ -1451,7 +1451,7 @@ impl HyperiaMcp {
         )]))
     }
 
-    #[tool(description = "Read a value from the Hyperia config (~/.hyperia/hyperia.json). \
+    #[tool(description = "Read a value from the shared Hyperia config. \
         Pass a dot-separated path like 'config.fontSize' or 'config.defaultProfile' or \
         'config.ferricula.url'. Pass an empty string to dump the entire config. Returns the \
         JSON value as a string.")]
@@ -1470,7 +1470,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(body)]))
     }
 
-    #[tool(description = "Write a value to the Hyperia config (~/.hyperia/hyperia.json). \
+    #[tool(description = "Write a value to the shared Hyperia config. \
         Pass a dot-separated path like 'config.fontSize' or 'config.defaultProfile' or \
         'config.ferricula.url', and the new value. Intermediate objects are created if needed. \
         Pass null as the value to remove the key. The change takes effect on next Hyperia \
@@ -2526,10 +2526,8 @@ impl HyperiaMcp {
     }
 
     fn config_path(&self) -> std::path::PathBuf {
-        let home = std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-            .unwrap_or_else(|_| ".".into());
-        std::path::PathBuf::from(home).join(".hyperia").join("hyperia.json")
+        crate::util::shared_config_path()
+            .unwrap_or_else(|| std::path::PathBuf::from(".").join("hyperia.json"))
     }
 
     async fn read_config(&self) -> Result<serde_json::Value, ErrorData> {
@@ -2543,10 +2541,7 @@ impl HyperiaMcp {
 
     async fn write_config(&self, cfg: &serde_json::Value) -> Result<(), ErrorData> {
         let path = self.config_path();
-        let data = serde_json::to_string_pretty(cfg)
-            .map_err(|e| ErrorData::internal_error(format!("Serialize config: {e}"), None))?;
-        tokio::fs::write(&path, data.as_bytes())
-            .await
+        crate::util::write_json_file_atomic(&path, cfg)
             .map_err(|e| ErrorData::internal_error(format!("Write config: {e}"), None))
     }
 
