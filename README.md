@@ -2,7 +2,7 @@
 
 **A terminal emulator built for agents and humans.**
 
-![Hyperia](hyperia.png)
+![Hyperia-Terminal](assets/two.png)
 
 Hyperia is an agent-native terminal emulator. Forked from [Hyper](https://github.com/vercel/hyper) and extended with a Rust sidecar, it turns the terminal into a first-class platform for AI orchestration. Agents connect over the Model Context Protocol (MCP) and operate terminal sessions as peers — opening tabs, splitting panes, running commands, reading screens, and reporting status — while the human stays in control at all times.
 
@@ -19,6 +19,9 @@ Built by [Deep Blue Dynamics](https://deepbluedynamics.com).
 - **Stickys™** — Floating, named, color-coded notes that persist across restarts and are fully controllable from any agent.
 - **Shell profiles** — PowerShell, CMD, WSL, Git Bash, or any custom shell, surfaced in the new-pane chooser.
 - **Sidecar architecture** — A dedicated Rust process (`hyperia-sidecar`) provides the HTTP, WebSocket, and MCP surfaces, decoupled from Electron for speed and reliability.
+- **`hyperia` CLI** — A bundled MCP client for scripts and lightweight agents: curated verbs (`status`, `run`, `split`, `focus`, `open`, `cd`, …), a `doctor` health check, and a `guide`. Build standalone with `yarn build:cli`.
+- **Shell integration** — Panes report their live working directory and running app, with safe `cd` from the new-pane picker and from agents.
+- **Stream Deck Plus support** — An optional companion daemon ([`tools/deck-mcp`](tools/deck-mcp)) turns an Elgato Stream Deck Plus into a physical control surface: focus/split/new-tab your panes from the touch strip and dials, switch apps from the keys.
 - **Telemetry dashboard** — Per-pane metrics at `http://localhost:9800/dashboard`.
 
 ---
