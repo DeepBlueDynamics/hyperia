@@ -29,12 +29,12 @@ import {resolve} from 'path';
 
 // Packages
 import {app, BrowserWindow, Menu, screen, ipcMain} from 'electron';
-app.name = 'Hyperia2';
-app.setName('Hyperia2');
+app.name = 'Hyperia Terminal';
+app.setName('Hyperia Terminal');
 
 if (process.platform === 'win32') {
   try {
-    app.setAppUserModelId('com.deepbluedynamics.hyperia2');
+    app.setAppUserModelId('com.deepbluedynamics.hyperia');
   } catch {
     /* non-fatal */
   }
