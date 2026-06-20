@@ -29,8 +29,8 @@ import {resolve} from 'path';
 
 // Packages
 import {app, BrowserWindow, Menu, screen, ipcMain} from 'electron';
-app.name = 'Hyperia Terminal';
-app.setName('Hyperia Terminal');
+app.name = 'Hyperia-Terminal';
+app.setName('Hyperia-Terminal');
 
 if (process.platform === 'win32') {
   try {
