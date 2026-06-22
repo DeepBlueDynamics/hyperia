@@ -111,11 +111,29 @@ MOUNT_POINT=$(mktemp -d -t hyperia-mount)
 hdiutil attach "$TMP_DMG" -nobrowse -mountpoint "$MOUNT_POINT" -quiet
 
 echo "==> Installing to /Applications..."
-if [ -d "/Applications/Hyperia.app" ]; then
-  echo "    Removing existing installation..."
-  rm -rf "/Applications/Hyperia.app"
+# Resolve the actual .app bundle inside the image. Its name follows productName
+# (e.g. "Hyperia-Terminal.app"), so NEVER hardcode it — a hardcoded "Hyperia.app"
+# is what broke installs after the app was renamed (cp: …/Hyperia.app: no such
+# file or directory).
+APP_PATH=$(find "$MOUNT_POINT" -maxdepth 1 -name "*.app" | head -1)
+if [ -z "$APP_PATH" ]; then
+  echo "No .app found in the downloaded image — aborting."
+  hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null || true
+  rm -f "$TMP_DMG"
+  exit 1
 fi
-cp -R "$MOUNT_POINT/Hyperia.app" /Applications/
+APP_NAME=$(basename "$APP_PATH")
+
+# Remove any previously-installed Hyperia under ANY of its past names so a rename
+# never leaves a stale or duplicate app behind.
+for OLD in "Hyperia.app" "Hyperia2.app" "Hyperia Terminal.app" "Hyperia-Terminal.app" "$APP_NAME"; do
+  if [ -d "/Applications/$OLD" ]; then
+    echo "    Removing existing /Applications/$OLD ..."
+    rm -rf "/Applications/$OLD"
+  fi
+done
+
+cp -R "$APP_PATH" /Applications/
 
 echo "==> Cleaning up..."
 hdiutil detach "$MOUNT_POINT" -quiet
@@ -124,4 +142,4 @@ rmdir "$MOUNT_POINT" 2>/dev/null || true
 
 echo ""
 echo "Hyperia $VERSION installed successfully."
-echo "Open it from /Applications/Hyperia.app or run: open /Applications/Hyperia.app"
+echo "Open it from /Applications/$APP_NAME or run: open \"/Applications/$APP_NAME\""
