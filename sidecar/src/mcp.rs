@@ -88,6 +88,13 @@ pub struct RunRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RequestTokenRequest {
+    /// A name for this agent identity (e.g. "claude-code", "lume-claude"). Minting
+    /// the same name again returns the same token. Defaults to "external-agent".
+    pub name: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ScreenRequest {
     /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
@@ -701,7 +708,7 @@ impl HyperiaMcp {
         lines.join("\n")
     }
 
-    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab, \\x03 for Ctrl-C. These are unescaped automatically. Address panes with window/tab/pane. Panes are addressed by name or paneId (from terminal_status). If the human is currently active in the target pane, the keys are queued and the reply tells you so — resend with interrupt=true to send immediately (use this to interrupt a running process). The response includes a [hyperia:meta] envelope describing the target process so you can detect Ink/TUI agents that need LF (\\n) instead of CR (\\r) for submit.")]
+    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab, \\x03 for Ctrl-C. These are unescaped automatically. Address panes with window/tab/pane (name or paneId from terminal_status). IMPORTANT for restartable agents: a paneId is NOT stable across restarts — a containerized/long-running agent that restarts comes back with a new paneId and name. To reliably reach 'the agent', address by window+tab and OMIT pane (the tab is stable; this hits the tab's current active pane). A write with NO window/tab/pane is refused (it will not default to the human's focused pane). If the human is currently active in the target pane, the keys are queued and the reply tells you so — resend with interrupt=true to send immediately (use this to interrupt a running process). The response includes a [hyperia:meta] envelope describing the target process so you can detect Ink/TUI agents that need LF (\\n) instead of CR (\\r) for submit.")]
     async fn terminal_keys(
         &self,
         Parameters(req): Parameters<KeysRequest>,
@@ -1255,6 +1262,32 @@ impl HyperiaMcp {
             sidecar_version, sidecar_version, app_version
         );
         Ok(CallToolResult::success(vec![Content::text(info)]))
+    }
+
+    #[tool(description = "Get a persistent Hyperia identity token for an EXTERNAL agent — one NOT running inside a Hyperia pane, so it has no HYPERIA_AGENT_TOKEN in its environment. Call this the moment a state-changing tool returns 'No identity': it mints (or returns) a persistent hyp_agent_… token. Then set your MCP client's Authorization header to 'Bearer <that token>' and reconnect — after which terminal_run / terminal_keys / terminal_split / request_access etc. work. Read-only/monitoring tools never needed it. The token persists in ~/.hyperia/agents.json across restarts; minting the same name again returns the same token.")]
+    async fn request_token(
+        &self,
+        Parameters(req): Parameters<RequestTokenRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let raw = req.name.unwrap_or_default();
+        let name = if raw.trim().is_empty() { "external-agent".to_string() } else { raw.trim().to_string() };
+        let body = serde_json::json!({"name": name});
+        let resp = self.post_json("/api/identity/agent", &body).await?;
+        let token = serde_json::from_str::<serde_json::Value>(&resp)
+            .ok()
+            .and_then(|v| v["token"].as_str().map(String::from))
+            .unwrap_or_default();
+        let msg = format!(
+            "Minted a persistent Hyperia agent token for \"{name}\":\n\n  {token}\n\n\
+             Wire it into your MCP client and reconnect:\n  \
+             claude mcp add --transport http --scope user hyperia {base}/mcp --header \"Authorization: Bearer {token}\"\n\
+             (or set headers.Authorization = \"Bearer {token}\" on the hyperia server in your MCP config — for Claude Code that's the `hyperia` block in ~/.claude.json — then restart the session).\n\n\
+             After reconnect, state-changing tools work. This token persists in ~/.hyperia/agents.json; calling request_token again with the same name returns it.",
+            name = name,
+            token = token,
+            base = self.base_url
+        );
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(

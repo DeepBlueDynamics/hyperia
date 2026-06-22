@@ -472,6 +472,12 @@ async fn post_type(
     if body.is_empty() {
         return (StatusCode::BAD_REQUEST, "Empty body".into());
     }
+    // A write must name its target. Refuse to default to the human's focused
+    // pane — that's how stray keystrokes end up typed into whatever the human is
+    // using. Require an explicit window/tab/pane (see focus-never-steal).
+    if addr.window.is_none() && addr.tab.is_none() && addr.pane.is_none() {
+        return (StatusCode::BAD_REQUEST, "No pane addressed. Keystrokes will NOT default to the focused pane (that risks typing into whatever the human is using). Pass an explicit window/tab/pane — pane is a name or paneId from terminal_status.".into());
+    }
     // raw=true sends the body byte-for-byte. raw=false (default) treats the
     // body as containing escape sequences (\x03 → Ctrl-C etc.). terminal_run
     // uses raw=true so Windows paths like `\research` aren't shredded by the
@@ -488,9 +494,11 @@ async fn post_type(
             tracing::warn!("post_type 404: window={:?} tab={:?} pane={:?} (sessions={})",
                 addr.window, addr.tab, addr.pane, session_count);
             return (StatusCode::NOT_FOUND, format!(
-                "No pane at that address (window={:?} tab={:?} pane={:?}, {} sessions registered). \
-The pane field accepts either a split label (for example 'a' or 'b') or a paneId from terminal_status. \
-If the pane label is empty, use paneId.",
+                "No pane at that address (window={:?} tab={:?} pane={:?}; {} panes registered). \
+A paneId is NOT stable across restarts: a pane that closed — or an agent that restarted — comes back \
+with a NEW paneId (and a new name), so a held id stops resolving. Call terminal_status to get current ids. \
+For a long-running or restartable agent, address by window+tab and OMIT pane — that always targets that \
+tab's current active pane, no matter how many times the pane inside it has restarted.",
                 addr.window, addr.tab, addr.pane, session_count
             ));
         }
@@ -527,6 +535,9 @@ async fn post_type_and_collect(
     if body.is_empty() {
         return (StatusCode::BAD_REQUEST, "Empty body".into());
     }
+    if addr.window.is_none() && addr.tab.is_none() && addr.pane.is_none() {
+        return (StatusCode::BAD_REQUEST, "No pane addressed. Keystrokes will NOT default to the focused pane (that risks typing into whatever the human is using). Pass an explicit window/tab/pane — pane is a name or paneId from terminal_status.".into());
+    }
     let uid = match state
         .bridge
         .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
@@ -536,7 +547,7 @@ async fn post_type_and_collect(
         None => {
             return (
                 StatusCode::NOT_FOUND,
-                "No pane at that address. The pane field accepts either a split label or a paneId from terminal_status. If the pane label is empty, use paneId.".into(),
+                "No pane at that address. A paneId is not stable across restarts (a closed/restarted pane comes back with a new id) — call terminal_status to refresh, or address by window+tab and omit pane to always hit that tab's current active pane.".into(),
             );
         }
     };
@@ -869,10 +880,12 @@ async fn enforce_drive(
         )),
         AuthDecision::SoftWall => Err((
             StatusCode::UNAUTHORIZED,
-            "No identity on this request. Your pane/agent token is provisioned in the \
-             HYPERIA_AGENT_TOKEN env var — send it as 'Authorization: Bearer <token>'. \
-             For an MCP client, add headers.Authorization = \"Bearer ${HYPERIA_AGENT_TOKEN}\" \
-             to the hyperia server config and restart the session, then retry."
+            "No identity on this request. If you're running INSIDE a Hyperia pane, your token is in \
+             the HYPERIA_AGENT_TOKEN env var — send it as 'Authorization: Bearer <token>' (MCP client: \
+             headers.Authorization = \"Bearer ${HYPERIA_AGENT_TOKEN}\"). If you're an EXTERNAL agent \
+             (no such env var), MINT one: call the request_token tool (or POST /api/identity/agent \
+             {\"name\":\"<you>\"}) to get a persistent hyp_agent_… token, set your MCP client's \
+             Authorization header to 'Bearer <token>', and reconnect — then retry."
                 .to_string(),
         )),
         AuthDecision::Denied => Err((
@@ -962,10 +975,11 @@ async fn enforce_create(
         AuthDecision::RefuseHome => Ok(()), // n/a to create
         AuthDecision::SoftWall => Err((
             StatusCode::UNAUTHORIZED,
-            "No identity on this request, so creating panes/tabs is blocked. Your token is in the \
-             HYPERIA_AGENT_TOKEN env var — send it as 'Authorization: Bearer <token>'. For an MCP \
-             client, add headers.Authorization = \"Bearer ${HYPERIA_AGENT_TOKEN}\" to the hyperia \
-             server config and restart the session, then retry."
+            "No identity on this request, so creating panes/tabs is blocked. INSIDE a pane: send the \
+             HYPERIA_AGENT_TOKEN env var as 'Authorization: Bearer <token>' (MCP client: \
+             headers.Authorization = \"Bearer ${HYPERIA_AGENT_TOKEN}\"). EXTERNAL agent (no env var): \
+             call the request_token tool (or POST /api/identity/agent {\"name\":\"<you>\"}) to mint a \
+             persistent hyp_agent_… token, wire it as your MCP Authorization header, and reconnect."
                 .to_string(),
         )),
         AuthDecision::Denied => Err((
@@ -1053,7 +1067,7 @@ async fn enforce_capability(
         AuthDecision::Allow | AuthDecision::RefuseHome => Ok(()),
         AuthDecision::SoftWall => Err((
             StatusCode::UNAUTHORIZED,
-            format!("No identity. Send an Authorization token (Bearer <token>) to use the '{cap}' capability."),
+            format!("No identity. To use the '{cap}' capability, send an Authorization token (Bearer <token>). External agents with no token: call the request_token tool to mint a persistent hyp_agent_… token, then send it as your Authorization header."),
         )),
         AuthDecision::Denied => Err((
             StatusCode::FORBIDDEN,
@@ -1236,10 +1250,10 @@ async fn post_cd(
             None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
         }
     } else {
-        match state.bridge.focused_pane().await {
-            Some(u) => Some(u),
-            None => return (StatusCode::NOT_FOUND, "No focused pane to cd in".into()),
-        }
+        // A cd is a write — do NOT default to the human's focused pane. Require
+        // an explicit target so an agent can't change the cwd of whatever pane
+        // the human is using (see focus-never-steal).
+        return (StatusCode::BAD_REQUEST, "No pane addressed. cd will NOT default to the focused pane. Pass an explicit uid, or window/tab/pane — pane is a name or paneId from terminal_status.".into());
     };
 
     let uid = match uid {

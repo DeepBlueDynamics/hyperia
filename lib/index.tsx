@@ -128,16 +128,11 @@ rpc.on('session set active', ({uid}: {uid: string}) => {
 
 rpc.on('permission request', (req) => {
   permissionsBus.setRequest(req);
-  if (req?.targetPane) {
-    // Flash the tab that owns the target pane (per-tab attention/bell channel:
-    // persists while backgrounded, auto-clears when the tab is activated)...
-    store_.dispatch(uiActions.markTabBell(req.targetPane));
-    // ...and switch to that pane so its consent prompt is actually in view when
-    // an agent asks for access to a non-visible tab, rather than only flashing.
-    // Same in-window focus as terminal_focus — no OS window raise.
-    store_.dispatch(sessionActions.setActiveSession(req.targetPane) as any);
-    setTimeout(() => window.focusActiveTerm?.(req.targetPane), 0);
-  }
+  // Flash the tab that owns the target pane so a consent prompt raised in a
+  // BACKGROUND tab is noticeable — but DO NOT move the human's active pane/tab.
+  // An agent asking to use a pane must never steal the human's focus; the
+  // human's view is theirs and only human input changes it.
+  if (req?.targetPane) store_.dispatch(uiActions.markTabBell(req.targetPane));
 });
 
 rpc.on('permission resolved', ({targetPane, id}: {targetPane: string; decision: string; id?: string}) => {
