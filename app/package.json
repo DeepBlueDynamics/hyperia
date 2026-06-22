@@ -1,8 +1,8 @@
 {
   "name": "hyperia",
-  "productName": "Hyperia-Terminal",
+  "productName": "Hyperia",
   "description": "A modern agentic terminal.",
-  "version": "0.12.10",
+  "version": "0.12.11",
   "license": "BSD-2-Clause",
   "author": {
     "name": "Deep Blue Dynamics",
