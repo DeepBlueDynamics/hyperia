@@ -29,18 +29,18 @@ import {resolve} from 'path';
 
 // Packages
 import {app, BrowserWindow, Menu, screen, ipcMain} from 'electron';
-app.name = 'Hyperia';
-app.setName('Hyperia');
+app.name = 'Hyperia-Terminal';
+app.setName('Hyperia-Terminal');
 
 // Pin Electron's userData directory to a STABLE path so it is NOT derived from
 // the display name. Electron defaults userData to %APPDATA%/<app.name>, so every
 // productName change (Hyperia → Hyperia2 → Hyperia-Terminal) moved the data dir
 // and orphaned localStorage — web-pane URL history, dir history, the private-mode
 // toggle, etc. (issue #127). Freezing the dir here lets the display name change
-// freely without stranding history. "Hyperia" is the canonical dir — it matches
-// the original app name and existing macOS/0.11.1 installs.
+// freely without ever stranding history. "Hyperia-Terminal" is chosen because
+// current installs already store there, so this is a no-op move for them.
 try {
-  app.setPath('userData', resolve(app.getPath('appData'), 'Hyperia'));
+  app.setPath('userData', resolve(app.getPath('appData'), 'Hyperia-Terminal'));
 } catch (e) {
   console.warn('[userData] failed to pin stable path:', e);
 }
@@ -54,7 +54,7 @@ if (process.platform === 'win32') {
     // electron-builder appId (com.deepbluedynamics.hyperia), which stays stable so
     // auto-update / install-in-place keeps working. Trade-off: a taskbar pin won't
     // follow across versions (AUMID changes), so a re-pin may be needed per update.
-    app.setAppUserModelId('com.deepbluedynamics.hyperia-v01211');
+    app.setAppUserModelId('com.deepbluedynamics.hyperia-v01210');
   } catch {
     /* non-fatal */
   }
