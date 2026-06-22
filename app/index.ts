@@ -34,7 +34,14 @@ app.setName('Hyperia-Terminal');
 
 if (process.platform === 'win32') {
   try {
-    app.setAppUserModelId('com.deepbluedynamics.hyperia');
+    // Versioned AUMID — BUMP THIS SUFFIX EVERY RELEASE (…-v0128, -v0129, …).
+    // Windows keys the taskbar/shortcut icon cache off the AUMID; a fresh AUMID
+    // each release sidesteps the poisoned per-AUMID icon cache so the icon always
+    // reads clean from the exe. NOTE: this is intentionally DIFFERENT from the
+    // electron-builder appId (com.deepbluedynamics.hyperia), which stays stable so
+    // auto-update / install-in-place keeps working. Trade-off: a taskbar pin won't
+    // follow across versions (AUMID changes), so a re-pin may be needed per update.
+    app.setAppUserModelId('com.deepbluedynamics.hyperia-v0128');
   } catch {
     /* non-fatal */
   }
