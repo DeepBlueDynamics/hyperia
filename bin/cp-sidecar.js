@@ -25,7 +25,17 @@ exports.default = async (context) => {
     'hyperia-sidecar'
   );
 
-  const targetDir = path.join(context.appOutDir, 'Hyperia.app', 'Contents', 'Resources', 'sidecar');
+  // Resolve the ACTUAL .app bundle name — it tracks productName (e.g.
+  // "Hyperia-Terminal.app"), so never hardcode it. A stale "Hyperia.app" here
+  // mkdir'd a bogus empty bundle into appOutDir (the "/…/Hyperia.app: no such
+  // file or directory" DMG-mount failure) and shipped the real app with NO
+  // sidecar. Scanning for *.app is immune to any future rename.
+  const appBundle = fs.readdirSync(context.appOutDir).find((f) => f.endsWith('.app'));
+  if (!appBundle) {
+    console.warn(`No .app bundle found in ${context.appOutDir} — skipping sidecar copy`);
+    return;
+  }
+  const targetDir = path.join(context.appOutDir, appBundle, 'Contents', 'Resources', 'sidecar');
   const targetPath = path.join(targetDir, 'hyperia-sidecar');
 
   if (!fs.existsSync(sourcePath)) {

@@ -31,6 +31,12 @@
       "rpm",
       "snap",
       "pacman"
+    ],
+    "extraResources": [
+      {
+        "from": "./sidecar/target/release/hyperia-sidecar",
+        "to": "./sidecar/hyperia-sidecar"
+      }
     ]
   },
   "win": {
