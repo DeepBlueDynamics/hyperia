@@ -976,21 +976,50 @@ impl Bridge {
             }
 
             "Heartbeat" => {
-                // Reconcile: remove any sessions the bridge no longer tracks
+                // Reconcile in BOTH directions. The renderer is the source of
+                // truth for which panes exist, so every heartbeat carries its
+                // full session-uid list.
                 if let Some(uids) = msg["sessionUids"].as_array() {
                     let bridge_uids: std::collections::HashSet<String> = uids
                         .iter()
                         .filter_map(|v| v.as_str().map(|s| s.to_string()))
                         .collect();
-                    let mut sessions = self.inner.sessions.lock().await;
-                    let stale: Vec<String> = sessions
-                        .keys()
-                        .filter(|uid| !bridge_uids.contains(*uid))
-                        .cloned()
-                        .collect();
-                    for uid in &stale {
-                        tracing::info!("Heartbeat reconcile: removing stale session {uid}");
-                        sessions.remove(uid);
+                    let missing: Vec<String> = {
+                        let mut sessions = self.inner.sessions.lock().await;
+                        // (1) Prune sessions we still hold that the renderer dropped.
+                        let stale: Vec<String> = sessions
+                            .keys()
+                            .filter(|uid| !bridge_uids.contains(*uid))
+                            .cloned()
+                            .collect();
+                        for uid in &stale {
+                            tracing::info!("Heartbeat reconcile: removing stale session {uid}");
+                            sessions.remove(uid);
+                        }
+                        // (2) Find sessions the renderer tracks but we're missing
+                        // (a registration lost to a crash / disconnect race).
+                        // Without this the drift never self-heals — the pane stays
+                        // invisible to terminal_status / hyper status / agents
+                        // until it is recreated.
+                        bridge_uids
+                            .iter()
+                            .filter(|uid| !sessions.contains_key(*uid))
+                            .cloned()
+                            .collect()
+                    };
+                    // (3) Ask the renderer to re-register anything we lack. Its
+                    // SessionRegister rebuilds the entry; this converges in one
+                    // heartbeat and can't loop (once present it is no longer
+                    // "missing").
+                    if !missing.is_empty() {
+                        tracing::warn!(
+                            "Heartbeat reconcile: {} session(s) tracked by renderer but missing here; requesting re-register: {:?}",
+                            missing.len(),
+                            missing
+                        );
+                        let _ = self
+                            .notify(serde_json::json!({ "type": "ResyncSessions", "uids": missing }))
+                            .await;
                     }
                 }
             }

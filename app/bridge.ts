@@ -325,6 +325,21 @@ function handleCommand(msg: Record<string, unknown>) {
   const seq = msg.seq as number | undefined;
 
   switch (type) {
+    case 'ResyncSessions': {
+      // The sidecar lost these sessions to a crash/disconnect race but still
+      // sees them in our heartbeat — re-send their registration so it can
+      // rebuild its map. Self-heals the "pane visible in UI but missing from
+      // hyper status / unreachable by agents" drift without recreating the pane.
+      const uids = Array.isArray(msg.uids) ? (msg.uids as string[]) : [];
+      for (const uid of uids) {
+        const tracked = trackedSessions.get(uid);
+        if (tracked) {
+          console.log(`[bridge] ResyncSessions: re-registering ${uid} at sidecar request`);
+          sendSessionRegister(uid, tracked);
+        }
+      }
+      break;
+    }
     case 'Keys': {
       const uid = msg.uid as string;
       const keys = msg.keys as string;
