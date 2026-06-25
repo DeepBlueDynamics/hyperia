@@ -43,6 +43,25 @@ Object.defineProperty(window, 'rpc', {get: () => rpc});
 Object.defineProperty(window, 'config', {get: () => config});
 Object.defineProperty(window, 'plugins', {get: () => plugins});
 
+// When the last tab (root term group) in this window closes, close the WINDOW
+// instead of leaving an empty frame with just a "+". Driven off the live
+// root-group count so it fires no matter HOW the tab emptied — pane ×, tab ×,
+// shell exit, or a desynced/ghost group — which the old per-action
+// `Object.keys(termGroups).length <= 1` guard missed (it counted split children
+// + ghosts off a stale snapshot). `hadTabsOnce` gates it so it never fires
+// before the first tab exists (root count is 0 at startup / during restore).
+let hadTabsOnce = false;
+store_.subscribe(() => {
+  const tg = store_.getState().termGroups.termGroups;
+  const rootCount = Object.keys(tg).filter((uid) => !tg[uid].parentUid).length;
+  if (rootCount > 0) {
+    hadTabsOnce = true;
+  } else if (hadTabsOnce) {
+    hadTabsOnce = false;
+    window.close();
+  }
+});
+
 const fetchFileData = (configData: configOptions) => {
   const configInfo: configOptions = {...configData, bellSound: null};
   if (!configInfo.bell || configInfo.bell.toUpperCase() !== 'SOUND' || !configInfo.bellSoundURL) {
