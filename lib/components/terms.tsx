@@ -1,3 +1,4 @@
+import {clipboard} from 'electron';
 import React from 'react';
 
 import type {TermsProps, HyperDispatch} from '../../typings/hyper';
@@ -51,57 +52,102 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
     this.terms[uid] = term;
   }
 
-  componentDidMount() {
-    window.addEventListener('contextmenu', (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target) return;
-
-      // Do NOT trigger the default terminal context menu for UI elements, labels, and web panes.
-      // Prevent default to ensure no context menu shows up at all in these areas.
+  findClickedTerm(target: HTMLElement): {clickedTerm: Term | null; clickedUid: string | null} {
+    let clickedTerm: Term | null = null;
+    let clickedUid: string | null = null;
+    for (const key in this.terms) {
+      const term = this.terms[key];
+      const outerRef = (term as any)?.termOuterRef?.current as HTMLElement | null;
+      const wrapperRef = term?.termWrapperRef;
       if (
-        target.closest('.term_splitLabel') ||
-        target.closest('.term_profileMenu') ||
-        target.closest('.toolbar_wrap') ||
-        target.closest('.toolbar_bar') ||
-        target.closest('.header_header') ||
-        target.closest('.header_bar') ||
-        target.closest('.tabs_nav') ||
-        target.closest('.web-pane') ||
-        target.closest('webview')
+        term &&
+        ((outerRef && (outerRef.contains(target) || outerRef === target)) ||
+          (wrapperRef && (wrapperRef.contains(target) || wrapperRef === target)))
       ) {
-        e.preventDefault();
-        return;
+        clickedTerm = term;
+        clickedUid = key;
+        break;
       }
+    }
+    return {clickedTerm, clickedUid};
+  }
 
-      if (e.defaultPrevented) return;
+  onMouseDownCapture = (e: MouseEvent) => {
+    if (e.button !== 2) return;
+    const target = e.target as HTMLElement;
+    if (!target) return;
 
-      // Find the specific terminal component that was clicked
-      let clickedTerm: Term | null = null;
-      let clickedUid: string | null = null;
-      for (const key in this.terms) {
-        const term = this.terms[key];
-        const outerRef = (term as any)?.termOuterRef?.current;
-        const wrapperRef = term?.termWrapperRef;
-        if (
-          term &&
-          ((outerRef && (outerRef.contains(target) || outerRef === target)) ||
-            (wrapperRef && (wrapperRef.contains(target) || wrapperRef === target)))
-        ) {
-          clickedTerm = term;
-          clickedUid = key;
-          break;
-        }
+    const {clickedTerm} = this.findClickedTerm(target);
+    if (clickedTerm && clickedTerm.term.hasSelection()) {
+      e.stopPropagation();
+    }
+  };
+
+  onMouseUpCapture = (e: MouseEvent) => {
+    if (e.button !== 2) return;
+    const target = e.target as HTMLElement;
+    if (!target) return;
+
+    const {clickedTerm} = this.findClickedTerm(target);
+    if (clickedTerm && clickedTerm.term.hasSelection()) {
+      e.stopPropagation();
+      if (this.props.quickEdit) {
+        clipboard.writeText(clickedTerm.term.getSelection());
+        clickedTerm.term.clearSelection();
       }
+    }
+  };
 
-      // If the right-click was not inside any terminal pane, ignore it
-      if (!clickedTerm) {
-        return;
-      }
+  onContextMenu = (e: MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (!target) return;
 
-      const selection = clickedTerm.term.getSelection();
-      const uid = clickedUid || this.props.activeSession!;
-      this.props.onContextMenu(uid, selection);
-    });
+    // Do NOT trigger the default terminal context menu for UI elements, labels, and web panes.
+    // Prevent default to ensure no context menu shows up at all in these areas.
+    if (
+      target.closest('.term_splitLabel') ||
+      target.closest('.term_profileMenu') ||
+      target.closest('.toolbar_wrap') ||
+      target.closest('.toolbar_bar') ||
+      target.closest('.header_header') ||
+      target.closest('.header_bar') ||
+      target.closest('.tabs_nav') ||
+      target.closest('.web-pane') ||
+      target.closest('webview')
+    ) {
+      e.preventDefault();
+      return;
+    }
+
+    const {clickedTerm, clickedUid} = this.findClickedTerm(target);
+    if (!clickedTerm) return;
+
+    const hasSelection = clickedTerm.term.hasSelection();
+
+    // If xterm.js or something else prevented the default context menu:
+    // we still want to show the context menu if there is a selection!
+    if (e.defaultPrevented && !hasSelection) {
+      return;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    // If quickEdit is enabled, right-click on selection already copied and cleared selection in mouseup.
+    // So we don't open context menu.
+    if (this.props.quickEdit && hasSelection) {
+      return;
+    }
+
+    const selection = clickedTerm.term.getSelection();
+    const uid = clickedUid || this.props.activeSession!;
+    this.props.onContextMenu(uid, selection);
+  };
+
+  componentDidMount() {
+    window.addEventListener('mousedown', this.onMouseDownCapture, {capture: true});
+    window.addEventListener('mouseup', this.onMouseUpCapture, {capture: true});
+    window.addEventListener('contextmenu', this.onContextMenu);
   }
 
   componentDidUpdate(prevProps: TermsProps) {
@@ -118,6 +164,9 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
   }
 
   componentWillUnmount() {
+    window.removeEventListener('mousedown', this.onMouseDownCapture, {capture: true});
+    window.removeEventListener('mouseup', this.onMouseUpCapture, {capture: true});
+    window.removeEventListener('contextmenu', this.onContextMenu);
     this.props.ref_(null);
   }
 
