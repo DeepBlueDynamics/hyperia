@@ -708,7 +708,7 @@ impl HyperiaMcp {
         lines.join("\n")
     }
 
-    #[tool(description = "Type keystrokes into a terminal pane. Use \\n for Enter, \\r for Return, \\t for Tab, \\x03 for Ctrl-C. These are unescaped automatically. Address panes with window/tab/pane (name or paneId from terminal_status). IMPORTANT for restartable agents: a paneId is NOT stable across restarts — a containerized/long-running agent that restarts comes back with a new paneId and name. To reliably reach 'the agent', address by window+tab and OMIT pane (the tab is stable; this hits the tab's current active pane). A write with NO window/tab/pane is refused (it will not default to the human's focused pane). If the human is currently active in the target pane, the keys are queued and the reply tells you so — resend with interrupt=true to send immediately (use this to interrupt a running process). The response includes a [hyperia:meta] envelope describing the target process so you can detect Ink/TUI agents that need LF (\\n) instead of CR (\\r) for submit.")]
+    #[tool(description = "Type keystrokes into a terminal pane. To send Enter, you must use a double-escaped \\\\n (backslash-n, written as \\\\\\\\n in JSON payloads). A single newline in the JSON payload is parsed into a literal newline character and will be ignored/dropped by the PTY. Use \\\\r for Return, \\\\t for Tab, \\\\x03 for Ctrl-C. Address panes with window/tab/pane (name or paneId from terminal_status). IMPORTANT for restartable agents: a paneId is NOT stable across restarts — a containerized/long-running agent that restarts comes back with a new paneId and name. To reliably reach 'the agent', address by window+tab and OMIT pane (the tab is stable; this hits the tab's current active pane). A write with NO window/tab/pane is refused (it will not default to the human's focused pane). If the human is currently active in the target pane, the keys are queued and the reply tells you so — resend with interrupt=true to send immediately (use this to interrupt a running process). The response includes a [hyperia:meta] envelope describing the target process so you can detect Ink/TUI agents that need LF (\\\\n) instead of CR (\\\\r) for submit.")]
     async fn terminal_keys(
         &self,
         Parameters(req): Parameters<KeysRequest>,
@@ -729,7 +729,7 @@ impl HyperiaMcp {
             out.push_str(&extra);
             if Self::is_likely_ink_tui(&target_process) {
                 out.push_str(&format!(
-                    "\n[hyperia:hint] target_process='{}' is a Node/Ink TUI — it reads LF for submit. If your keys contained \\r and the target didn't react, retry with keys=\"\\n\".",
+                    "\n[hyperia:hint] target_process='{}' is a Node/Ink TUI — it reads LF for submit. If your keys contained \\r and the target didn't react, you must use a double-escaped \\\\n (backslash-n, written as \\\\\\\\n in JSON payloads).",
                     target_process,
                 ));
             }

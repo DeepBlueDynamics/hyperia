@@ -1,6 +1,8 @@
+import {spawn} from 'child_process';
+import {existsSync, readFileSync} from 'fs';
+import {dirname, join, resolve} from 'path';
+
 import {app, ipcMain, Notification, Tray, Menu, nativeImage} from 'electron';
-import {existsSync} from 'fs';
-import {dirname, join} from 'path';
 
 import isDev from 'electron-is-dev';
 
@@ -21,15 +23,17 @@ export function initTray() {
         trayIcon = nativeImage.createFromPath(icoPath);
       } else {
         const iconImage = getAppIcon();
-        trayIcon = typeof iconImage === 'string'
-          ? nativeImage.createFromPath(iconImage).resize({width: 16, height: 16})
-          : iconImage.resize({width: 16, height: 16});
+        trayIcon =
+          typeof iconImage === 'string'
+            ? nativeImage.createFromPath(iconImage).resize({width: 16, height: 16})
+            : iconImage.resize({width: 16, height: 16});
       }
     } else {
       const iconImage = getAppIcon();
-      trayIcon = typeof iconImage === 'string'
-        ? nativeImage.createFromPath(iconImage).resize({width: 16, height: 16})
-        : iconImage.resize({width: 16, height: 16});
+      trayIcon =
+        typeof iconImage === 'string'
+          ? nativeImage.createFromPath(iconImage).resize({width: 16, height: 16})
+          : iconImage.resize({width: 16, height: 16});
     }
     tray = new Tray(trayIcon);
     tray.setToolTip('Hyperia');
@@ -57,6 +61,77 @@ export function destroyTray() {
     tray.destroy();
     tray = null;
   }
+}
+
+function reconnectStreamDeck() {
+  const isWin = process.platform === 'win32';
+
+  // Kill any existing deck-mcp process
+  if (isWin) {
+    spawn('taskkill', ['/f', '/im', 'deck-mcp.exe']);
+  } else {
+    spawn('pkill', ['-f', 'deck-mcp']);
+  }
+
+  // Wait a moment and then spawn the daemon
+  setTimeout(() => {
+    let binaryPath: string | null = null;
+    const exeName = isWin ? 'deck-mcp.exe' : 'deck-mcp';
+
+    // Find binary
+    const paths = [
+      resolve(app.getAppPath(), 'tools/deck-mcp/target/release', exeName),
+      resolve(app.getAppPath(), 'tools/deck-mcp/target/debug', exeName),
+      resolve(app.getAppPath(), '../tools/deck-mcp/target/release', exeName),
+      resolve(app.getAppPath(), '../tools/deck-mcp/target/debug', exeName),
+      resolve(process.cwd(), 'tools/deck-mcp/target/release', exeName),
+      resolve(process.cwd(), 'tools/deck-mcp/target/debug', exeName)
+    ];
+
+    for (const p of paths) {
+      if (existsSync(p)) {
+        binaryPath = p;
+        break;
+      }
+    }
+
+    if (!binaryPath) {
+      console.warn('[tray] Stream Deck daemon binary not found');
+      return;
+    }
+
+    console.log('[tray] Spawning Stream Deck daemon:', binaryPath);
+
+    // Read token if available, matching README run instructions
+    let token = '';
+    try {
+      const cliJsonPath = join(app.getPath('home'), '.hyperia/cli.json');
+      if (existsSync(cliJsonPath)) {
+        const cliJson = JSON.parse(readFileSync(cliJsonPath, 'utf8'));
+        token = cliJson.token || '';
+      }
+    } catch (err) {
+      console.warn('[tray] Failed to read Hyperia token for Stream Deck:', err);
+    }
+
+    let daemonCwd = dirname(binaryPath);
+    const potentialRoot = resolve(daemonCwd, '../..');
+    if (existsSync(join(potentialRoot, 'src'))) {
+      daemonCwd = potentialRoot;
+    }
+
+    const child = spawn(binaryPath, [], {
+      detached: true,
+      stdio: 'ignore',
+      cwd: daemonCwd,
+      env: {
+        ...process.env,
+        HYPERIA_AGENT_TOKEN: token,
+        HYPERIA_URL: 'http://localhost:9800'
+      }
+    });
+    child.unref();
+  }, 1000);
 }
 
 function getWindow(): Electron.BrowserWindow | null {
@@ -106,6 +181,12 @@ function updateTrayMenu() {
       click: () => {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         (app as any).createWindow?.();
+      }
+    },
+    {
+      label: 'Reconnect Stream Deck',
+      click: () => {
+        reconnectStreamDeck();
       }
     },
     {type: 'separator'}
