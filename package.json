@@ -15,7 +15,7 @@
     "test:e2e": "ava --config ava-e2e.config.js",
     "postinstall": "webpack --config-name hyper-app && electron-builder install-app-deps && cpy --cwd=target node_modules \"../../app/\" && husky install",
     "rebuild-node-pty": "electron-rebuild -f -o node-pty -m target",
-    "dist": "node ./bin/verify-version.js && yarn run build && electron-builder",
+    "dist": "node ./bin/verify-version.js && yarn run build && electron-builder --config.npmRebuild=false",
     "clean": "node ./bin/rimraf-standalone.js node_modules && node ./bin/rimraf-standalone.js ./app/node_modules && node ./bin/rimraf-standalone.js ./app/renderer",
     "generate-schema": "typescript-json-schema ./typings/config.d.ts rawConfig -o ./app/config/schema.json --required"
   },

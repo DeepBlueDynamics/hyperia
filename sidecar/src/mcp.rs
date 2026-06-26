@@ -2387,6 +2387,7 @@ struct ShellStateInfo {
 fn detect_shell_state(screen: &str) -> ShellStateInfo {
     let lower = screen.to_lowercase();
 
+    // 1. Dialogs and interactive prompts (high priority, requires user response)
     // Claude Code trust dialog
     if lower.contains("yes, i trust this folder") && lower.contains("enter to confirm") {
         return ShellStateInfo {
@@ -2423,12 +2424,42 @@ fn detect_shell_state(screen: &str) -> ShellStateInfo {
         };
     }
 
-    // Claude Code ready (has prompt marker)
-    if screen.contains("\u{276f}") || screen.contains("❯") {
-        // Check if it's a blank prompt (idle)
-        let lines: Vec<&str> = screen.lines().filter(|l| !l.trim().is_empty()).collect();
-        if let Some(last) = lines.last() {
-            if last.trim() == "\u{276f}" || last.trim() == "❯" || last.trim().ends_with("❯") {
+    // 2. Spinner and active work detection
+    // Braille spinner characters (commonly used by ora/cli-spinners in Node/TUI agents)
+    let braille_spinners = [
+        '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏',
+        '⢄', '⢂', '⢁', '⡁', '⡈', '⡐', '⡠'
+    ];
+    let has_spinner = screen.chars().any(|c| braille_spinners.contains(&c));
+
+    if has_spinner || lower.contains("working") || lower.contains("compiling") || lower.contains("building")
+        || lower.contains("installing") || lower.contains("downloading") || lower.contains("befuddling")
+        || lower.contains("cogitating") || lower.contains("flowing") || lower.contains("sautéed")
+        || lower.contains("cooking") || lower.contains("baking") || lower.contains("philosophising")
+        || lower.contains("still thinking") || lower.contains("shell still running")
+    {
+        return ShellStateInfo {
+            kind: "running".into(),
+            detail: "Command or agent execution in progress".into(),
+            actionable: None,
+        };
+    }
+
+    // 3. End-of-line prompt detection (scans last few lines to allow for footers/menus below prompt)
+    let lines: Vec<&str> = screen.lines().filter(|l| !l.trim().is_empty()).collect();
+    let scan_count = lines.len().min(5);
+    for i in 0..scan_count {
+        if let Some(line) = lines.get(lines.len() - 1 - i) {
+            let trimmed = line.trim();
+            // Claude Code or general TUI shell prompt markers
+            if trimmed == "\u{276f}" || trimmed == "❯" || trimmed.ends_with('❯') || trimmed.ends_with("\u{276f}")
+                || (trimmed.starts_with('❯') && !trimmed.contains("error"))
+                || (trimmed.starts_with("\u{276f}") && !trimmed.contains("error"))
+                // Windows cmd/powershell path prompt
+                || (trimmed.contains(":\\") && trimmed.contains(">") && !trimmed.contains("error"))
+                // Unix standard/admin shell prompts
+                || (trimmed.ends_with('$') || trimmed.ends_with('#'))
+            {
                 return ShellStateInfo {
                     kind: "idle".into(),
                     detail: "At prompt, ready for input".into(),
@@ -2438,33 +2469,8 @@ fn detect_shell_state(screen: &str) -> ShellStateInfo {
         }
     }
 
-    // Windows cmd prompt
-    if screen.contains(":\\") && screen.contains(">") {
-        let lines: Vec<&str> = screen.lines().filter(|l| !l.trim().is_empty()).collect();
-        if let Some(last) = lines.last() {
-            if last.contains(">") && !last.contains("error") {
-                return ShellStateInfo {
-                    kind: "idle".into(),
-                    detail: "At cmd prompt".into(),
-                    actionable: None,
-                };
-            }
-        }
-    }
-
-    // Working/running indicator
-    if lower.contains("working") || lower.contains("compiling") || lower.contains("building")
-        || lower.contains("installing") || lower.contains("downloading") {
-        return ShellStateInfo {
-            kind: "running".into(),
-            detail: "Command in progress".into(),
-            actionable: None,
-        };
-    }
-
-    // Empty/blank screen
-    let non_empty: Vec<&str> = screen.lines().filter(|l| !l.trim().is_empty()).collect();
-    if non_empty.is_empty() {
+    // 4. Empty/blank screen detection
+    if lines.is_empty() {
         return ShellStateInfo {
             kind: "empty".into(),
             detail: "Blank screen".into(),
@@ -2472,6 +2478,7 @@ fn detect_shell_state(screen: &str) -> ShellStateInfo {
         };
     }
 
+    // 5. Fallback
     ShellStateInfo {
         kind: "unknown".into(),
         detail: "Unrecognized state".into(),
