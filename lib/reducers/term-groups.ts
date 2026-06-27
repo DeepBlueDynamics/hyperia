@@ -59,7 +59,15 @@ const setActiveGroup = (state: ITermState, action: {uid: string}) => {
     return state.set('activeRootGroup', null);
   }
 
-  const childGroup = findBySession(state, action.uid)!;
+  const childGroup = findBySession(state, action.uid);
+  // Guard: a dangling session pointer (its pane was closed or the tree desynced)
+  // makes findBySession return undefined; the old non-null assertion then threw on
+  // childGroup.uid, which silently bricked tab selection (the "dead tab you can't
+  // select" bug). Leave active state unchanged instead of crashing, so a later
+  // valid selection can recover the tab.
+  if (!childGroup) {
+    return state;
+  }
   const rootGroup = findRootGroup(state.termGroups, childGroup.uid);
   return state
     .set('activeRootGroup', rootGroup.uid)

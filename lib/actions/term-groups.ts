@@ -115,26 +115,37 @@ export function setActiveGroup(uid: string) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     const {termGroups} = getState();
     const sessionUid = termGroups.activeSessions[uid];
-    if (sessionUid) {
+    // Only trust the remembered active session if it STILL resolves to a node in
+    // the tree. A dangling pointer (its pane was closed or the layout desynced)
+    // would otherwise be dispatched and crash the reducer's findBySession,
+    // bricking the tab so it can't be selected. When it's stale, fall through to
+    // re-deriving a live pane below.
+    if (sessionUid && findBySession(termGroups, sessionUid)) {
       dispatch(setActiveSession(sessionUid));
-    } else {
-      // Find the first leaf pane of this root group (web pane) and activate it
-      const group = termGroups.termGroups[uid];
-      if (group) {
-        const leaves = findLeaves(termGroups, group);
-        const firstLeaf = leaves[0];
-        if (firstLeaf) {
-          if (firstLeaf.sessionUid) {
-            dispatch(setActiveSession(firstLeaf.sessionUid));
-          } else {
-            dispatch({type: 'TERM_GROUP_SET_ACTIVE', uid: firstLeaf.uid} as any);
-          }
-          return;
-        }
-      }
-      // Fallback
-      dispatch({type: TERM_GROUP_ACTIVATE_WEB_TAB, uid} as any);
+      return;
     }
+    const group = termGroups.termGroups[uid];
+    if (group) {
+      const leaves = findLeaves(termGroups, group);
+      // Prefer a leaf with a live, resolvable session so the tab always lands on
+      // something real even when the tree is partly corrupt.
+      const liveLeaf = leaves.find((l) => l.sessionUid && findBySession(termGroups, l.sessionUid));
+      if (liveLeaf && liveLeaf.sessionUid) {
+        dispatch(setActiveSession(liveLeaf.sessionUid));
+        return;
+      }
+      const firstLeaf = leaves[0];
+      if (firstLeaf) {
+        if (firstLeaf.sessionUid) {
+          dispatch(setActiveSession(firstLeaf.sessionUid));
+        } else {
+          dispatch({type: 'TERM_GROUP_SET_ACTIVE', uid: firstLeaf.uid} as any);
+        }
+        return;
+      }
+    }
+    // Fallback (web-only / empty tab)
+    dispatch({type: TERM_GROUP_ACTIVATE_WEB_TAB, uid} as any);
   };
 }
 
