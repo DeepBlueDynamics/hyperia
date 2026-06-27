@@ -144,6 +144,16 @@ pub struct FocusRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct OnIdleRequest {
+    /// The prompt/text to deliver to YOUR OWN pane the next time it goes idle.
+    pub keys: String,
+    /// Seconds until the callback expires (hard-capped at 3600 = 1h). Default 900.
+    pub max_lifetime_secs: Option<u64>,
+    /// How many times it may fire before disarming (capped at 5). Default 1 (one-shot).
+    pub max_fires: Option<u32>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CloseRequest {
     /// Window ID of the pane to close — the `id` field from terminal_status. Omit to use the focused window.
     pub window: Option<u32>,
@@ -1075,6 +1085,23 @@ impl HyperiaMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let body = serde_json::json!({"window": req.window, "tab": req.tab, "pane": req.pane, "force": req.force.unwrap_or(false)});
         let resp = self.post_json("/api/pane/focus", &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Schedule a SELF-poke: the next time YOUR OWN pane goes idle (you finish what you're doing), Hyperia delivers `keys` back to you. The safe way to keep yourself moving when you'd otherwise stall — edge-triggered (fires once per running->idle transition, NOT in a loop), capped (max_fires, default 1), and expiring (<=1h). Only works from inside a Hyperia pane (you have a HYPERIA_AGENT_TOKEN env var); an external agent has no pane to target — use pane_pulse_set for another pane.")]
+    async fn pane_on_idle(
+        &self,
+        Parameters(req): Parameters<OnIdleRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({
+            "keys": req.keys,
+            "max_lifetime_secs": req.max_lifetime_secs,
+            "max_fires": req.max_fires,
+        });
+        let resp = self
+            .post_json_as("/api/pulse/on-idle", &body, forwarded_auth(&ctx).as_deref())
+            .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -2420,6 +2447,12 @@ struct ShellStateInfo {
     detail: String,
     /// If set, the keys to send to resolve the prompt
     actionable: Option<String>,
+}
+
+/// Coarse screen-state kind (idle/running/dialog/empty/unknown) for the idle
+/// monitor. Thin wrapper so callers outside this module needn't see ShellStateInfo.
+pub(crate) fn classify_screen_kind(screen: &str) -> String {
+    detect_shell_state(screen).kind
 }
 
 fn detect_shell_state(screen: &str) -> ShellStateInfo {

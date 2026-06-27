@@ -1253,6 +1253,49 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
     }
 }
 
+/// Arm a one-shot (capped) idle callback on the CALLER'S OWN pane: when it next
+/// goes running->idle, the keys are delivered back to it. Self-only — only an
+/// in-pane agent (pane token) can arm one; external agents have no pane to target.
+async fn post_pane_on_idle(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    let pane = match &id {
+        identity::CallerIdentity::Pane { pane, .. } => pane.clone(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                "pane_on_idle is self-only: it schedules a poke to YOUR OWN pane when you next go idle. Only an in-pane agent (with a HYPERIA_AGENT_TOKEN pane token) can arm one — external agents have no pane to target. Use pane_pulse_set for another pane.".into(),
+            )
+        }
+    };
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let keys = parsed["keys"].as_str().unwrap_or("").to_string();
+    if keys.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "keys (the prompt to deliver when you go idle) is required".into(),
+        );
+    }
+    let life = parsed["max_lifetime_secs"].as_u64().unwrap_or(900);
+    let max_fires = parsed["max_fires"].as_u64().unwrap_or(1) as u32;
+    let cb_id = state
+        .bridge
+        .register_idle_callback(&pane, &keys, life, max_fires, &id.label())
+        .await;
+    (
+        StatusCode::OK,
+        serde_json::json!({
+            "ok": true,
+            "id": cb_id,
+            "message": "Armed. The next time this pane goes idle, the prompt is delivered to it (edge-triggered, capped, expires within 1h)."
+        })
+        .to_string(),
+    )
+}
+
 async fn get_perm_state(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(state.bridge.perms().snapshot().await)
 }
@@ -2378,6 +2421,7 @@ async fn main() -> anyhow::Result<()> {
     // Grab lume handles before `state` is moved into the router below.
     let lume_for_flush = state.bridge.lume();
     let lume_for_shutdown = state.bridge.lume();
+    let bridge_for_monitor = state.bridge.clone();
     // Bridge handle for the identity middleware (runs across all routes incl. /mcp).
     let bridge_for_mw = state.bridge.clone();
 
@@ -2397,6 +2441,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/edit/apply", axum::routing::post(post_edit_apply))
         // Write endpoints
         .route("/api/type", axum::routing::post(post_type))
+        .route("/api/pulse/on-idle", axum::routing::post(post_pane_on_idle))
         .route("/api/type-and-collect", axum::routing::post(post_type_and_collect))
         .route("/api/pane/split", axum::routing::post(post_split))
         .route("/api/pane/focus", axum::routing::post(post_focus))
@@ -2535,6 +2580,21 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 tick.tick().await;
                 lume.persist().await;
+            }
+        });
+    }
+
+    // Idle monitor: ~2s tick. Watches panes that have an armed idle-callback
+    // (and, later, pulses), classifies each from its cached screen, and fires on
+    // a running->idle edge. Independent of any agent's loop.
+    {
+        let bridge = bridge_for_monitor;
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+            tick.tick().await; // consume the immediate first tick
+            loop {
+                tick.tick().await;
+                bridge.idle_monitor_tick().await;
             }
         });
     }

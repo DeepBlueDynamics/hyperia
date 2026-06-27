@@ -88,6 +88,23 @@ struct HeldAction {
     keys: String,
 }
 
+/// A capped, edge-triggered self-poke an agent armed for its OWN pane: when the
+/// pane next goes running->idle, deliver `keys` to it. Can't run away — it fires
+/// once per running->idle edge, at most `max_fires` times, and expires (<=1h).
+#[derive(Clone)]
+struct IdleCallback {
+    #[allow(dead_code)]
+    id: String,
+    pane: String,
+    keys: String,
+    expires_at: std::time::Instant,
+    max_fires: u32,
+    fires: u32,
+    running_seen: bool,
+    #[allow(dead_code)]
+    creator: String,
+}
+
 struct BridgeInner {
     /// Channel to send JSON messages downstream to Electron
     cmd_tx: Mutex<Option<mpsc::UnboundedSender<String>>>,
@@ -105,6 +122,9 @@ struct BridgeInner {
     /// Keystrokes an agent tried to send to a pane it doesn't own yet, held while
     /// the human decides. Flushed on approval, dropped on denial. Key = target uid.
     held_actions: Mutex<HashMap<String, HeldAction>>,
+    /// Capped, edge-triggered self idle-callbacks: when a pane goes running->idle,
+    /// deliver the stored keys to it. Watched + fired by the idle-monitor task.
+    idle_callbacks: Mutex<Vec<IdleCallback>>,
     /// Per-session output subscribers: uid → list of senders waiting for PTY bytes
     output_subs: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>,
     /// Lume-backed per-shell log store (BM25 search + pickle-to-disk).
@@ -126,6 +146,7 @@ impl Bridge {
                 focused_window_id: Mutex::new(None),
                 app_foreground: Mutex::new(true),
                 held_actions: Mutex::new(HashMap::new()),
+                idle_callbacks: Mutex::new(Vec::new()),
                 output_subs: Mutex::new(HashMap::new()),
                 lume: crate::lume_store::LumeStore::new(),
                 perms: crate::perms::PermStore::default(),
@@ -365,6 +386,119 @@ impl Bridge {
             .await
             .remove(target_uid)
             .map(|h| h.keys)
+    }
+
+    /// Arm a one-shot (capped) idle callback for a pane — the caller's OWN pane.
+    /// Replaces any existing callback for that pane (one per pane). Lifetime is
+    /// hard-capped at 1h and fires at 5. Returns the callback id.
+    pub async fn register_idle_callback(
+        &self,
+        pane: &str,
+        keys: &str,
+        max_lifetime_secs: u64,
+        max_fires: u32,
+        creator: &str,
+    ) -> String {
+        let life = max_lifetime_secs.clamp(1, 3600);
+        let fires_cap = max_fires.clamp(1, 5);
+        let id = format!(
+            "cb_{}",
+            self.inner.seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let cb = IdleCallback {
+            id: id.clone(),
+            pane: pane.to_string(),
+            keys: keys.to_string(),
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(life),
+            max_fires: fires_cap,
+            fires: 0,
+            // The caller is active right now (it just made this call), so arm as
+            // if we've already seen 'running' — the NEXT idle fires.
+            running_seen: true,
+            creator: creator.to_string(),
+        };
+        let mut cbs = self.inner.idle_callbacks.lock().await;
+        cbs.retain(|c| c.pane != pane);
+        cbs.push(cb);
+        id
+    }
+
+    /// Whether the human touched this pane within the last 15s (don't poke over them).
+    async fn user_active_recently(&self, uid: &str) -> bool {
+        let sessions = self.inner.sessions.lock().await;
+        sessions
+            .get(uid)
+            .and_then(|s| s.last_user_activity)
+            .map(|t| t.elapsed().as_secs() < 15)
+            .unwrap_or(false)
+    }
+
+    /// One idle-monitor tick: classify each watched pane and fire any callback
+    /// whose pane just went running->idle. Edge-triggered, capped, expiring.
+    pub async fn idle_monitor_tick(&self) {
+        // Snapshot watched panes (don't hold the callbacks lock across awaits).
+        let panes: Vec<String> = {
+            let cbs = self.inner.idle_callbacks.lock().await;
+            let mut v: Vec<String> = cbs.iter().map(|c| c.pane.clone()).collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        if panes.is_empty() {
+            return;
+        }
+
+        // Classify each pane. 'human' if the human was active there recently —
+        // never poke over them; treat dialog/empty/unknown as "not safely idle".
+        let mut kinds: HashMap<String, String> = HashMap::new();
+        for pane in &panes {
+            let kind = if self.user_active_recently(pane).await {
+                "human".to_string()
+            } else {
+                let text = self.get_screen_text_by_uid(pane).await;
+                crate::mcp::classify_screen_kind(&text)
+            };
+            kinds.insert(pane.clone(), kind);
+        }
+
+        // Update edge state + collect fires, then prune expired/exhausted.
+        let now = std::time::Instant::now();
+        let mut to_fire: Vec<(String, String)> = Vec::new();
+        {
+            let mut cbs = self.inner.idle_callbacks.lock().await;
+            for c in cbs.iter_mut() {
+                match kinds.get(&c.pane).map(|s| s.as_str()).unwrap_or("unknown") {
+                    "running" => c.running_seen = true,
+                    "idle" => {
+                        if c.running_seen {
+                            to_fire.push((c.pane.clone(), c.keys.clone()));
+                            c.fires += 1;
+                            c.running_seen = false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            cbs.retain(|c| now < c.expires_at && c.fires < c.max_fires);
+        }
+
+        // Fire outside the lock. interrupt=false so it never steals focus and the
+        // renderer queues it if the human is active. Bracketed-paste + a separate
+        // Enter so a long prompt isn't garbled by the agent's Ink input.
+        for (pane, keys) in to_fire {
+            let wrapped = format!("\u{1b}[200~{}\u{1b}[201~", keys);
+            let _ = self
+                .send_command(serde_json::json!({
+                    "type": "Keys", "uid": pane, "keys": wrapped, "interrupt": false
+                }))
+                .await;
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            let _ = self
+                .send_command(serde_json::json!({
+                    "type": "Keys", "uid": pane, "keys": "\n", "interrupt": false
+                }))
+                .await;
+        }
     }
 
     /// Fire-and-forget a JSON message to Electron (no seq, no response wait).
