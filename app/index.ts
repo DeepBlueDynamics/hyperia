@@ -79,7 +79,7 @@ import isDev from 'electron-is-dev';
 import {gitDescribe} from 'git-describe';
 import parseUrl from 'parse-url';
 
-import {startBridge, stopBridge} from './bridge';
+import {startBridge, stopBridge, sendAppFocus} from './bridge';
 import {initHyperia} from './ghost';
 import * as AppMenu from './menus/menu';
 import {initTray, destroyTray} from './notify';
@@ -498,6 +498,15 @@ app.on('ready', () => {
   void spawnSidecar().then(() => {
     // Connect bridge to sidecar (auto-reconnects until connected)
     startBridge(SIDECAR_PORT);
+  });
+
+  // Track OS-foreground so the sidecar's human-location report knows whether the
+  // human is actually in Hyperia or off in another app (e.g. Chrome). On blur we
+  // settle briefly, then report true only if SOME Hyperia window is still focused
+  // (covers alt-tabbing between Hyperia windows vs. leaving the app entirely).
+  app.on('browser-window-focus', () => sendAppFocus(true));
+  app.on('browser-window-blur', () => {
+    setTimeout(() => sendAppFocus(BrowserWindow.getAllWindows().some((w) => w.isFocused())), 60);
   });
 
   return installDevExtensions(isDev)

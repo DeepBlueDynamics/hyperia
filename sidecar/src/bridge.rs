@@ -90,6 +90,9 @@ struct BridgeInner {
     sessions: Mutex<HashMap<String, SessionInfo>>,
     /// Last focused Hyperia window id.
     focused_window_id: Mutex<Option<u32>>,
+    /// Whether a Hyperia window is the OS-foreground app (false → the human is in
+    /// another app, e.g. Chrome). Set from the renderer's AppFocus messages.
+    app_foreground: Mutex<bool>,
     /// Per-session output subscribers: uid → list of senders waiting for PTY bytes
     output_subs: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>,
     /// Lume-backed per-shell log store (BM25 search + pickle-to-disk).
@@ -109,6 +112,7 @@ impl Bridge {
                 seq: AtomicU64::new(1),
                 sessions: Mutex::new(HashMap::new()),
                 focused_window_id: Mutex::new(None),
+                app_foreground: Mutex::new(true),
                 output_subs: Mutex::new(HashMap::new()),
                 lume: crate::lume_store::LumeStore::new(),
                 perms: crate::perms::PermStore::default(),
@@ -296,6 +300,38 @@ impl Bridge {
             .iter()
             .find(|(_, s)| Some(s.window_id) == focused && s.pane_active)
             .map(|(uid, _)| uid.clone())
+    }
+
+    /// Record whether a Hyperia window is the OS-foreground app (false → the
+    /// human is in another application).
+    pub async fn set_app_foreground(&self, foreground: bool) {
+        *self.inner.app_foreground.lock().await = foreground;
+    }
+
+    /// Where the human's keyboard is right now — the active pane of the focused
+    /// window, how long since they touched it, and whether Hyperia is the
+    /// foreground app. Lets a focus caller see if forcing would steal the view.
+    pub async fn human_focus_report(&self) -> serde_json::Value {
+        let focused_win = *self.inner.focused_window_id.lock().await;
+        let app_foreground = *self.inner.app_foreground.lock().await;
+        let sessions = self.inner.sessions.lock().await;
+        let here = sessions
+            .iter()
+            .find(|(_, s)| Some(s.window_id) == focused_win && s.pane_active);
+        match here {
+            Some((uid, s)) => serde_json::json!({
+                "hyperia_foreground": app_foreground,
+                "window": s.window_id,
+                "tab": s.tab_name,
+                "pane": s.shell_name,
+                "paneId": uid,
+                "secs_since_active": s.last_user_activity.map(|t| t.elapsed().as_secs()),
+            }),
+            None => serde_json::json!({
+                "hyperia_foreground": app_foreground,
+                "note": "no active pane resolved for the focused window",
+            }),
+        }
     }
 
     /// Fire-and-forget a JSON message to Electron (no seq, no response wait).
@@ -920,6 +956,13 @@ impl Bridge {
             "WindowFocus" => {
                 let window_id = msg["windowId"].as_u64().unwrap_or(0) as u32;
                 *self.inner.focused_window_id.lock().await = Some(window_id);
+            }
+
+            "AppFocus" => {
+                // Whether a Hyperia window is the OS-foreground app (false → the
+                // human is in another application, e.g. Chrome).
+                let fg = msg["foreground"].as_bool().unwrap_or(true);
+                *self.inner.app_foreground.lock().await = fg;
             }
 
             "SessionData" => {

@@ -136,6 +136,11 @@ pub struct FocusRequest {
     pub tab: Option<String>,
     /// Which pane in the tab — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
     pub pane: Option<String>,
+    /// Default false. When false, this does NOT move the human's view — it flashes
+    /// (bells) the target tab and returns where the human currently is. Set true
+    /// ONLY to actually pull the human's screen to this pane (focus-stealing) — do
+    /// that only when the human asked to be taken there.
+    pub force: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -1035,7 +1040,7 @@ impl HyperiaMcp {
         &self,
         Parameters(req): Parameters<FocusRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let body = serde_json::json!({"window": req.window, "tab": req.tab, "pane": req.pane});
+        let body = serde_json::json!({"window": req.window, "tab": req.tab, "pane": req.pane, "force": req.force.unwrap_or(false)});
         let resp = self.post_json("/api/pane/focus", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
@@ -2489,9 +2494,11 @@ fn detect_shell_state(screen: &str) -> ShellStateInfo {
 // -- Helper methods --
 
 impl HyperiaMcp {
-    /// Focus a pane by window/tab/pane address (fire-and-forget, best-effort).
+    /// Nudge a pane by window/tab/pane address (fire-and-forget, best-effort).
+    /// force:false — never steals the human's view; it only bells the target tab.
+    /// (Internal callers must not yank the human's screen as a side effect.)
     async fn focus_pane(&self, window: Option<u32>, tab: Option<&str>, pane: Option<&str>) {
-        let body = serde_json::json!({"window": window, "tab": tab, "pane": pane});
+        let body = serde_json::json!({"window": window, "tab": tab, "pane": pane, "force": false});
         let _ = self.post_json("/api/pane/focus", &body).await;
     }
 

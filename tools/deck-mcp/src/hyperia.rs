@@ -179,6 +179,9 @@ impl HyperiaClient {
         if let Some(win) = window_id {
             args["window"] = serde_json::Value::Number(win.into());
         }
+        // Stream Deck tap is human-driven input — focus-never-steal sanctions it
+        // moving the view, so force past the new no-steal default.
+        args["force"] = serde_json::Value::Bool(true);
         self.call_tool("terminal_focus", args).await?;
         Ok(())
     }

@@ -406,7 +406,9 @@ async function cmdClose(flags: Flags, wantJson: boolean): Promise<number> {
 }
 
 async function cmdFocus(flags: Flags, wantJson: boolean): Promise<number> {
-  return invoke('terminal_focus', {...target(flags)}, wantJson);
+  // The CLI focus verb is human-driven (you ran it), so force the view move —
+  // terminal_focus no longer steals focus by default.
+  return invoke('terminal_focus', {...target(flags), force: true}, wantJson);
 }
 
 async function cmdRename(pos: string[], flags: Flags, wantJson: boolean): Promise<number> {

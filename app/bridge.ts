@@ -508,6 +508,18 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'TabBell': {
+      // An agent nudged a pane WITHOUT forcing focus (terminal_focus default, or
+      // an internal auto-focus). Flash/bell that pane's tab so it's noticeable in
+      // the bar — but never move the human's view (focus-never-steal). The
+      // renderer's markTabBell keys off the paneId to find the owning tab.
+      const uid = msg.uid as string;
+      for (const w of (app as any).getWindows?.() || []) {
+        if (w?.rpc) w.rpc.emit('tab bell', {uid});
+      }
+      break;
+    }
+
     case 'PermissionResolved': {
       const payload = {
         id: msg.id as string,
@@ -975,6 +987,15 @@ function sendResult(seq: number | undefined, result: string) {
 // ---------------------------------------------------------------------------
 
 /** Start the bridge. Call once after sidecar spawn. */
+/**
+ * Tell the sidecar whether a Hyperia window is the OS-foreground app. false →
+ * the human is in another application (e.g. Chrome). Powers the human-location
+ * report so an agent can see whether forcing a focus would steal the view.
+ */
+export function sendAppFocus(foreground: boolean) {
+  send({type: 'AppFocus', foreground});
+}
+
 export function startBridge(port: number = 9800) {
   sidecarPort = port;
   stopped = false;

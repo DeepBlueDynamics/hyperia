@@ -160,6 +160,12 @@ rpc.on('permission resolved', ({targetPane, id}: {targetPane: string; decision: 
   if (id) permissionsBus.clearToast(id);
 });
 
+// Agent focused a pane without force (terminal_focus default / internal auto-
+// focus). Flash the owning tab — but DO NOT move the human's active pane/tab.
+rpc.on('tab bell', ({uid}: {uid: string}) => {
+  if (uid) store_.dispatch(uiActions.markTabBell(uid));
+});
+
 rpc.on('agent toast', (req) => {
   permissionsBus.setToast(req);
 });

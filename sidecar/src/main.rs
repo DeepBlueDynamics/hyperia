@@ -655,18 +655,15 @@ async fn post_focus(
     body: String,
 ) -> (StatusCode, String) {
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    // force=true is the ONLY way to actually move the human's view. Default false
+    // honors focus-never-steal: agent focus must not yank the human's screen.
+    let force = parsed["force"].as_bool().unwrap_or(false);
 
-    // No human-activity lockout: focus is purely visual — it shifts which
-    // pane is active, it doesn't send any input to the pane. Blocking it
-    // confused agents into thinking they couldn't even orient themselves.
-    if let Some(uid) = parsed["sessionUid"].as_str() {
-        let cmd = serde_json::json!({"type": "Focus", "uid": uid});
-        match state.bridge.send_command(cmd).await {
-            Ok(r) => (StatusCode::OK, r),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
-        }
+    // Resolve the target pane uid: explicit sessionUid, else window/tab/pane.
+    let uid: Option<String> = if let Some(u) = parsed["sessionUid"].as_str() {
+        Some(u.to_string())
     } else if parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string() {
-        let uid = match state
+        state
             .bridge
             .resolve_pane_uid(
                 parsed["window"].as_u64().map(|v| v as u32),
@@ -674,18 +671,38 @@ async fn post_focus(
                 parsed["pane"].as_str(),
             )
             .await
-        {
-            Some(u) => u,
-            None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
-        };
+    } else {
+        return (StatusCode::BAD_REQUEST, "Missing sessionUid or window/tab/pane".into());
+    };
+    let uid = match uid {
+        Some(u) => u,
+        None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
+    };
+
+    if force {
+        // The human asked to be taken here — actually move the active view.
         let cmd = serde_json::json!({"type": "Focus", "uid": uid});
-        match state.bridge.send_command(cmd).await {
+        return match state.bridge.send_command(cmd).await {
             Ok(r) => (StatusCode::OK, r),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
-        }
-    } else {
-        (StatusCode::BAD_REQUEST, "Missing sessionUid or window/tab/pane".into())
+        };
     }
+
+    // Default: DON'T steal the view. Bell the target tab so it's noticeable in
+    // the bar, and report where the human currently is so the agent can decide
+    // whether forcing is warranted.
+    let _ = state
+        .bridge
+        .send_command(serde_json::json!({"type": "TabBell", "uid": uid}))
+        .await;
+    let human = state.bridge.human_focus_report().await;
+    let resp = serde_json::json!({
+        "focused": false,
+        "belled": true,
+        "human": human,
+        "message": "Did NOT move the human's view (focus-never-steal) — flashed the target tab instead. `human` shows where their keyboard is right now and whether Hyperia is the foreground app (they may be in Chrome or another app). To actually pull their screen to this pane, call again with force:true — only when the human asked to be taken here."
+    });
+    (StatusCode::OK, resp.to_string())
 }
 
 /// Proactively request the human's consent to act on a pane (the "ask for perms"
