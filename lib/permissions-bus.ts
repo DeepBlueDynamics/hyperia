@@ -18,9 +18,19 @@ type Listener = (req: PermRequest | null) => void;
 const current = new Map<string, PermRequest>();
 const listeners = new Map<string, Set<Listener>>();
 
+// Window-level subscribers (the centered consent modal) — see ALL pending
+// requests at once, regardless of which pane/tab owns them.
+const allListeners = new Set<(reqs: PermRequest[]) => void>();
+
+function emitAll(): void {
+  const list = Array.from(current.values());
+  allListeners.forEach((cb) => cb(list));
+}
+
 function emit(paneId: string): void {
   const req = current.get(paneId) || null;
   listeners.get(paneId)?.forEach((cb) => cb(req));
+  emitAll();
 }
 
 /** A request arrived for a pane — show its prompt. */
@@ -33,6 +43,18 @@ export function setRequest(req: PermRequest): void {
 /** The request for a pane was answered (or the pane closed) — dismiss it. */
 export function clearRequest(paneId: string): void {
   if (current.delete(paneId)) emit(paneId);
+}
+
+/**
+ * Subscribe the window-level modal to every pending consent request. Fires
+ * immediately with the current list.
+ */
+export function subscribeAllRequests(cb: (reqs: PermRequest[]) => void): () => void {
+  allListeners.add(cb);
+  cb(Array.from(current.values()));
+  return () => {
+    allListeners.delete(cb);
+  };
 }
 
 /** Subscribe a pane to its own prompt. Fires immediately with current state. */

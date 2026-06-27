@@ -19,6 +19,7 @@ import * as termGroupActions from './actions/term-groups';
 import * as uiActions from './actions/ui';
 import * as updaterActions from './actions/updater';
 import AgentToast from './components/agent-toast';
+import ConsentModal from './components/consent-modal';
 import {activeTerminals} from './components/term';
 import WebPaneDialog, {showWebPaneDialog} from './components/web-pane-dialog';
 import HyperContainer from './containers/hyper';
@@ -577,6 +578,7 @@ root.render(
     <HyperContainer />
     <WebPaneDialog />
     <AgentToast />
+    <ConsentModal />
   </Provider>
 );
 
