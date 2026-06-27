@@ -79,6 +79,15 @@ pub struct Bridge {
     inner: Arc<BridgeInner>,
 }
 
+/// An agent's keystroke payload held while the human decides on a consent
+/// prompt. Flushed to the target pane on approval, dropped on denial.
+#[derive(Clone)]
+struct HeldAction {
+    #[allow(dead_code)]
+    requester: String,
+    keys: String,
+}
+
 struct BridgeInner {
     /// Channel to send JSON messages downstream to Electron
     cmd_tx: Mutex<Option<mpsc::UnboundedSender<String>>>,
@@ -93,6 +102,9 @@ struct BridgeInner {
     /// Whether a Hyperia window is the OS-foreground app (false → the human is in
     /// another app, e.g. Chrome). Set from the renderer's AppFocus messages.
     app_foreground: Mutex<bool>,
+    /// Keystrokes an agent tried to send to a pane it doesn't own yet, held while
+    /// the human decides. Flushed on approval, dropped on denial. Key = target uid.
+    held_actions: Mutex<HashMap<String, HeldAction>>,
     /// Per-session output subscribers: uid → list of senders waiting for PTY bytes
     output_subs: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>,
     /// Lume-backed per-shell log store (BM25 search + pickle-to-disk).
@@ -113,6 +125,7 @@ impl Bridge {
                 sessions: Mutex::new(HashMap::new()),
                 focused_window_id: Mutex::new(None),
                 app_foreground: Mutex::new(true),
+                held_actions: Mutex::new(HashMap::new()),
                 output_subs: Mutex::new(HashMap::new()),
                 lume: crate::lume_store::LumeStore::new(),
                 perms: crate::perms::PermStore::default(),
@@ -332,6 +345,26 @@ impl Bridge {
                 "note": "no active pane resolved for the focused window",
             }),
         }
+    }
+
+    /// Hold an agent's keystrokes for a pane it doesn't own yet, pending the
+    /// human's consent decision. Overwrites any prior held action for the pane.
+    pub async fn hold_action(&self, target_uid: &str, requester: &str, keys: &str) {
+        self.inner.held_actions.lock().await.insert(
+            target_uid.to_string(),
+            HeldAction { requester: requester.to_string(), keys: keys.to_string() },
+        );
+    }
+
+    /// Take (remove + return) any keystrokes held for a pane — called when the
+    /// human resolves the consent prompt. Returns the held keys, if any.
+    pub async fn take_action(&self, target_uid: &str) -> Option<String> {
+        self.inner
+            .held_actions
+            .lock()
+            .await
+            .remove(target_uid)
+            .map(|h| h.keys)
     }
 
     /// Fire-and-forget a JSON message to Electron (no seq, no response wait).

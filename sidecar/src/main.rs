@@ -504,6 +504,17 @@ tab's current active pane, no matter how many times the pane inside it has resta
         }
     };
     if let Err(resp) = enforce_drive(&state, &headers, &uid).await {
+        // Pending (202): the human hasn't decided yet. HOLD these keys so they
+        // flush to the pane automatically the instant they approve — the agent
+        // does NOT need to re-call (see pending_202's message).
+        if resp.0 == StatusCode::ACCEPTED {
+            let requester = state
+                .bridge
+                .resolve_caller(bearer_token(&headers).as_deref())
+                .await
+                .label();
+            state.bridge.hold_action(&uid, &requester, &keys).await;
+        }
         return resp;
     }
     let interrupt = addr.interrupt.unwrap_or(false);
@@ -979,19 +990,20 @@ async fn enforce_drive(
     }
 }
 
-/// The 202 returned when the human hasn't decided within the wait window. Tells
-/// the agent the action did NOT run and to simply re-call the same tool once
-/// approved — not to go hunting around or improvise a workaround.
+/// The 202 returned when the human hasn't decided within the wait window. The
+/// keys are HELD server-side and flush automatically on approval, so the agent
+/// must simply WAIT — not re-call, not improvise a workaround.
 fn pending_202() -> (StatusCode, String) {
     (
         StatusCode::ACCEPTED,
         serde_json::json!({
             "ok": false,
             "pending": true,
-            "message": "Still awaiting your approval in the Hyperia UI. This action has NOT run — \
-                        approving the prompt does not auto-execute it. Call the SAME tool again to \
-                        complete it once you've approved; it succeeds when approved (or reports denied). \
-                        Don't read files or run other commands to work around it — just re-call."
+            "message": "The human is considering your request in the Hyperia approval prompt — give them \
+                        a moment (set a short timer and check back). Your command is HELD and will run \
+                        AUTOMATICALLY the instant they approve (you'll see it execute in the pane), or be \
+                        dropped if they deny. Do NOT re-call this tool and do NOT try a workaround — just \
+                        wait. To see the result, read the pane after a bit with terminal_screen."
         })
         .to_string(),
     )
@@ -1200,6 +1212,29 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
     let duration_secs = p["durationSecs"].as_u64();
     match state.bridge.perms().respond(id, allow, scope, duration_secs).await {
         Some(req) => {
+            // Flush or drop any keystrokes the agent had held pending this decision.
+            if allow {
+                if let Some(mut keys) = state.bridge.take_action(&req.target_pane).await {
+                    // Guarantee the held command runs: terminal_run keys already end
+                    // with Enter, terminal_keys may not — append a CR only if needed.
+                    if !keys.ends_with('\n') && !keys.ends_with('\r') {
+                        keys.push('\r');
+                    }
+                    // interrupt=true: the human just approved, so write immediately
+                    // even if they're currently active in the target pane.
+                    let _ = state
+                        .bridge
+                        .send_command(serde_json::json!({
+                            "type": "Keys",
+                            "uid": req.target_pane,
+                            "keys": keys,
+                            "interrupt": true,
+                        }))
+                        .await;
+                }
+            } else {
+                let _ = state.bridge.take_action(&req.target_pane).await;
+            }
             let _ = state
                 .bridge
                 .notify(serde_json::json!({
