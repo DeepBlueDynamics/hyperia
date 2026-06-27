@@ -301,6 +301,11 @@ impl PermStore {
         denials.contains_key(&(requester.to_string(), target_pane.to_string()))
     }
 
+    /// Clear a denial for a given requester and pane (used for reauth/re-prompt).
+    pub async fn clear_denial(&self, requester: &str, target_pane: &str) {
+        self.denials.lock().await.remove(&(requester.to_string(), target_pane.to_string()));
+    }
+
     /// Return the pane's access token, minting (and caching) one on first ask.
     /// Stable for the pane's lifetime so a copied token keeps working.
     pub async fn token_for(&self, pane: &str) -> String {

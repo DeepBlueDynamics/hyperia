@@ -719,6 +719,12 @@ async fn post_request_access(
             None => return (StatusCode::NOT_FOUND, "No focused pane to request access to.".into()),
         }
     };
+    // Since this is an explicit request for access (e.g. from the request_access tool),
+    // clear any recent denial cooldown to allow prompting the user again (re-authentication).
+    let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    let label = id.label();
+    state.bridge.perms().clear_denial(&label, &uid).await;
+
     // Same gate as a real drive: Allow / RefuseHome / SoftWall(401) / Denied(403)
     // / NeedConsent → raises the prompt and waits ~15s for the human, returning
     // the real decision (Ok once approved) instead of a fire-and-forget 202.
@@ -890,7 +896,7 @@ async fn enforce_drive(
         )),
         AuthDecision::Denied => Err((
             StatusCode::FORBIDDEN,
-            "Access to this pane was denied by the user. Don't retry — ask the user directly if you need it."
+            "Access to this pane was denied by the user. If you want to request permission again (re-authenticate), run the 'request_access' tool (or call POST /api/perms/request-access) with this pane and a purpose to prompt the user again."
                 .to_string(),
         )),
         AuthDecision::NeedConsent => {
@@ -929,7 +935,7 @@ async fn enforce_drive(
                     AuthDecision::Denied => {
                         return Err((
                             StatusCode::FORBIDDEN,
-                            "Access to this pane was denied by the user. Don't retry — ask the user directly."
+                            "Access to this pane was denied by the user. If you want to request permission again (re-authenticate), run the 'request_access' tool (or call POST /api/perms/request-access) with this pane and a purpose to prompt the user again."
                                 .to_string(),
                         ))
                     }
