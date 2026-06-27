@@ -793,7 +793,16 @@ impl HyperiaMcp {
         let target_process = self
             .pane_process_name(req.window, req.tab.as_deref(), req.pane.as_deref())
             .await;
-        let submit_seq = if Self::is_likely_ink_tui(&target_process) { "\n" } else { "\r" };
+        let is_ink = Self::is_likely_ink_tui(&target_process);
+        let submit_seq = if is_ink { "\n" } else { "\r" };
+        // Large / multi-line text typed into an Ink/Node TUI as one bulk PTY write
+        // gets garbled: the app's input parser keeps only the TAIL and the trailing
+        // newline submits that fragment ("only the last few lines landed"). Wrap
+        // such payloads in bracketed paste (ESC[200~ … ESC[201~) so the app ingests
+        // them atomically, then send Enter as a SEPARATE write. Shells are left
+        // alone (they may not have bracketed paste on); short single-line input
+        // works fine on the plain path.
+        let needs_paste = is_ink && (cmd.chars().count() > 120 || cmd.contains('\n'));
 
         if submit {
             // Use type-and-collect: sends the command, streams all PTY output until
@@ -807,14 +816,31 @@ impl HyperiaMcp {
             // Give the HTTP client headroom over the server's quiet window so it doesn't
             // time out before /api/type-and-collect finishes draining PTY output.
             let req_timeout = std::time::Duration::from_millis(wait + 15_000);
-            let raw_output = self
-                .post_text_as(
+            let raw_output = if needs_paste {
+                // 1) Paste the body atomically (bracketed paste, no submit).
+                let type_base = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
+                let tsep = if type_base.contains('?') { '&' } else { '?' };
+                let type_path = format!("{}{tsep}raw=true", type_base);
+                self.post_text_as(
+                    &type_path,
+                    &format!("\u{1b}[200~{}\u{1b}[201~", cmd),
+                    Some(req_timeout),
+                    forwarded_auth(&ctx).as_deref(),
+                )
+                .await?;
+                // 2) Let the paste settle, then submit Enter on its own.
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                self.post_text_as(&collect_path, submit_seq, Some(req_timeout), forwarded_auth(&ctx).as_deref())
+                    .await?
+            } else {
+                self.post_text_as(
                     &collect_path,
                     &format!("{}{}", cmd, submit_seq),
                     Some(req_timeout),
                     forwarded_auth(&ctx).as_deref(),
                 )
-                .await?;
+                .await?
+            };
             let max_chars = req.max_output_chars.unwrap_or(12_000);
             let text = clean_terminal_output(&raw_output, max_chars);
             let mut out = self.maximus_filter(&text, req.focus.as_deref(), req.raw.unwrap_or(false)).await;
@@ -847,7 +873,14 @@ impl HyperiaMcp {
             let base = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
             let sep = if base.contains('?') { '&' } else { '?' };
             let pane_path = format!("{}{sep}raw=true", base);
-            self.post_text(&pane_path, &cmd).await?;
+            // Same bracketed-paste atomic ingest for large/multi-line Ink input,
+            // minus the Enter (the human submits after review).
+            let body = if needs_paste {
+                format!("\u{1b}[200~{}\u{1b}[201~", cmd)
+            } else {
+                cmd.clone()
+            };
+            self.post_text(&pane_path, &body).await?;
             Ok(CallToolResult::success(vec![Content::text(String::from("Typed (not submitted). Press Enter to run."))]))
         }
     }
