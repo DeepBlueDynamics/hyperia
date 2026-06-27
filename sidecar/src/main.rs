@@ -886,12 +886,27 @@ async fn enforce_drive(
         )),
         AuthDecision::SoftWall => Err((
             StatusCode::UNAUTHORIZED,
-            "No identity on this request. If you're running INSIDE a Hyperia pane, your token is in \
-             the HYPERIA_AGENT_TOKEN env var — send it as 'Authorization: Bearer <token>' (MCP client: \
-             headers.Authorization = \"Bearer ${HYPERIA_AGENT_TOKEN}\"). If you're an EXTERNAL agent \
-             (no such env var), MINT one: call the request_token tool (or POST /api/identity/agent \
-             {\"name\":\"<you>\"}) to get a persistent hyp_agent_… token, set your MCP client's \
-             Authorization header to 'Bearer <token>', and reconnect — then retry."
+            "No identity on this request — your MCP connection sent an empty or missing Authorization \
+             token, so the server can't tell who you are. Reads (terminal_status, terminal_screen, \
+             hyperia_version) work without identity; writes (terminal_run/keys/cd/split, etc.) do not. \
+             IMPORTANT: do NOT call request_access to fix this — request_access ALSO requires identity \
+             and will return this exact error. Identity comes first, access second. Recovery:\n\
+             INSIDE a Hyperia pane (you have a HYPERIA_AGENT_TOKEN env var):\n\
+             1. Your MCP client's hyperia entry must send header Authorization = \"Bearer \
+             ${HYPERIA_AGENT_TOKEN}\". Check the config block your session ACTUALLY loads: a project-local \
+             .mcp.json, or the ~/.claude.json entry for THIS working directory. If neither defines hyperia \
+             it falls back to the GLOBAL mcpServers entry — which may have a literal empty \"Bearer\" (the \
+             usual culprit). Fix that header.\n\
+             2. You MUST FULLY RESTART this pane afterward (close the agent, relaunch e.g. with --continue). \
+             MCP Authorization headers are read ONLY at process startup — editing config mid-session, or a \
+             '/mcp' reconnect, does NOT reload them. This restart is the step that is almost always missed; \
+             without it every write keeps failing no matter what you change.\n\
+             3. After restart, verify with hyperia_version (a read), then retry your write. THEN, if you \
+             need to drive a pane you don't own, request_access will work (it can finally raise the user's \
+             approval prompt).\n\
+             EXTERNAL agent (no HYPERIA_AGENT_TOKEN env var): call request_token to mint a persistent \
+             hyp_agent_… token, set your client's Authorization header to 'Bearer <token>', restart/reconnect \
+             the client, then retry."
                 .to_string(),
         )),
         AuthDecision::Denied => Err((
