@@ -132,17 +132,24 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
     React.useEffect(() => {
       if (!paneId) return;
       let alive = true;
-      void ipcRenderer.invoke('pulse:status').then((txt: string) => {
-        if (!alive) return;
-        try {
-          const list = (JSON.parse(txt)?.pulses || []) as Array<{pane: string; paused: boolean}>;
-          setPulseActive(list.some((p) => p.pane === paneId && !p.paused));
-        } catch {
-          /* ignore */
-        }
-      });
+      const check = () => {
+        void ipcRenderer.invoke('pulse:status').then((txt: string) => {
+          if (!alive) return;
+          try {
+            const list = (JSON.parse(txt)?.pulses || []) as Array<{pane: string; paused: boolean}>;
+            setPulseActive(list.some((p) => p.pane === paneId && !p.paused));
+          } catch {
+            /* ignore */
+          }
+        });
+      };
+      check();
+      // Poll so the running indicator stays accurate (a pulse can expire or be
+      // cleared from elsewhere) — this drives the pulsing icon.
+      const t = setInterval(check, 5000);
       return () => {
         alive = false;
+        clearInterval(t);
       };
     }, [paneId, pulseOpen]);
 
@@ -433,27 +440,32 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           style={{display: 'flex', alignItems: 'center', gap: 'var(--space-10)', flexShrink: 0}}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Pulse (re-poke watchdog) — clock toggle, mirrors the sticky timer icon */}
+          {/* Pulse (re-poke watchdog) — clock toggle, mirrors the sticky timer icon.
+              Pulses (animates) while a pulse is active so it's obvious it's running. */}
           {paneId && !isPlaceholder && (
-            <span
-              className="pane-band-control-icon pane-band-tooltip-trigger"
-              title={pulseActive ? 'Pulse active — click to edit or clear' : 'Set a periodic pulse (re-poke this pane)'}
-              onClick={(e) => {
-                e.stopPropagation();
-                setPulseOpen((v) => !v);
-              }}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: pulseActive ? 'var(--accent-primary, #6ea8fe)' : undefined
-              }}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="9" />
-                <polyline points="12 7 12 12 15 14" />
-              </svg>
-            </span>
+            <>
+              <style>{`@keyframes hyPulseRun{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.72)}}`}</style>
+              <span
+                className="pane-band-control-icon pane-band-tooltip-trigger"
+                title={pulseActive ? 'Pulse running — click to edit or clear' : 'Set a periodic pulse (re-poke this pane)'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPulseOpen((v) => !v);
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: pulseActive ? 'var(--accent-primary, #6ea8fe)' : undefined,
+                  animation: pulseActive ? 'hyPulseRun 1.4s ease-in-out infinite' : undefined
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" />
+                  <polyline points="12 7 12 12 15 14" />
+                </svg>
+              </span>
+            </>
           )}
 
           {/* Split Down */}
