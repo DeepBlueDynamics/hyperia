@@ -1296,6 +1296,42 @@ async fn post_pane_on_idle(
     )
 }
 
+/// Self-reported liveness from an agent or its in-container monitor (e.g.
+/// nemesis8 samples CPU/net/proc and reports it can't see from the screen).
+/// state=busy marks the pane busy for ttl_secs (OVERRIDES the screen heuristic,
+/// suppressing pokes); state=idle clears it. The Bearer pane token identifies
+/// the pane — self-reported, so no other-pane spoofing.
+async fn post_pane_liveness(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    let pane = match &id {
+        identity::CallerIdentity::Pane { pane, .. } => pane.clone(),
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                "Liveness is self-reported: send Authorization: Bearer <HYPERIA_AGENT_TOKEN> (your pane token, forwarded into the container env) so we know which pane. The token IS the correlation key — you don't need to send a pane id.".into(),
+            )
+        }
+    };
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let busy = parsed["state"].as_str().unwrap_or("busy") != "idle";
+    let ttl = parsed["ttl_secs"].as_u64().unwrap_or(10);
+    state.bridge.set_liveness(&pane, busy, ttl).await;
+    (
+        StatusCode::OK,
+        serde_json::json!({
+            "ok": true,
+            "pane": pane,
+            "state": if busy { "busy" } else { "idle" },
+            "ttl_secs": ttl
+        })
+        .to_string(),
+    )
+}
+
 async fn get_perm_state(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(state.bridge.perms().snapshot().await)
 }
@@ -2442,6 +2478,7 @@ async fn main() -> anyhow::Result<()> {
         // Write endpoints
         .route("/api/type", axum::routing::post(post_type))
         .route("/api/pulse/on-idle", axum::routing::post(post_pane_on_idle))
+        .route("/api/pulse/liveness", axum::routing::post(post_pane_liveness))
         .route("/api/type-and-collect", axum::routing::post(post_type_and_collect))
         .route("/api/pane/split", axum::routing::post(post_split))
         .route("/api/pane/focus", axum::routing::post(post_focus))

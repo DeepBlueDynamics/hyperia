@@ -125,6 +125,10 @@ struct BridgeInner {
     /// Capped, edge-triggered self idle-callbacks: when a pane goes running->idle,
     /// deliver the stored keys to it. Watched + fired by the idle-monitor task.
     idle_callbacks: Mutex<Vec<IdleCallback>>,
+    /// Self-reported liveness: pane uid -> busy-until instant. A fresh entry means
+    /// the agent (or its in-container monitor, e.g. nemesis8) says it's working —
+    /// this OVERRIDES the screen heuristic and suppresses pokes. Lapses on TTL.
+    liveness: Mutex<HashMap<String, std::time::Instant>>,
     /// Per-session output subscribers: uid → list of senders waiting for PTY bytes
     output_subs: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>,
     /// Lume-backed per-shell log store (BM25 search + pickle-to-disk).
@@ -147,6 +151,7 @@ impl Bridge {
                 app_foreground: Mutex::new(true),
                 held_actions: Mutex::new(HashMap::new()),
                 idle_callbacks: Mutex::new(Vec::new()),
+                liveness: Mutex::new(HashMap::new()),
                 output_subs: Mutex::new(HashMap::new()),
                 lume: crate::lume_store::LumeStore::new(),
                 perms: crate::perms::PermStore::default(),
@@ -423,6 +428,28 @@ impl Bridge {
         id
     }
 
+    /// Record a self-reported liveness pulse. busy=true marks the pane busy until
+    /// now+ttl (overrides the screen heuristic); busy=false clears it (let the
+    /// screen decide, so a pending callback can fire). TTL clamped to a sane window.
+    pub async fn set_liveness(&self, pane: &str, busy: bool, ttl_secs: u64) {
+        let mut lv = self.inner.liveness.lock().await;
+        if busy {
+            let ttl = ttl_secs.clamp(1, 120);
+            lv.insert(
+                pane.to_string(),
+                std::time::Instant::now() + std::time::Duration::from_secs(ttl),
+            );
+        } else {
+            lv.remove(pane);
+        }
+    }
+
+    /// Whether the pane has a non-expired self-reported busy pulse.
+    async fn pane_self_busy(&self, pane: &str) -> bool {
+        let lv = self.inner.liveness.lock().await;
+        lv.get(pane).map(|t| *t > std::time::Instant::now()).unwrap_or(false)
+    }
+
     /// Whether the human touched this pane within the last 15s (don't poke over them).
     async fn user_active_recently(&self, uid: &str) -> bool {
         let sessions = self.inner.sessions.lock().await;
@@ -452,7 +479,11 @@ impl Bridge {
         // never poke over them; treat dialog/empty/unknown as "not safely idle".
         let mut kinds: HashMap<String, String> = HashMap::new();
         for pane in &panes {
-            let kind = if self.user_active_recently(pane).await {
+            let kind = if self.pane_self_busy(pane).await {
+                // Agent (or its in-container monitor) says it's working — overrides
+                // the screen heuristic (covers "thinking"/streaming that looks idle).
+                "running".to_string()
+            } else if self.user_active_recently(pane).await {
                 "human".to_string()
             } else {
                 let text = self.get_screen_text_by_uid(pane).await;

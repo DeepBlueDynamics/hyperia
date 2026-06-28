@@ -154,6 +154,12 @@ pub struct OnIdleRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct BusyRequest {
+    /// Seconds this busy state stays valid (TTL). Default 30, capped at 120. Re-call before it lapses to stay busy.
+    pub ttl_secs: Option<u64>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CloseRequest {
     /// Window ID of the pane to close — the `id` field from terminal_status. Omit to use the focused window.
     pub window: Option<u32>,
@@ -1101,6 +1107,31 @@ impl HyperiaMcp {
         });
         let resp = self
             .post_json_as("/api/pulse/on-idle", &body, forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Tell Hyperia THIS pane is BUSY working so the pulse / idle watchdog won't poke you — valid for ttl_secs (default 30, max 120); re-call before it lapses to stay busy. OVERRIDES the on-screen heuristic, so it covers 'thinking' / token-streaming that looks idle on screen. Self-only (uses your pane token). Call pane_idle when you're done.")]
+    async fn pane_busy(
+        &self,
+        Parameters(req): Parameters<BusyRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"state": "busy", "ttl_secs": req.ttl_secs.unwrap_or(30)});
+        let resp = self
+            .post_json_as("/api/pulse/liveness", &body, forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Tell Hyperia THIS pane is now IDLE / done — clears any busy state so the watchdog resumes and any armed idle-callback can fire. Self-only (uses your pane token).")]
+    async fn pane_idle(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"state": "idle"});
+        let resp = self
+            .post_json_as("/api/pulse/liveness", &body, forwarded_auth(&ctx).as_deref())
             .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
