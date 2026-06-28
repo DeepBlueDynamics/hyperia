@@ -686,24 +686,35 @@ impl Bridge {
         // long prompt isn't garbled. Pulses get a "From: <creator>:" header into
         // agent panes; self-callbacks don't (you're poking yourself).
         for (pane, keys, from_creator) in to_fire {
+            let is_agent = self.is_agent_pane(&pane).await;
             let payload = match &from_creator {
-                Some(creator) if self.is_agent_pane(&pane).await => {
-                    format!("From: {creator}: {keys}")
-                }
+                Some(creator) if is_agent => format!("From: {creator}: {keys}"),
                 _ => keys,
             };
-            let wrapped = format!("\u{1b}[200~{payload}\u{1b}[201~");
-            let _ = self
-                .send_command(serde_json::json!({
-                    "type": "Keys", "uid": pane, "keys": wrapped, "interrupt": false
-                }))
-                .await;
-            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-            let _ = self
-                .send_command(serde_json::json!({
-                    "type": "Keys", "uid": pane, "keys": "\n", "interrupt": false
-                }))
-                .await;
+            if is_agent {
+                // Ink/agent TUI: bracketed paste (atomic ingest) + a separate LF
+                // submit, so a long prompt isn't garbled.
+                let wrapped = format!("\u{1b}[200~{payload}\u{1b}[201~");
+                let _ = self
+                    .send_command(serde_json::json!({
+                        "type": "Keys", "uid": pane, "keys": wrapped, "interrupt": false
+                    }))
+                    .await;
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                let _ = self
+                    .send_command(serde_json::json!({
+                        "type": "Keys", "uid": pane, "keys": "\n", "interrupt": false
+                    }))
+                    .await;
+            } else {
+                // Shell (pwsh/bash/cmd): CR submits the line. LF would leave a `>>`
+                // continuation prompt. No bracketed paste — shells don't enable it.
+                let _ = self
+                    .send_command(serde_json::json!({
+                        "type": "Keys", "uid": pane, "keys": format!("{payload}\r"), "interrupt": false
+                    }))
+                    .await;
+            }
         }
     }
 

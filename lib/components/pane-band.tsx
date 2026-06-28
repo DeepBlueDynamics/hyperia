@@ -121,7 +121,9 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
     const [pulseOpen, setPulseOpen] = React.useState(false);
     const [pulseActive, setPulseActive] = React.useState(false);
     const [pKeys, setPKeys] = React.useState('');
-    const [pInterval, setPInterval] = React.useState(120);
+    // Default to a random interval (30s–5m) so multiple pulses don't fire in
+    // lockstep; the [rand] button re-rolls it.
+    const [pInterval, setPInterval] = React.useState(() => 30 + Math.floor(Math.random() * 271));
     const [pIdleOnly, setPIdleOnly] = React.useState(true);
     const [pLifetime, setPLifetime] = React.useState(3600);
     const [pBusy, setPBusy] = React.useState(false);
@@ -659,6 +661,15 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                     {lbl}
                   </button>
                 ))}
+                <button
+                  key="rand"
+                  type="button"
+                  title="Random interval 30s–5m (jitter so pulses don't fire in lockstep)"
+                  onClick={() => setPInterval(30 + Math.floor(Math.random() * 271))}
+                  style={pulseSeg(![30, 60, 120, 300].includes(pInterval))}
+                >
+                  {[30, 60, 120, 300].includes(pInterval) ? '⚄ rand' : `⚄ ${pInterval}s`}
+                </button>
               </div>
             </div>
 
