@@ -173,6 +173,9 @@ pub struct PulseSetRequest {
     pub interval_secs: Option<u64>,
     /// Only fire when the pane looks idle/stalled (recommended). Default true.
     pub idle_only: Option<bool>,
+    /// Press Enter after typing (submit). Default true. Set false to type without
+    /// submitting (e.g. to stage text for the human to review/send).
+    pub submit: Option<bool>,
     /// Seconds until the pulse auto-expires (capped at 3600 = 1h). Default 3600.
     pub max_lifetime_secs: Option<u64>,
     /// Optional cap on total fires.
@@ -1182,7 +1185,8 @@ impl HyperiaMcp {
         let body = serde_json::json!({
             "window": req.window, "tab": req.tab, "pane": req.pane,
             "keys": req.keys, "interval_secs": req.interval_secs,
-            "idle_only": req.idle_only, "max_lifetime_secs": req.max_lifetime_secs,
+            "idle_only": req.idle_only, "submit": req.submit,
+            "max_lifetime_secs": req.max_lifetime_secs,
             "max_fires": req.max_fires,
         });
         let resp = self

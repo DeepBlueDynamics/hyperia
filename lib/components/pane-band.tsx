@@ -125,6 +125,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
     // lockstep; the [rand] button re-rolls it.
     const [pInterval, setPInterval] = React.useState(() => 30 + Math.floor(Math.random() * 271));
     const [pIdleOnly, setPIdleOnly] = React.useState(true);
+    const [pSubmit, setPSubmit] = React.useState(true);
     const [pLifetime, setPLifetime] = React.useState(3600);
     const [pBusy, setPBusy] = React.useState(false);
 
@@ -162,6 +163,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           keys: pKeys,
           interval_secs: pInterval,
           idle_only: pIdleOnly,
+          submit: pSubmit,
           max_lifetime_secs: pLifetime
         })
         .finally(() => {
@@ -696,6 +698,21 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 </button>
               </div>
             </div>
+
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                marginBottom: 12,
+                fontSize: 11,
+                cursor: 'pointer',
+                color: 'var(--text-secondary, #9a9aa2)'
+              }}
+            >
+              <input type="checkbox" checked={pSubmit} onChange={(e) => setPSubmit(e.target.checked)} />
+              Submit to agent (press Enter) — uncheck to type only
+            </label>
 
             <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12}}>
               <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>For</span>

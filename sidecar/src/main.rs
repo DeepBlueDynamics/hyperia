@@ -1399,6 +1399,7 @@ async fn post_pulse_set(
     }
     let interval = parsed["interval_secs"].as_u64().unwrap_or(60);
     let idle_only = parsed["idle_only"].as_bool().unwrap_or(true);
+    let submit = parsed["submit"].as_bool().unwrap_or(true);
     let life = parsed["max_lifetime_secs"].as_u64().unwrap_or(3600);
     let max_fires = parsed["max_fires"].as_u64().map(|v| v as u32);
     let creator = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await.label();
@@ -1411,7 +1412,7 @@ async fn post_pulse_set(
     };
     let id = state
         .bridge
-        .register_pulse(window_id, &tab_name, &uid, &label, &keys, interval, idle_only, life, max_fires, &creator)
+        .register_pulse(window_id, &tab_name, &uid, &label, &keys, interval, idle_only, submit, life, max_fires, &creator)
         .await;
     (
         StatusCode::OK,

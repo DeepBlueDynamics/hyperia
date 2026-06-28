@@ -113,6 +113,11 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// serde default for `Pulse.submit` (older persisted pulses had no field → submit).
+fn default_true() -> bool {
+    true
+}
+
 /// A recurring prompt the sidecar re-injects into a pane on an interval — the
 /// pane "pulse" watchdog. idle_only fires only when the pane looks idle/stalled;
 /// otherwise it fires every interval (skipping human/dialog/working). Capped to
@@ -131,6 +136,9 @@ struct Pulse {
     keys: String,
     interval_secs: u64,
     idle_only: bool,
+    /// Whether to press Enter after typing (submit). false = type only, for review.
+    #[serde(default = "default_true")]
+    submit: bool,
     created_at_unix: u64,
     expires_at_unix: u64,
     max_fires: Option<u32>,
@@ -529,6 +537,7 @@ impl Bridge {
         keys: &str,
         interval_secs: u64,
         idle_only: bool,
+        submit: bool,
         max_lifetime_secs: u64,
         max_fires: Option<u32>,
         creator: &str,
@@ -551,6 +560,7 @@ impl Bridge {
             keys: keys.to_string(),
             interval_secs: interval,
             idle_only,
+            submit,
             created_at_unix: now,
             expires_at_unix: now + life,
             max_fires,
@@ -757,8 +767,8 @@ impl Bridge {
         }
 
         let now = std::time::Instant::now();
-        // (pane, keys, Some(creator) => pulse [attribute] / None => callback [self])
-        let mut to_fire: Vec<(String, String, Option<String>)> = Vec::new();
+        // (pane, keys, Some(creator) => pulse [attribute] / None => callback [self], submit?)
+        let mut to_fire: Vec<(String, String, Option<String>, bool)> = Vec::new();
 
         // Idle callbacks — edge-triggered (running->idle), one fire per edge.
         {
@@ -768,7 +778,7 @@ impl Bridge {
                     "running" => c.running_seen = true,
                     "idle" => {
                         if c.running_seen {
-                            to_fire.push((c.pane.clone(), c.keys.clone(), None));
+                            to_fire.push((c.pane.clone(), c.keys.clone(), None, true));
                             c.fires += 1;
                             c.running_seen = false;
                         }
@@ -800,7 +810,7 @@ impl Bridge {
                     kind != "human" && kind != "dialog" && kind != "running"
                 };
                 if ok {
-                    to_fire.push((p.pane.clone(), p.keys.clone(), Some(p.creator.clone())));
+                    to_fire.push((p.pane.clone(), p.keys.clone(), Some(p.creator.clone()), p.submit));
                     p.last_fire_unix = now_u;
                     p.fires += 1;
                     pulses_changed = true;
@@ -821,33 +831,49 @@ impl Bridge {
         // queues if the human is active). Bracketed-paste + a separate Enter so a
         // long prompt isn't garbled. Pulses get a "From: <creator>:" header into
         // agent panes; self-callbacks don't (you're poking yourself).
-        for (pane, keys, from_creator) in to_fire {
+        for (pane, keys, from_creator, submit) in to_fire {
             let is_agent = self.is_agent_pane(&pane).await;
             let payload = match &from_creator {
                 Some(creator) if is_agent => format!("From: {creator}: {keys}"),
                 _ => keys,
             };
             if is_agent {
-                // Ink/agent TUI: bracketed paste (atomic ingest) + a separate LF
-                // submit, so a long prompt isn't garbled.
-                let wrapped = format!("\u{1b}[200~{payload}\u{1b}[201~");
-                let _ = self
-                    .send_command(serde_json::json!({
-                        "type": "Keys", "uid": pane, "keys": wrapped, "interrupt": false
-                    }))
-                    .await;
-                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                let _ = self
-                    .send_command(serde_json::json!({
-                        "type": "Keys", "uid": pane, "keys": "\n", "interrupt": false
-                    }))
-                    .await;
+                // Ink/agent TUI submits on LF. A long/multiline payload needs
+                // bracketed paste (atomic ingest) so it isn't garbled — then Enter
+                // separately. A SHORT one is typed + LF in ONE write: that's how
+                // terminal_run reliably submits claude-code (a separate Enter after
+                // a bracketed paste often types a newline but does NOT submit).
+                let large = payload.chars().count() > 120 || payload.contains('\n');
+                if large {
+                    let wrapped = format!("\u{1b}[200~{payload}\u{1b}[201~");
+                    let _ = self
+                        .send_command(serde_json::json!({
+                            "type": "Keys", "uid": pane, "keys": wrapped, "interrupt": false
+                        }))
+                        .await;
+                    if submit {
+                        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                        let _ = self
+                            .send_command(serde_json::json!({
+                                "type": "Keys", "uid": pane, "keys": "\n", "interrupt": false
+                            }))
+                            .await;
+                    }
+                } else {
+                    let body = if submit { format!("{payload}\n") } else { payload };
+                    let _ = self
+                        .send_command(serde_json::json!({
+                            "type": "Keys", "uid": pane, "keys": body, "interrupt": false
+                        }))
+                        .await;
+                }
             } else {
-                // Shell (pwsh/bash/cmd): CR submits the line. LF would leave a `>>`
-                // continuation prompt. No bracketed paste — shells don't enable it.
+                // Shell (pwsh/bash/cmd): CR submits; LF leaves a `>>` continuation.
+                // No bracketed paste — shells don't enable it.
+                let body = if submit { format!("{payload}\r") } else { payload };
                 let _ = self
                     .send_command(serde_json::json!({
-                        "type": "Keys", "uid": pane, "keys": format!("{payload}\r"), "interrupt": false
+                        "type": "Keys", "uid": pane, "keys": body, "interrupt": false
                     }))
                     .await;
             }
