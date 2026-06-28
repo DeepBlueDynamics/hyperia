@@ -77,6 +77,12 @@ struct PaneAddress {
     /// and shred the path. `terminal_keys` keeps raw=false (default) so
     /// `\x03` still maps to Ctrl-C.
     raw: Option<bool>,
+    /// When true, prepend a "From: <your pane>:" header so the recipient agent
+    /// knows who's messaging it. Opt-in (default off) — the caller decides; Hyperia
+    /// fills in the caller's origin pane, so you never specify it yourself. Only
+    /// applied when the target is an agent/AI pane (a prefix would corrupt a shell
+    /// command).
+    attribute: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -537,9 +543,14 @@ tab's current active pane, no matter how many times the pane inside it has resta
             ));
         }
     };
-    // Auto-attribution: stamp "From: <caller>:" when poking an agent pane (so the
-    // held/flushed and the immediate send are consistent).
-    let keys = maybe_attribute(&state, &headers, &uid, &keys).await;
+    // Opt-in attribution: stamp "From: <caller>:" only when the caller asked
+    // (attribute=true). Applied before hold/send so held/flushed and the immediate
+    // send stay consistent. Hyperia fills in the caller's origin pane.
+    let keys = if addr.attribute.unwrap_or(false) {
+        maybe_attribute(&state, &headers, &uid, &keys).await
+    } else {
+        keys
+    };
     if let Err(resp) = enforce_drive(&state, &headers, &uid).await {
         // Pending (202): the human hasn't decided yet. HOLD these keys so they
         // flush to the pane automatically the instant they approve — the agent
@@ -610,8 +621,12 @@ async fn post_type_and_collect(
     // for terminal_run so Windows paths with `\research`, `\new`, `\test`
     // aren't shredded by the unescape rule.
     let keys = if addr.raw.unwrap_or(false) { body.clone() } else { unescape_keys(&body) };
-    // Auto-attribution: stamp "From: <caller>:" when poking an agent pane.
-    let keys = maybe_attribute(&state, &headers, &uid, &keys).await;
+    // Opt-in attribution (attribute=true) — stamp "From: <caller>:" only on request.
+    let keys = if addr.attribute.unwrap_or(false) {
+        maybe_attribute(&state, &headers, &uid, &keys).await
+    } else {
+        keys
+    };
     let log_addr = state.bridge.pane_address_for_log(&uid).await;
     if let Some((tab, pane, win)) = &log_addr {
         tracing::info!(

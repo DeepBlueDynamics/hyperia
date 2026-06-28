@@ -49,6 +49,8 @@ pub struct KeysRequest {
     pub pane: Option<String>,
     /// Set true to send immediately even when the human is active in this pane — use this to interrupt a running process (e.g. Ctrl-C). When the human is active and this is false/omitted, the keys are queued and you get a notice telling you to resend with interrupt=true.
     pub interrupt: Option<bool>,
+    /// Set true to prepend "From: <your pane>:" so the recipient agent knows who's messaging it — Hyperia fills in YOUR origin pane, you never specify it. Opt-in (default off); only applied when the target is an agent/AI pane. Leave off for shell commands.
+    pub attribute: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -85,6 +87,8 @@ pub struct RunRequest {
     pub raw: Option<bool>,
     /// Acknowledge that you've read the Hyperia anti-pattern warning and intentionally want to run a shell-level backgrounding command (Start-Process, nohup, & at end, tmux). Default false. If false, commands matching those patterns are refused with guidance to use terminal_split / terminal_new_tab instead, which is almost always what you should do in Hyperia.
     pub force: Option<bool>,
+    /// Set true to prepend "From: <your pane>:" so a recipient AGENT knows who's messaging it — Hyperia fills in YOUR origin pane, you never specify it. Opt-in (default off); only applied when the target is an agent/AI pane (a prefix would corrupt a shell command).
+    pub attribute: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -782,6 +786,11 @@ impl HyperiaMcp {
             path.push(sep);
             path.push_str("interrupt=true");
         }
+        if req.attribute.unwrap_or(false) {
+            let sep = if path.contains('?') { '&' } else { '?' };
+            path.push(sep);
+            path.push_str("attribute=true");
+        }
         let resp = self.post_text_as(&path, &req.keys, None, forwarded_auth(&ctx).as_deref()).await?;
         let target_process = self.pane_process_name(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
         let mut out = resp;
@@ -868,7 +877,8 @@ impl HyperiaMcp {
             // like `\research` aren't shredded into a CR + `esearch`.
             let base = self.pane_path("/api/type-and-collect", req.window, req.tab.as_deref(), req.pane.as_deref());
             let sep = if base.contains('?') { '&' } else { '?' };
-            let collect_path = format!("{}{sep}quiet_ms={}&raw=true", base, wait);
+            let attr = if req.attribute.unwrap_or(false) { "&attribute=true" } else { "" };
+            let collect_path = format!("{}{sep}quiet_ms={}&raw=true{}", base, wait, attr);
             // Give the HTTP client headroom over the server's quiet window so it doesn't
             // time out before /api/type-and-collect finishes draining PTY output.
             let req_timeout = std::time::Duration::from_millis(wait + 15_000);
