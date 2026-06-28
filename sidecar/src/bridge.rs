@@ -105,24 +105,67 @@ struct IdleCallback {
     creator: String,
 }
 
+/// Wall-clock seconds since the unix epoch (for persisted pulse timing).
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// A recurring prompt the sidecar re-injects into a pane on an interval — the
 /// pane "pulse" watchdog. idle_only fires only when the pane looks idle/stalled;
 /// otherwise it fires every interval (skipping human/dialog/working). Capped to
-/// a max lifetime (<=1h) and optional max_fires.
-#[derive(Clone)]
+/// a max lifetime (<=1h) and optional max_fires. Persisted to disk and addressed
+/// by window+tab so it survives pane/agent restarts and a Hyperia restart.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Pulse {
     id: String,
-    pane: String,
+    window: u32,
+    tab: String,
     target_label: String,
+    /// Last resolved pane uid — re-bound each tick from window+tab. Not authoritative
+    /// (a restart gives a new uid); recomputed, so default empty when loaded.
+    #[serde(default)]
+    pane: String,
     keys: String,
     interval_secs: u64,
     idle_only: bool,
-    expires_at: std::time::Instant,
+    created_at_unix: u64,
+    expires_at_unix: u64,
     max_fires: Option<u32>,
     fires: u32,
     paused: bool,
-    last_fire: std::time::Instant,
+    last_fire_unix: u64,
     creator: String,
+}
+
+/// Where pulses persist (~/.hyperia/pulse/configs.json).
+fn pulse_store_path() -> std::path::PathBuf {
+    let home = std::env::var("USERPROFILE")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok())
+        .unwrap_or_else(|| ".".into());
+    std::path::PathBuf::from(home)
+        .join(".hyperia")
+        .join("pulse")
+        .join("configs.json")
+}
+
+/// Load persisted pulses, dropping any already past their lifetime (never resurrect
+/// an expired pulse). The cached uid is cleared — re-resolved on the first tick.
+fn load_pulses() -> Vec<Pulse> {
+    let txt = match std::fs::read_to_string(pulse_store_path()) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let mut v: Vec<Pulse> = serde_json::from_str(&txt).unwrap_or_default();
+    let now = now_unix();
+    v.retain(|p| now < p.expires_at_unix);
+    for p in v.iter_mut() {
+        p.pane = String::new();
+    }
+    v
 }
 
 struct BridgeInner {
@@ -175,7 +218,7 @@ impl Bridge {
                 held_actions: Mutex::new(HashMap::new()),
                 idle_callbacks: Mutex::new(Vec::new()),
                 liveness: Mutex::new(HashMap::new()),
-                pulses: Mutex::new(Vec::new()),
+                pulses: Mutex::new(load_pulses()),
                 output_subs: Mutex::new(HashMap::new()),
                 lume: crate::lume_store::LumeStore::new(),
                 perms: crate::perms::PermStore::default(),
@@ -479,7 +522,8 @@ impl Bridge {
     #[allow(clippy::too_many_arguments)]
     pub async fn register_pulse(
         &self,
-        pane: &str,
+        window: u32,
+        tab: &str,
         target_label: &str,
         keys: &str,
         interval_secs: u64,
@@ -490,53 +534,84 @@ impl Bridge {
     ) -> String {
         let interval = interval_secs.max(20);
         let life = max_lifetime_secs.clamp(1, 3600);
-        let now = std::time::Instant::now();
+        let now = now_unix();
         let id = format!(
             "pulse_{}",
             self.inner.seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         );
         let p = Pulse {
             id: id.clone(),
-            pane: pane.to_string(),
+            window,
+            tab: tab.to_string(),
             target_label: target_label.to_string(),
+            pane: String::new(),
             keys: keys.to_string(),
             interval_secs: interval,
             idle_only,
-            expires_at: now + std::time::Duration::from_secs(life),
+            created_at_unix: now,
+            expires_at_unix: now + life,
             max_fires,
             fires: 0,
             paused: false,
-            last_fire: now, // wait one interval before the first fire
+            last_fire_unix: now, // wait one interval before the first fire
             creator: creator.to_string(),
         };
-        let mut pulses = self.inner.pulses.lock().await;
-        pulses.retain(|x| x.pane != pane);
-        pulses.push(p);
+        {
+            let mut pulses = self.inner.pulses.lock().await;
+            pulses.retain(|x| !(x.window == window && x.tab == tab));
+            pulses.push(p);
+        }
+        self.persist_pulses().await;
         id
     }
 
-    /// Clear pulses by id or by target pane. Returns how many were removed.
+    /// Clear pulses by id or by (current) target pane uid. Returns how many removed.
     pub async fn clear_pulse(&self, id_or_pane: &str) -> usize {
-        let mut pulses = self.inner.pulses.lock().await;
-        let before = pulses.len();
-        pulses.retain(|p| p.id != id_or_pane && p.pane != id_or_pane);
-        before - pulses.len()
+        let n = {
+            let mut pulses = self.inner.pulses.lock().await;
+            let before = pulses.len();
+            pulses.retain(|p| p.id != id_or_pane && p.pane != id_or_pane);
+            before - pulses.len()
+        };
+        if n > 0 {
+            self.persist_pulses().await;
+        }
+        n
     }
 
     /// Pause/resume a pulse by id. Returns true if found.
     pub async fn pause_pulse(&self, id: &str, paused: bool) -> bool {
-        let mut pulses = self.inner.pulses.lock().await;
-        if let Some(p) = pulses.iter_mut().find(|p| p.id == id) {
-            p.paused = paused;
-            true
-        } else {
-            false
+        let found = {
+            let mut pulses = self.inner.pulses.lock().await;
+            if let Some(p) = pulses.iter_mut().find(|p| p.id == id) {
+                p.paused = paused;
+                true
+            } else {
+                false
+            }
+        };
+        if found {
+            self.persist_pulses().await;
         }
+        found
+    }
+
+    /// Persist all pulses to disk (best-effort).
+    async fn persist_pulses(&self) {
+        let json = {
+            let pulses = self.inner.pulses.lock().await;
+            serde_json::to_string_pretty(&*pulses).unwrap_or_else(|_| "[]".to_string())
+        };
+        let path = pulse_store_path();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, json);
     }
 
     /// Snapshot of active pulses for the status endpoint.
     pub async fn pulse_status(&self) -> serde_json::Value {
-        let now = std::time::Instant::now();
+        let now = now_unix();
         let pulses = self.inner.pulses.lock().await;
         let list: Vec<serde_json::Value> = pulses
             .iter()
@@ -545,13 +620,15 @@ impl Bridge {
                     "id": p.id,
                     "pane": p.pane,
                     "target": p.target_label,
+                    "window": p.window,
+                    "tab": p.tab,
                     "interval_secs": p.interval_secs,
                     "idle_only": p.idle_only,
                     "paused": p.paused,
                     "fires": p.fires,
                     "max_fires": p.max_fires,
-                    "secs_until_expiry": p.expires_at.saturating_duration_since(now).as_secs(),
-                    "secs_since_fire": now.saturating_duration_since(p.last_fire).as_secs(),
+                    "secs_until_expiry": p.expires_at_unix.saturating_sub(now),
+                    "secs_since_fire": now.saturating_sub(p.last_fire_unix),
                     "creator": p.creator,
                 })
             })
@@ -596,9 +673,39 @@ impl Bridge {
             .filter(|n| !n.is_empty())
     }
 
+    /// The (window_id, tab_name) a pane lives in — for restart-stable pulse
+    /// addressing (a pulse re-binds to the tab's current active pane each tick).
+    pub async fn pane_window_tab(&self, uid: &str) -> Option<(u32, String)> {
+        let sessions = self.inner.sessions.lock().await;
+        sessions.get(uid).map(|s| (s.window_id, s.tab_name.clone()))
+    }
+
     /// One idle-monitor tick: classify each watched pane and fire any callback
     /// whose pane just went running->idle. Edge-triggered, capped, expiring.
     pub async fn idle_monitor_tick(&self) {
+        // Re-bind each active pulse to its tab's CURRENT active pane: an agent
+        // restart gives a new uid, but the tab is stable. This keeps pulses alive
+        // across pane/agent restarts and a Hyperia restart (window+tab persisted).
+        let pulse_targets: Vec<(String, u32, String)> = {
+            let pulses = self.inner.pulses.lock().await;
+            pulses
+                .iter()
+                .filter(|p| !p.paused)
+                .map(|p| (p.id.clone(), p.window, p.tab.clone()))
+                .collect()
+        };
+        for (id, window, tab) in &pulse_targets {
+            if let Some(uid) = self
+                .resolve_pane_uid(Some(*window), Some(tab.as_str()), None)
+                .await
+            {
+                let mut pulses = self.inner.pulses.lock().await;
+                if let Some(p) = pulses.iter_mut().find(|p| &p.id == id) {
+                    p.pane = uid;
+                }
+            }
+        }
+
         // Snapshot watched panes (don't hold the callbacks lock across awaits).
         let panes: Vec<String> = {
             let cbs = self.inner.idle_callbacks.lock().await;
@@ -655,13 +762,16 @@ impl Bridge {
 
         // Pulses — interval-gated. idle_only fires only when idle; otherwise fires
         // when not human/dialog/running. Never fires while the human is active.
+        let now_u = now_unix();
+        let mut pulses_changed = false;
         {
             let mut pulses = self.inner.pulses.lock().await;
+            let before = pulses.len();
             for p in pulses.iter_mut() {
-                if p.paused {
+                if p.paused || p.pane.is_empty() {
                     continue;
                 }
-                if now.saturating_duration_since(p.last_fire).as_secs() < p.interval_secs {
+                if now_u.saturating_sub(p.last_fire_unix) < p.interval_secs {
                     continue;
                 }
                 let kind = kinds.get(&p.pane).map(|s| s.as_str()).unwrap_or("unknown");
@@ -672,13 +782,20 @@ impl Bridge {
                 };
                 if ok {
                     to_fire.push((p.pane.clone(), p.keys.clone(), Some(p.creator.clone())));
-                    p.last_fire = now;
+                    p.last_fire_unix = now_u;
                     p.fires += 1;
+                    pulses_changed = true;
                 }
             }
             pulses.retain(|p| {
-                now < p.expires_at && p.max_fires.map(|m| p.fires < m).unwrap_or(true)
+                now_u < p.expires_at_unix && p.max_fires.map(|m| p.fires < m).unwrap_or(true)
             });
+            if pulses.len() != before {
+                pulses_changed = true;
+            }
+        }
+        if pulses_changed {
+            self.persist_pulses().await;
         }
 
         // Fire outside the locks. interrupt=false (never steals focus; renderer

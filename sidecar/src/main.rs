@@ -1403,9 +1403,15 @@ async fn post_pulse_set(
     let max_fires = parsed["max_fires"].as_u64().map(|v| v as u32);
     let creator = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await.label();
     let label = state.bridge.pane_display_name(&uid).await.unwrap_or_else(|| uid.clone());
+    // Address the pulse by window+tab so it re-binds to the tab's current active
+    // pane across restarts (and persists across a Hyperia restart).
+    let (window_id, tab_name) = match state.bridge.pane_window_tab(&uid).await {
+        Some(wt) => wt,
+        None => return (StatusCode::NOT_FOUND, "Could not resolve the pane's window/tab.".into()),
+    };
     let id = state
         .bridge
-        .register_pulse(&uid, &label, &keys, interval, idle_only, life, max_fires, &creator)
+        .register_pulse(window_id, &tab_name, &label, &keys, interval, idle_only, life, max_fires, &creator)
         .await;
     (
         StatusCode::OK,
