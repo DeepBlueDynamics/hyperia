@@ -518,12 +518,13 @@ impl Bridge {
     }
 
     /// Register a recurring pulse on a pane. Clamps interval (>=20s) and lifetime
-    /// (<=1h). One pulse per pane (dedupe). Returns the id.
+    /// (<=1h). One pulse per (window,tab) — dedupe. Returns the id.
     #[allow(clippy::too_many_arguments)]
     pub async fn register_pulse(
         &self,
         window: u32,
         tab: &str,
+        pane: &str,
         target_label: &str,
         keys: &str,
         interval_secs: u64,
@@ -544,7 +545,9 @@ impl Bridge {
             window,
             tab: tab.to_string(),
             target_label: target_label.to_string(),
-            pane: String::new(),
+            // Target the SPECIFIC pane it was set on (re-resolved to the tab's
+            // active pane only if this one's session later dies — see the monitor).
+            pane: pane.to_string(),
             keys: keys.to_string(),
             interval_secs: interval,
             idle_only,
@@ -680,6 +683,11 @@ impl Bridge {
         sessions.get(uid).map(|s| (s.window_id, s.tab_name.clone()))
     }
 
+    /// Whether a live session exists for this uid.
+    async fn has_session(&self, uid: &str) -> bool {
+        self.inner.sessions.lock().await.contains_key(uid)
+    }
+
     /// One idle-monitor tick: classify each watched pane and fire any callback
     /// whose pane just went running->idle. Edge-triggered, capped, expiring.
     pub async fn idle_monitor_tick(&self) {
@@ -695,6 +703,17 @@ impl Bridge {
                 .collect()
         };
         for (id, window, tab) in &pulse_targets {
+            // Keep the SPECIFIC pane the pulse was set on while its session is
+            // alive (so a split's pulse hits the right pane, not the tab's active
+            // one). Only re-bind to the tab's active pane when the cached pane is
+            // empty or its session has died (agent/Hyperia restart).
+            let cached = {
+                let pulses = self.inner.pulses.lock().await;
+                pulses.iter().find(|p| &p.id == id).map(|p| p.pane.clone()).unwrap_or_default()
+            };
+            if !cached.is_empty() && self.has_session(&cached).await {
+                continue;
+            }
             if let Some(uid) = self
                 .resolve_pane_uid(Some(*window), Some(tab.as_str()), None)
                 .await

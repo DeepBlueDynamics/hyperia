@@ -1411,7 +1411,7 @@ async fn post_pulse_set(
     };
     let id = state
         .bridge
-        .register_pulse(window_id, &tab_name, &label, &keys, interval, idle_only, life, max_fires, &creator)
+        .register_pulse(window_id, &tab_name, &uid, &label, &keys, interval, idle_only, life, max_fires, &creator)
         .await;
     (
         StatusCode::OK,
