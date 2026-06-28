@@ -109,6 +109,23 @@ interface WebPaneState {
   expandedHistoryRoots: {[key: string]: boolean};
 }
 
+// Omnibox routing: pass real URLs through (any scheme, or a dotted host like
+// example.com), but send plain queries — anything with whitespace or no dotted
+// host — to a DuckDuckGo search. A dotted host that LOOKS valid but fails to
+// resolve (e.g. news.hackernews.com) is caught later by the did-fail-load fallback.
+function toNavigableUrl(input: string): string {
+  const t = (input || '').trim();
+  if (!t) return t;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) return t; // already has a scheme (http/https/file/ai/…)
+  if (/^localhost(:\d+)?(\/|$)/i.test(t)) return 'http://' + t;
+  if (!/\s/.test(t) && /^[^\s/]+\.[^\s/]+/.test(t)) return t; // dotted host → navigateWebview adds https://
+  return 'https://duckduckgo.com/?q=' + encodeURIComponent(t);
+}
+
+// net error codes where the site couldn't be reached → fall back to a DDG search:
+// ERR_NAME_NOT_RESOLVED, ERR_NAME_RESOLUTION_FAILED, ERR_ADDRESS_UNREACHABLE, ERR_INVALID_URL.
+const DDG_RESOLVE_FAIL = new Set([-105, -137, -109, -300]);
+
 class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   webviewRef = React.createRef<any>();
   urlInputRef = React.createRef<HTMLInputElement>();
@@ -356,6 +373,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   };
 
   navigateWebview = (targetUrl: string) => {
+    // Route plain queries / non-URLs to a DuckDuckGo search (keeps ai://, http(s),
+    // file, and dotted hosts intact).
+    targetUrl = toNavigableUrl(targetUrl);
     if (isOAuthUrl(targetUrl)) {
       void shell.openExternal(targetUrl);
       return;
@@ -1017,14 +1037,29 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     });
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-    wv.addEventListener('did-fail-load', (e: {errorCode: number; errorDescription: string; validatedURL?: string}) => {
-      if (e.errorCode === -3) return;
-      this.setState({loading: false, error: e.errorDescription || 'Failed to load'});
-      const badUrl = e.validatedURL || this.state.urlInputVal;
-      if (badUrl) {
-        this.removeHistoryEntry('url', badUrl);
+    wv.addEventListener(
+      'did-fail-load',
+      (e: {errorCode: number; errorDescription: string; validatedURL?: string; isMainFrame?: boolean}) => {
+        if (e.errorCode === -3) return;
+        this.setState({loading: false, error: e.errorDescription || 'Failed to load'});
+        const badUrl = e.validatedURL || this.state.urlInputVal;
+        if (badUrl) {
+          this.removeHistoryEntry('url', badUrl);
+        }
+        // A main-frame URL that didn't resolve (e.g. a typo'd domain like
+        // news.hackernews.com) → fall back to a DuckDuckGo search of it. Guard
+        // against looping if the DDG search itself fails.
+        if (
+          (e.isMainFrame ?? true) &&
+          DDG_RESOLVE_FAIL.has(e.errorCode) &&
+          badUrl &&
+          !/duckduckgo\.com\/\?q=/i.test(badUrl)
+        ) {
+          const q = badUrl.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/+$/, '');
+          this.navigateWebview('https://duckduckgo.com/?q=' + encodeURIComponent(q));
+        }
       }
-    });
+    );
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     wv.addEventListener('page-title-updated', (e: {title?: string}) => {
