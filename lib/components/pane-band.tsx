@@ -1,4 +1,31 @@
 import React from 'react';
+import {ipcRenderer} from 'electron';
+
+// Pulse picker pills + action buttons (re-poke watchdog editor in the band).
+const pulseSeg = (active: boolean): React.CSSProperties => ({
+  padding: '3px 9px',
+  fontSize: '11px',
+  borderRadius: '5px',
+  border: '1px solid',
+  borderColor: active ? 'var(--accent-primary, #6ea8fe)' : 'var(--border-neutral, rgba(255,255,255,0.12))',
+  background: active ? 'var(--accent-primary, #6ea8fe)' : 'transparent',
+  color: active ? '#0b0b0f' : 'var(--text-secondary, #9a9aa2)',
+  fontWeight: active ? 600 : 400,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap'
+});
+const pulseBtn = (primary: boolean, busy: boolean): React.CSSProperties => ({
+  padding: '5px 14px',
+  fontSize: '12px',
+  fontWeight: 600,
+  borderRadius: '6px',
+  border: '1px solid',
+  borderColor: primary ? 'var(--accent-primary, #6ea8fe)' : 'var(--border-neutral, rgba(255,255,255,0.15))',
+  background: primary ? 'var(--accent-primary, #6ea8fe)' : 'transparent',
+  color: primary ? '#0b0b0f' : 'var(--text-primary, #e8e8ea)',
+  cursor: busy ? 'default' : 'pointer',
+  opacity: busy ? 0.55 : 1
+});
 
 type PaneBandProps = {
   paneType: 'shell' | 'web' | 'ai';
@@ -87,6 +114,63 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
         return () => clearTimeout(timer);
       }
     }, [copied]);
+
+    // ── Pulse (re-poke watchdog) editor ──────────────────────────────────────
+    // The human sets a pulse via main (which holds SYSTEM_TOKEN) so it bypasses
+    // the agent consent gate. We only show the active state + a compact editor.
+    const [pulseOpen, setPulseOpen] = React.useState(false);
+    const [pulseActive, setPulseActive] = React.useState(false);
+    const [pKeys, setPKeys] = React.useState('');
+    const [pInterval, setPInterval] = React.useState(120);
+    const [pIdleOnly, setPIdleOnly] = React.useState(true);
+    const [pLifetime, setPLifetime] = React.useState(3600);
+    const [pBusy, setPBusy] = React.useState(false);
+
+    // Reflect whether this pane already has an active pulse (on open + mount).
+    React.useEffect(() => {
+      if (!paneId) return;
+      let alive = true;
+      void ipcRenderer.invoke('pulse:status').then((txt: string) => {
+        if (!alive) return;
+        try {
+          const list = (JSON.parse(txt)?.pulses || []) as Array<{pane: string; paused: boolean}>;
+          setPulseActive(list.some((p) => p.pane === paneId && !p.paused));
+        } catch {
+          /* ignore */
+        }
+      });
+      return () => {
+        alive = false;
+      };
+    }, [paneId, pulseOpen]);
+
+    const submitPulse = React.useCallback(() => {
+      if (!paneId || !pKeys.trim()) return;
+      setPBusy(true);
+      void ipcRenderer
+        .invoke('pulse:set', {
+          pane: paneId,
+          keys: pKeys,
+          interval_secs: pInterval,
+          idle_only: pIdleOnly,
+          max_lifetime_secs: pLifetime
+        })
+        .finally(() => {
+          setPBusy(false);
+          setPulseActive(true);
+          setPulseOpen(false);
+        });
+    }, [paneId, pKeys, pInterval, pIdleOnly, pLifetime]);
+
+    const clearPulse = React.useCallback(() => {
+      if (!paneId) return;
+      setPBusy(true);
+      void ipcRenderer.invoke('pulse:clear', {pane: paneId}).finally(() => {
+        setPBusy(false);
+        setPulseActive(false);
+        setPulseOpen(false);
+      });
+    }, [paneId]);
 
     const handleNameClick = (e: React.MouseEvent) => {
       e.stopPropagation();
@@ -347,6 +431,29 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           style={{display: 'flex', alignItems: 'center', gap: 'var(--space-10)', flexShrink: 0}}
           onClick={(e) => e.stopPropagation()}
         >
+          {/* Pulse (re-poke watchdog) — clock toggle, mirrors the sticky timer icon */}
+          {paneId && !isPlaceholder && (
+            <span
+              className="pane-band-control-icon pane-band-tooltip-trigger"
+              title={pulseActive ? 'Pulse active — click to edit or clear' : 'Set a periodic pulse (re-poke this pane)'}
+              onClick={(e) => {
+                e.stopPropagation();
+                setPulseOpen((v) => !v);
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: pulseActive ? 'var(--accent-primary, #6ea8fe)' : undefined
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <polyline points="12 7 12 12 15 14" />
+              </svg>
+            </span>
+          )}
+
           {/* Split Down */}
           {!isSplitDownDisabled && (
             <span
@@ -496,6 +603,105 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             </div>
           </span>
         </div>
+
+        {pulseOpen && paneId && (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              top: 'calc(100% + 6px)',
+              right: 8,
+              zIndex: 60,
+              width: 'min(320px, calc(100% - 16px))',
+              maxWidth: 320,
+              padding: '12px 14px',
+              boxSizing: 'border-box',
+              background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',
+              border: '1px solid var(--accent-primary, #6ea8fe)',
+              borderRadius: 10,
+              boxShadow: '0 10px 24px rgba(0,0,0,0.45)',
+              color: 'var(--text-primary, #e8e8ea)',
+              fontFamily: 'var(--font-sans)',
+              cursor: 'default'
+            }}
+          >
+            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12.5}}>
+              <span style={{fontSize: 14}}>⏱</span>
+              <b>Periodic pulse</b>
+              <span style={{color: 'var(--text-secondary, #9a9aa2)', fontSize: 11}}>— re-pokes this pane</span>
+            </div>
+
+            <textarea
+              value={pKeys}
+              onChange={(e) => setPKeys(e.target.value)}
+              placeholder="Prompt to re-submit (e.g. continue, or status?)"
+              rows={2}
+              style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                resize: 'vertical',
+                fontFamily: 'var(--font-mono, monospace)',
+                fontSize: 12,
+                padding: '6px 8px',
+                borderRadius: 6,
+                border: '1px solid var(--border-neutral, rgba(255,255,255,0.15))',
+                background: 'var(--bg-secondary, #15151a)',
+                color: 'inherit',
+                marginBottom: 10
+              }}
+            />
+
+            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8}}>
+              <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>Every</span>
+              <div style={{display: 'flex', gap: 4}}>
+                {([['30s', 30], ['1m', 60], ['2m', 120], ['5m', 300]] as const).map(([lbl, secs]) => (
+                  <button key={lbl} type="button" onClick={() => setPInterval(secs)} style={pulseSeg(pInterval === secs)}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8}}>
+              <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>When</span>
+              <div style={{display: 'flex', gap: 4}}>
+                <button type="button" onClick={() => setPIdleOnly(true)} style={pulseSeg(pIdleOnly)}>
+                  Only if idle
+                </button>
+                <button type="button" onClick={() => setPIdleOnly(false)} style={pulseSeg(!pIdleOnly)}>
+                  Always
+                </button>
+              </div>
+            </div>
+
+            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12}}>
+              <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>For</span>
+              <div style={{display: 'flex', gap: 4}}>
+                {([['15 min', 900], ['1 hour', 3600]] as const).map(([lbl, secs]) => (
+                  <button key={lbl} type="button" onClick={() => setPLifetime(secs)} style={pulseSeg(pLifetime === secs)}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{display: 'flex', gap: 8, justifyContent: 'flex-end'}}>
+              {pulseActive && (
+                <button type="button" disabled={pBusy} onClick={clearPulse} style={pulseBtn(false, pBusy)}>
+                  Clear
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={pBusy || !pKeys.trim()}
+                onClick={submitPulse}
+                style={pulseBtn(true, pBusy)}
+              >
+                {pulseActive ? 'Update' : 'Set'}
+              </button>
+            </div>
+          </div>
+        )}
 
         <style jsx>{`
           .pane-band-container {

@@ -196,6 +196,27 @@ function _showSplash(
 let sidecarProcess: ChildProcess | null = null;
 const SIDECAR_PORT = 9800;
 
+// Pulse UI bridge. The renderer can't hold SYSTEM_TOKEN (kept off the renderer
+// for the same reason it's off PTYs), so it asks main to call the consent-gated
+// pulse endpoints as System — the human is the authority, so this bypasses the
+// agent consent prompt. Token never leaves the main process.
+async function pulseFetch(method: 'GET' | 'POST', apiPath: string, body?: unknown): Promise<string> {
+  try {
+    const res = await fetch(`http://localhost:${SIDECAR_PORT}${apiPath}`, {
+      method,
+      headers: {'Content-Type': 'application/json', Authorization: `Bearer ${SYSTEM_TOKEN}`},
+      body: body == null ? undefined : JSON.stringify(body)
+    });
+    return await res.text();
+  } catch (e) {
+    return JSON.stringify({ok: false, error: String(e)});
+  }
+}
+ipcMain.handle('pulse:set', (_e, body) => pulseFetch('POST', '/api/pulse/set', body));
+ipcMain.handle('pulse:clear', (_e, body) => pulseFetch('POST', '/api/pulse/clear', body));
+ipcMain.handle('pulse:pause', (_e, body) => pulseFetch('POST', '/api/pulse/pause', body));
+ipcMain.handle('pulse:status', () => pulseFetch('GET', '/api/pulse/status'));
+
 function findSidecarBinary(): string | null {
   const exeDir = process.platform === 'win32' ? resolve(process.execPath, '..') : __dirname;
   const resDir = process.resourcesPath || resolve(exeDir, 'resources');
