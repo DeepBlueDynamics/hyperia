@@ -463,6 +463,40 @@ fn unescape_keys(raw: &str) -> String {
     result
 }
 
+/// Insert a "From: <caller>: " attribution header. If the payload is wrapped in
+/// bracketed paste, insert it INSIDE the paste (so it's ingested with the body);
+/// otherwise prepend it. Same line (no newline) so it doesn't prematurely submit
+/// in an Ink TUI.
+fn attribute_keys(keys: &str, from_label: &str) -> String {
+    let prefix = format!("From: {from_label}: ");
+    const BP_START: &str = "\u{1b}[200~";
+    if let Some(rest) = keys.strip_prefix(BP_START) {
+        format!("{BP_START}{prefix}{rest}")
+    } else {
+        format!("{prefix}{keys}")
+    }
+}
+
+/// Auto-attribution: when text is injected INTO an agent/Ink pane, stamp it with
+/// "From: <caller>:" so the recipient knows who poked it. Off for shells (a prefix
+/// would corrupt a command) and for System/anonymous callers (no meaningful From).
+async fn maybe_attribute(state: &AppState, headers: &HeaderMap, uid: &str, keys: &str) -> String {
+    if !state.bridge.is_agent_pane(uid).await {
+        return keys.to_string();
+    }
+    let id = state.bridge.resolve_caller(bearer_token(headers).as_deref()).await;
+    let from = match &id {
+        identity::CallerIdentity::Pane { pane, .. } => state
+            .bridge
+            .pane_display_name(pane)
+            .await
+            .unwrap_or_else(|| "a pane".into()),
+        identity::CallerIdentity::Agent { name, .. } => format!("{name} (external agent)"),
+        _ => return keys.to_string(),
+    };
+    attribute_keys(keys, &from)
+}
+
 async fn post_type(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -503,6 +537,9 @@ tab's current active pane, no matter how many times the pane inside it has resta
             ));
         }
     };
+    // Auto-attribution: stamp "From: <caller>:" when poking an agent pane (so the
+    // held/flushed and the immediate send are consistent).
+    let keys = maybe_attribute(&state, &headers, &uid, &keys).await;
     if let Err(resp) = enforce_drive(&state, &headers, &uid).await {
         // Pending (202): the human hasn't decided yet. HOLD these keys so they
         // flush to the pane automatically the instant they approve — the agent
@@ -573,6 +610,8 @@ async fn post_type_and_collect(
     // for terminal_run so Windows paths with `\research`, `\new`, `\test`
     // aren't shredded by the unescape rule.
     let keys = if addr.raw.unwrap_or(false) { body.clone() } else { unescape_keys(&body) };
+    // Auto-attribution: stamp "From: <caller>:" when poking an agent pane.
+    let keys = maybe_attribute(&state, &headers, &uid, &keys).await;
     let log_addr = state.bridge.pane_address_for_log(&uid).await;
     if let Some((tab, pane, win)) = &log_addr {
         tracing::info!(

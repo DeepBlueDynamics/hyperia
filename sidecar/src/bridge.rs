@@ -460,6 +460,33 @@ impl Bridge {
             .unwrap_or(false)
     }
 
+    /// True if the pane is running an agent / Ink TUI (prose input), so a "From:"
+    /// attribution header is appropriate. False for a plain shell (a prefix would
+    /// corrupt a command). Keys off the foreground app name (shell_app), which is
+    /// None for a bare shell.
+    pub async fn is_agent_pane(&self, uid: &str) -> bool {
+        const AGENTS: &[&str] = &[
+            "claude", "codex", "aider", "gemini", "ollama", "node", "n8",
+            "nemesis8", "antigravity", "opencode", "grok", "sakana", "pi",
+        ];
+        let sessions = self.inner.sessions.lock().await;
+        let name = sessions
+            .get(uid)
+            .and_then(|s| s.shell_app.as_ref())
+            .map(|a| a.name.to_lowercase())
+            .unwrap_or_default();
+        !name.is_empty() && AGENTS.iter().any(|a| name.contains(a))
+    }
+
+    /// The friendly display name (shell_name) of a pane, for attribution headers.
+    pub async fn pane_display_name(&self, uid: &str) -> Option<String> {
+        let sessions = self.inner.sessions.lock().await;
+        sessions
+            .get(uid)
+            .map(|s| s.shell_name.clone())
+            .filter(|n| !n.is_empty())
+    }
+
     /// One idle-monitor tick: classify each watched pane and fire any callback
     /// whose pane just went running->idle. Edge-triggered, capped, expiring.
     pub async fn idle_monitor_tick(&self) {
