@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Hyperia's sidecar exposes its tool surface over the **MCP streamable-HTTP transport** at `http://localhost:9800/mcp` (Hyperia must be running). There are **56 tools**. For client setup (Claude Code, Codex, Antigravity), see the [README](../README.md#connect-an-agent-mcp-over-http).
+Hyperia's sidecar exposes its tool surface over the **MCP streamable-HTTP transport** at `http://localhost:9800/mcp` (Hyperia must be running). There are **63 tools**. For client setup (Claude Code, Codex, Antigravity), see the [README](../README.md#connect-an-agent-mcp-over-http).
 
 This reference is generated from the `#[tool]` definitions in `sidecar/src/mcp.rs` — it is the source of truth.
 
@@ -19,7 +19,7 @@ Sessions are organized as **windows > tabs > panes**. Most tools accept optional
 | `terminal_keys` | Send raw keystrokes to a pane (`\n` Enter, `\r` Return, `\t` Tab, `\x03` Ctrl-C). `interrupt=true` to send past a busy human. |
 | `terminal_screen` | Read a pane's current screen as text. Supports `focus`/`raw`. |
 | `terminal_split` | Split a pane (horizontal/vertical), optionally with a startup command. |
-| `terminal_focus` | Move the human's active focus to a pane. |
+| `terminal_focus` | Move the human's view to a pane. Does **not** steal focus by default — it flashes the target tab (🔔) and reports where the human is; pass `force:true` to actually pull the view. |
 | `terminal_close` | Close a pane. |
 | `terminal_rename` | Rename a tab. |
 | `terminal_new_tab` | Open a new tab, optionally with a startup command/profile. |
@@ -28,6 +28,20 @@ Sessions are organized as **windows > tabs > panes**. Most tools accept optional
 | `terminal_flush_state` | Force-refresh the cached pane/session state. |
 | `terminal_ui_key` | Send a UI-layer key event (Escape, Ctrl+C, etc.) to the renderer rather than the PTY. |
 | `focus_pane` | Bring a specific pane to the foreground. |
+
+## Pulse & liveness (agent coordination)
+
+A **pulse** is a recurring prompt the sidecar re-submits into a pane on its own — independent of any agent's loop — to keep a stalled agent moving. Pulses never steal focus, are idle-gated by default, and auto-expire within an hour. Agents self-report liveness so the watchdog can tell real work from a quiet screen.
+
+| Tool | Description |
+|------|-------------|
+| `pane_pulse_set` | Attach a recurring prompt to a pane (the watchdog). `idle_only` (default true) fires only when the pane looks stalled; otherwise fires every interval. Min interval 20s, auto-expires ≤1h, optional `max_fires`. Pulsing a pane you don't own prompts the human for consent; you **cannot** pulse your own pane (use `pane_on_idle`). |
+| `pane_pulse_clear` | Clear a pulse by `id`, or by addressing the pane (window/tab/pane). |
+| `pane_pulse_pause` | Pause or resume a pulse by `id`. |
+| `pane_pulse_status` | List active pulses (target, interval, `idle_only`, paused, fires, time to expiry). |
+| `pane_on_idle` | Arm a safe one-shot **self**-poke: the next time YOUR pane goes idle, the sidecar delivers your prompt back to you. Edge-triggered (one fire per running→idle transition), capped, ≤1h. In-pane agents only. |
+| `pane_busy` | Self-report that this pane is working, valid for `ttl_secs` (re-call to extend) — suppresses pokes and **overrides** the on-screen heuristic (covers "thinking"/token-streaming that looks idle). |
+| `pane_idle` | Self-report that this pane is now idle/done — clears busy so the watchdog resumes and any armed idle-callback can fire. |
 
 ## Web panes
 
