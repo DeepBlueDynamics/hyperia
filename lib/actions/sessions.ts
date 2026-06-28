@@ -122,9 +122,20 @@ export function requestSession(profile: string | undefined) {
     dispatch({
       type: SESSION_REQUEST,
       effect: () => {
-        const {ui} = getState();
-        const {cwd} = ui;
-        rpc.emit('new', {cwd, profile});
+        const state = getState();
+        const {cwd} = state.ui;
+        // Seed the new pty with the active pane's current grid size so it's born
+        // at a realistic size instead of node-pty's 80x24. A panel TUI launched
+        // right away (or an n8 container that inherits the pty size) otherwise
+        // lays out into 80x24 before the first resize → whacked borders. The new
+        // <Term> still fits + resizes to its exact size on mount, so this is just
+        // a correct birth size, not a fixed one. (Hyper/VS Code do the same.)
+        const active = state.sessions.activeUid
+          ? state.sessions.sessions[state.sessions.activeUid]
+          : undefined;
+        const cols = active?.cols ?? undefined;
+        const rows = active?.rows ?? undefined;
+        rpc.emit('new', {cwd, profile, cols, rows});
       }
     });
   };
