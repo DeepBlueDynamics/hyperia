@@ -657,9 +657,22 @@ app.on('ready', () => {
       });
 
       app.on('before-quit', () => {
+        // Mark quitting BEFORE windows receive 'close' so the window close
+        // handler stops preventing close (otherwise Electron aborts the quit and
+        // the app + helpers + stickies linger — the "still running" bug).
+        (app as {isQuitting?: boolean}).isQuitting = true;
         destroyTray();
         stopBridge();
         killSidecar();
+        // Failsafe: force-close any remaining windows (incl. sticky-note windows)
+        // so the process actually exits and the installer's running-check passes.
+        for (const w of BrowserWindow.getAllWindows()) {
+          try {
+            w.destroy();
+          } catch {
+            /* already gone */
+          }
+        }
       });
 
       const makeMenu = () => {

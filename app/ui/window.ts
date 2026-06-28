@@ -599,6 +599,13 @@ export function newWindow(
   });
   let isClosingAndWaitingForSave = false;
   window.on('close', (e) => {
+    // A real app quit (tray → Quit) must NOT be blocked by the save-on-close
+    // preventDefault below — otherwise Electron aborts the quit and the app +
+    // helper processes + stickies linger (the "Hyperia still running" bug). Let
+    // the window close immediately when we're quitting.
+    if ((app as {isQuitting?: boolean}).isQuitting) {
+      return;
+    }
     if (isClosingAndWaitingForSave) {
       return;
     }
