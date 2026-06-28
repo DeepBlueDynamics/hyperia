@@ -160,6 +160,43 @@ pub struct BusyRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PulseSetRequest {
+    /// Window ID of the pane to pulse.
+    pub window: Option<u32>,
+    /// Tab name of the pane to pulse.
+    pub tab: Option<String>,
+    /// Pane (name or paneId) to pulse.
+    pub pane: Option<String>,
+    /// The prompt/text re-submitted into the pane on each fire.
+    pub keys: String,
+    /// Seconds between fires (min 20). Default 60.
+    pub interval_secs: Option<u64>,
+    /// Only fire when the pane looks idle/stalled (recommended). Default true.
+    pub idle_only: Option<bool>,
+    /// Seconds until the pulse auto-expires (capped at 3600 = 1h). Default 3600.
+    pub max_lifetime_secs: Option<u64>,
+    /// Optional cap on total fires.
+    pub max_fires: Option<u32>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PulseClearRequest {
+    /// Pulse id to clear; OR address the pane via window/tab/pane.
+    pub id: Option<String>,
+    pub window: Option<u32>,
+    pub tab: Option<String>,
+    pub pane: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PulsePauseRequest {
+    /// Pulse id (from pane_pulse_status).
+    pub id: String,
+    /// true to pause, false to resume. Default true.
+    pub paused: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CloseRequest {
     /// Window ID of the pane to close — the `id` field from terminal_status. Omit to use the focused window.
     pub window: Option<u32>,
@@ -1133,6 +1170,56 @@ impl HyperiaMcp {
         let resp = self
             .post_json_as("/api/pulse/liveness", &body, forwarded_auth(&ctx).as_deref())
             .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Set a recurring PULSE on a pane: the sidecar re-submits `keys` into it on an interval, independent of any agent's loop — to re-poke a stalled agent. idle_only (default true) fires only when the pane looks idle/stalled; false fires every interval. Never steals focus; auto-expires within 1h; min interval 20s. Pulsing a pane you don't own prompts the human for consent. You CANNOT pulse your own pane — use pane_on_idle for a one-shot self-poke.")]
+    async fn pane_pulse_set(
+        &self,
+        Parameters(req): Parameters<PulseSetRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({
+            "window": req.window, "tab": req.tab, "pane": req.pane,
+            "keys": req.keys, "interval_secs": req.interval_secs,
+            "idle_only": req.idle_only, "max_lifetime_secs": req.max_lifetime_secs,
+            "max_fires": req.max_fires,
+        });
+        let resp = self
+            .post_json_as("/api/pulse/set", &body, forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Clear a pane pulse — by its id, or by addressing the pane (window/tab/pane).")]
+    async fn pane_pulse_clear(
+        &self,
+        Parameters(req): Parameters<PulseClearRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"id": req.id, "window": req.window, "tab": req.tab, "pane": req.pane});
+        let resp = self
+            .post_json_as("/api/pulse/clear", &body, forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Pause or resume a pane pulse by id (from pane_pulse_status).")]
+    async fn pane_pulse_pause(
+        &self,
+        Parameters(req): Parameters<PulsePauseRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"id": req.id, "paused": req.paused.unwrap_or(true)});
+        let resp = self
+            .post_json_as("/api/pulse/pause", &body, forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "List active pane pulses (id, target, interval, idle_only, paused, fires, time to expiry).")]
+    async fn pane_pulse_status(&self) -> Result<CallToolResult, ErrorData> {
+        let resp = self.get("/api/pulse/status").await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 

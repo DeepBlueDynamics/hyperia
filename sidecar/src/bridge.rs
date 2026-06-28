@@ -105,6 +105,26 @@ struct IdleCallback {
     creator: String,
 }
 
+/// A recurring prompt the sidecar re-injects into a pane on an interval — the
+/// pane "pulse" watchdog. idle_only fires only when the pane looks idle/stalled;
+/// otherwise it fires every interval (skipping human/dialog/working). Capped to
+/// a max lifetime (<=1h) and optional max_fires.
+#[derive(Clone)]
+struct Pulse {
+    id: String,
+    pane: String,
+    target_label: String,
+    keys: String,
+    interval_secs: u64,
+    idle_only: bool,
+    expires_at: std::time::Instant,
+    max_fires: Option<u32>,
+    fires: u32,
+    paused: bool,
+    last_fire: std::time::Instant,
+    creator: String,
+}
+
 struct BridgeInner {
     /// Channel to send JSON messages downstream to Electron
     cmd_tx: Mutex<Option<mpsc::UnboundedSender<String>>>,
@@ -129,6 +149,9 @@ struct BridgeInner {
     /// the agent (or its in-container monitor, e.g. nemesis8) says it's working —
     /// this OVERRIDES the screen heuristic and suppresses pokes. Lapses on TTL.
     liveness: Mutex<HashMap<String, std::time::Instant>>,
+    /// Recurring pane pulses (the watchdog): re-inject a prompt on an interval,
+    /// idle-gated or fixed. Watched + fired by the idle-monitor task.
+    pulses: Mutex<Vec<Pulse>>,
     /// Per-session output subscribers: uid → list of senders waiting for PTY bytes
     output_subs: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>,
     /// Lume-backed per-shell log store (BM25 search + pickle-to-disk).
@@ -152,6 +175,7 @@ impl Bridge {
                 held_actions: Mutex::new(HashMap::new()),
                 idle_callbacks: Mutex::new(Vec::new()),
                 liveness: Mutex::new(HashMap::new()),
+                pulses: Mutex::new(Vec::new()),
                 output_subs: Mutex::new(HashMap::new()),
                 lume: crate::lume_store::LumeStore::new(),
                 perms: crate::perms::PermStore::default(),
@@ -450,6 +474,91 @@ impl Bridge {
         lv.get(pane).map(|t| *t > std::time::Instant::now()).unwrap_or(false)
     }
 
+    /// Register a recurring pulse on a pane. Clamps interval (>=20s) and lifetime
+    /// (<=1h). One pulse per pane (dedupe). Returns the id.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_pulse(
+        &self,
+        pane: &str,
+        target_label: &str,
+        keys: &str,
+        interval_secs: u64,
+        idle_only: bool,
+        max_lifetime_secs: u64,
+        max_fires: Option<u32>,
+        creator: &str,
+    ) -> String {
+        let interval = interval_secs.max(20);
+        let life = max_lifetime_secs.clamp(1, 3600);
+        let now = std::time::Instant::now();
+        let id = format!(
+            "pulse_{}",
+            self.inner.seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        let p = Pulse {
+            id: id.clone(),
+            pane: pane.to_string(),
+            target_label: target_label.to_string(),
+            keys: keys.to_string(),
+            interval_secs: interval,
+            idle_only,
+            expires_at: now + std::time::Duration::from_secs(life),
+            max_fires,
+            fires: 0,
+            paused: false,
+            last_fire: now, // wait one interval before the first fire
+            creator: creator.to_string(),
+        };
+        let mut pulses = self.inner.pulses.lock().await;
+        pulses.retain(|x| x.pane != pane);
+        pulses.push(p);
+        id
+    }
+
+    /// Clear pulses by id or by target pane. Returns how many were removed.
+    pub async fn clear_pulse(&self, id_or_pane: &str) -> usize {
+        let mut pulses = self.inner.pulses.lock().await;
+        let before = pulses.len();
+        pulses.retain(|p| p.id != id_or_pane && p.pane != id_or_pane);
+        before - pulses.len()
+    }
+
+    /// Pause/resume a pulse by id. Returns true if found.
+    pub async fn pause_pulse(&self, id: &str, paused: bool) -> bool {
+        let mut pulses = self.inner.pulses.lock().await;
+        if let Some(p) = pulses.iter_mut().find(|p| p.id == id) {
+            p.paused = paused;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Snapshot of active pulses for the status endpoint.
+    pub async fn pulse_status(&self) -> serde_json::Value {
+        let now = std::time::Instant::now();
+        let pulses = self.inner.pulses.lock().await;
+        let list: Vec<serde_json::Value> = pulses
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "id": p.id,
+                    "pane": p.pane,
+                    "target": p.target_label,
+                    "interval_secs": p.interval_secs,
+                    "idle_only": p.idle_only,
+                    "paused": p.paused,
+                    "fires": p.fires,
+                    "max_fires": p.max_fires,
+                    "secs_until_expiry": p.expires_at.saturating_duration_since(now).as_secs(),
+                    "secs_since_fire": now.saturating_duration_since(p.last_fire).as_secs(),
+                    "creator": p.creator,
+                })
+            })
+            .collect();
+        serde_json::json!({ "pulses": list })
+    }
+
     /// Whether the human touched this pane within the last 15s (don't poke over them).
     async fn user_active_recently(&self, uid: &str) -> bool {
         let sessions = self.inner.sessions.lock().await;
@@ -493,7 +602,9 @@ impl Bridge {
         // Snapshot watched panes (don't hold the callbacks lock across awaits).
         let panes: Vec<String> = {
             let cbs = self.inner.idle_callbacks.lock().await;
+            let pulses = self.inner.pulses.lock().await;
             let mut v: Vec<String> = cbs.iter().map(|c| c.pane.clone()).collect();
+            v.extend(pulses.iter().filter(|p| !p.paused).map(|p| p.pane.clone()));
             v.sort();
             v.dedup();
             v
@@ -519,9 +630,11 @@ impl Bridge {
             kinds.insert(pane.clone(), kind);
         }
 
-        // Update edge state + collect fires, then prune expired/exhausted.
         let now = std::time::Instant::now();
-        let mut to_fire: Vec<(String, String)> = Vec::new();
+        // (pane, keys, Some(creator) => pulse [attribute] / None => callback [self])
+        let mut to_fire: Vec<(String, String, Option<String>)> = Vec::new();
+
+        // Idle callbacks — edge-triggered (running->idle), one fire per edge.
         {
             let mut cbs = self.inner.idle_callbacks.lock().await;
             for c in cbs.iter_mut() {
@@ -529,7 +642,7 @@ impl Bridge {
                     "running" => c.running_seen = true,
                     "idle" => {
                         if c.running_seen {
-                            to_fire.push((c.pane.clone(), c.keys.clone()));
+                            to_fire.push((c.pane.clone(), c.keys.clone(), None));
                             c.fires += 1;
                             c.running_seen = false;
                         }
@@ -540,11 +653,46 @@ impl Bridge {
             cbs.retain(|c| now < c.expires_at && c.fires < c.max_fires);
         }
 
-        // Fire outside the lock. interrupt=false so it never steals focus and the
-        // renderer queues it if the human is active. Bracketed-paste + a separate
-        // Enter so a long prompt isn't garbled by the agent's Ink input.
-        for (pane, keys) in to_fire {
-            let wrapped = format!("\u{1b}[200~{}\u{1b}[201~", keys);
+        // Pulses — interval-gated. idle_only fires only when idle; otherwise fires
+        // when not human/dialog/running. Never fires while the human is active.
+        {
+            let mut pulses = self.inner.pulses.lock().await;
+            for p in pulses.iter_mut() {
+                if p.paused {
+                    continue;
+                }
+                if now.saturating_duration_since(p.last_fire).as_secs() < p.interval_secs {
+                    continue;
+                }
+                let kind = kinds.get(&p.pane).map(|s| s.as_str()).unwrap_or("unknown");
+                let ok = if p.idle_only {
+                    kind == "idle"
+                } else {
+                    kind != "human" && kind != "dialog" && kind != "running"
+                };
+                if ok {
+                    to_fire.push((p.pane.clone(), p.keys.clone(), Some(p.creator.clone())));
+                    p.last_fire = now;
+                    p.fires += 1;
+                }
+            }
+            pulses.retain(|p| {
+                now < p.expires_at && p.max_fires.map(|m| p.fires < m).unwrap_or(true)
+            });
+        }
+
+        // Fire outside the locks. interrupt=false (never steals focus; renderer
+        // queues if the human is active). Bracketed-paste + a separate Enter so a
+        // long prompt isn't garbled. Pulses get a "From: <creator>:" header into
+        // agent panes; self-callbacks don't (you're poking yourself).
+        for (pane, keys, from_creator) in to_fire {
+            let payload = match &from_creator {
+                Some(creator) if self.is_agent_pane(&pane).await => {
+                    format!("From: {creator}: {keys}")
+                }
+                _ => keys,
+            };
+            let wrapped = format!("\u{1b}[200~{payload}\u{1b}[201~");
             let _ = self
                 .send_command(serde_json::json!({
                     "type": "Keys", "uid": pane, "keys": wrapped, "interrupt": false

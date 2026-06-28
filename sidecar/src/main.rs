@@ -1371,6 +1371,98 @@ async fn post_pane_liveness(
     )
 }
 
+/// Set a recurring pulse on a pane (cross-pane; consent-gated at set-time, self
+/// blocked by RefuseHome). Re-submits `keys` on the interval, idle-gated by default.
+async fn post_pulse_set(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let window = parsed["window"].as_u64().map(|v| v as u32);
+    let tab = parsed["tab"].as_str();
+    let pane = parsed["pane"].as_str();
+    if window.is_none() && tab.is_none() && pane.is_none() {
+        return (StatusCode::BAD_REQUEST, "No pane addressed. Pass window/tab/pane — the pane to pulse.".into());
+    }
+    let uid = match state.bridge.resolve_pane_uid(window, tab, pane).await {
+        Some(u) => u,
+        None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address.".into()),
+    };
+    let keys = parsed["keys"].as_str().unwrap_or("").to_string();
+    if keys.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "keys (the prompt to re-submit) is required".into());
+    }
+    // Cross-pane consent at set-time. Self-pulse loop is blocked here (RefuseHome).
+    if let Err(resp) = enforce_drive(&state, &headers, &uid).await {
+        return resp;
+    }
+    let interval = parsed["interval_secs"].as_u64().unwrap_or(60);
+    let idle_only = parsed["idle_only"].as_bool().unwrap_or(true);
+    let life = parsed["max_lifetime_secs"].as_u64().unwrap_or(3600);
+    let max_fires = parsed["max_fires"].as_u64().map(|v| v as u32);
+    let creator = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await.label();
+    let label = state.bridge.pane_display_name(&uid).await.unwrap_or_else(|| uid.clone());
+    let id = state
+        .bridge
+        .register_pulse(&uid, &label, &keys, interval, idle_only, life, max_fires, &creator)
+        .await;
+    (
+        StatusCode::OK,
+        serde_json::json!({
+            "ok": true,
+            "id": id,
+            "pane": uid,
+            "interval_secs": interval.max(20),
+            "idle_only": idle_only,
+            "message": "Pulse set. It re-submits on the interval (idle-gated if idle_only), never steals focus, and auto-expires within 1h."
+        })
+        .to_string(),
+    )
+}
+
+/// Clear pulse(s) by id, or by addressing the pane (window/tab/pane).
+async fn post_pulse_clear(
+    State(state): State<AppState>,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let key = if let Some(id) = parsed["id"].as_str() {
+        id.to_string()
+    } else {
+        let window = parsed["window"].as_u64().map(|v| v as u32);
+        match state
+            .bridge
+            .resolve_pane_uid(window, parsed["tab"].as_str(), parsed["pane"].as_str())
+            .await
+        {
+            Some(u) => u,
+            None => return (StatusCode::BAD_REQUEST, "Pass id, or a window/tab/pane that resolves.".into()),
+        }
+    };
+    let n = state.bridge.clear_pulse(&key).await;
+    (StatusCode::OK, serde_json::json!({"ok": true, "cleared": n}).to_string())
+}
+
+/// Pause/resume a pulse by id.
+async fn post_pulse_pause(
+    State(state): State<AppState>,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let id = parsed["id"].as_str().unwrap_or("");
+    let paused = parsed["paused"].as_bool().unwrap_or(true);
+    if state.bridge.pause_pulse(id, paused).await {
+        (StatusCode::OK, serde_json::json!({"ok": true, "paused": paused}).to_string())
+    } else {
+        (StatusCode::NOT_FOUND, serde_json::json!({"ok": false, "error": "unknown pulse id"}).to_string())
+    }
+}
+
+async fn get_pulse_status(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(state.bridge.pulse_status().await)
+}
+
 async fn get_perm_state(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(state.bridge.perms().snapshot().await)
 }
@@ -2518,6 +2610,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/type", axum::routing::post(post_type))
         .route("/api/pulse/on-idle", axum::routing::post(post_pane_on_idle))
         .route("/api/pulse/liveness", axum::routing::post(post_pane_liveness))
+        .route("/api/pulse/set", axum::routing::post(post_pulse_set))
+        .route("/api/pulse/clear", axum::routing::post(post_pulse_clear))
+        .route("/api/pulse/pause", axum::routing::post(post_pulse_pause))
+        .route("/api/pulse/status", axum::routing::get(get_pulse_status))
         .route("/api/type-and-collect", axum::routing::post(post_type_and_collect))
         .route("/api/pane/split", axum::routing::post(post_split))
         .route("/api/pane/focus", axum::routing::post(post_focus))
