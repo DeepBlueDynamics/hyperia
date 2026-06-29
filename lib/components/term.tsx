@@ -2455,6 +2455,7 @@ export default class Term extends React.PureComponent<
             isSplitRightDisabled={hideSplits}
             isSplitDownDisabled={isSplitDownDisabled || hideSplits}
             isBusy={this.isTerminalBusy()}
+            paneName={labelFull}
             label={
               this.state.isRenamingLabel ? (
                 <input

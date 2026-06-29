@@ -211,7 +211,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       //   `<name> (pane <8charHex>)`
       // Pasting that anywhere reads as the human name first; the parenthetical
       // tells the reader (or an agent) the kind and gives a stable handle.
-      const name = (getTextFromNode(label) || paneName || 'Pane').trim();
+      const name = (paneName || getTextFromNode(label) || 'Pane').trim();
       const shortId = paneId ? paneId.replace(/-/g, '').slice(0, 8) : '';
       let cleanText = name;
       if (shortId) {
@@ -245,7 +245,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
     const handleNameContextMenu = (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const name = (getTextFromNode(label) || paneName || 'Pane').trim();
+      const name = (paneName || getTextFromNode(label) || 'Pane').trim();
       const shortId = paneId ? paneId.replace(/-/g, '').slice(0, 8) : '';
       try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires

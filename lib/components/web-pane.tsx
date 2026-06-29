@@ -2058,6 +2058,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             paneId={this.props.groupUid}
             tint={tint as any}
             label={labelText}
+            paneName={labelText}
             isSplitRightDisabled={hideSplits}
             isSplitDownDisabled={isSplitDownDisabled || hideSplits}
             navCluster={
