@@ -890,11 +890,42 @@ async fn get_identity_whoami(State(state): State<AppState>, headers: HeaderMap) 
 /// EVERY request (including the nested `/mcp` MCP service), stash it in request
 /// extensions for downstream handlers, and log non-anonymous calls so MCP tool
 /// traffic is attributable. Enforcement (refusing/ gating) lands in #59.
+fn extract_token_from_query(query: &str) -> Option<String> {
+    for part in query.split('&') {
+        let mut key_val = part.splitn(2, '=');
+        if let (Some(k), Some(v)) = (key_val.next(), key_val.next()) {
+            if k == "token" {
+                if let Ok(decoded) = urlencoding::decode(v) {
+                    return Some(decoded.into_owned());
+                }
+            }
+        }
+    }
+    None
+}
+
 async fn identity_mw(
     State(bridge): State<Bridge>,
     mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    // If the Authorization header is missing/empty, try to extract token from query parameter
+    let auth_header_missing = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true);
+
+    if auth_header_missing {
+        if let Some(query) = req.uri().query() {
+            if let Some(tok) = extract_token_from_query(query) {
+                if let Ok(header_val) = axum::http::HeaderValue::from_str(&format!("Bearer {}", tok)) {
+                    req.headers_mut().insert(axum::http::header::AUTHORIZATION, header_val);
+                }
+            }
+        }
+    }
     let bearer = req
         .headers()
         .get(axum::http::header::AUTHORIZATION)
