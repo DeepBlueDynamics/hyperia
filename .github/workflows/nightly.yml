@@ -20,7 +20,11 @@ jobs:
       fail-fast: false # one platform failing shouldn't drop the others' artifacts
       matrix:
         include:
-          - os: windows-latest
+          # Pinned to windows-2022 (VS 2022). windows-latest moved to an image
+          # with VS 18, which the bundled node-gyp can't detect → native rebuild
+          # (native-process-working-directory) fails in install-app-deps. Mirrors
+          # build.yml, which was already pinned for this reason.
+          - os: windows-2022
             rust_target: x86_64-pc-windows-msvc
           - os: macos-latest
             rust_target: x86_64-apple-darwin
@@ -76,7 +80,7 @@ jobs:
 
       # Package installers — UNSIGNED on every platform.
       - name: Build installer (Windows, unsigned)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2022'
         # No AZURE_CLIENT_SECRET → build/win/sign.js logs "skipping signing".
         run: npx electron-builder --win
         env:
