@@ -2454,6 +2454,7 @@ export default class Term extends React.PureComponent<
             isPlaceholder={isPicker}
             isSplitRightDisabled={hideSplits}
             isSplitDownDisabled={isSplitDownDisabled || hideSplits}
+            isBusy={this.isTerminalBusy()}
             label={
               this.state.isRenamingLabel ? (
                 <input

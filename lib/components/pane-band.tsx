@@ -48,6 +48,7 @@ type PaneBandProps = {
   isSplitDownDisabled?: boolean;
   paneName?: string; // Optional override for the visible name used in click-to-copy
   paneId?: string; // Underlying UID — used ONLY to append a short suffix to the copied string for disambiguation
+  isBusy?: boolean;
 };
 
 const getTextFromNode = (node: React.ReactNode): string => {
@@ -99,12 +100,24 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       isSplitRightDisabled = false,
       isSplitDownDisabled = false,
       paneName,
-      paneId
+      paneId,
+      isBusy = false
     },
     ref
   ) => {
     const resolvedTint = isPlaceholder ? 'neutral' : tint;
     const isAi = paneType === 'ai';
+
+    const [confirmClose, setConfirmClose] = React.useState(false);
+    const confirmCloseTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+
+    React.useEffect(() => {
+      return () => {
+        if (confirmCloseTimeoutRef.current) {
+          clearTimeout(confirmCloseTimeoutRef.current);
+        }
+      };
+    }, []);
 
     // Cross-pane access consent now renders as a single window-level centered
     // modal (lib/components/consent-modal.tsx), reachable from any tab — not a
@@ -765,9 +778,19 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             className="pane-band-control-icon pane-band-tooltip-trigger"
             onClick={(e) => {
               e.stopPropagation();
+              if (isBusy && !confirmClose) {
+                setConfirmClose(true);
+                if (confirmCloseTimeoutRef.current) {
+                  clearTimeout(confirmCloseTimeoutRef.current);
+                }
+                confirmCloseTimeoutRef.current = setTimeout(() => {
+                  setConfirmClose(false);
+                }, 3000);
+                return;
+              }
               onClose();
             }}
-            style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0}}
+            style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, position: 'relative'}}
           >
             {/* Inline SVG (not the `ti` icon font, which may not be loaded —
                 that's why the close × was invisible while the split controls,
@@ -803,6 +826,28 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 {resolvedTint === 'neutral' && paneType === 'web' ? 'Escape' : 'Ctrl+Shift+W'}
               </div>
             </div>
+            {confirmClose && (
+              <div
+                className="pane-band-confirm-close-toast"
+                style={{
+                  position: 'absolute',
+                  top: '28px',
+                  right: '0px',
+                  background: 'var(--accent-warning, #d29922)',
+                  color: '#0f0f18',
+                  padding: 'var(--space-4) var(--space-8)',
+                  borderRadius: 'var(--radius-3)',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+                  zIndex: 3000,
+                  pointerEvents: 'none'
+                }}
+              >
+                Click again to close
+              </div>
+            )}
           </span>
         </div>
 
