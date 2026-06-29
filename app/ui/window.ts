@@ -416,7 +416,8 @@ export function newWindow(
       cwd: options.cwd,
       isNewGroup: extraOptions.isNewGroup,
       isRestore: extraOptions.isRestore,
-      lastCommand: extraOptions.lastCommand
+      lastCommand: extraOptions.lastCommand,
+      layoutPattern: (extraOptions as any).layoutPattern
     });
 
     // Register with sidecar bridge for agent control

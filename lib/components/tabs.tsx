@@ -1,4 +1,5 @@
 import React, {forwardRef, useEffect, useRef, useCallback, useState} from 'react';
+import rpc from '../rpc';
 
 import type {TabsProps} from '../../typings/hyper';
 import {ipcRenderer} from '../utils/ipc';
@@ -285,7 +286,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         </button>
       )}
 
-      <div className="tabs_newTabPair">
+      <div className="tabs_newTabPair tabs_newTab_tooltip_trigger">
         <button
           className="tabs_newTabBtn"
           onClick={() => props.openNewTab('picker')}
@@ -294,6 +295,67 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         >
           +
         </button>
+
+        <div className="tabs_newTab_tooltip" style={{minWidth: '200px'}}>
+          <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 600, marginBottom: '8px', textAlign: 'center'}}>
+            New Tab Layouts
+          </div>
+          <div className="tabs_layout_grid">
+            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: '3cols'})} title="3 Columns">
+              <div className="layout-preview-box l-3cols">
+                <div /><div /><div />
+              </div>
+            </div>
+            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: '3rows'})} title="3 Rows">
+              <div className="layout-preview-box l-3rows">
+                <div /><div /><div />
+              </div>
+            </div>
+            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'grid2x2'})} title="Grid 2x2">
+              <div className="layout-preview-box l-grid2x2">
+                <div /><div /><div /><div />
+              </div>
+            </div>
+            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'leftHeavy'})} title="Left Heavy">
+              <div className="layout-preview-box l-leftHeavy">
+                <div className="l-col"><div /><div /></div>
+                <div className="l-col"><div /></div>
+              </div>
+            </div>
+            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'rightHeavy'})} title="Right Heavy">
+              <div className="layout-preview-box l-rightHeavy">
+                <div className="l-col"><div /></div>
+                <div className="l-col"><div /><div /></div>
+              </div>
+            </div>
+            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'topHeavy'})} title="Top Heavy">
+              <div className="layout-preview-box l-topHeavy">
+                <div className="l-row"><div /><div /></div>
+                <div className="l-row"><div /></div>
+              </div>
+            </div>
+            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'bottomHeavy'})} title="Bottom Heavy">
+              <div className="layout-preview-box l-bottomHeavy">
+                <div className="l-row"><div /></div>
+                <div className="l-row"><div /><div /></div>
+              </div>
+            </div>
+            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'hsplit212'})} title="H-Split (2-1-2)">
+              <div className="layout-preview-box l-hsplit212">
+                <div className="l-col"><div /><div /></div>
+                <div className="l-col"><div /></div>
+                <div className="l-col"><div /><div /></div>
+              </div>
+            </div>
+            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'grid3x2'})} title="Grid 3x2">
+              <div className="layout-preview-box l-grid3x2">
+                <div className="l-col"><div /><div /></div>
+                <div className="l-col"><div /><div /></div>
+                <div className="l-col"><div /><div /></div>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <button
           ref={chevronRef}
@@ -913,6 +975,134 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           height: 0.5px;
           background: var(--border-neutral);
           margin: 6px 0;
+        }
+
+        .tabs_newTab_tooltip_trigger {
+          position: relative;
+        }
+
+        .tabs_newTab_tooltip {
+          display: none;
+          position: absolute;
+          top: 34px;
+          left: 0;
+          background: var(--bg-primary);
+          border: 0.5px solid var(--border-neutral);
+          border-radius: var(--radius-4);
+          padding: var(--space-8) var(--space-12);
+          white-space: nowrap;
+          z-index: 1000;
+          text-align: left;
+          pointer-events: auto;
+          box-shadow: 0 6px 16px rgba(0,0,0,0.35);
+        }
+
+        .tabs_newTab_tooltip::before {
+          content: '';
+          position: absolute;
+          top: -12px;
+          left: 4px;
+          width: 20px;
+          height: 12px;
+          background: transparent;
+        }
+
+        .tabs_newTab_tooltip_trigger:hover .tabs_newTab_tooltip {
+          display: block;
+        }
+
+        /* Layouts grid */
+        .tabs_layout_grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 8px;
+          padding: 4px;
+        }
+
+        .tabs_layout_item {
+          cursor: pointer;
+          border-radius: 4px;
+          border: 1px solid var(--border-neutral);
+          padding: 4px;
+          background: rgba(255, 255, 255, 0.02);
+          transition: all 0.15s ease;
+        }
+
+        .tabs_layout_item:hover {
+          border-color: var(--accent-primary, #6ea8fe);
+          background: rgba(110, 168, 254, 0.15);
+          transform: translateY(-1px);
+        }
+
+        .layout-preview-box {
+          width: 48px;
+          height: 32px;
+          background: rgba(0, 0, 0, 0.25);
+          border-radius: 2px;
+          overflow: hidden;
+          display: flex;
+          gap: 1px;
+          border: 0.5px solid rgba(255, 255, 255, 0.15);
+        }
+
+        .layout-preview-box div {
+          background: rgba(255, 255, 255, 0.2);
+          border-radius: 1px;
+        }
+
+        /* 3cols */
+        .l-3cols > div {
+          flex: 1;
+        }
+
+        /* 3rows */
+        .l-3rows {
+          flex-direction: column;
+        }
+        .l-3rows > div {
+          flex: 1;
+        }
+
+        /* grid2x2 */
+        .l-grid2x2 {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          grid-template-rows: 1fr 1fr;
+          gap: 1px;
+        }
+
+        /* Columns/Rows based layouts */
+        .l-col {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 1px;
+          background: transparent !important;
+        }
+
+        .l-col > div {
+          flex: 1;
+          width: 100%;
+        }
+
+        .l-row {
+          flex: 1;
+          display: flex;
+          gap: 1px;
+          background: transparent !important;
+        }
+
+        .l-row > div {
+          flex: 1;
+          height: 100%;
+        }
+
+        .l-topHeavy {
+          flex-direction: column;
+        }
+
+        .l-bottomHeavy {
+          flex-direction: column;
         }
       `}</style>
     </nav>

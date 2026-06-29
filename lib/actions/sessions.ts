@@ -21,6 +21,7 @@ import type {HyperState, HyperDispatch, HyperActions} from '../../typings/hyper'
 import rpc from '../rpc';
 import {keys} from '../utils/object';
 import findBySession from '../utils/term-groups';
+import {openLayout} from '../utils/layouts';
 
 export function addSession(data: Session) {
   const {
@@ -40,6 +41,7 @@ export function addSession(data: Session) {
   } = data;
   const isRestore = (data as any).isRestore;
   const lastCommand = (data as any).lastCommand;
+  const layoutPattern = (data as any).layoutPattern;
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     const {sessions} = getState();
     const resolvedActiveUid = activeUid ? activeUid : sessions.activeUid;
@@ -63,6 +65,12 @@ export function addSession(data: Session) {
       isRestore,
       lastCommand
     });
+
+    if (layoutPattern) {
+      setTimeout(() => {
+        openLayout(layoutPattern, uid);
+      }, 50);
+    }
 
     if (isRestore && lastCommand) {
       setTimeout(() => {

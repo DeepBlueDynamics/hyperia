@@ -22,6 +22,7 @@ export type Session = {
   isRestore?: boolean;
   lastCommand?: string;
   splitPlacement?: 'BEFORE' | 'AFTER';
+  layoutPattern?: string;
 };
 
 export type sessionExtraOptions = {
@@ -40,6 +41,7 @@ export type sessionExtraOptions = {
   profile?: string;
   groupUid?: string;
   url?: string;
+  layoutPattern?: string;
 };
 
 export type MainEvents = {
