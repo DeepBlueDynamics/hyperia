@@ -20,15 +20,7 @@ canvas { display: block; }
   pointer-events: none;
   z-index: 10;
 }
-#title-tm {
-  position: absolute;
-  top: -18px; right: -22px;
-  font-size: 14px;
-  font-weight: 300;
-  letter-spacing: 0;
-  color: rgba(255,255,255,0.55);
-  text-shadow: none;
-}
+
 #brand {
   position: absolute;
   top: calc(50% + 52px); left: 50%;
@@ -148,18 +140,7 @@ for (let i = 0; i < 5; i++) {
   particles.push(p);
 }
 
-// ™ node — orbits in the field like any other particle
-const tmParticle = new Particle();
-tmParticle.x = W / 2 + 180;
-tmParticle.y = H / 2 - 80;
-tmParticle.vx = 20;
-tmParticle.vy = 60;
-tmParticle.q = 1.5;
-tmParticle.mass = 3;
-tmParticle.r = 200; tmParticle.g = 200; tmParticle.b = 255;
-tmParticle.isTm = true;
-tmParticle.maxTrail = 16;
-particles.push(tmParticle);
+
 
 function weberForce(p1, p2) {
   const dx = p2.x - p1.x;
@@ -280,40 +261,22 @@ function draw() {
       ctx.stroke();
     }
 
-    if (p.isTm) {
-      // ™ glow halo
-      const tmGlow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 22);
-      tmGlow.addColorStop(0, `rgba(${p.r}, ${p.g}, ${p.b}, 0.45)`);
-      tmGlow.addColorStop(0.5, `rgba(${p.r}, ${p.g}, ${p.b}, 0.1)`);
-      tmGlow.addColorStop(1, `rgba(${p.r}, ${p.g}, ${p.b}, 0)`);
-      ctx.fillStyle = tmGlow;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 22, 0, Math.PI * 2);
-      ctx.fill();
-      // ™ text
-      ctx.font = '600 13px "Segoe UI", sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = `rgb(${p.r}, ${p.g}, ${p.b})`;
-      ctx.fillText('™', p.x, p.y);
-    } else {
-      // Glow
-      const size = Math.abs(p.q) * 3 + 1;
-      const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, size * 6);
-      glow.addColorStop(0, `rgba(${p.r}, ${p.g}, ${p.b}, 0.6)`);
-      glow.addColorStop(0.4, `rgba(${p.r}, ${p.g}, ${p.b}, 0.15)`);
-      glow.addColorStop(1, `rgba(${p.r}, ${p.g}, ${p.b}, 0)`);
-      ctx.fillStyle = glow;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, size * 6, 0, Math.PI * 2);
-      ctx.fill();
+    // Glow
+    const size = Math.abs(p.q) * 3 + 1;
+    const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, size * 6);
+    glow.addColorStop(0, `rgba(${p.r}, ${p.g}, ${p.b}, 0.6)`);
+    glow.addColorStop(0.4, `rgba(${p.r}, ${p.g}, ${p.b}, 0.15)`);
+    glow.addColorStop(1, `rgba(${p.r}, ${p.g}, ${p.b}, 0)`);
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, size * 6, 0, Math.PI * 2);
+    ctx.fill();
 
-      // Core
-      ctx.fillStyle = `rgb(${p.r}, ${p.g}, ${p.b})`;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    // Core
+    ctx.fillStyle = `rgb(${p.r}, ${p.g}, ${p.b})`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+    ctx.fill();
   }
 }
 
