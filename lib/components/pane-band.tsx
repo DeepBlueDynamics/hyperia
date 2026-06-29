@@ -575,7 +575,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           )}
 
           {/* Layouts Button */}
-          {paneId && !isPlaceholder && (
+          {paneId && !isPlaceholder && !isSplitRightDisabled && !isSplitDownDisabled && (
             <span
               className="pane-band-control-icon pane-band-tooltip-trigger"
               style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
@@ -596,7 +596,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 <rect x="4" y="4" width="4" height="4" fill="currentColor" opacity="0.3" />
                 <rect x="16" y="16" width="4" height="4" fill="currentColor" opacity="0.3" />
               </svg>
-              <div className="pane-band-tooltip pane-band-layout-tooltip" style={{minWidth: '200px'}}>
+              <div className="pane-band-tooltip pane-band-layout-tooltip" style={{minWidth: '180px'}}>
                 <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 600, marginBottom: '8px', textAlign: 'center'}}>
                   Quick Layouts
                 </div>
@@ -614,44 +614,6 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   <div className="pane-band-layout-item" onClick={() => openLayout('grid2x2', paneId)} title="Grid 2x2">
                     <div className="layout-preview-box l-grid2x2">
                       <div /><div /><div /><div />
-                    </div>
-                  </div>
-                  <div className="pane-band-layout-item" onClick={() => openLayout('leftHeavy', paneId)} title="Left Heavy">
-                    <div className="layout-preview-box l-leftHeavy">
-                      <div className="l-col"><div /><div /></div>
-                      <div className="l-col"><div /></div>
-                    </div>
-                  </div>
-                  <div className="pane-band-layout-item" onClick={() => openLayout('rightHeavy', paneId)} title="Right Heavy">
-                    <div className="layout-preview-box l-rightHeavy">
-                      <div className="l-col"><div /></div>
-                      <div className="l-col"><div /><div /></div>
-                    </div>
-                  </div>
-                  <div className="pane-band-layout-item" onClick={() => openLayout('topHeavy', paneId)} title="Top Heavy">
-                    <div className="layout-preview-box l-topHeavy">
-                      <div className="l-row"><div /><div /></div>
-                      <div className="l-row"><div /></div>
-                    </div>
-                  </div>
-                  <div className="pane-band-layout-item" onClick={() => openLayout('bottomHeavy', paneId)} title="Bottom Heavy">
-                    <div className="layout-preview-box l-bottomHeavy">
-                      <div className="l-row"><div /></div>
-                      <div className="l-row"><div /><div /></div>
-                    </div>
-                  </div>
-                  <div className="pane-band-layout-item" onClick={() => openLayout('hsplit212', paneId)} title="H-Split (2-1-2)">
-                    <div className="layout-preview-box l-hsplit212">
-                      <div className="l-col"><div /><div /></div>
-                      <div className="l-col"><div /></div>
-                      <div className="l-col"><div /><div /></div>
-                    </div>
-                  </div>
-                  <div className="pane-band-layout-item" onClick={() => openLayout('grid3x2', paneId)} title="Grid 3x2">
-                    <div className="layout-preview-box l-grid3x2">
-                      <div className="l-col"><div /><div /></div>
-                      <div className="l-col"><div /><div /></div>
-                      <div className="l-col"><div /><div /></div>
                     </div>
                   </div>
                 </div>
@@ -1216,29 +1178,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             gap: 1px;
           }
 
-          /* Columns/Rows based layouts */
-          .l-col {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 1px;
-            background: transparent !important;
-          }
 
-          .l-row {
-            flex: 1;
-            display: flex;
-            gap: 1px;
-            background: transparent !important;
-          }
-
-          .l-topHeavy {
-            flex-direction: column;
-          }
-
-          .l-bottomHeavy {
-            flex-direction: column;
-          }
 
           .pane-band-name-cluster {
             scrollbar-width: none !important;
