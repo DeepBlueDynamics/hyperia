@@ -14,7 +14,8 @@ import {
   SESSION_SET_XTERM_TITLE,
   SESSION_SEARCH,
   SESSION_SET_DESCRIPTION,
-  SESSION_SET_CWD
+  SESSION_SET_CWD,
+  SESSION_SET_SHELL_STATE
 } from '../../typings/constants/sessions';
 import {TERM_GROUP_SET_TAB_NAME} from '../../typings/constants/term-groups';
 import type {HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
@@ -334,5 +335,13 @@ export function setSessionCwd(uid: string, cwd: string): HyperActions {
     type: SESSION_SET_CWD,
     uid,
     cwd
+  };
+}
+
+export function setSessionShellState(uid: string, shellState: { state: 'idle' | 'busy'; lastExit?: number; command?: string }): HyperActions {
+  return {
+    type: SESSION_SET_SHELL_STATE,
+    uid,
+    shellState
   };
 }

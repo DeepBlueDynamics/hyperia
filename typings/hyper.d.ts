@@ -143,6 +143,7 @@ export type session = {
   shellName?: string;
   lastCommand?: string;
   manualTitle?: boolean;
+  shellState?: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
 };
 
 export type sessionState = Immutable<{
@@ -460,6 +461,7 @@ export type TermProps = {
   defaultProfile?: string;
   profiles?: any[];
   sessionCwd?: string;
+  shellState?: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
   onCwd?: (cwd: string) => void;
 } & extensionProps;
 

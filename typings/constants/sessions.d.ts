@@ -13,6 +13,7 @@ export const SESSION_SET_XTERM_TITLE = 'SESSION_SET_XTERM_TITLE';
 export const SESSION_SET_CWD = 'SESSION_SET_CWD';
 export const SESSION_SEARCH = 'SESSION_SEARCH';
 export const SESSION_SET_DESCRIPTION = 'SESSION_SET_DESCRIPTION';
+export const SESSION_SET_SHELL_STATE = 'SESSION_SET_SHELL_STATE';
 
 export interface SessionAddAction {
   type: typeof SESSION_ADD;
@@ -29,6 +30,7 @@ export interface SessionAddAction {
   url?: string;
   cwd?: string;
   isNewGroup?: boolean;
+  shellState?: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
 }
 export interface SessionResizeAction {
   type: typeof SESSION_RESIZE;
@@ -96,6 +98,12 @@ export interface SessionSetDescriptionAction {
   tabName: string;
 }
 
+export interface SessionSetShellStateAction {
+  type: typeof SESSION_SET_SHELL_STATE;
+  uid: string;
+  shellState: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
+}
+
 export type SessionActions =
   | SessionAddAction
   | SessionResizeAction
@@ -111,4 +119,5 @@ export type SessionActions =
   | SessionSetXtermTitleAction
   | SessionSetCwdAction
   | SessionSearchAction
-  | SessionSetDescriptionAction;
+  | SessionSetDescriptionAction
+  | SessionSetShellStateAction;

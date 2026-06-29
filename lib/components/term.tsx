@@ -1244,8 +1244,15 @@ export default class Term extends React.PureComponent<
     });
   };
 
+  isTerminalBusy = () => {
+    if (this.props.shellState) {
+      return this.props.shellState.state !== 'idle';
+    }
+    return !!this.state.activeProgram;
+  };
+
   toggleDirNavigator = () => {
-    if (this.state.activeProgram) return;
+    if (this.isTerminalBusy()) return;
     const {isDirNavigatorOpen} = this.state;
     const sessionCwd = (this.props as any).sessionCwd;
     // Always open on the pane's CURRENT directory (sessionCwd), not a stale
@@ -1632,6 +1639,7 @@ export default class Term extends React.PureComponent<
   // The ONLY place that actually changes the shell's directory — on an explicit
   // Go, never on browse. Queued navigation lands here.
   goToNavigatorDir = () => {
+    if (this.isTerminalBusy()) return;
     const target = this.state.navigatorCurrentPath;
     if (!target || !this.props.onData) return;
 
@@ -2106,25 +2114,26 @@ export default class Term extends React.PureComponent<
           onKeyDown={this.handleSearchInputKeyDown}
         />
         <span
-          onClick={this.goToNavigatorDir}
+          onClick={this.isTerminalBusy() ? undefined : this.goToNavigatorDir}
           onMouseDown={(e) => e.preventDefault()}
           style={{
-            cursor: 'pointer',
+            cursor: this.isTerminalBusy() ? 'not-allowed' : 'pointer',
             display: 'inline-flex',
             alignItems: 'center',
             gap: 'var(--space-4)',
             fontSize: '10px',
             fontWeight: 600,
             fontFamily: 'var(--font-mono)',
-            color: 'var(--text-info)',
+            color: this.isTerminalBusy() ? 'var(--text-secondary)' : 'var(--text-info)',
             border: '0.5px solid var(--border-neutral)',
             borderRadius: 'var(--radius-3)',
             padding: '1px var(--space-6)',
             background: 'var(--bg-secondary)',
             userSelect: 'none',
-            whiteSpace: 'nowrap'
+            whiteSpace: 'nowrap',
+            opacity: this.isTerminalBusy() ? 0.5 : 1
           }}
-          title="cd to current browsed path (Ctrl+Enter)"
+          title={this.isTerminalBusy() ? "Directory change locked while process is running" : "cd to current browsed path (Ctrl+Enter)"}
         >
           ctrl-enter
         </span>
@@ -2627,21 +2636,21 @@ export default class Term extends React.PureComponent<
                     // below ~320 via showDirBar. Matches the web-pane URL bar.
                     flex: 1,
                     minWidth: '110px',
-                    cursor: this.state.activeProgram ? 'not-allowed' : 'pointer',
-                    opacity: this.state.activeProgram ? 0.5 : 1,
+                    cursor: this.isTerminalBusy() ? 'not-allowed' : 'pointer',
+                    opacity: this.isTerminalBusy() ? 0.5 : 1,
                     boxSizing: 'border-box',
                     marginLeft: 'var(--space-4)',
                     marginRight: 'var(--space-8)'
                   }}
                   title={
-                    this.state.activeProgram
-                      ? `Directory browsing locked while ${this.state.activeProgram} is running`
+                    this.isTerminalBusy()
+                      ? `Directory browsing locked while a process is running`
                       : 'Click to browse directories (Ctrl+Shift+O)'
                   }
                 >
                   <i
                     className={
-                      this.state.activeProgram
+                      this.isTerminalBusy()
                         ? 'ti ti-lock'
                         : this.state.isDirNavigatorOpen
                           ? 'ti ti-folder-open'

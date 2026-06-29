@@ -23,6 +23,7 @@ export type Session = {
   lastCommand?: string;
   splitPlacement?: 'BEFORE' | 'AFTER';
   layoutPattern?: string;
+  shellState?: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
 };
 
 export type sessionExtraOptions = {
@@ -153,6 +154,7 @@ export type RendererEvents = {
   'session data': string;
   'session cwd': {uid: string; cwd: string};
   'session exit': {uid: string};
+  'session shellstate': {uid: string; shellState: { state: 'idle' | 'busy'; lastExit?: number; command?: string }};
   'permission request': {id: string; requester: string; requesterPane: string; targetPane: string};
   'permission resolved': {targetPane: string; decision: string; id?: string};
   'agent toast': {id: string; requester: string; action: string};

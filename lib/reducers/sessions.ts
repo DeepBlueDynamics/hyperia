@@ -13,7 +13,8 @@ import {
   SESSION_SET_XTERM_TITLE,
   SESSION_SET_CWD,
   SESSION_SEARCH,
-  SESSION_SET_DESCRIPTION
+  SESSION_SET_DESCRIPTION,
+  SESSION_SET_SHELL_STATE
 } from '../../typings/constants/sessions';
 import {RESTORE_LAYOUT_STATE} from '../../typings/constants/term-groups';
 import type {sessionState, session, Mutable, ISessionReducer} from '../../typings/hyper';
@@ -239,7 +240,8 @@ function Session(obj: Immutable.DeepPartial<session>) {
     pid: null,
     profile: '',
     shellName: '',
-    manualTitle: false
+    manualTitle: false,
+    shellState: undefined
   };
   return Immutable(x).merge(obj);
 }
@@ -289,7 +291,8 @@ const reducer: ISessionReducer = (state = initialState, action) => {
           pid: action.pid,
           profile: action.profile,
           cwd: action.cwd || '',
-          shellName: nextShellName()
+          shellName: nextShellName(),
+          shellState: action.shellState
         })
       );
     }
@@ -406,6 +409,12 @@ const reducer: ISessionReducer = (state = initialState, action) => {
       }
       if (state.activeUid) {
         return state.setIn(['sessions', state.activeUid, 'cwd'], action.cwd);
+      }
+      return state;
+
+    case SESSION_SET_SHELL_STATE:
+      if (action.uid && state.sessions[action.uid]) {
+        return state.setIn(['sessions', action.uid, 'shellState'], action.shellState);
       }
       return state;
 

@@ -417,7 +417,8 @@ export function newWindow(
       isNewGroup: extraOptions.isNewGroup,
       isRestore: extraOptions.isRestore,
       lastCommand: extraOptions.lastCommand,
-      layoutPattern: (extraOptions as any).layoutPattern
+      layoutPattern: (extraOptions as any).layoutPattern,
+      shellState: (session as any).shellState
     });
 
     // Register with sidecar bridge for agent control
@@ -448,6 +449,10 @@ export function newWindow(
     session.on('cwd', (cwd: string) => {
       updateSessionCwd(options.uid, cwd);
       rpc.emit('session cwd', {uid: options.uid, cwd});
+    });
+
+    session.on('shellstate', (shellState: any) => {
+      rpc.emit('session shellstate', {uid: options.uid, shellState});
     });
 
     session.on('exit', () => {

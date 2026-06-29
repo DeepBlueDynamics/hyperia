@@ -130,6 +130,10 @@ rpc.on('session cwd', ({uid, cwd}: {uid: string; cwd: string}) => {
   store_.dispatch(sessionActions.setSessionCwd(uid, cwd));
 });
 
+rpc.on('session shellstate', ({uid, shellState}: {uid: string; shellState: { state: 'idle' | 'busy'; lastExit?: number; command?: string }}) => {
+  store_.dispatch(sessionActions.setSessionShellState(uid, shellState));
+});
+
 // Agent / Stream-Deck focus. The sidecar's /api/pane/focus (terminal_focus)
 // resolves a pane and has the bridge emit `session set active`. The renderer had
 // no listener for it, so a focus command reached the window and did nothing —

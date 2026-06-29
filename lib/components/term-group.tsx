@@ -99,6 +99,7 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       search: session.search,
       cols: session.cols,
       rows: session.rows,
+      shellState: session.shellState,
       copyOnSelect: this.props.copyOnSelect,
       disableMouseReporting: this.props.disableMouseReporting,
       bell: this.props.bell,
