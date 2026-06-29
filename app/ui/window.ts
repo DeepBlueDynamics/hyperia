@@ -644,6 +644,7 @@ export function newWindow(
     }
     e.preventDefault();
     isClosingAndWaitingForSave = true;
+    (window as any).isClosing = true;
     rpc.emit('get-layout-state-req');
     // Failsafe: the close used to hang waiting for the renderer's
     // 'layout-state-reply' — if that never arrived the window stayed open and

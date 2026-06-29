@@ -601,8 +601,10 @@ app.on('ready', () => {
 
         // the window can be closed by the browser process itself
         hwin.on('close', () => {
-          hwin.clean();
-          windowSet.delete(hwin);
+          if ((hwin as any).isClosing || (app as any).isQuitting) {
+            hwin.clean();
+            windowSet.delete(hwin);
+          }
         });
 
         return hwin;
