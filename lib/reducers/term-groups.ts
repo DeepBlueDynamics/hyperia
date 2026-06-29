@@ -181,7 +181,7 @@ const splitGroup = (state: ITermState, action: SessionAddAction) => {
 // split path entirely (which dragged along a shell/blank phantom pane). The
 // resulting group is identical in shape to what the chooser's setWebPaneUrl makes.
 const splitWebGroup = (state: ITermState, action: any) => {
-  const {splitDirection, activeUid, url} = action;
+  const {splitDirection, activeUid, url, isAgentInitiated} = action;
   let activeGroup = findBySession(state, activeUid);
   if (!activeGroup && state.termGroups[activeUid]) {
     activeGroup = state.termGroups[activeUid];
@@ -213,7 +213,7 @@ const splitWebGroup = (state: ITermState, action: any) => {
       parentUid: parentGroup.uid,
       webUrl: (parentGroup as any).webUrl
     });
-    return state
+    state = state
       .setIn(['termGroups', existingSession.uid], existingSession)
       .setIn(['activeSessions', parentGroup.uid], null as any)
       .setIn(
@@ -224,8 +224,11 @@ const splitWebGroup = (state: ITermState, action: any) => {
           direction: splitDirection,
           children: [existingSession.uid, newSession.uid]
         })
-      )
-      .set('activeTermGroup', newSession.uid);
+      );
+    if (!isAgentInitiated) {
+      state = state.set('activeTermGroup', newSession.uid);
+    }
+    return state;
   }
 
   const {children} = parentGroup;
@@ -239,7 +242,10 @@ const splitWebGroup = (state: ITermState, action: any) => {
     const newSizes = insertRebalance(parentGroup.sizes, index);
     state = state.setIn(['termGroups', parentGroup.uid, 'sizes'], newSizes);
   }
-  return state.set('activeTermGroup', newSession.uid);
+  if (!isAgentInitiated) {
+    state = state.set('activeTermGroup', newSession.uid);
+  }
+  return state;
 };
 
 // Replace the parent by the given child in the tree,
@@ -343,6 +349,9 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
 
       if (act.splitDirection) {
         state = splitGroup(state, act);
+        if (act.isAgentInitiated) {
+          return state;
+        }
         return setActiveGroup(state, act);
       }
 
@@ -353,11 +362,15 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
         webUrl: act.profile === 'Web Pane' ? act.url || '' : undefined
       });
 
-      return state
+      state = state
         .setIn(['termGroups', uid], termGroup)
-        .setIn(['activeSessions', uid], act.uid)
-        .set('activeRootGroup', uid)
-        .set('activeTermGroup', uid);
+        .setIn(['activeSessions', uid], act.uid);
+      if (!act.isAgentInitiated) {
+        state = state
+          .set('activeRootGroup', uid)
+          .set('activeTermGroup', uid);
+      }
+      return state;
     }
     case RESTORE_LAYOUT_STATE: {
       const {savedState} = act;

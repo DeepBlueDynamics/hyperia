@@ -418,7 +418,8 @@ export function newWindow(
       isRestore: extraOptions.isRestore,
       lastCommand: extraOptions.lastCommand,
       layoutPattern: (extraOptions as any).layoutPattern,
-      shellState: (session as any).shellState
+      shellState: (session as any).shellState,
+      isAgentInitiated: (extraOptions as any).isAgentInitiated
     });
 
     // Register with sidecar bridge for agent control

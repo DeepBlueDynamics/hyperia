@@ -239,16 +239,16 @@ rpc.on('session search close', () => {
   store_.dispatch(sessionActions.closeSearch());
 });
 
-rpc.on('termgroup add req', ({activeUid, profile}) => {
-  store_.dispatch(termGroupActions.requestTermGroup(activeUid ?? undefined, profile ?? undefined));
+rpc.on('termgroup add req', ({activeUid, profile, isAgentInitiated}) => {
+  store_.dispatch(termGroupActions.requestTermGroup(activeUid ?? undefined, profile ?? undefined, isAgentInitiated));
 });
 
-rpc.on('split request horizontal', ({activeUid, profile, url, splitPlacement}) => {
-  store_.dispatch(termGroupActions.requestHorizontalSplit(activeUid ?? undefined, profile ?? undefined, url, splitPlacement));
+rpc.on('split request horizontal', ({activeUid, profile, url, splitPlacement, isAgentInitiated}) => {
+  store_.dispatch(termGroupActions.requestHorizontalSplit(activeUid ?? undefined, profile ?? undefined, url, splitPlacement, isAgentInitiated));
 });
 
-rpc.on('split request vertical', ({activeUid, profile, url, splitPlacement}) => {
-  store_.dispatch(termGroupActions.requestVerticalSplit(activeUid ?? undefined, profile ?? undefined, url, splitPlacement));
+rpc.on('split request vertical', ({activeUid, profile, url, splitPlacement, isAgentInitiated}) => {
+  store_.dispatch(termGroupActions.requestVerticalSplit(activeUid ?? undefined, profile ?? undefined, url, splitPlacement, isAgentInitiated));
 });
 
 rpc.on('clone request vertical', () => {
@@ -592,10 +592,10 @@ rpc.on('reload', () => {
 
 rpc.on(
   'split web pane req',
-  ({activeUid, url, direction}: {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'}) => {
+  ({activeUid, url, direction, isAgentInitiated}: {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'; isAgentInitiated?: boolean}) => {
     if (url) {
       const full = /^[a-z]+:\/\//i.test(url) ? url : 'https://' + url;
-      store_.dispatch(termGroupActions.splitWebPane(activeUid ?? undefined, full, direction ?? 'HORIZONTAL') as any);
+      store_.dispatch(termGroupActions.splitWebPane(activeUid ?? undefined, full, direction ?? 'HORIZONTAL', isAgentInitiated) as any);
     }
   }
 );

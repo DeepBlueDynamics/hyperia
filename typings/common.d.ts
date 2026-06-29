@@ -24,6 +24,7 @@ export type Session = {
   splitPlacement?: 'BEFORE' | 'AFTER';
   layoutPattern?: string;
   shellState?: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
+  isAgentInitiated?: boolean;
 };
 
 export type sessionExtraOptions = {
@@ -43,6 +44,7 @@ export type sessionExtraOptions = {
   groupUid?: string;
   url?: string;
   layoutPattern?: string;
+  isAgentInitiated?: boolean;
 };
 
 export type MainEvents = {
@@ -89,9 +91,9 @@ export type MainEvents = {
   'web-pane-read-result': {uid: string; result: any};
   'web-pane-eval-result': {uid: string; result: any};
   'web-pane-mouse-result': {uid: string; result: any};
-  'split request vertical': {activeUid?: string | null; profile?: string | null; url?: string; splitPlacement?: 'BEFORE' | 'AFTER'};
-  'split request horizontal': {activeUid?: string | null; profile?: string | null; url?: string; splitPlacement?: 'BEFORE' | 'AFTER'};
-  'split web pane req': {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'};
+  'split request vertical': {activeUid?: string | null; profile?: string | null; url?: string; splitPlacement?: 'BEFORE' | 'AFTER'; isAgentInitiated?: boolean};
+  'split request horizontal': {activeUid?: string | null; profile?: string | null; url?: string; splitPlacement?: 'BEFORE' | 'AFTER'; isAgentInitiated?: boolean};
+  'split web pane req': {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'; isAgentInitiated?: boolean};
   'clone request vertical': any;
   'clone request horizontal': any;
   'layout-state-reply': any;
@@ -142,12 +144,12 @@ export type RendererEvents = {
   'term selectAll': never;
   reload: never;
   'session clear req': never;
-  'split request horizontal': {activeUid?: string | null; profile?: string | null; url?: string; splitPlacement?: 'BEFORE' | 'AFTER'};
-  'split web pane req': {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'};
-  'split request vertical': {activeUid?: string | null; profile?: string | null; url?: string; splitPlacement?: 'BEFORE' | 'AFTER'};
+  'split request horizontal': {activeUid?: string | null; profile?: string | null; url?: string; splitPlacement?: 'BEFORE' | 'AFTER'; isAgentInitiated?: boolean};
+  'split web pane req': {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'; isAgentInitiated?: boolean};
+  'split request vertical': {activeUid?: string | null; profile?: string | null; url?: string; splitPlacement?: 'BEFORE' | 'AFTER'; isAgentInitiated?: boolean};
   'clone request vertical': any;
   'clone request horizontal': any;
-  'termgroup add req': {activeUid?: string | null; profile?: string | null};
+  'termgroup add req': {activeUid?: string | null; profile?: string | null; isAgentInitiated?: boolean};
   'termgroup close req': never;
   'web-pane-reload': string;
   'session add': Session;

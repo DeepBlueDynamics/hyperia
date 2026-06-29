@@ -19,7 +19,7 @@ import findBySession, {countPathHorizontalStacks} from '../utils/term-groups';
 import {setActiveSession, ptyExitSession, userExitSession} from './sessions';
 
 function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
-  return (_activeUid: string | undefined, _profile: string | undefined, url?: string, splitPlacement?: 'BEFORE' | 'AFTER') =>
+  return (_activeUid: string | undefined, _profile: string | undefined, url?: string, splitPlacement?: 'BEFORE' | 'AFTER', isAgentInitiated?: boolean) =>
     (dispatch: HyperDispatch, getState: () => HyperState): void => {
       const {sessions, termGroups} = getState();
       let activeUid = _activeUid;
@@ -73,7 +73,8 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
             activeUid,
             profile,
             url,
-            splitPlacement
+            splitPlacement,
+            isAgentInitiated
           });
         }
       });
@@ -91,7 +92,7 @@ export function resizeTermGroup(uid: string, sizes: number[]): HyperActions {
   };
 }
 
-export function requestTermGroup(_activeUid: string | undefined, _profile: string | undefined) {
+export function requestTermGroup(_activeUid: string | undefined, _profile: string | undefined, isAgentInitiated?: boolean) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     dispatch({
       type: TERM_GROUP_REQUEST,
@@ -105,7 +106,8 @@ export function requestTermGroup(_activeUid: string | undefined, _profile: strin
           isNewGroup: true,
           cwd,
           activeUid,
-          profile
+          profile,
+          isAgentInitiated
         });
       }
     });
@@ -308,9 +310,9 @@ export function splitWebPaneBelow(activeUid: string | undefined, url: string) {
   };
 }
 
-export function splitWebPane(activeUid: string | undefined, url: string, direction: 'HORIZONTAL' | 'VERTICAL') {
+export function splitWebPane(activeUid: string | undefined, url: string, direction: 'HORIZONTAL' | 'VERTICAL', isAgentInitiated?: boolean) {
   return (dispatch: HyperDispatch) => {
-    dispatch({type: 'TERM_GROUP_SPLIT_WEB', activeUid, url, splitDirection: direction} as any);
+    dispatch({type: 'TERM_GROUP_SPLIT_WEB', activeUid, url, splitDirection: direction, isAgentInitiated} as any);
   };
 }
 

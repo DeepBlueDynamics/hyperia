@@ -461,12 +461,13 @@ function handleCommand(msg: Record<string, unknown>) {
           win.rpc.emit('split web pane req', {
             activeUid: splitTargetUid ?? undefined,
             url,
-            direction: dir === 'horizontal' ? 'HORIZONTAL' : 'VERTICAL'
+            direction: dir === 'horizontal' ? 'HORIZONTAL' : 'VERTICAL',
+            isAgentInitiated: true
           });
           // Web pane has no PTY to wait on — acknowledge the open immediately.
           sendResult(seq, JSON.stringify({ok: true, type: 'web-pane', url}));
         } else {
-          const splitOpts = {profile, activeUid: splitTargetUid ?? undefined};
+          const splitOpts = {profile, activeUid: splitTargetUid ?? undefined, isAgentInitiated: true};
           if (dir === 'horizontal') {
             win.rpc.emit('split request horizontal', splitOpts);
           } else {
@@ -587,7 +588,10 @@ function handleCommand(msg: Record<string, unknown>) {
           pendingSessionCallback = {seq: currentSeq, timer};
         }
 
-        win.rpc.emit('termgroup add req', profile ? {profile} : {});
+        win.rpc.emit('termgroup add req', {
+          profile: profile || undefined,
+          isAgentInitiated: true
+        });
 
         // If a startup command was provided, write it to the new session once it's ready
         if (command) {

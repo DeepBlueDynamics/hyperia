@@ -64,7 +64,8 @@ export function addSession(data: Session) {
       cwd,
       isNewGroup,
       isRestore,
-      lastCommand
+      lastCommand,
+      isAgentInitiated: (data as any).isAgentInitiated
     });
 
     if (layoutPattern) {
@@ -124,7 +125,9 @@ export function addSession(data: Session) {
     if (tabName) {
       window.rpc.emit('session set tab name', {uid, tabName});
     }
-    window.rpc.emit('session set active', {uid});
+    if (!(data as any).isAgentInitiated) {
+      window.rpc.emit('session set active', {uid});
+    }
   };
 }
 
