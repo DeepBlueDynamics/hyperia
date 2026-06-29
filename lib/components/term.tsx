@@ -2356,8 +2356,8 @@ export default class Term extends React.PureComponent<
     // bar floors at ~11 chars and is hidden entirely below ~320 rather than
     // shrinking to a stub. End state = title + nav + close.
     const w = this.state.paneWidth;
-    const hideSplits = w < 400;
-    const showDirBar = w >= 320;
+    const hideSplits = w < 300;
+    const showDirBar = w >= 240;
     // Find-bar match counts (xterm reports a 0-based resultIndex).
     const sr = this.state.searchResults as {resultIndex: number; resultCount: number} | undefined;
     const findActive = sr ? sr.resultIndex + 1 : 0;
@@ -2636,7 +2636,7 @@ export default class Term extends React.PureComponent<
                     // Fill the row; hard floor ~11 chars; hidden (not stubbed)
                     // below ~320 via showDirBar. Matches the web-pane URL bar.
                     flex: 1,
-                    minWidth: '110px',
+                    minWidth: '80px',
                     cursor: this.isTerminalBusy() ? 'not-allowed' : 'pointer',
                     opacity: this.isTerminalBusy() ? 0.5 : 1,
                     boxSizing: 'border-box',

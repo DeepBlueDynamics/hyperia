@@ -2036,8 +2036,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     const showExternal = !isAi;
     // splits (~60px) crowd the url floor below ~400; url floor (110) itself
     // stops fitting below ~320 → drop the bar.
-    const hideSplits = w < 400;
-    const showUrlBar = w >= 320;
+    const hideSplits = w < 300;
+    const showUrlBar = w >= 240;
 
     return (
       <div
@@ -2348,7 +2348,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     // letters); below that the whole bar is hidden (showUrlBar),
                     // never shrunk to a sub-"https://" stub.
                     flex: 1,
-                    minWidth: '110px',
+                    minWidth: '80px',
                     cursor: 'pointer',
                     boxSizing: 'border-box',
                     marginLeft: 'var(--space-4)',
