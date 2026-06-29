@@ -279,7 +279,16 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       // tells the reader (or an agent) the kind and gives a stable handle.
       const name = (getTextFromNode(label) || paneName || 'Pane').trim();
       const shortId = paneId ? paneId.replace(/-/g, '').slice(0, 8) : '';
-      const cleanText = shortId ? `${name} (pane ${shortId})` : name;
+      let cleanText = name;
+      if (shortId) {
+        if (paneType === 'web') {
+          cleanText = `Hyperia WebPane: ${name} (${shortId})`;
+        } else if (paneType === 'ai') {
+          cleanText = `Hyperia AIPane: ${name} (${shortId})`;
+        } else {
+          cleanText = `Hyperia Pane: ${name} (${shortId})`;
+        }
+      }
       if (cleanText) {
         // Use Electron's clipboard, not navigator.clipboard — the latter fails
         // silently in this (non-secure-context) renderer.
@@ -314,7 +323,17 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           new MenuItem({
             label: 'Copy Pane Name',
             click: () => {
-              clipboard.writeText(shortId ? `${name} (pane ${shortId})` : name);
+              let cleanText = name;
+              if (shortId) {
+                if (paneType === 'web') {
+                  cleanText = `Hyperia WebPane: ${name} (${shortId})`;
+                } else if (paneType === 'ai') {
+                  cleanText = `Hyperia AIPane: ${name} (${shortId})`;
+                } else {
+                  cleanText = `Hyperia Pane: ${name} (${shortId})`;
+                }
+              }
+              clipboard.writeText(cleanText);
               setCopied(true);
             }
           })

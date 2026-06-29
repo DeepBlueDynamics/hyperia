@@ -6,7 +6,7 @@ import {readFileSync, writeFileSync, mkdirSync, watchFile, unwatchFile, existsSy
 import {homedir} from 'os';
 import {join, resolve, basename, dirname} from 'path';
 
-import {BrowserWindow, ipcMain, Menu, screen, app, nativeImage, shell, dialog, Notification} from 'electron';
+import {BrowserWindow, ipcMain, Menu, screen, app, nativeImage, shell, dialog, Notification, clipboard} from 'electron';
 
 import isDev from 'electron-is-dev';
 
@@ -1091,6 +1091,17 @@ export function initSticky() {
         {
           label: 'Copy All',
           click: () => event.sender.send('sticky-copy-all')
+        },
+        {
+          label: 'Copy Sticky name + ID',
+          click: () => {
+            const n = getNote(noteId);
+            if (n) {
+              const name = (n.name || n.text?.split('\n')[0].slice(0, 20) || 'Sticky').trim();
+              const shortId = n.id.replace(/-/g, '').slice(0, 8);
+              clipboard.writeText(`Hyperia StickyNote: ${name} (${shortId})`);
+            }
+          }
         },
         {type: 'separator'},
         {label: 'New Sticky', click: () => createStickyNote({})},

@@ -167,7 +167,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         click: () => {
           const name = (pendingName ?? (tabName || description || props.text) ?? 'Tab').trim();
           const shortId = props.uid.replace(/-/g, '').slice(0, 8);
-          void clipboard.writeText(`${name} (tab ${shortId})`);
+          void clipboard.writeText(`Hyperia Tab: ${name} (${shortId})`);
           setCopied(true);
           setTimeout(() => setCopied(false), 1000);
         }
