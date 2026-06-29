@@ -18,11 +18,6 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
 
-  const [isOpen, setIsOpen] = useState(false);
-  const [focusedIndex, setFocusedIndex] = useState(0);
-  const chevronRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [profileName, setProfileName] = useState('');
   const [shellPath, setShellPath] = useState('');
@@ -30,117 +25,6 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   const [envVars, setEnvVars] = useState<{key: string; val: string}[]>([]);
   const [newKey, setNewKey] = useState('');
   const [newVal, setNewVal] = useState('');
-
-  // Process, map, and sort profiles so the default is first
-  const mappedProfiles = (props.profiles || []).map((p: any) => {
-    const id = p.id || p.name;
-    const displayName = p.displayName || p.name;
-    const isDefault = p.default === true || id === props.defaultProfile || p.name === props.defaultProfile;
-    return {
-      id,
-      displayName,
-      isDefault,
-      iconPath: p.iconPath,
-      config: p.config
-    };
-  });
-
-  const sortedProfiles = [...mappedProfiles].sort((a, b) => {
-    if (a.isDefault && !b.isDefault) return -1;
-    if (!a.isDefault && b.isDefault) return 1;
-    return 0;
-  });
-
-  const totalItemsCount = sortedProfiles.length + 2;
-
-  const triggerItem = (index: number) => {
-    setIsOpen(false);
-    if (index < sortedProfiles.length) {
-      const p = sortedProfiles[index];
-      props.openNewTab(p.id as string);
-    } else if (index === sortedProfiles.length) {
-      setIsModalOpen(true);
-    } else if (index === sortedProfiles.length + 1) {
-      try {
-        ipcRenderer.send('show-about');
-      } catch (err) {
-        console.error(err);
-      }
-    }
-    chevronRef.current?.focus();
-  };
-
-  // Outside click dismiss
-  useEffect(() => {
-    if (!isOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (
-        menuRef.current &&
-        !menuRef.current.contains(e.target as Node) &&
-        chevronRef.current &&
-        !chevronRef.current.contains(e.target as Node)
-      ) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [isOpen]);
-
-  // Focus first menu item on open
-  useEffect(() => {
-    if (isOpen) {
-      setFocusedIndex(0);
-      setTimeout(() => {
-        const itemEl = menuRef.current?.querySelector('[data-index="0"]') as HTMLDivElement | null;
-        itemEl?.focus();
-      }, 50);
-    }
-  }, [isOpen]);
-
-  // Keyboard navigation & focus trap inside popover
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleDocumentKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsOpen(false);
-        chevronRef.current?.focus();
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-
-      if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {
-        e.preventDefault();
-        e.stopPropagation();
-        setFocusedIndex((prev) => {
-          const next = (prev + 1) % totalItemsCount;
-          const itemEl = menuRef.current?.querySelector(`[data-index="${next}"]`) as HTMLDivElement | null;
-          itemEl?.focus();
-          return next;
-        });
-      } else if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) {
-        e.preventDefault();
-        e.stopPropagation();
-        setFocusedIndex((prev) => {
-          const next = (prev - 1 + totalItemsCount) % totalItemsCount;
-          const itemEl = menuRef.current?.querySelector(`[data-index="${next}"]`) as HTMLDivElement | null;
-          itemEl?.focus();
-          return next;
-        });
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        e.stopPropagation();
-        triggerItem(focusedIndex);
-      }
-    };
-
-    document.addEventListener('keydown', handleDocumentKeyDown, true);
-    return () => {
-      document.removeEventListener('keydown', handleDocumentKeyDown, true);
-    };
-  }, [isOpen, focusedIndex, sortedProfiles.length]);
 
   const updateScrollState = useCallback(() => {
     const el = listRef.current;
@@ -357,53 +241,6 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           </div>
         </div>
 
-        <button
-          ref={chevronRef}
-          className="tabs_chevronBtn"
-          onClick={() => setIsOpen(!isOpen)}
-          aria-haspopup="true"
-          aria-expanded={isOpen}
-          aria-label="Profiles list"
-          title="Select Profile"
-        >
-          <svg viewBox="0 0 14 14" width="10" height="10">
-            <path d="M3 5l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-          </svg>
-        </button>
-
-        {isOpen && (
-          <div className="new_tab_menu" ref={menuRef}>
-            {sortedProfiles.map((p, idx) => (
-              <div
-                key={p.id}
-                data-index={idx}
-                tabIndex={0}
-                className={`new_tab_menu_item ${p.isDefault ? 'new_tab_menu_item_default' : ''}`}
-                onClick={() => triggerItem(idx)}
-              >
-                {p.displayName}
-              </div>
-            ))}
-            <div className="new_tab_menu_divider" />
-            <div
-              data-index={sortedProfiles.length}
-              tabIndex={0}
-              className="new_tab_menu_item"
-              onClick={() => triggerItem(sortedProfiles.length)}
-            >
-              Custom…
-            </div>
-            <div className="new_tab_menu_divider" />
-            <div
-              data-index={sortedProfiles.length + 1}
-              tabIndex={0}
-              className="new_tab_menu_item"
-              onClick={() => triggerItem(sortedProfiles.length + 1)}
-            >
-              About
-            </div>
-          </div>
-        )}
 
         <button
           className="tabs_newTabBtn"
