@@ -51,7 +51,7 @@
     "bell": "SOUND",
     "bellSound": null,
     "bellSoundURL": null,
-    "copyOnSelect": false,
+    "copyOnSelect": true,
     "defaultSSHApp": true,
     "quickEdit": false,
     "macOptionSelectionMode": "vertical",
