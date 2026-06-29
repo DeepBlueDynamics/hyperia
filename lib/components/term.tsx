@@ -207,6 +207,8 @@ export default class Term extends React.PureComponent<
   dprUpdateHandler!: () => void;
   searchDecorations: ISearchDecorationOptions;
   searchBufferTimeout: NodeJS.Timeout | null = null;
+  lastSelection = '';
+  lastSelectionTime = 0;
   state = {
     searchOptions: {
       caseSensitive: false,
@@ -495,6 +497,12 @@ export default class Term extends React.PureComponent<
 
     this.termOptions = getTermOptions(props);
     this.term = props.term || new Terminal(this.termOptions);
+    this.term.onSelectionChange(() => {
+      if (this.term.hasSelection()) {
+        this.lastSelection = this.term.getSelection();
+        this.lastSelectionTime = Date.now();
+      }
+    });
     this.defaultBellSound = new Audio(
       // Source: https://freesound.org/people/altemark/sounds/45759/
       // This sound is released under the Creative Commons Attribution 3.0 Unported
@@ -1145,13 +1153,21 @@ export default class Term extends React.PureComponent<
     const isCtrlShiftC = e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key?.toLowerCase() === 'c';
     const isCmdC = e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && e.key?.toLowerCase() === 'c';
 
+    const hasActiveSelection = this.term.hasSelection();
+    const hasBufferedSelection = !hasActiveSelection && this.lastSelection && (Date.now() - this.lastSelectionTime < 1000);
+
     if (
-      (isCtrlC && this.term.hasSelection()) ||
-      (isCtrlShiftC && this.term.hasSelection()) ||
-      (isCmdC && this.term.hasSelection())
+      (isCtrlC && (hasActiveSelection || hasBufferedSelection)) ||
+      (isCtrlShiftC && (hasActiveSelection || hasBufferedSelection)) ||
+      (isCmdC && (hasActiveSelection || hasBufferedSelection))
     ) {
-      clipboard.writeText(this.term.getSelection());
-      this.term.clearSelection();
+      const textToCopy = hasActiveSelection ? this.term.getSelection() : this.lastSelection;
+      clipboard.writeText(textToCopy);
+      if (hasActiveSelection) {
+        this.term.clearSelection();
+      }
+      this.lastSelection = '';
+      this.lastSelectionTime = 0;
       e.preventDefault();
       e.stopPropagation();
       return false;
