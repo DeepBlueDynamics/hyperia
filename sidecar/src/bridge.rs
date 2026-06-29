@@ -833,11 +833,25 @@ impl Bridge {
         // agent panes; self-callbacks don't (you're poking yourself).
         for (pane, keys, from_creator, submit) in to_fire {
             let is_agent = self.is_agent_pane(&pane).await;
+            let shell_pid = {
+                let sessions = self.inner.sessions.lock().await;
+                sessions.get(&pane).map(|s| s.pid).unwrap_or(0)
+            };
+            let is_ink_tui = if shell_pid > 0 {
+                let proc_name = crate::process::foreground_process(shell_pid);
+                let n = proc_name.to_lowercase();
+                ["node", "claude", "claude-code", "codex", "aider", "gemini", "ollama"]
+                    .iter()
+                    .any(|needle| n.contains(needle))
+            } else {
+                false
+            };
+
             let payload = match &from_creator {
                 Some(creator) if is_agent => format!("From: {creator}: {keys}"),
                 _ => keys,
             };
-            if is_agent {
+            if is_agent || is_ink_tui {
                 // Ink/agent TUI submits on LF. A long/multiline payload needs
                 // bracketed paste (atomic ingest) so it isn't garbled — then Enter
                 // separately. A SHORT one is typed + LF in ONE write: that's how
@@ -868,9 +882,10 @@ impl Bridge {
                         .await;
                 }
             } else {
-                // Shell (pwsh/bash/cmd): CR submits; LF leaves a `>>` continuation.
+                // Shell (pwsh/bash/cmd): CR submits on Windows; LF submits on Unix.
                 // No bracketed paste — shells don't enable it.
-                let body = if submit { format!("{payload}\r") } else { payload };
+                let enter_char = if cfg!(target_os = "windows") { "\r" } else { "\n" };
+                let body = if submit { format!("{payload}{enter_char}") } else { payload };
                 let _ = self
                     .send_command(serde_json::json!({
                         "type": "Keys", "uid": pane, "keys": body, "interrupt": false
