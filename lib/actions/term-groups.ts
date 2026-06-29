@@ -19,7 +19,7 @@ import findBySession, {countPathHorizontalStacks} from '../utils/term-groups';
 import {setActiveSession, ptyExitSession, userExitSession} from './sessions';
 
 function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
-  return (_activeUid: string | undefined, _profile: string | undefined, url?: string) =>
+  return (_activeUid: string | undefined, _profile: string | undefined, url?: string, splitPlacement?: 'BEFORE' | 'AFTER') =>
     (dispatch: HyperDispatch, getState: () => HyperState): void => {
       const {sessions, termGroups} = getState();
       let activeUid = _activeUid;
@@ -72,7 +72,8 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
             cwd,
             activeUid,
             profile,
-            url
+            url,
+            splitPlacement
           });
         }
       });

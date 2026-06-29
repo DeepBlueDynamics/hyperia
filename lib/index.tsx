@@ -239,12 +239,12 @@ rpc.on('termgroup add req', ({activeUid, profile}) => {
   store_.dispatch(termGroupActions.requestTermGroup(activeUid ?? undefined, profile ?? undefined));
 });
 
-rpc.on('split request horizontal', ({activeUid, profile, url}) => {
-  store_.dispatch(termGroupActions.requestHorizontalSplit(activeUid ?? undefined, profile ?? undefined, url));
+rpc.on('split request horizontal', ({activeUid, profile, url, splitPlacement}) => {
+  store_.dispatch(termGroupActions.requestHorizontalSplit(activeUid ?? undefined, profile ?? undefined, url, splitPlacement));
 });
 
-rpc.on('split request vertical', ({activeUid, profile, url}) => {
-  store_.dispatch(termGroupActions.requestVerticalSplit(activeUid ?? undefined, profile ?? undefined, url));
+rpc.on('split request vertical', ({activeUid, profile, url, splitPlacement}) => {
+  store_.dispatch(termGroupActions.requestVerticalSplit(activeUid ?? undefined, profile ?? undefined, url, splitPlacement));
 });
 
 rpc.on('clone request vertical', () => {
