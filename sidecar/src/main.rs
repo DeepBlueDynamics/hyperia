@@ -1218,6 +1218,60 @@ async fn enforce_capability(
     }
 }
 
+/// Enforce access permission to a specific sticky note ID.
+async fn enforce_note_access(
+    state: &AppState,
+    headers: &HeaderMap,
+    note_id: &str,
+) -> Result<(), (StatusCode, String)> {
+    use identity::CallerIdentity;
+    use perms::AuthDecision;
+
+    let id = state.bridge.resolve_caller(bearer_token(headers).as_deref()).await;
+    
+    // Bypass if enforcement is off or it's the system (human GUI)
+    if !state.bridge.perms().enforced() || id.is_system() {
+        return Ok(());
+    }
+
+    // Resolve note creator (owner)
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").ok()
+    } else {
+        std::env::var("HOME").ok()
+    };
+    let mut creator: Option<String> = None;
+    if let Some(home) = home {
+        let path = std::path::PathBuf::from(home)
+            .join(".hyperia")
+            .join("stickys")
+            .join("notes.json");
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(notes) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
+                if let Some(note) = resolve_note(&notes, note_id) {
+                    creator = note["creator"].as_str().map(String::from);
+                }
+            }
+        }
+    }
+
+    let caller_label = id.label();
+    
+    // Check if caller is the owner
+    if creator.is_some() && creator.as_deref() == Some(&caller_label) {
+        return Ok(());
+    }
+
+    // Check if caller has sticky:list_all capability (full read/write for all stickies)
+    if let AuthDecision::Allow | AuthDecision::RefuseHome = state.bridge.authorize_capability(&id, "sticky:list_all").await {
+        return Ok(());
+    }
+
+    // Enforce capability sticky:access:<note_id> (this prompts the user if needed)
+    let cap = format!("sticky:access:{}", note_id);
+    enforce_capability(state, headers, &cap).await
+}
+
 async fn post_perm_request(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2031,7 +2085,26 @@ async fn post_ui_key(
     }
 }
 
-async fn get_notes(Query(query): Query<NotesQuery>) -> (StatusCode, String) {
+async fn get_notes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<NotesQuery>,
+) -> (StatusCode, String) {
+    use identity::CallerIdentity;
+    use perms::AuthDecision;
+
+    let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    let mut has_list_all = false;
+    if !state.bridge.perms().enforced() {
+        has_list_all = true;
+    } else if id.is_system() {
+        has_list_all = true;
+    } else {
+        if let AuthDecision::Allow | AuthDecision::RefuseHome = state.bridge.authorize_capability(&id, "sticky:list_all").await {
+            has_list_all = true;
+        }
+    }
+
     let home = if cfg!(windows) {
         std::env::var("USERPROFILE").ok()
     } else {
@@ -2046,11 +2119,30 @@ async fn get_notes(Query(query): Query<NotesQuery>) -> (StatusCode, String) {
         .join("notes.json");
     match std::fs::read_to_string(&path) {
         Ok(content) => {
+            let notes = serde_json::from_str::<Vec<serde_json::Value>>(&content).unwrap_or_default();
+            let caller_label = id.label();
+            let mut allowed_notes = Vec::new();
+            for note in notes {
+                let mut allowed = has_list_all;
+                if !allowed {
+                    if note["creator"].as_str() == Some(&caller_label) {
+                        allowed = true;
+                    } else if let Some(note_id) = note["id"].as_str() {
+                        let cap = format!("sticky:access:{}", note_id);
+                        if let AuthDecision::Allow | AuthDecision::RefuseHome = state.bridge.authorize_capability(&id, &cap).await {
+                            allowed = true;
+                        }
+                    }
+                }
+                if allowed {
+                    allowed_notes.push(note);
+                }
+            }
+
             let query = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
             if let Some(query) = query {
                 let query = query.to_lowercase();
-                let filtered = serde_json::from_str::<Vec<serde_json::Value>>(&content)
-                    .unwrap_or_default()
+                let filtered = allowed_notes
                     .into_iter()
                     .filter(|note| {
                         note["text"]
@@ -2064,7 +2156,10 @@ async fn get_notes(Query(query): Query<NotesQuery>) -> (StatusCode, String) {
                     serde_json::to_string(&filtered).unwrap_or_else(|_| "[]".into()),
                 )
             } else {
-                (StatusCode::OK, content)
+                (
+                    StatusCode::OK,
+                    serde_json::to_string(&allowed_notes).unwrap_or_else(|_| "[]".into()),
+                )
             }
         }
         Err(_) => (StatusCode::OK, "[]".into()),
@@ -2079,12 +2174,16 @@ async fn post_note_create(
     if let Err(resp) = enforce_create(&state, &headers, "create_sticky").await {
         return resp;
     }
+    use identity::CallerIdentity;
+    let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    let creator = id.label();
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let cmd = serde_json::json!({
         "type": "NoteCreate",
         "text": parsed["text"],
         "color": parsed["color"],
         "filePath": parsed["file_path"],
+        "creator": creator,
     });
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
@@ -2094,12 +2193,16 @@ async fn post_note_create(
 
 async fn post_note_close(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: String,
 ) -> (StatusCode, String) {
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let id = parsed["id"].as_str().unwrap_or("").to_string();
     if id.is_empty() {
         return (StatusCode::BAD_REQUEST, "Missing note id".into());
+    }
+    if let Err(resp) = enforce_note_access(&state, &headers, &id).await {
+        return resp;
     }
     let cmd = serde_json::json!({"type": "NoteClose", "id": id});
     match state.bridge.send_command(cmd).await {
@@ -2110,12 +2213,16 @@ async fn post_note_close(
 
 async fn post_note_open(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: String,
 ) -> (StatusCode, String) {
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let id = parsed["id"].as_str().unwrap_or("").to_string();
     if id.is_empty() {
         return (StatusCode::BAD_REQUEST, "Missing note id".into());
+    }
+    if let Err(resp) = enforce_note_access(&state, &headers, &id).await {
+        return resp;
     }
     let cmd = serde_json::json!({"type": "NoteOpen", "id": id});
     match state.bridge.send_command(cmd).await {
@@ -2124,7 +2231,14 @@ async fn post_note_open(
     }
 }
 
-async fn get_note(Path(id): Path<String>) -> (StatusCode, String) {
+async fn get_note(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> (StatusCode, String) {
+    if let Err(resp) = enforce_note_access(&state, &headers, &id).await {
+        return resp;
+    }
     let home = if cfg!(windows) {
         std::env::var("USERPROFILE").ok()
     } else {
@@ -2170,11 +2284,15 @@ fn resolve_note<'a>(notes: &'a [serde_json::Value], id: &str) -> Option<&'a serd
 
 async fn patch_note(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     body: String,
 ) -> (StatusCode, String) {
     if id.is_empty() {
         return (StatusCode::BAD_REQUEST, "Missing note id".into());
+    }
+    if let Err(resp) = enforce_note_access(&state, &headers, &id).await {
+        return resp;
     }
     let payload: serde_json::Value = match serde_json::from_str(&body) {
         Ok(v) => v,
@@ -2229,9 +2347,13 @@ async fn patch_note(
 /// object is forwarded verbatim to Electron, which owns the timer + runners.
 async fn post_note_schedule(
     State(state): State<AppState>,
+    headers: HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
     body: String,
 ) -> (StatusCode, String) {
+    if let Err(resp) = enforce_note_access(&state, &headers, &id).await {
+        return resp;
+    }
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
     // Accept either the bare schedule object or {"schedule": {...}}.
     let schedule = if parsed.get("schedule").is_some() {
@@ -2341,10 +2463,14 @@ async fn post_edit_apply(
 
 async fn delete_note(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> (StatusCode, String) {
     if id.is_empty() {
         return (StatusCode::BAD_REQUEST, "Missing note id".into());
+    }
+    if let Err(resp) = enforce_note_access(&state, &headers, &id).await {
+        return resp;
     }
 
     let home = if cfg!(windows) {

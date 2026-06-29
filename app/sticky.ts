@@ -452,6 +452,7 @@ type NoteData = {
   // ONLY on explicit close. An app quit (taskkill) leaves it true, so
   // "active" notes reopen on next launch.
   open?: boolean;
+  creator?: string;
 };
 
 function readAllNotes(): NoteData[] {
@@ -674,6 +675,7 @@ function createStickyNote(
     height?: number;
     color?: string;
     startHidden?: boolean;
+    creator?: string;
   } = {}
 ) {
   if (options.filePath) {
@@ -794,7 +796,8 @@ function createStickyNote(
       height,
       // Stamp creation time on genuinely-new notes (this fallback only runs when
       // getNote returned nothing). Existing notes keep their original created_at.
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      creator: options.creator
     };
     upsertNote({...current, name: displayName, x, y, width, height, color: colorHex, open: true});
   }

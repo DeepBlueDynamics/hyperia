@@ -915,7 +915,8 @@ function handleCommand(msg: Record<string, unknown>) {
       const text = msg.text as string | undefined;
       const color = msg.color as string | undefined;
       const filePath = msg.filePath as string | undefined;
-      const res = createStickyNote({text, color, filePath}) as any;
+      const creator = msg.creator as string | undefined;
+      const res = createStickyNote({text, color, filePath, creator}) as any;
       if (res?.error) {
         // e.g. an unreachable code-sticky file — report it instead of "ok".
         sendResult(seq, JSON.stringify({ok: false, error: res.error}));

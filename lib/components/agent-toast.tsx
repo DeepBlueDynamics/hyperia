@@ -18,6 +18,12 @@ const CAP_PHRASE: Record<string, string> = {
   'cap:manage': 'close / manage panes & tabs'
 };
 function actionPhrase(action: string): string {
+  if (action === 'cap:sticky:list_all') {
+    return 'search and list all sticky notes';
+  }
+  if (action.startsWith('cap:sticky:access:')) {
+    return 'read and write sticky note ' + action.slice('cap:sticky:access:'.length);
+  }
   return CREATE_SURFACE[action] || CAP_PHRASE[action] || 'perform an action';
 }
 
