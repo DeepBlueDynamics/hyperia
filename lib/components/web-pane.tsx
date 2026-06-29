@@ -2410,6 +2410,18 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             onSplitDown={() =>
               rpc.emit('split request horizontal', {activeUid: this.props.sessionUid || this.props.groupUid})
             }
+            onSplitLeft={() =>
+              rpc.emit('split request vertical', {
+                activeUid: this.props.sessionUid || this.props.groupUid,
+                splitPlacement: 'BEFORE'
+              })
+            }
+            onSplitUp={() =>
+              rpc.emit('split request horizontal', {
+                activeUid: this.props.sessionUid || this.props.groupUid,
+                splitPlacement: 'BEFORE'
+              })
+            }
             onClose={() => {
               if (hasSession) {
                 onClose?.();

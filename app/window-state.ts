@@ -87,15 +87,18 @@ export function restoreFor(defaults: {x?: number; y?: number; width: number; hei
   };
 
   if (state) {
-    opts.width = state.width;
-    opts.height = state.height;
+    // Open it smaller than it was when last closed
+    opts.width = Math.max(370, Math.round(state.width * 0.85));
+    opts.height = Math.max(190, Math.round(state.height * 0.85));
     if (
       typeof state.x === 'number' &&
       typeof state.y === 'number' &&
       boundsAreVisible(state.x, state.y, state.width, state.height)
     ) {
-      opts.x = state.x;
-      opts.y = state.y;
+      const dx = Math.round((state.width - opts.width) / 2);
+      const dy = Math.round((state.height - opts.height) / 2);
+      opts.x = state.x + dx;
+      opts.y = state.y + dy;
     }
     // else: drop x/y so Electron centers on the primary display.
   }
@@ -106,8 +109,7 @@ export function restoreFor(defaults: {x?: number; y?: number; width: number; hei
     if (state) {
       const applyChrome = () => {
         if (window.isDestroyed()) return;
-        if (state.isFullScreen) window.setFullScreen(true);
-        else if (state.isMaximized) window.maximize();
+        // Do not auto-maximize or fullscreen on startup to respect "smaller than last closed" request.
       };
       window.once('ready-to-show', applyChrome);
     }

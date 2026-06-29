@@ -38,6 +38,8 @@ type PaneBandProps = {
   locationBar?: React.ReactNode; // path bar, URL bar, or null
   onSplitRight: () => void;
   onSplitDown: () => void;
+  onSplitLeft?: () => void;
+  onSplitUp?: () => void;
   onClose: () => void;
   onClick?: (e: React.MouseEvent) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
@@ -73,6 +75,87 @@ const getTextFromNode = (node: React.ReactNode): string => {
   return '';
 };
 
+const openLayout = (pattern: string, activeUid: string) => {
+  const rpc = (window as any).rpc;
+  if (!rpc) return;
+
+  const uuidv4 = () => {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0,
+        v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  };
+
+  const emitNew = (newUid: string, parentUid: string, direction: 'VERTICAL' | 'HORIZONTAL') => {
+    rpc.emit('new', {
+      uid: newUid,
+      activeUid: parentUid,
+      splitDirection: direction,
+      isNewGroup: false
+    });
+  };
+
+  if (pattern === '3cols') {
+    const col2 = uuidv4();
+    const col3 = uuidv4();
+    emitNew(col2, activeUid, 'VERTICAL');
+    emitNew(col3, col2, 'VERTICAL');
+  } else if (pattern === '3rows') {
+    const row2 = uuidv4();
+    const row3 = uuidv4();
+    emitNew(row2, activeUid, 'HORIZONTAL');
+    emitNew(row3, row2, 'HORIZONTAL');
+  } else if (pattern === 'grid2x2') {
+    const right = uuidv4();
+    const leftBottom = uuidv4();
+    const rightBottom = uuidv4();
+    emitNew(right, activeUid, 'VERTICAL');
+    emitNew(leftBottom, activeUid, 'HORIZONTAL');
+    emitNew(rightBottom, right, 'HORIZONTAL');
+  } else if (pattern === 'leftHeavy') {
+    const right = uuidv4();
+    const leftBottom = uuidv4();
+    emitNew(right, activeUid, 'VERTICAL');
+    emitNew(leftBottom, activeUid, 'HORIZONTAL');
+  } else if (pattern === 'rightHeavy') {
+    const right = uuidv4();
+    const rightBottom = uuidv4();
+    emitNew(right, activeUid, 'VERTICAL');
+    emitNew(rightBottom, right, 'HORIZONTAL');
+  } else if (pattern === 'topHeavy') {
+    const bottom = uuidv4();
+    const topLeft = uuidv4();
+    emitNew(bottom, activeUid, 'HORIZONTAL');
+    emitNew(topLeft, activeUid, 'VERTICAL');
+  } else if (pattern === 'bottomHeavy') {
+    const bottom = uuidv4();
+    const bottomRight = uuidv4();
+    emitNew(bottom, activeUid, 'HORIZONTAL');
+    emitNew(bottomRight, bottom, 'VERTICAL');
+  } else if (pattern === 'hsplit212') {
+    const right = uuidv4();
+    const middle = uuidv4();
+    const leftBottom = uuidv4();
+    const rightBottom = uuidv4();
+    emitNew(middle, activeUid, 'VERTICAL');
+    emitNew(right, middle, 'VERTICAL');
+    emitNew(leftBottom, activeUid, 'HORIZONTAL');
+    emitNew(rightBottom, right, 'HORIZONTAL');
+  } else if (pattern === 'grid3x2') {
+    const middle = uuidv4();
+    const right = uuidv4();
+    const col1Bottom = uuidv4();
+    const col2Bottom = uuidv4();
+    const col3Bottom = uuidv4();
+    emitNew(middle, activeUid, 'VERTICAL');
+    emitNew(right, middle, 'VERTICAL');
+    emitNew(col1Bottom, activeUid, 'HORIZONTAL');
+    emitNew(col2Bottom, middle, 'HORIZONTAL');
+    emitNew(col3Bottom, right, 'HORIZONTAL');
+  }
+};
+
 export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
   (
     {
@@ -86,6 +169,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       locationBar,
       onSplitRight,
       onSplitDown,
+      onSplitLeft,
+      onSplitUp,
       onClose,
       onClick,
       onContextMenu,
@@ -470,14 +555,95 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             </>
           )}
 
+          {/* Layouts Button */}
+          {paneId && !isPlaceholder && (
+            <span
+              className="pane-band-control-icon pane-band-tooltip-trigger"
+              style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
+            >
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <path d="M9 3v18M15 3v18M3 9h18M3 15h18" strokeDasharray="2,2" opacity="0.5" />
+                <rect x="4" y="4" width="4" height="4" fill="currentColor" opacity="0.3" />
+                <rect x="16" y="16" width="4" height="4" fill="currentColor" opacity="0.3" />
+              </svg>
+              <div className="pane-band-tooltip pane-band-layout-tooltip" style={{minWidth: '200px'}}>
+                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 600, marginBottom: '8px', textAlign: 'center'}}>
+                  Quick Layouts
+                </div>
+                <div className="pane-band-layout-grid">
+                  <div className="pane-band-layout-item" onClick={() => openLayout('3cols', paneId)} title="3 Columns">
+                    <div className="layout-preview-box l-3cols">
+                      <div /><div /><div />
+                    </div>
+                  </div>
+                  <div className="pane-band-layout-item" onClick={() => openLayout('3rows', paneId)} title="3 Rows">
+                    <div className="layout-preview-box l-3rows">
+                      <div /><div /><div />
+                    </div>
+                  </div>
+                  <div className="pane-band-layout-item" onClick={() => openLayout('grid2x2', paneId)} title="Grid 2x2">
+                    <div className="layout-preview-box l-grid2x2">
+                      <div /><div /><div /><div />
+                    </div>
+                  </div>
+                  <div className="pane-band-layout-item" onClick={() => openLayout('leftHeavy', paneId)} title="Left Heavy">
+                    <div className="layout-preview-box l-leftHeavy">
+                      <div className="l-col"><div /><div /></div>
+                      <div className="l-col"><div /></div>
+                    </div>
+                  </div>
+                  <div className="pane-band-layout-item" onClick={() => openLayout('rightHeavy', paneId)} title="Right Heavy">
+                    <div className="layout-preview-box l-rightHeavy">
+                      <div className="l-col"><div /></div>
+                      <div className="l-col"><div /><div /></div>
+                    </div>
+                  </div>
+                  <div className="pane-band-layout-item" onClick={() => openLayout('topHeavy', paneId)} title="Top Heavy">
+                    <div className="layout-preview-box l-topHeavy">
+                      <div className="l-row"><div /><div /></div>
+                      <div className="l-row"><div /></div>
+                    </div>
+                  </div>
+                  <div className="pane-band-layout-item" onClick={() => openLayout('bottomHeavy', paneId)} title="Bottom Heavy">
+                    <div className="layout-preview-box l-bottomHeavy">
+                      <div className="l-row"><div /></div>
+                      <div className="l-row"><div /><div /></div>
+                    </div>
+                  </div>
+                  <div className="pane-band-layout-item" onClick={() => openLayout('hsplit212', paneId)} title="H-Split (2-1-2)">
+                    <div className="layout-preview-box l-hsplit212">
+                      <div className="l-col"><div /><div /></div>
+                      <div className="l-col"><div /></div>
+                      <div className="l-col"><div /><div /></div>
+                    </div>
+                  </div>
+                  <div className="pane-band-layout-item" onClick={() => openLayout('grid3x2', paneId)} title="Grid 3x2">
+                    <div className="layout-preview-box l-grid3x2">
+                      <div className="l-col"><div /><div /></div>
+                      <div className="l-col"><div /><div /></div>
+                      <div className="l-col"><div /><div /></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </span>
+          )}
+
           {/* Split Down */}
           {!isSplitDownDisabled && (
             <span
               className="pane-band-control-icon pane-band-tooltip-trigger"
-              onClick={(e) => {
-                e.stopPropagation();
-                onSplitDown();
-              }}
               style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
             >
               <svg
@@ -495,28 +661,30 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 <line x1="3" y1="12" x2="21" y2="12" />
               </svg>
               <div className="pane-band-tooltip">
-                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Split down</div>
-                <div
-                  style={{
-                    fontSize: '11px',
-                    fontFamily: 'var(--font-mono)',
-                    color: 'var(--text-secondary)',
-                    marginTop: 'var(--space-2)'
+                <div 
+                  className="pane-band-tooltip-clickable"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSplitDown();
                   }}
                 >
-                  Ctrl+Shift+_
+                  <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Split Down</div>
+                  <div style={{fontSize: '10px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', marginTop: '2px'}}>Ctrl+Shift+_</div>
                 </div>
-                <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: 'var(--space-6) 0'}} />
-                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Clone down</div>
-                <div
-                  style={{
-                    fontSize: '11px',
-                    fontFamily: 'var(--font-mono)',
-                    color: 'var(--text-secondary)',
-                    marginTop: 'var(--space-2)'
+                <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: 'var(--space-4) 0'}} />
+                <div 
+                  className="pane-band-tooltip-clickable"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onSplitUp) onSplitUp();
+                    else {
+                      const rpc = (window as any).rpc;
+                      if (rpc && paneId) rpc.emit('split request horizontal', {activeUid: paneId, splitPlacement: 'BEFORE'});
+                    }
                   }}
                 >
-                  Ctrl+Alt+Shift+_
+                  <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Split Up</div>
+                  <div style={{fontSize: '10px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', marginTop: '2px'}}>Place to Top</div>
                 </div>
               </div>
             </span>
@@ -526,10 +694,6 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           {!isSplitRightDisabled && (
             <span
               className="pane-band-control-icon pane-band-tooltip-trigger"
-              onClick={(e) => {
-                e.stopPropagation();
-                onSplitRight();
-              }}
               style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
             >
               <svg
@@ -547,28 +711,30 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 <line x1="12" y1="3" x2="12" y2="21" />
               </svg>
               <div className="pane-band-tooltip">
-                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Split right</div>
-                <div
-                  style={{
-                    fontSize: '11px',
-                    fontFamily: 'var(--font-mono)',
-                    color: 'var(--text-secondary)',
-                    marginTop: 'var(--space-2)'
+                <div 
+                  className="pane-band-tooltip-clickable"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSplitRight();
                   }}
                 >
-                  Ctrl+Shift+D
+                  <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Split Right</div>
+                  <div style={{fontSize: '10px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', marginTop: '2px'}}>Ctrl+Shift+D</div>
                 </div>
-                <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: 'var(--space-6) 0'}} />
-                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Clone right</div>
-                <div
-                  style={{
-                    fontSize: '11px',
-                    fontFamily: 'var(--font-mono)',
-                    color: 'var(--text-secondary)',
-                    marginTop: 'var(--space-2)'
+                <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: 'var(--space-4) 0'}} />
+                <div 
+                  className="pane-band-tooltip-clickable"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onSplitLeft) onSplitLeft();
+                    else {
+                      const rpc = (window as any).rpc;
+                      if (rpc && paneId) rpc.emit('split request vertical', {activeUid: paneId, splitPlacement: 'BEFORE'});
+                    }
                   }}
                 >
-                  Ctrl+Alt+Shift+D
+                  <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Split Left</div>
+                  <div style={{fontSize: '10px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', marginTop: '2px'}}>Place to Left</div>
                 </div>
               </div>
             </span>
@@ -817,7 +983,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           .pane-band-tooltip {
             display: none;
             position: absolute;
-            top: 28px;
+            top: 20px;
             right: -6px;
             background: var(--bg-primary);
             border: 0.5px solid var(--border-neutral);
@@ -827,11 +993,117 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             z-index: 1000;
             min-width: 140px;
             text-align: left;
-            pointer-events: none;
+            pointer-events: auto;
+            box-shadow: 0 6px 16px rgba(0,0,0,0.35);
+          }
+
+          .pane-band-tooltip::before {
+            content: '';
+            position: absolute;
+            top: -12px;
+            left: 0;
+            width: 100%;
+            height: 12px;
+            background: transparent;
           }
 
           .pane-band-tooltip-trigger:hover .pane-band-tooltip {
             display: block;
+          }
+
+          .pane-band-tooltip-clickable {
+            cursor: pointer;
+            padding: 4px 6px;
+            border-radius: 4px;
+            transition: background 0.15s ease;
+          }
+
+          .pane-band-tooltip-clickable:hover {
+            background: rgba(255, 255, 255, 0.08);
+          }
+
+          /* Layouts grid */
+          .pane-band-layout-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            padding: 4px;
+          }
+
+          .pane-band-layout-item {
+            cursor: pointer;
+            border-radius: 4px;
+            border: 1px solid var(--border-neutral);
+            padding: 4px;
+            background: rgba(255, 255, 255, 0.02);
+            transition: all 0.15s ease;
+          }
+
+          .pane-band-layout-item:hover {
+            border-color: var(--accent-primary, #6ea8fe);
+            background: rgba(110, 168, 254, 0.15);
+            transform: translateY(-1px);
+          }
+
+          .layout-preview-box {
+            width: 48px;
+            height: 32px;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 2px;
+            overflow: hidden;
+            display: flex;
+            gap: 1px;
+            border: 0.5px solid rgba(255, 255, 255, 0.15);
+          }
+
+          .layout-preview-box div {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 1px;
+          }
+
+          /* 3cols */
+          .l-3cols > div {
+            flex: 1;
+          }
+
+          /* 3rows */
+          .l-3rows {
+            flex-direction: column;
+          }
+          .l-3rows > div {
+            flex: 1;
+          }
+
+          /* grid2x2 */
+          .l-grid2x2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 1px;
+          }
+
+          /* Columns/Rows based layouts */
+          .l-col {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            background: transparent !important;
+          }
+
+          .l-row {
+            flex: 1;
+            display: flex;
+            gap: 1px;
+            background: transparent !important;
+          }
+
+          .l-topHeavy {
+            flex-direction: column;
+          }
+
+          .l-bottomHeavy {
+            flex-direction: column;
           }
 
           .pane-band-name-cluster {

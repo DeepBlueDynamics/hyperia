@@ -2677,6 +2677,8 @@ export default class Term extends React.PureComponent<
                 activeUid: this.props.uid
               })
             }
+            onSplitLeft={() => rpc.emit('split request vertical', {activeUid: this.props.uid, splitPlacement: 'BEFORE'})}
+            onSplitUp={() => rpc.emit('split request horizontal', {activeUid: this.props.uid, splitPlacement: 'BEFORE'})}
             onClose={() => {
               if (this.props.onClosePane && this.props.groupUid) {
                 this.props.onClosePane(this.props.groupUid);

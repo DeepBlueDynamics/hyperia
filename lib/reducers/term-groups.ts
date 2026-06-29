@@ -148,14 +148,17 @@ const splitGroup = (state: ITermState, action: SessionAddAction) => {
         sessionUid: '',
         webUrl: undefined,
         direction: splitDirection,
-        children: [existingSession.uid, newSession.uid]
+        children: (action as any).splitPlacement === 'BEFORE'
+          ? [newSession.uid, existingSession.uid]
+          : [existingSession.uid, newSession.uid]
       })
     );
   }
 
   const {children} = parentGroup;
-  // Insert the new child pane right after the active one:
-  const index = children.indexOf(activeGroup.uid) + 1;
+  const index = (action as any).splitPlacement === 'BEFORE'
+    ? children.indexOf(activeGroup.uid)
+    : children.indexOf(activeGroup.uid) + 1;
   const newChildren = [...children.slice(0, index).asMutable(), newSession.uid, ...children.slice(index).asMutable()];
   state = state.setIn(
     ['termGroups', parentGroup.uid],

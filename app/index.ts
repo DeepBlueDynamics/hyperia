@@ -615,6 +615,7 @@ app.on('ready', () => {
       // version, any platform). _showSplash fades out and reveals the main
       // window itself; otherwise just show the window when its content loads.
       if (shouldShowSplashOnce()) {
+        firstWin.show();
         void _showSplash(firstWin.getBounds(), firstWin);
       } else {
         firstWin.webContents.once('did-finish-load', () => {
