@@ -54,7 +54,7 @@ if (process.platform === 'win32') {
     // electron-builder appId (com.deepbluedynamics.hyperia), which stays stable so
     // auto-update / install-in-place keeps working. Trade-off: a taskbar pin won't
     // follow across versions (AUMID changes), so a re-pin may be needed per update.
-    app.setAppUserModelId('com.deepbluedynamics.hyperia-v01306');
+    app.setAppUserModelId('com.deepbluedynamics.hyperia-v01307');
   } catch {
     /* non-fatal */
   }
