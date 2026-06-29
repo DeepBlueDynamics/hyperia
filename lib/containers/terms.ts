@@ -49,6 +49,7 @@ const mapStateToProps = (state: HyperState) => {
     bellSoundURL: state.ui.bellSoundURL,
     bellSound: state.ui.bellSound,
     copyOnSelect: state.ui.copyOnSelect,
+    disableMouseReporting: state.ui.disableMouseReporting,
     modifierKeys: state.ui.modifierKeys,
     quickEdit: state.ui.quickEdit,
     webGLRenderer: state.ui.webGLRenderer,

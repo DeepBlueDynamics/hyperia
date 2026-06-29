@@ -64,6 +64,7 @@ export type uiState = Immutable<{
   colors: ColorMap;
   cols: number | null;
   copyOnSelect: boolean;
+  disableMouseReporting: boolean;
   css: string;
   cursorAccentColor: string;
   cursorBlink: boolean;
@@ -341,6 +342,7 @@ export type TermGroupOwnProps = {
   | 'borderColor'
   | 'colors'
   | 'copyOnSelect'
+  | 'disableMouseReporting'
   | 'cursorBlink'
   | 'cursorColor'
   | 'cursorShape'
@@ -408,6 +410,7 @@ export type TermProps = {
   colors: ColorMap;
   cols: number | null;
   copyOnSelect: boolean;
+  disableMouseReporting: boolean;
   cursorAccentColor?: string;
   cursorBlink: boolean;
   cursorColor: string;

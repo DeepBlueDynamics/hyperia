@@ -204,6 +204,7 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
             bellSoundURL: this.props.bellSoundURL,
             bellSound: this.props.bellSound,
             copyOnSelect: this.props.copyOnSelect,
+            disableMouseReporting: this.props.disableMouseReporting,
             modifierKeys: this.props.modifierKeys,
             onActive: this.props.onActive,
             onCwd: (this.props as any).onCwd,

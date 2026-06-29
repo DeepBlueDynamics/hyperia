@@ -83,6 +83,8 @@ type profileConfigOptions = {
   colors: ColorMap;
   /** if `true` selected text will automatically be copied to the clipboard */
   copyOnSelect: boolean;
+  /** if `true` mouse reporting/tracking is completely disabled */
+  disableMouseReporting?: boolean;
   /** custom CSS to embed in the main window */
   css: string;
   /** terminal text color under BLOCK cursor */

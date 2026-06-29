@@ -149,6 +149,7 @@ function detectWindows(): DetectedProfile[] {
   if (n8Installed && existsSync(cmd)) {
     const n8Bin = n8WhereNem ? 'nemesis8' : 'n8';
     profiles.push({name: 'Nemesis8', config: {shell: cmd, shellArgs: ['/c', n8Bin]}});
+    profiles.push({name: 'Nemesis8 Danger', config: {shell: cmd, shellArgs: ['/c', `${n8Bin} --danger`]}});
   } else if (psInstaller) {
     profiles.push({
       name: 'Nemesis8',
@@ -199,6 +200,7 @@ function detectUnix(): DetectedProfile[] {
   const unixShell = profiles[0]?.config.shell || '/bin/bash';
   if (n8Bin) {
     profiles.push({name: 'Nemesis8', config: {shell: unixShell, shellArgs: ['-l', '-c', n8Bin]}});
+    profiles.push({name: 'Nemesis8 Danger', config: {shell: unixShell, shellArgs: ['-l', '-c', `${n8Bin} --danger`]}});
   } else {
     profiles.push({
       name: 'Nemesis8',

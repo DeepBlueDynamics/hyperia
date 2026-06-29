@@ -728,8 +728,11 @@ export default class Term extends React.PureComponent<
 
     this.disposableListeners.push(
       this.term.onData((data) => {
-        if (props.onData) {
-          props.onData(data);
+        if (this.props.onData) {
+          if (this.props.disableMouseReporting && (data.startsWith('\x1b[M') || data.startsWith('\x1b[<'))) {
+            return;
+          }
+          this.props.onData(data);
         }
         this.checkActiveProgram();
       })
@@ -2969,28 +2972,52 @@ export default class Term extends React.PureComponent<
                   <span>Claude Code</span>
                 </button>
                 {((this.props as any).profiles || []).some((p: any) => p.name.toLowerCase() === 'nemesis8') && (
-                  <button
-                    className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
-                    onClick={() => {
-                      // Starts in the picked directory, then runs `n8` — its launcher
-                      // comes up and the user picks the agent there.
-                      const {groupUid, uid, sessionCwd} = this.props as any;
-                      rpc.emit('new', {
-                        isNewGroup: false,
-                        cwd: sessionCwd || (this.props as any).cwd,
-                        activeUid: uid,
-                        profile: 'Nemesis8',
-                        groupUid
-                      });
-                    }}
-                  >
-                    <i
-                      className="ti ti-robot"
-                      style={{fontSize: '14px', color: 'var(--danger-text)'}}
-                      aria-hidden="true"
-                    />
-                    <span>Nemesis8</span>
-                  </button>
+                  <>
+                    <button
+                      className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
+                      onClick={() => {
+                        // Starts in the picked directory, then runs `n8` — its launcher
+                        // comes up and the user picks the agent there.
+                        const {groupUid, uid, sessionCwd} = this.props as any;
+                        rpc.emit('new', {
+                          isNewGroup: false,
+                          cwd: sessionCwd || (this.props as any).cwd,
+                          activeUid: uid,
+                          profile: 'Nemesis8',
+                          groupUid
+                        });
+                      }}
+                    >
+                      <i
+                        className="ti ti-robot"
+                        style={{fontSize: '14px', color: 'var(--danger-text)'}}
+                        aria-hidden="true"
+                      />
+                      <span>Nemesis8</span>
+                    </button>
+                    {((this.props as any).profiles || []).some((p: any) => p.name.toLowerCase() === 'nemesis8 danger') && (
+                      <button
+                        className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
+                        onClick={() => {
+                          const {groupUid, uid, sessionCwd} = this.props as any;
+                          rpc.emit('new', {
+                            isNewGroup: false,
+                            cwd: sessionCwd || (this.props as any).cwd,
+                            activeUid: uid,
+                            profile: 'Nemesis8 Danger',
+                            groupUid
+                          });
+                        }}
+                      >
+                        <i
+                          className="ti ti-shield-off"
+                          style={{fontSize: '14px', color: 'var(--danger-text)'}}
+                          aria-hidden="true"
+                        />
+                        <span>Nemesis8 Danger</span>
+                      </button>
+                    )}
+                  </>
                 )}
                 <button
                   className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
