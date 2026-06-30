@@ -47,12 +47,16 @@
         "to": "./sidecar/hyperia-sidecar.exe"
       }
     ],
-    "target": {
-      "target": "nsis",
-      "arch": [
-        "x64"
-      ]
-    },
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      },
+      {
+        "target": "zip",
+        "arch": ["x64"]
+      }
+    ],
     "signtoolOptions": {
       "publisherName": "DeepBlue Dynamics LLC",
       "signingHashAlgorithms": ["sha256"],
