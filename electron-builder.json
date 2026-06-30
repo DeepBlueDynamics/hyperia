@@ -62,6 +62,7 @@
   "nsis": {
     "include": "build/win/installer.nsh",
     "shortcutName": "Hyperia",
+    "uninstallDisplayName": "Hyperia",
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
