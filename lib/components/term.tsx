@@ -21,12 +21,13 @@ import type {TermProps} from '../../typings/hyper';
 import rpc from '../rpc';
 import terms from '../terms';
 import processClipboard from '../utils/paste';
+import {toNavigableUrl} from '../utils/navigable-url';
 import {translatePath} from '../utils/path-translate';
 import {countPathHorizontalStacks} from '../utils/term-groups';
 
 import FindBar from './find-bar';
+import {NewPanePicker} from './new-pane-picker';
 import {PaneBand} from './pane-band';
-import UrlPicker from './url-picker';
 
 const path = require('path');
 
@@ -418,42 +419,16 @@ export default class Term extends React.PureComponent<
     const trimmed = (override !== undefined ? override : this.state.urlInput || '').trim();
     if (!trimmed) return;
 
-    const isValidUrl = (str: string): boolean => {
-      const t = str.trim();
-      try {
-        const url = new URL(t);
-        if (url.protocol && url.host) return true;
-      } catch {}
-      if (/^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?(\/.*)?$/i.test(t)) {
-        return true;
-      }
-      if (/^(https?:\/\/)?([a-zA-Z0-9-]+\.)+(local|test)(:\d+)?(\/.*)?$/i.test(t)) {
-        return true;
-      }
-      if (/^(https?:\/\/)?([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(:\d+)?(\/.*)?$/i.test(t)) {
-        return true;
-      }
-      return false;
-    };
-
-    if (isValidUrl(trimmed)) {
-      let finalUrl = trimmed;
-      if (!/^https?:\/\//i.test(finalUrl)) {
-        if (/^(localhost|127\.0\.0\.1)/i.test(finalUrl)) {
-          finalUrl = 'http://' + finalUrl;
-        } else {
-          finalUrl = 'https://' + finalUrl;
-        }
-      }
-      const {groupUid, uid, setWebPaneUrl} = this.props as any;
-      if (setWebPaneUrl && groupUid) {
-        rpc.emit('exit', {uid});
-        setWebPaneUrl(groupUid, finalUrl);
-      }
-      this.setState({urlInput: '', urlError: ''});
-    } else {
-      this.setState({urlError: "Doesn't look like a URL"});
+    // Same smart routing the web pane uses: real URLs pass through, loopback
+    // gets http://, dotted/host-like tokens get https://, and free text becomes
+    // a DuckDuckGo search — so the box always resolves to something navigable.
+    const finalUrl = toNavigableUrl(trimmed);
+    const {groupUid, uid, setWebPaneUrl} = this.props as any;
+    if (setWebPaneUrl && groupUid) {
+      rpc.emit('exit', {uid});
+      setWebPaneUrl(groupUid, finalUrl);
     }
+    this.setState({urlInput: '', urlError: ''});
   };
 
   constructor(props: TermProps) {
@@ -2781,391 +2756,22 @@ export default class Term extends React.PureComponent<
           </div>
         )}
         {isPicker ? (
-          <div
-            className="term_pickerContainer"
-            style={{zoom: this.state.pickerZoom}}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              this.triggerPickerGlimmer();
-            }}
-          >
-            <div
-              style={{
-                margin: 'auto 0',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                padding: 'var(--space-10) 0',
-                gap: 'var(--space-10)',
-                width: '100%',
-                flexShrink: 0
-              }}
-            >
-              <div
-                style={{
-                  fontSize: '13px',
-                  fontWeight: 500,
-                  color: 'var(--text-primary)',
-                  fontFamily: 'var(--font-sans)'
-                }}
-              >
-                New Pane
-              </div>
-
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-10)',
-                  width: '100%',
-                  maxWidth: '560px'
-                }}
-              >
-                <div
-                  style={{
-                    flex: 1,
-                    height: '0.5px',
-                    background: 'var(--border-neutral)'
-                  }}
-                />
-                <div
-                  style={{
-                    fontSize: '11px',
-                    color: 'var(--text-tertiary)',
-                    fontFamily: 'var(--font-sans)'
-                  }}
-                >
-                  pick a shell
-                </div>
-                <div
-                  style={{
-                    flex: 1,
-                    height: '0.5px',
-                    background: 'var(--border-neutral)'
-                  }}
-                />
-              </div>
-
-              <div className="term_pickerGrid_rev">
-                {((this.props as any).profiles || [])
-                  .filter((p: any) => {
-                    const n = p.name.toLowerCase();
-                    // Agents live under "pick an agent", not the shell grid:
-                    // built-in agent names + any custom profile saved as kind 'agent'.
-                    if (n === 'claude code' || n === 'nemesis8' || p.kind === 'agent') return false;
-                    // Don't show shells that belong to another OS (synced config).
-                    return profileFitsPlatform(p);
-                  })
-                  // Stock (system-detected, no `kind`) shells first; user-added
-                  // custom shells (kind:'shell') after. Stable, so each group
-                  // keeps its own order.
-                  .sort((a: any, b: any) => (a.kind ? 1 : 0) - (b.kind ? 1 : 0))
-                  .map((p: any) => {
-                    const profileNameLower = p.name.toLowerCase();
-                    let iconClass = 'ti ti-terminal-2';
-                    if (profileNameLower.includes('powershell') || profileNameLower.includes('pwsh'))
-                      iconClass = 'ti ti-terminal-2';
-                    else if (
-                      profileNameLower.includes('wsl') ||
-                      profileNameLower.includes('ubuntu') ||
-                      profileNameLower.includes('debian')
-                    )
-                      iconClass = 'ti ti-brand-debian';
-                    else if (profileNameLower.includes('bash') || profileNameLower.includes('git'))
-                      iconClass = 'ti ti-brand-git';
-                    else if (profileNameLower.includes('cmd') || profileNameLower.includes('command'))
-                      iconClass = 'ti ti-terminal';
-                    else if (profileNameLower.includes('azure') || profileNameLower.includes('cloud'))
-                      iconClass = 'ti ti-cloud';
-
-                    const displayName = p.name.charAt(0).toUpperCase() + p.name.slice(1);
-
-                    return (
-                      <button
-                        key={p.name}
-                        className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
-                        title={p.kind ? `${displayName} — right-click to delete` : undefined}
-                        onClick={() => {
-                          const {groupUid, uid, sessionCwd} = this.props as any;
-                          rpc.emit('new', {
-                            isNewGroup: false,
-                            cwd: sessionCwd || (this.props as any).cwd,
-                            activeUid: uid,
-                            profile: p.name,
-                            groupUid
-                          });
-                        }}
-                        onContextMenu={
-                          p.kind
-                            ? (e) => {
-                                // Custom shells only: right-click to delete.
-                                e.preventDefault();
-                                void (async () => {
-                                  const confirmed = await ipcRenderer.invoke('confirm-remove-profile', {
-                                    type: 'shell',
-                                    displayName
-                                  });
-                                  if (confirmed) {
-                                    ipcRenderer.send('remove-profile', p.name);
-                                  }
-                                })();
-                              }
-                            : undefined
-                        }
-                      >
-                        <i className={iconClass} style={{fontSize: '14px'}} aria-hidden="true" />
-                        <span
-                          style={{
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap'
-                          }}
-                        >
-                          {displayName}
-                        </span>
-                      </button>
-                    );
-                  })}
-                <button
-                  className={
-                    'term_pickerButton_rev term_pickerButton_custom_rev ' +
-                    (this.state.isGlimmerActive ? 'term_glimmer' : '')
-                  }
-                  onClick={() => {
-                    this.setState({
-                      isCustomModalOpen: true,
-                      customKind: 'shell'
-                    });
-                  }}
-                >
-                  <i className="ti ti-plus" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <span>Custom…</span>
-                </button>
-              </div>
-
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-10)',
-                  width: '100%',
-                  maxWidth: '560px',
-                  marginTop: 'var(--space-4)'
-                }}
-              >
-                <div
-                  style={{
-                    flex: 1,
-                    height: '0.5px',
-                    background: 'var(--border-neutral)'
-                  }}
-                />
-                <div
-                  style={{
-                    fontSize: '11px',
-                    color: 'var(--text-tertiary)',
-                    fontFamily: 'var(--font-sans)'
-                  }}
-                >
-                  or pick an agent
-                </div>
-                <div
-                  style={{
-                    flex: 1,
-                    height: '0.5px',
-                    background: 'var(--border-neutral)'
-                  }}
-                />
-              </div>
-
-              <div className="term_pickerGrid_rev">
-                <button
-                  className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
-                  onClick={() => {
-                    const {groupUid, uid, sessionCwd} = this.props as any;
-                    rpc.emit('new', {
-                      isNewGroup: false,
-                      cwd: sessionCwd || (this.props as any).cwd,
-                      activeUid: uid,
-                      profile: 'Claude Code',
-                      groupUid
-                    });
-                  }}
-                >
-                  <i
-                    className="ti ti-sparkles"
-                    style={{fontSize: '14px', color: 'var(--info-text)'}}
-                    aria-hidden="true"
-                  />
-                  <span>Claude Code</span>
-                </button>
-                {((this.props as any).profiles || []).some((p: any) => p.name.toLowerCase() === 'nemesis8') && (
-                  <>
-                    <button
-                      className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
-                      onClick={() => {
-                        // Starts in the picked directory, then runs `n8` — its launcher
-                        // comes up and the user picks the agent there.
-                        const {groupUid, uid, sessionCwd} = this.props as any;
-                        rpc.emit('new', {
-                          isNewGroup: false,
-                          cwd: sessionCwd || (this.props as any).cwd,
-                          activeUid: uid,
-                          profile: 'Nemesis8',
-                          groupUid
-                        });
-                      }}
-                    >
-                      <i
-                        className="ti ti-robot"
-                        style={{fontSize: '14px', color: 'var(--danger-text)'}}
-                        aria-hidden="true"
-                      />
-                      <span>Nemesis8</span>
-                    </button>
-                  </>
-                )}
-                <button
-                  className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
-                  onClick={() => {
-                    const port = process.env.HYPERIA_PORT || '9800';
-                    const shellUrl = `http://localhost:${port}/shell`;
-                    const {groupUid, uid, setWebPaneUrl} = this.props as any;
-                    if (setWebPaneUrl && groupUid) {
-                      rpc.emit('exit', {uid});
-                      setWebPaneUrl(groupUid, shellUrl);
-                    }
-                  }}
-                >
-                  <i className="ti ti-robot" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <span>Hyperia Shell</span>
-                </button>
-                {/* Custom agents the user saved (kind 'agent') */}
-                {((this.props as any).profiles || [])
-                  .filter((p: any) => p.kind === 'agent' && profileFitsPlatform(p))
-                  .map((p: any) => (
-                    <button
-                      key={p.name}
-                      className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
-                      title={`${p.name} — right-click to delete`}
-                      onClick={() => {
-                        const {groupUid, uid, sessionCwd} = this.props as any;
-                        rpc.emit('new', {
-                          isNewGroup: false,
-                          cwd: sessionCwd || (this.props as any).cwd,
-                          activeUid: uid,
-                          profile: p.name,
-                          groupUid
-                        });
-                      }}
-                      onContextMenu={(e) => {
-                        // Custom agents: right-click to delete.
-                        e.preventDefault();
-                        void (async () => {
-                          const confirmed = await ipcRenderer.invoke('confirm-remove-profile', {
-                            type: 'agent',
-                            displayName: p.name
-                          });
-                          if (confirmed) {
-                            ipcRenderer.send('remove-profile', p.name);
-                          }
-                        })();
-                      }}
-                    >
-                      <i className="ti ti-robot" style={{fontSize: '14px'}} aria-hidden="true" />
-                      <span
-                        style={{
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap'
-                        }}
-                      >
-                        {p.name}
-                      </span>
-                    </button>
-                  ))}
-                <button
-                  className={
-                    'term_pickerButton_rev term_pickerButton_custom_rev ' +
-                    (this.state.isGlimmerActive ? 'term_glimmer' : '')
-                  }
-                  onClick={() => {
-                    this.setState({
-                      isCustomModalOpen: true,
-                      customKind: 'agent'
-                    });
-                  }}
-                >
-                  <i className="ti ti-plus" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <span>Custom…</span>
-                </button>
-              </div>
-
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-10)',
-                  width: '100%',
-                  maxWidth: '560px',
-                  marginTop: 'var(--space-4)'
-                }}
-              >
-                <div
-                  style={{
-                    flex: 1,
-                    height: '0.5px',
-                    background: 'var(--border-neutral)'
-                  }}
-                />
-                <div
-                  style={{
-                    fontSize: '11px',
-                    color: 'var(--text-tertiary)',
-                    fontFamily: 'var(--font-sans)'
-                  }}
-                >
-                  or type a URL
-                </div>
-                <div
-                  style={{
-                    flex: 1,
-                    height: '0.5px',
-                    background: 'var(--border-neutral)'
-                  }}
-                />
-              </div>
-
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  width: '100%',
-                  maxWidth: '340px'
-                }}
-              >
-                <UrlPicker
-                  value={this.state.urlInput || ''}
-                  onChange={(v) => this.setState({urlInput: v, urlError: ''})}
-                  onNavigate={(url) => this.submitUrl(url)}
-                />
-                {this.state.urlError && (
-                  <div
-                    style={{
-                      fontSize: '11px',
-                      color: '#ff3b30',
-                      marginTop: 'var(--space-4)',
-                      textAlign: 'left',
-                      fontFamily: 'var(--font-sans)'
-                    }}
-                  >
-                    {this.state.urlError}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+          <NewPanePicker
+            profiles={(this.props as any).profiles}
+            groupUid={(this.props as any).groupUid}
+            uid={(this.props as any).uid}
+            sessionCwd={(this.props as any).sessionCwd}
+            cwd={(this.props as any).cwd}
+            setWebPaneUrl={(this.props as any).setWebPaneUrl}
+            urlInput={this.state.urlInput}
+            urlError={this.state.urlError}
+            pickerZoom={this.state.pickerZoom}
+            isGlimmerActive={this.state.isGlimmerActive}
+            onUrlChange={(v) => this.setState({urlInput: v, urlError: ''})}
+            onSubmitUrl={(url) => this.submitUrl(url)}
+            onTriggerGlimmer={() => this.triggerPickerGlimmer()}
+            onOpenCustomModal={(kind) => this.setState({isCustomModalOpen: true, customKind: kind})}
+          />
         ) : (
           <div
             ref={this.onTermWrapperRef}

@@ -97,7 +97,9 @@ export default class UrlPicker extends React.Component<Props, State> {
   componentDidMount() {
     if (this.props.autoFocus) {
       // Defer so the surrounding pane/picker has mounted and won't steal focus.
-      setTimeout(() => this.inputRef.current?.focus(), 60);
+      // preventScroll: focusing must NOT scroll the picker — clicking/auto-
+      // focusing the field used to jump the whole chooser into view.
+      setTimeout(() => this.inputRef.current?.focus({preventScroll: true}), 60);
     }
   }
 
@@ -180,7 +182,7 @@ export default class UrlPicker extends React.Component<Props, State> {
               e.preventDefault();
               e.stopPropagation();
               try {
-                this.inputRef.current?.focus();
+                this.inputRef.current?.focus({preventScroll: true});
                 // eslint-disable-next-line @typescript-eslint/no-var-requires
                 const {Menu, MenuItem} = require('@electron/remote');
                 const menu = new Menu();
@@ -237,7 +239,7 @@ export default class UrlPicker extends React.Component<Props, State> {
               if (r && r.type === 'root') this.toggleRoot(r.key);
               else if (r) onNavigate(r.entry.value);
               else if (value.trim()) onNavigate(value.trim());
-              else this.inputRef.current?.focus();
+              else this.inputRef.current?.focus({preventScroll: true});
             }}
             style={{
               fontFamily: 'var(--font-mono)',

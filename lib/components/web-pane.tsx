@@ -6,6 +6,7 @@ import {connect} from 'react-redux';
 import type {HyperDispatch} from '../../typings/hyper';
 import {clearWebPane, userExitTermGroup, splitWebPane, popOutPane} from '../actions/term-groups';
 import rpc from '../rpc';
+import {toNavigableUrl} from '../utils/navigable-url';
 import {countPathHorizontalStacks} from '../utils/term-groups';
 import {
   BROWSER_UA,
@@ -107,19 +108,6 @@ interface WebPaneState {
   findTotal: number;
   // Which collapsed history roots (e.g. all "google.com/maps" URLs) are expanded.
   expandedHistoryRoots: {[key: string]: boolean};
-}
-
-// Omnibox routing: pass real URLs through (any scheme, or a dotted host like
-// example.com), but send plain queries — anything with whitespace or no dotted
-// host — to a DuckDuckGo search. A dotted host that LOOKS valid but fails to
-// resolve (e.g. news.hackernews.com) is caught later by the did-fail-load fallback.
-function toNavigableUrl(input: string): string {
-  const t = (input || '').trim();
-  if (!t) return t;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) return t; // already has a scheme (http/https/file/ai/…)
-  if (/^localhost(:\d+)?(\/|$)/i.test(t)) return 'http://' + t;
-  if (!/\s/.test(t) && /^[^\s/]+\.[^\s/]+/.test(t)) return t; // dotted host → navigateWebview adds https://
-  return 'https://duckduckgo.com/?q=' + encodeURIComponent(t);
 }
 
 // net error codes where the site couldn't be reached → fall back to a DDG search:
