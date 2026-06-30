@@ -25,12 +25,16 @@ Start-Sleep -Milliseconds 500
 # 2. Remove leftover installed app dirs (default + custom you may have picked) -----
 Step "Removing leftover install dirs"
 $installDirs = @(
+  "$env:LocalAppData\Programs\Hyperia",
   "$env:LocalAppData\Programs\Hyperia-Terminal",
+  "$env:LocalAppData\Programs\hyperia",
   "$env:LocalAppData\Programs\hyperia-terminal"
 )
-# also any folder named Hyperia-Terminal under common custom roots
-$installDirs += Get-ChildItem "C:\","$env:UserProfile" -Directory -Filter "Hyperia-Terminal" -Depth 2 -EA SilentlyContinue |
-  Where-Object { $_.FullName -notlike "*\Code\*" } | Select-Object -ExpandProperty FullName
+# also any folder named Hyperia / Hyperia-Terminal under common custom roots
+# (skip the repo checkout under \Code\ so we don't nuke dist/win-unpacked)
+$installDirs += Get-ChildItem "C:\","$env:UserProfile" -Directory -Depth 2 -EA SilentlyContinue |
+  Where-Object { $_.Name -in @('Hyperia','Hyperia-Terminal') -and $_.FullName -notlike "*\Code\*" } |
+  Select-Object -ExpandProperty FullName
 foreach ($d in ($installDirs | Select-Object -Unique)) {
   if (Test-Path $d) { Remove-Item $d -Recurse -Force; Note "removed $d" }
 }

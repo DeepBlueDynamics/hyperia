@@ -2,7 +2,7 @@
 
 **A terminal emulator built for agents and humans.**
 
-![Hyperia-Terminal](assets/two.png)
+![Hyperia](assets/two.png)
 
 Hyperia is an agent-native terminal emulator. Forked from [Hyper](https://github.com/vercel/hyper) and extended with a Rust sidecar, it turns the terminal into a first-class platform for AI orchestration. Agents connect over the Model Context Protocol (MCP) and operate terminal sessions as peers — opening tabs, splitting panes, running commands, reading screens, and reporting status — while the human stays in control at all times.
 
