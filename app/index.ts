@@ -49,17 +49,11 @@ if (process.platform === 'win32' && app.isPackaged) {
 app.name = 'Hyperia';
 app.setName('Hyperia');
 
-// Pin Electron's userData directory to a STABLE path so it is NOT derived from
-// the display name. Electron defaults userData to %APPDATA%/<app.name>, so every
-// productName change (Hyperia → Hyperia2 → Hyperia-Terminal → Hyperia) moved the
-// data dir and orphaned localStorage — web-pane URL history, dir history, the
-// private-mode toggle, etc. (issue #127). Freezing the dir here lets the display
-// name change freely without ever stranding history. We KEEP "Hyperia-Terminal"
-// as the data dir even though the app is now named "Hyperia": existing installs
-// store there, so renaming back to "Hyperia" preserves all history (do NOT change
-// this string to match the new name, or you re-orphan everyone's data).
+// Pin Electron's userData directory to a STABLE path named "Hyperia" (the product
+// name). Electron defaults userData to %APPDATA%/<app.name>; pinning it explicitly
+// keeps it constant regardless of any future display-name tweaks (issue #127).
 try {
-  app.setPath('userData', resolve(app.getPath('appData'), 'Hyperia-Terminal'));
+  app.setPath('userData', resolve(app.getPath('appData'), 'Hyperia'));
 } catch (e) {
   console.warn('[userData] failed to pin stable path:', e);
 }
