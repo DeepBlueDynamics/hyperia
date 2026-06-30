@@ -2811,6 +2811,8 @@ async fn main() -> anyhow::Result<()> {
     let bridge_for_monitor = state.bridge.clone();
     // Bridge handle for the identity middleware (runs across all routes incl. /mcp).
     let bridge_for_mw = state.bridge.clone();
+    // Bridge handle to mint Ghost's identity (state is moved into the router below).
+    let bridge_for_ghost = state.bridge.clone();
 
     let app = axum::Router::new()
         .route("/health", axum::routing::get(|| async { "ok" }))
@@ -2883,8 +2885,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/dashboard/widgets", axum::routing::get(dashboard::get_widgets).post(dashboard::post_widgets))
         .with_state(dash_state);
 
-    // Ghost agent routes — always mounted, config lazy-loaded per request
-    let ghost_state = ghost::GhostState::new(args.port);
+    // Ghost agent routes — always mounted, config lazy-loaded per request.
+    // Mint Ghost a persistent identity so its sidecar API calls are attributed
+    // (not anonymous) — same IdentityStore resolve_caller reads (#22).
+    let ghost_token = bridge_for_ghost.identity().mint("Ghost 👻").await.token;
+    let ghost_state = ghost::GhostState::new(args.port, ghost_token);
     let shared_registry = ghost_state.registry.clone();
     let ghost_routes = axum::Router::new()
         .route("/api/ghost/chat", axum::routing::post(ghost::api::ghost_chat))

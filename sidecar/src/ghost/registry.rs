@@ -54,11 +54,27 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
-    pub fn new(http_port: u16) -> Self {
+    pub fn new(http_port: u16, ghost_token: String) -> Self {
+        // Identify Ghost's own sidecar API calls (#22): a minted "Ghost"
+        // hyp_agent_ token rides as the default Authorization header on every
+        // request this client makes, so Ghost's actions are attributed (not
+        // anonymous) and consent-gated like any other agent.
+        let client = {
+            let mut headers = reqwest::header::HeaderMap::new();
+            if let Ok(v) =
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {ghost_token}"))
+            {
+                headers.insert(reqwest::header::AUTHORIZATION, v);
+            }
+            reqwest::Client::builder()
+                .default_headers(headers)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        };
         Self {
             builtins: builtin_tool_defs(),
             dynamic: Arc::new(Mutex::new(Vec::new())),
-            client: reqwest::Client::new(),
+            client,
             http_port,
             ferricula: None,
             compressor: crate::ghost::compressor::ContextCompressor::from_env(),

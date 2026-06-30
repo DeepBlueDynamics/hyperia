@@ -31,11 +31,11 @@ pub struct GhostState {
 }
 
 impl GhostState {
-    pub fn new(http_port: u16) -> Self {
+    pub fn new(http_port: u16, ghost_token: String) -> Self {
         let session = Arc::new(Mutex::new(GhostSession::new(25)));
         let fc_config = load_ferricula_config();
         let ferricula = Arc::new(FerriculaBackend::new(&fc_config));
-        let registry = Arc::new(ToolRegistry::new(http_port).with_ferricula(ferricula.clone()));
+        let registry = Arc::new(ToolRegistry::new(http_port, ghost_token).with_ferricula(ferricula.clone()));
         let assets = Arc::new(AssetStore::new());
         Self {
             session,
