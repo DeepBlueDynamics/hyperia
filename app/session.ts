@@ -274,7 +274,7 @@ fi
         baseEnv.WSLENV = Array.from(new Set(wslenv.split(':').concat(vars))).filter(Boolean).join(':');
 
         const distroArgs = _shellArgs ? [..._shellArgs] : [];
-        shellArgs = distroArgs.concat(['--', 'bash', '-c', 'exec bash -i --rcfile "$HYPERIA_CTL_DIR/bashrc"']);
+        shellArgs = distroArgs.concat(['--', 'bash', '-c', 'exec bash --rcfile "$HYPERIA_CTL_DIR/bashrc" -i']);
       }
     }
 
