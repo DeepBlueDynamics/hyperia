@@ -30,14 +30,15 @@ import {resolve} from 'path';
 // Packages
 import {app, BrowserWindow, Menu, screen, ipcMain} from 'electron';
 
-// Windows app identity — set FIRST, before app.name/setName, the userData pin, or
-// any window/tray creation. If Electron inits a window/tray (or even setName)
-// before the AUMID is pinned, it broadcasts a default identity derived from
-// electron.exe and Windows caches the GENERIC Electron icon under it; pinning the
-// AUMID first makes Windows index us exactly once, with our icon. Stable (== the
-// electron-builder appId) so Start-menu search + taskbar pins persist across
-// updates; the icon cache is refreshed by the installer (ie4uinit -show).
-if (process.platform === 'win32') {
+// Windows app identity — set FIRST (before app.name/setName, the userData pin, or
+// any window/tray), but ONLY in a packaged build. Critical: in dev, `yarn start`
+// runs node_modules\electron\dist\electron.exe; if THAT process claimed the same
+// stable AUMID, Windows would cache "com.deepbluedynamics.hyperia → electron.exe"
+// (the GENERIC Electron icon), and the packaged app would inherit that poisoned
+// icon mapping. Gating on app.isPackaged means only the real installed exe ever
+// owns the AUMID, so Windows maps it to OUR icon. Stable (== electron-builder
+// appId) so Start-menu search + taskbar pins persist across updates.
+if (process.platform === 'win32' && app.isPackaged) {
   try {
     app.setAppUserModelId('com.deepbluedynamics.hyperia');
   } catch {
