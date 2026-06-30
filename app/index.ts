@@ -29,6 +29,22 @@ import {resolve} from 'path';
 
 // Packages
 import {app, BrowserWindow, Menu, screen, ipcMain} from 'electron';
+
+// Windows app identity — set FIRST, before app.name/setName, the userData pin, or
+// any window/tray creation. If Electron inits a window/tray (or even setName)
+// before the AUMID is pinned, it broadcasts a default identity derived from
+// electron.exe and Windows caches the GENERIC Electron icon under it; pinning the
+// AUMID first makes Windows index us exactly once, with our icon. Stable (== the
+// electron-builder appId) so Start-menu search + taskbar pins persist across
+// updates; the icon cache is refreshed by the installer (ie4uinit -show).
+if (process.platform === 'win32') {
+  try {
+    app.setAppUserModelId('com.deepbluedynamics.hyperia');
+  } catch {
+    /* non-fatal */
+  }
+}
+
 app.name = 'Hyperia-Terminal';
 app.setName('Hyperia-Terminal');
 
@@ -45,20 +61,6 @@ try {
   console.warn('[userData] failed to pin stable path:', e);
 }
 
-if (process.platform === 'win32') {
-  try {
-    // STABLE AUMID — must equal the electron-builder appId so there is ONE Windows
-    // app identity. We used to version this per release (…-v0139, -v0140) to dodge
-    // the poisoned per-AUMID icon cache, but churning the identity every release
-    // broke Start-menu search (stale AUMID entries pile up; "hyper" stops matching)
-    // and never let a taskbar pin survive an update. A stable AUMID fixes both; the
-    // icon cache is instead refreshed by the installer (ie4uinit -show in
-    // build/win/installer.nsh) so the new icon still reads clean on update.
-    app.setAppUserModelId('com.deepbluedynamics.hyperia');
-  } catch {
-    /* non-fatal */
-  }
-}
 
 // A broken stdout/stderr pipe must NEVER crash the main process. When Hyperia is
 // launched detached (or the parent terminal/pipe that captured its output

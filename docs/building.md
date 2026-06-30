@@ -2,6 +2,11 @@
 
 For the end-to-end release flow (CI + signing + GitHub release + auto-update channel + install-script deploy), use **`deploy/operations/release-build.md`** — that's the operations runbook. This file covers the per-platform local-build mechanics only.
 
+## Dev workflow (the standing cadence)
+
+- **Every change = implement → bump the version → commit → build the local installer.** This is the default for *every* change, unprompted. A new feature/fix gets its own version bump (patch by default; minor for a milestone). **Never rebuild the same version number with new code** — the version must always reflect what's in the binary.
+- **"deploy" / "push" / "release" = put it on GitHub** — push `canary` then tag the release (`git tag vX.Y.Z && git push --no-verify origin vX.Y.Z`); the tag-triggered CI publishes the cross-platform signed artifacts. Do this ONLY when explicitly asked with one of those words.
+
 ## Prerequisites
 
 - **Node.js** + **Yarn**
