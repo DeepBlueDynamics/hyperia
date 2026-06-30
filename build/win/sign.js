@@ -59,6 +59,13 @@ function loadSigningEnv() {
 }
 
 exports.default = async function (config) {
+  // Explicit unsigned build: HYPERIA_SKIP_SIGNING=1 yarn run dist — ships every
+  // artifact unsigned even when .signing.env is present (for diagnostics / quick
+  // local builds). Returning here leaves the file unsigned.
+  if (process.env.HYPERIA_SKIP_SIGNING) {
+    console.warn(`HYPERIA_SKIP_SIGNING set — shipping ${require('path').basename(config.path)} UNSIGNED`);
+    return;
+  }
   loadSigningEnv();
   const file = config.path;
 
