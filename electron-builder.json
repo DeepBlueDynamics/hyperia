@@ -61,8 +61,8 @@
   },
   "nsis": {
     "include": "build/win/installer.nsh",
-    "shortcutName": "Hyperia",
-    "uninstallDisplayName": "Hyperia",
+    "shortcutName": "Hyperia-Terminal",
+    "uninstallDisplayName": "Hyperia-Terminal",
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
