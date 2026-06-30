@@ -47,14 +47,14 @@ try {
 
 if (process.platform === 'win32') {
   try {
-    // Versioned AUMID — BUMP THIS SUFFIX EVERY RELEASE (…-v0128, -v0129, …).
-    // Windows keys the taskbar/shortcut icon cache off the AUMID; a fresh AUMID
-    // each release sidesteps the poisoned per-AUMID icon cache so the icon always
-    // reads clean from the exe. NOTE: this is intentionally DIFFERENT from the
-    // electron-builder appId (com.deepbluedynamics.hyperia), which stays stable so
-    // auto-update / install-in-place keeps working. Trade-off: a taskbar pin won't
-    // follow across versions (AUMID changes), so a re-pin may be needed per update.
-    app.setAppUserModelId('com.deepbluedynamics.hyperia-v01400');
+    // STABLE AUMID — must equal the electron-builder appId so there is ONE Windows
+    // app identity. We used to version this per release (…-v0139, -v0140) to dodge
+    // the poisoned per-AUMID icon cache, but churning the identity every release
+    // broke Start-menu search (stale AUMID entries pile up; "hyper" stops matching)
+    // and never let a taskbar pin survive an update. A stable AUMID fixes both; the
+    // icon cache is instead refreshed by the installer (ie4uinit -show in
+    // build/win/installer.nsh) so the new icon still reads clean on update.
+    app.setAppUserModelId('com.deepbluedynamics.hyperia');
   } catch {
     /* non-fatal */
   }

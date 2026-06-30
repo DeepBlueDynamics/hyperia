@@ -10,6 +10,11 @@
   WriteRegStr HKCU "Software\Classes\Drive\shell\Hyperia" "" "Open &Hyperia here"
   WriteRegStr HKCU "Software\Classes\Drive\shell\Hyperia" "Icon" `"$appExe"`
   WriteRegStr HKCU "Software\Classes\Drive\shell\Hyperia\command" "" `"$appExe" "%V"`
+
+  ; Rebuild the Windows icon cache so the new app icon reads clean on update.
+  ; This replaces the old per-release AUMID churn (which broke Start-menu search
+  ; and taskbar pinning) — the AUMID is now stable; we just bust the icon cache.
+  nsExec::Exec '"$SYSDIR\ie4uinit.exe" -show'
 !macroend
 
 !macro customUnInstall
@@ -33,12 +38,16 @@
   SetShellVarContext current
   Delete "$DESKTOP\Hyperia.lnk"
   Delete "$DESKTOP\Hyperia2.lnk"
+  Delete "$DESKTOP\Hyperia-Terminal.lnk"
   Delete "$SMPROGRAMS\Hyperia.lnk"
   Delete "$SMPROGRAMS\Hyperia2.lnk"
+  Delete "$SMPROGRAMS\Hyperia-Terminal.lnk"
   SetShellVarContext all
   Delete "$DESKTOP\Hyperia.lnk"
   Delete "$DESKTOP\Hyperia2.lnk"
+  Delete "$DESKTOP\Hyperia-Terminal.lnk"
   Delete "$SMPROGRAMS\Hyperia.lnk"
   Delete "$SMPROGRAMS\Hyperia2.lnk"
+  Delete "$SMPROGRAMS\Hyperia-Terminal.lnk"
   SetShellVarContext current
 !macroend

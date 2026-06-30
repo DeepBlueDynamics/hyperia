@@ -61,6 +61,7 @@
   },
   "nsis": {
     "include": "build/win/installer.nsh",
+    "shortcutName": "Hyperia",
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
