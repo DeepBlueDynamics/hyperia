@@ -31,6 +31,9 @@ pub struct PermRequest {
     /// "drive" (default) or "create_pane" / "create_tab" / "create_window" /
     /// "create_web" / "create_sticky" — drives prompt text + grant type.
     pub action: String,
+    /// Caller-supplied rationale (from request_access purpose=). Shown on the
+    /// consent prompt + audited so the human knows WHY. "" if none given.
+    pub purpose: String,
 }
 
 /// A granted permission. `expires_at == None` means "always" — it lives until
@@ -126,6 +129,7 @@ impl PermStore {
         requester_pane: &str,
         target_pane: &str,
         action: &str,
+        purpose: &str,
     ) -> PermRequest {
         let n = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req = PermRequest {
@@ -134,6 +138,7 @@ impl PermStore {
             requester_pane: requester_pane.to_string(),
             target_pane: target_pane.to_string(),
             action: action.to_string(),
+            purpose: purpose.to_string(),
         };
         self.pending.lock().await.insert(req.id.clone(), req.clone());
         req
@@ -393,6 +398,7 @@ impl PermStore {
                     "requester": r.requester,
                     "requesterPane": r.requester_pane,
                     "targetPane": r.target_pane,
+                    "purpose": r.purpose,
                 })
             })
             .collect();

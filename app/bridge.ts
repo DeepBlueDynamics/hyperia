@@ -501,7 +501,8 @@ function handleCommand(msg: Record<string, unknown>) {
         id: msg.id as string,
         requester: (msg.requester as string) || 'Unknown agent',
         requesterPane: (msg.requesterPane as string) || '',
-        targetPane: msg.targetPane as string
+        targetPane: msg.targetPane as string,
+        purpose: (msg.purpose as string) || ''
       };
       for (const w of (app as any).getWindows?.() || []) {
         if (w?.rpc) w.rpc.emit('permission request', payload);

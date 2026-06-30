@@ -810,7 +810,9 @@ async fn post_request_access(
     // Same gate as a real drive: Allow / RefuseHome / SoftWall(401) / Denied(403)
     // / NeedConsent → raises the prompt and waits ~15s for the human, returning
     // the real decision (Ok once approved) instead of a fire-and-forget 202.
-    match enforce_drive(&state, &headers, &uid).await {
+    // Thread the caller's `purpose` onto the prompt so the human sees WHY.
+    let purpose = parsed["purpose"].as_str().unwrap_or("");
+    match enforce_drive_with_purpose(&state, &headers, &uid, purpose).await {
         Ok(()) => (
             StatusCode::OK,
             serde_json::json!({
@@ -986,6 +988,17 @@ async fn enforce_drive(
     headers: &HeaderMap,
     target_uid: &str,
 ) -> Result<(), (StatusCode, String)> {
+    enforce_drive_with_purpose(state, headers, target_uid, "").await
+}
+
+// Like enforce_drive, but carries a caller-supplied `purpose` onto the consent
+// prompt + audit (used by request_access). Normal drives pass "".
+async fn enforce_drive_with_purpose(
+    state: &AppState,
+    headers: &HeaderMap,
+    target_uid: &str,
+    purpose: &str,
+) -> Result<(), (StatusCode, String)> {
     use identity::CallerIdentity;
     use perms::AuthDecision;
     let id = state.bridge.resolve_caller(bearer_token(headers).as_deref()).await;
@@ -1039,7 +1052,7 @@ async fn enforce_drive(
                 let req = state
                     .bridge
                     .perms()
-                    .create_request(&label, &requester_pane, target_uid, "drive")
+                    .create_request(&label, &requester_pane, target_uid, "drive", purpose)
                     .await;
                 let _ = state
                     .bridge
@@ -1049,6 +1062,7 @@ async fn enforce_drive(
                         "requester": req.requester,
                         "requesterPane": req.requester_pane,
                         "targetPane": req.target_pane,
+                        "purpose": req.purpose,
                     }))
                     .await;
             }
@@ -1135,7 +1149,7 @@ async fn enforce_create(
                 let req = state
                     .bridge
                     .perms()
-                    .create_request(&label, &requester_pane, &focus, action)
+                    .create_request(&label, &requester_pane, &focus, action, "")
                     .await;
                 let _ = state
                     .bridge
@@ -1221,7 +1235,7 @@ async fn enforce_capability(
                 let req = state
                     .bridge
                     .perms()
-                    .create_request(&label, &requester_pane, &focus, &format!("cap:{cap}"))
+                    .create_request(&label, &requester_pane, &focus, &format!("cap:{cap}"), "")
                     .await;
                 let _ = state
                     .bridge
@@ -1325,10 +1339,11 @@ async fn post_perm_request(
     if target.is_empty() {
         return (StatusCode::BAD_REQUEST, "targetPane required".into());
     }
+    let purpose = p["purpose"].as_str().unwrap_or("");
     let req = state
         .bridge
         .perms()
-        .create_request(&requester, &requester_pane, &target, "drive")
+        .create_request(&requester, &requester_pane, &target, "drive", purpose)
         .await;
     let _ = state
         .bridge
@@ -1338,6 +1353,7 @@ async fn post_perm_request(
             "requester": req.requester,
             "requesterPane": req.requester_pane,
             "targetPane": req.target_pane,
+            "purpose": req.purpose,
         }))
         .await;
     (StatusCode::OK, serde_json::json!({"ok": true, "id": req.id}).to_string())

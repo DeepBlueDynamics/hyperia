@@ -126,6 +126,21 @@ export default function ConsentModal(): React.ReactElement | null {
             <span style={{color: 'var(--text-secondary, #9a9aa2)'}}>
               {' '}— its tab is flashing 🔔. Approving runs the command it’s holding.
             </span>
+            {req.purpose ? (
+              <div
+                style={{
+                  marginTop: '8px',
+                  padding: '6px 9px',
+                  borderLeft: '2px solid var(--accent-primary, #6ea8fe)',
+                  background: 'var(--bg-secondary, rgba(255,255,255,0.04))',
+                  borderRadius: '3px',
+                  fontSize: '12.5px',
+                  color: 'var(--text-secondary, #9a9aa2)'
+                }}
+              >
+                <span style={{color: 'var(--text-primary, #e8e8ea)'}}>Why:</span> {req.purpose}
+              </div>
+            ) : null}
           </div>
         </div>
 

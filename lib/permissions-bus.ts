@@ -11,6 +11,8 @@ export type PermRequest = {
   requester: string;
   requesterPane: string;
   targetPane: string;
+  /** Caller-supplied rationale (from request_access purpose=); shown on the prompt. */
+  purpose?: string;
 };
 
 type Listener = (req: PermRequest | null) => void;

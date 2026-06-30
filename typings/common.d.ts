@@ -81,7 +81,7 @@ export type MainEvents = {
       active: boolean;
     }>;
   }>;
-  'permission request': {id: string; requester: string; requesterPane: string; targetPane: string};
+  'permission request': {id: string; requester: string; requesterPane: string; targetPane: string; purpose?: string};
   'permission resolved': {targetPane: string; decision: string; id?: string};
   'agent toast': {id: string; requester: string; action: string};
   'tab bell': {uid: string};
@@ -157,7 +157,7 @@ export type RendererEvents = {
   'session cwd': {uid: string; cwd: string};
   'session exit': {uid: string};
   'session shellstate': {uid: string; shellState: { state: 'idle' | 'busy'; lastExit?: number; command?: string }};
-  'permission request': {id: string; requester: string; requesterPane: string; targetPane: string};
+  'permission request': {id: string; requester: string; requesterPane: string; targetPane: string; purpose?: string};
   'permission resolved': {targetPane: string; decision: string; id?: string};
   'agent toast': {id: string; requester: string; action: string};
   'tab bell': {uid: string};
