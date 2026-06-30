@@ -3024,28 +3024,6 @@ export default class Term extends React.PureComponent<
                       />
                       <span>Nemesis8</span>
                     </button>
-                    {((this.props as any).profiles || []).some((p: any) => p.name.toLowerCase() === 'nemesis8 danger') && (
-                      <button
-                        className={'term_pickerButton_rev ' + (this.state.isGlimmerActive ? 'term_glimmer' : '')}
-                        onClick={() => {
-                          const {groupUid, uid, sessionCwd} = this.props as any;
-                          rpc.emit('new', {
-                            isNewGroup: false,
-                            cwd: sessionCwd || (this.props as any).cwd,
-                            activeUid: uid,
-                            profile: 'Nemesis8 Danger',
-                            groupUid
-                          });
-                        }}
-                      >
-                        <i
-                          className="ti ti-shield-off"
-                          style={{fontSize: '14px', color: 'var(--danger-text)'}}
-                          aria-hidden="true"
-                        />
-                        <span>Nemesis8 Danger</span>
-                      </button>
-                    )}
                   </>
                 )}
                 <button

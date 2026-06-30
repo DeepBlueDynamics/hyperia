@@ -160,6 +160,15 @@ function detectWindows(): DetectedProfile[] {
     });
   }
 
+  // Antigravity (Google's agentic IDE) — `agy` on PATH. Installed → a profile
+  // that runs it; the picker offers it as an agent.
+  const agyWhere = safeExec('where agy').trim() || safeExec('where antigravity').trim();
+  const agyInstalled = !!(agyWhere && existsSync(agyWhere.split('\n')[0].trim()));
+  if (agyInstalled && existsSync(cmd)) {
+    const agyBin = agyWhere.toLowerCase().includes('antigravity') ? 'antigravity' : 'agy';
+    profiles.push({name: 'Antigravity', config: {shell: cmd, shellArgs: ['/c', agyBin]}});
+  }
+
   return profiles;
 }
 
