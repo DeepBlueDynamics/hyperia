@@ -704,15 +704,15 @@ impl Bridge {
         // Re-bind each active pulse to its tab's CURRENT active pane: an agent
         // restart gives a new uid, but the tab is stable. This keeps pulses alive
         // across pane/agent restarts and a Hyperia restart (window+tab persisted).
-        let pulse_targets: Vec<(String, u32, String)> = {
+        let pulse_targets: Vec<(String, u32, String, String)> = {
             let pulses = self.inner.pulses.lock().await;
             pulses
                 .iter()
                 .filter(|p| !p.paused)
-                .map(|p| (p.id.clone(), p.window, p.tab.clone()))
+                .map(|p| (p.id.clone(), p.window, p.tab.clone(), p.target_label.clone()))
                 .collect()
         };
-        for (id, window, tab) in &pulse_targets {
+        for (id, window, tab, target_label) in &pulse_targets {
             // Keep the SPECIFIC pane the pulse was set on while its session is
             // alive (so a split's pulse hits the right pane, not the tab's active
             // one). Only re-bind to the tab's active pane when the cached pane is
@@ -725,7 +725,7 @@ impl Bridge {
                 continue;
             }
             if let Some(uid) = self
-                .resolve_pane_uid(Some(*window), Some(tab.as_str()), None)
+                .resolve_pane_uid(Some(*window), Some(tab.as_str()), Some(target_label.as_str()))
                 .await
             {
                 let mut pulses = self.inner.pulses.lock().await;
