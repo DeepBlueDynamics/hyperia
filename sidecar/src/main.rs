@@ -129,6 +129,50 @@ async fn get_search_shell(
     Json(serde_json::json!({ "query": q.q, "hits": hits }))
 }
 
+#[derive(serde::Deserialize)]
+struct ScrollbackQuery {
+    window: Option<u32>,
+    tab: Option<String>,
+    pane: Option<String>,
+    lines: Option<usize>,
+}
+
+/// Last N contiguous lines of a pane's shell scrollback (lume per-shell log),
+/// newest last, ANSI already stripped — the read surface #38 asks for. Addresses
+/// the pane by window/tab/pane like /api/screen.
+async fn get_scrollback(
+    State(state): State<AppState>,
+    Query(q): Query<ScrollbackQuery>,
+) -> (StatusCode, String) {
+    let n = q.lines.unwrap_or(100).clamp(1, 2000);
+    let uid = match state
+        .bridge
+        .resolve_pane_uid(q.window, q.tab.as_deref(), q.pane.as_deref())
+        .await
+    {
+        Some(u) => u,
+        None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
+    };
+    match state.bridge.lume().tail_shell(&uid, n).await {
+        Some((lines, total)) => {
+            let mut out = String::new();
+            if total > lines.len() {
+                out.push_str(&format!(
+                    "[Scrollback: showing last {} of {} lines. Use lines=2000 for more.]\n",
+                    lines.len(),
+                    total
+                ));
+            }
+            out.push_str(&lines.join("\n"));
+            (StatusCode::OK, out)
+        }
+        None => (
+            StatusCode::OK,
+            "[Scrollback: no history captured for this pane yet.]".into(),
+        ),
+    }
+}
+
 /// BM25 search across sticky notes (lume, reads notes.json fresh).
 async fn get_search_sticky(
     State(state): State<AppState>,
@@ -2826,6 +2870,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/fs/dirs", axum::routing::get(get_fs_dirs))
         .route("/api/tab/image", axum::routing::get(get_tab_image))
         .route("/api/search/shell", axum::routing::get(get_search_shell))
+        .route("/api/scrollback", axum::routing::get(get_scrollback))
         .route("/api/search/sticky", axum::routing::get(get_search_sticky))
         .route("/api/edit/apply", axum::routing::post(post_edit_apply))
         // Write endpoints

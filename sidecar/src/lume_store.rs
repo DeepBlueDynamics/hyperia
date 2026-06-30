@@ -136,6 +136,17 @@ impl LumeStore {
         self.inner.shell_logs.lock().await.remove(uid);
     }
 
+    /// Return the last `lines` lines of one shell's log (newest last) plus the
+    /// shell's TOTAL line count — the read surface for terminal_scrollback (#38).
+    /// None if the shell uid is unknown.
+    pub async fn tail_shell(&self, uid: &str, lines: usize) -> Option<(Vec<String>, usize)> {
+        let guard = self.inner.shell_logs.lock().await;
+        let buf = guard.get(uid)?;
+        let total = buf.len();
+        let start = total.saturating_sub(lines);
+        Some((buf[start..].to_vec(), total))
+    }
+
     /// Search one shell (Some uid) or every shell (None). Returns hits sorted
     /// by descending BM25 score, capped at `limit`.
     pub async fn search_shell(&self, uid: Option<&str>, query: &str, limit: usize, context_lines: usize) -> Vec<ShellLogHit> {

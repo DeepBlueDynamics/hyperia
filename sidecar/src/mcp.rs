@@ -113,6 +113,18 @@ pub struct ScreenRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ScrollbackRequest {
+    /// Window ID — the `id` field from terminal_status. Omit to use the focused window.
+    pub window: Option<u32>,
+    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
+    pub tab: Option<String>,
+    /// Which pane — its name or paneId (from terminal_status). Omit for the first/active pane.
+    pub pane: Option<String>,
+    /// How many lines of history to return, newest last. Default 100, max 2000.
+    pub lines: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SplitRequest {
     /// Split direction: "horizontal" or "vertical" (default: vertical)
     pub direction: Option<String>,
@@ -959,6 +971,22 @@ impl HyperiaMcp {
         let text = self.get(&self.pane_path("/api/screen", req.window, req.tab.as_deref(), req.pane.as_deref())).await?;
         let out = self.maximus_filter(&text, req.focus.as_deref(), req.raw.unwrap_or(false)).await;
         Ok(CallToolResult::success(vec![Content::text(out)]))
+    }
+
+    #[tool(description = "Read the last N lines of a pane's SCROLLBACK history — output that has scrolled off the visible screen (e.g. a 300-line build failure that terminal_screen can't show). Returns contiguous lines, newest last, ANSI-stripped, with a header if truncated. lines defaults to 100 (max 2000). Address with window/tab/pane like terminal_screen. To FIND a specific string across all history instead of reading a tail, use shell_log_search.")]
+    async fn terminal_scrollback(
+        &self,
+        Parameters(req): Parameters<ScrollbackRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut path =
+            self.pane_path("/api/scrollback", req.window, req.tab.as_deref(), req.pane.as_deref());
+        if let Some(n) = req.lines {
+            let sep = if path.contains('?') { '&' } else { '?' };
+            path.push(sep);
+            path.push_str(&format!("lines={}", n));
+        }
+        let text = self.get(&path).await?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     #[tool(description = "List all open windows, tabs, and panes in a nested hierarchy. Each window has an `id` field — pass that exact value as the `window` parameter in other tools (it is NOT 0-based; the first window is typically id=1). Each pane has a friendly `name` and a stable `paneId`. Address panes and tabs in other tools by their NAME or by paneId (full UUID or its 4+ char prefix) — there is no positional a/b/c label.")]
