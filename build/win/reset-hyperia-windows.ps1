@@ -64,6 +64,32 @@ Get-ChildItem "$env:AppData\Microsoft\Windows\Start Menu\Programs" -Directory -E
 Remove-Item "$env:Temp\WSLDVCPlugin" -Recurse -Force -EA SilentlyContinue
 Note "cleared %TEMP%\WSLDVCPlugin icon cache"
 
+# 3c. THE POISON: a dev-Electron shortcut carrying our AUMID -----------------------
+# `Electron.lnk` (or any .lnk targeting node_modules\electron\dist\electron.exe)
+# claims com.deepbluedynamics.hyperia and maps it to the generic Electron icon, so
+# Windows shows that for the packaged app too. Named "Electron", so the hyperia
+# filter above misses it — match by TARGET.
+Step "Removing dev-Electron shortcuts that hijack the AUMID"
+$sh2 = New-Object -ComObject WScript.Shell
+foreach ($r in @(
+    "$env:AppData\Microsoft\Windows\Start Menu",
+    "$env:ProgramData\Microsoft\Windows\Start Menu",
+    "$env:UserProfile\Desktop", "$env:Public\Desktop",
+    "$env:AppData\Microsoft\Windows\Recent")) {
+  Get-ChildItem $r -Recurse -Filter "*.lnk" -EA SilentlyContinue | ForEach-Object {
+    $t = $sh2.CreateShortcut($_.FullName).TargetPath
+    if ($t -match 'electron\\dist\\electron\.exe' -or $_.Name -eq 'Electron.lnk') {
+      Note "removed $($_.FullName)  ->  $t"; Remove-Item $_.FullName -Force
+    }
+  }
+}
+
+# 3d. AUMID-keyed jump-list stores (carry a stale AUMID->icon mapping) --------------
+Step "Clearing jump-list stores (AutomaticDestinations + CustomDestinations)"
+Remove-Item "$env:AppData\Roaming\Microsoft\Windows\Recent\AutomaticDestinations\*" -Force -EA SilentlyContinue
+Remove-Item "$env:AppData\Roaming\Microsoft\Windows\Recent\CustomDestinations\*" -Force -EA SilentlyContinue
+Note "jump lists will rebuild on next use"
+
 # 4. Clean Hyperia-specific registry: App Paths, installer shell verbs, ARP --------
 Step "Cleaning Hyperia registry keys"
 $regKeys = @(
