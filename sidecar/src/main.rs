@@ -1739,6 +1739,31 @@ async fn post_close(
     } else {
         None
     };
+    // Self-close guard (#118): an in-pane agent must NEVER be able to close its
+    // OWN pane — that's self-termination, and it's refused as a fundamental rule
+    // independent of ACLs/capabilities (a "manage" grant does not authorize an
+    // agent to delete itself). Resolve the effective target (the explicit uid, or
+    // the focused pane for a no-target close) and compare to the caller's pane.
+    let caller = state
+        .bridge
+        .resolve_caller(bearer_token(&headers).as_deref())
+        .await;
+    if let identity::CallerIdentity::Pane { pane: caller_pane, .. } = &caller {
+        let effective_target = match &uid {
+            Some(u) => Some(u.clone()),
+            None => state.bridge.resolve_pane_uid(None, None, None).await,
+        };
+        if effective_target.as_deref() == Some(caller_pane.as_str()) {
+            return (
+                StatusCode::FORBIDDEN,
+                "Refused: an agent cannot close its own pane (self-termination). \
+                 This is blocked unconditionally, regardless of permissions. If you \
+                 need this pane gone, ask the human; to close a DIFFERENT pane, \
+                 address it explicitly by window/tab/pane."
+                    .into(),
+            );
+        }
+    }
     // No activity gate on close either: agents can check userActiveSecsAgo
     // via terminal_status if they care to warn before tearing down a pane.
     let mut cmd = serde_json::json!({"type": "Close"});
