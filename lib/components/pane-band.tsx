@@ -487,7 +487,6 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               <style>{`@keyframes hyPulseRun{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.72)}}`}</style>
               <span
                 className="pane-band-control-icon pane-band-tooltip-trigger"
-                title={pulseActive ? 'Pulse running — click to edit or clear' : 'Set a periodic pulse (re-poke this pane)'}
                 onClick={(e) => {
                   e.stopPropagation();
                   setPulseOpen((v) => !v);
@@ -504,6 +503,16 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   <circle cx="12" cy="12" r="9" />
                   <polyline points="12 7 12 12 15 14" />
                 </svg>
+                {/* Styled hint (right-anchored) matching the other control icons —
+                    replaces a native title= that popped over the border. */}
+                <div className="pane-band-tooltip pane-band-pulse-tooltip">
+                  <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
+                    {pulseActive ? 'Pulse running' : 'Periodic pulse'}
+                  </div>
+                  <div style={{fontSize: '11px', color: 'var(--text-secondary)', marginTop: 'var(--space-2)'}}>
+                    {pulseActive ? 'Click to edit or clear' : 'Re-poke this pane on a timer'}
+                  </div>
+                </div>
               </span>
             </>
           )}
@@ -1082,6 +1091,12 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             min-width: 220px;
           }
 
+          .pane-band-pulse-tooltip {
+            right: -6px;
+            left: auto;
+            min-width: 200px;
+          }
+
           /* Hover bridge positioning to prevent overlapping other icons */
           .pane-band-tooltip::before {
             content: '';
@@ -1102,6 +1117,11 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           }
 
           .pane-band-split-right-tooltip::before {
+            right: 6px;
+            width: 20px;
+          }
+
+          .pane-band-pulse-tooltip::before {
             right: 6px;
             width: 20px;
           }

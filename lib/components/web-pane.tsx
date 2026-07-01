@@ -141,6 +141,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   _openSplitHandler: ((e: any, payload: {uid: string; url: string}) => void) | null = null;
   _focusHandler: ((e: any, payload: {uid: string}) => void) | null = null;
   _frozenHandler: ((e: any, payload: {uid: string; shot: string | null}) => void) | null = null;
+  _zoomKeyHandler: ((e: any, payload: {uid: string; dir: 'in' | 'out' | 'reset'}) => void) | null = null;
   // requestAnimationFrame token so reportBounds fires at most once per frame.
   _boundsRaf: number | null = null;
   _onScroll: (() => void) | null = null;
@@ -1407,6 +1408,17 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     rpc.on('web-pane-zoom-out', this.handleZoomOut);
     rpc.on('web-pane-zoom-reset', this.handleZoomReset);
 
+    // Ctrl/Cmd +/-/0 pressed while the page (native view) has focus — the manager
+    // intercepts them there (they never reach this window) and forwards here.
+    this._zoomKeyHandler = (_e: any, payload: {uid: string; dir: 'in' | 'out' | 'reset'}) => {
+      if (payload?.uid !== this.props.groupUid) return;
+      const arg = {uid: this.props.groupUid};
+      if (payload.dir === 'in') this.handleZoomIn(arg);
+      else if (payload.dir === 'out') this.handleZoomOut(arg);
+      else this.handleZoomReset(arg);
+    };
+    ipcRenderer.on('web-pane:zoom-key', this._zoomKeyHandler);
+
     this.checkAndTriggerInitialAiChat();
   }
 
@@ -1414,6 +1426,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     rpc.removeListener('web-pane-zoom-in', this.handleZoomIn);
     rpc.removeListener('web-pane-zoom-out', this.handleZoomOut);
     rpc.removeListener('web-pane-zoom-reset', this.handleZoomReset);
+    if (this._zoomKeyHandler) ipcRenderer.removeListener('web-pane:zoom-key', this._zoomKeyHandler);
 
     this.resizeObserver?.disconnect();
     document.removeEventListener('mousedown', this.handleOutsideClick);

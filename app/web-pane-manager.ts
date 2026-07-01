@@ -89,6 +89,21 @@ function wireWebContents(uid: string, wc: WebContents) {
   // Clicking into the page focuses its webContents — tell the renderer so it can
   // activate the pane (and dismiss the URL navigator).
   wc.on('focus', () => entrySend(uid, 'web-pane:focus', {uid}));
+  // Zoom shortcuts pressed while the PAGE has focus never reach the renderer's
+  // window (the native view captures them), so intercept Ctrl/Cmd +/-/0 here and
+  // route to the renderer's zoom handlers (which own the zoom-factor state).
+  wc.on('before-input-event', (event: Electron.Event, input: Electron.Input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta)) return;
+    const k = input.key;
+    let dir: 'in' | 'out' | 'reset' | null = null;
+    if (k === '+' || k === '=' || k === 'Add') dir = 'in';
+    else if (k === '-' || k === '_' || k === 'Subtract') dir = 'out';
+    else if (k === '0') dir = 'reset';
+    if (dir) {
+      event.preventDefault();
+      entrySend(uid, 'web-pane:zoom-key', {uid, dir});
+    }
+  });
   // OAuth that navigates the MAIN frame (not a popup) → punt to the system
   // browser, same as the old <webview> path.
   const oauthBail = (e: Electron.Event, url: string) => {
