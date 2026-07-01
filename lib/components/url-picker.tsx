@@ -22,24 +22,19 @@ function normalizeUrlKey(u: string): string {
   }
 }
 
-// Collapse key: scheme://host + full path, truncated at the first "special"
-// character (! ? @ # & = ; , ~ * + and more). Query strings and fragments live
-// in .search/.hash so they're already excluded; the path truncation also folds
-// in-path noise like google.com/maps/@lat,lng or /!bangs. Distinct pages keep
-// their full path and stay separate (article/123 ≠ article/456) — only variants
-// of the SAME page collapse together.
+// Group key = the HOST only (sub.domain.tld). Every page from a host collapses
+// into ONE expandable parent row — we no longer split by path — so all of a
+// site's visited URLs live under a single row you click to expand.
 function rootKeyForUrl(u: string): string {
   try {
     const p = new URL(/^[a-z]+:\/\//i.test(u) ? u : 'https://' + u);
-    let path = p.pathname;
-    const m = path.match(/[!?@#&=;,~*+$%^]/);
-    if (m?.index !== undefined && m.index > 0) path = path.slice(0, m.index);
-    return `${p.protocol}//${p.host}${path}`.replace(/\/+$/, '').toLowerCase();
+    return p.host.toLowerCase();
   } catch {
     return u
-      .split(/[!?@#&=;,~*+$%^]/)[0]
       .trim()
-      .toLowerCase();
+      .toLowerCase()
+      .replace(/^[a-z]+:\/\//i, '')
+      .split('/')[0];
   }
 }
 
@@ -107,6 +102,17 @@ export default class UrlPicker extends React.Component<Props, State> {
     this.setState((s) => ({expandedRoots: {...s.expandedRoots, [key]: !s.expandedRoots[key]}}));
   };
 
+  // Wipe the saved web-pane history. visibleRows() re-reads localStorage on the
+  // next render, so a setState is enough to reflect the now-empty store.
+  private clearHistory = () => {
+    try {
+      localStorage.removeItem('web_pane_history');
+    } catch {
+      /* ignore */
+    }
+    this.setState({focusedIndex: -1, expandedRoots: {}});
+  };
+
   // The dropdown opens when you CLICK IN (focus). URLs sharing a root (e.g. all
   // the google.com/maps/@... entries) collapse into one expandable row so a
   // map-spammed history stays tidy; typing filters and auto-expands matches.
@@ -133,7 +139,7 @@ export default class UrlPicker extends React.Component<Props, State> {
       if (entries.length === 1) {
         rows.push({type: 'single', entry: entries[0]});
       } else {
-        rows.push({type: 'root', key: k, label: k.replace(/^https?:\/\//, ''), entries});
+        rows.push({type: 'root', key: k, label: k, entries});
         if (this.state.expandedRoots[k] || !!q) {
           for (const e of entries) rows.push({type: 'child', entry: e});
         }
@@ -278,18 +284,13 @@ export default class UrlPicker extends React.Component<Props, State> {
                     <div
                       key={`root-${row.key}`}
                       onMouseDown={(ev) => {
+                        // Click the host row to EXPAND its pages (shown indented
+                        // below) — it never navigates. Pick a child to open one.
                         ev.preventDefault();
-                        // Ctrl/Cmd-click reveals the collapsed ?/#/@ variants; a
-                        // plain click navigates to the latest visit of this page.
-                        if (ev.ctrlKey || ev.metaKey) {
-                          this.toggleRoot(row.key);
-                        } else {
-                          this.setState({focusedIndex: -1});
-                          onNavigate(row.entries[0].value);
-                        }
+                        this.toggleRoot(row.key);
                       }}
                       onMouseEnter={() => this.setState({focusedIndex: i})}
-                      title={`${row.entries.length} versions · Ctrl-click to show`}
+                      title={`${row.entries.length} pages · click to ${expanded ? 'collapse' : 'expand'}`}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -436,6 +437,26 @@ export default class UrlPicker extends React.Component<Props, State> {
                   </div>
                 );
               })}
+            </div>
+            <div
+              // Clear history footer — pinned under the scroll area.
+              onMouseDown={(ev) => {
+                ev.preventDefault();
+                this.clearHistory();
+              }}
+              title="Clear browsing history"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '6px 10px',
+                cursor: 'pointer',
+                borderTop: '0.5px solid var(--border-neutral)',
+                color: 'var(--text-tertiary)'
+              }}
+            >
+              <i className="ti ti-trash" style={{fontSize: '13px', flexShrink: 0}} aria-hidden="true" />
+              <span style={{fontSize: '11px', fontFamily: 'var(--font-sans)'}}>Clear history</span>
             </div>
           </div>
         )}
