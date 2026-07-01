@@ -189,7 +189,9 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
             props.onUpdateState({isUrlNavigatorOpen: false});
           } else {
             if (!props.hasAiConfigured) {
-              props.onUpdateState({navigatorError: 'AI not configured — please check settings'});
+              // No AI configured → a bare (non-URL) query becomes a web search.
+              props.onNavigate('https://duckduckgo.com/?q=' + encodeURIComponent(trimmed));
+              props.onUpdateState({isUrlNavigatorOpen: false});
               return;
             }
 
@@ -252,7 +254,9 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
           props.onNavigate(finalUrl);
         } else {
           if (!props.hasAiConfigured) {
-            props.onUpdateState({navigatorError: 'AI not configured — please check settings'});
+            // No AI configured → a bare (non-URL) query becomes a web search.
+            props.onNavigate('https://duckduckgo.com/?q=' + encodeURIComponent(trimmed));
+            props.onUpdateState({isUrlNavigatorOpen: false});
             return;
           }
           const conversationId = 'conv-' + Date.now();
@@ -796,8 +800,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
       } else if (isUrl) {
         statusText = '🌐 URL · Enter navigates';
       } else if (!hasAi) {
-        statusText = '✨ AI not configured — see settings';
-        statusColor = 'var(--warning-text)';
+        statusText = '🦆 Enter searches DuckDuckGo';
       } else {
         const isPlausibleHost = !/\s/.test(trimmed);
         statusText = `✨ AI query · Enter sends to Claude${isPlausibleHost ? ' (Ctrl+Enter to navigate as URL)' : ''}`;

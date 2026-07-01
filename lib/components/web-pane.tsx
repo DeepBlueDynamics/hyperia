@@ -100,6 +100,13 @@ interface WebPaneState {
   isNarrow: boolean;
   paneWidth: number;
   pageBgColor?: string | null;
+  // Freeze-swap still shown in place of the (hidden) native view while an
+  // occluding DOM overlay is open. null = live view visible.
+  frozenShot?: string | null;
+  // True while the cursor is over the pane header — hides the native view so the
+  // header's hover tooltips (DOM, which a native view would otherwise occlude)
+  // are visible over a frozen frame.
+  headerHover?: boolean;
   // Find-in-page (Ctrl+F) bar.
   findOpen: boolean;
   findText: string;
@@ -128,7 +135,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   resizeObserver: any = null;
   _windowKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
   _findHandler: ((e: any, guestId: number) => void) | null = null;
-  _openSplitHandler: ((e: any, guestId: number, url: string) => void) | null = null;
+  _openSplitHandler: ((e: any, payload: {uid: string; url: string}) => void) | null = null;
+  _focusHandler: ((e: any, payload: {uid: string}) => void) | null = null;
+  _frozenHandler: ((e: any, payload: {uid: string; shot: string | null}) => void) | null = null;
   // requestAnimationFrame token so reportBounds fires at most once per frame.
   _boundsRaf: number | null = null;
   _onScroll: (() => void) | null = null;
@@ -237,6 +246,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       navigatorTop: 38,
       isNarrow: false,
       pageBgColor: null,
+      frozenShot: null,
+      headerHover: false,
       findOpen: false,
       findText: '',
       findActive: 0,
@@ -265,7 +276,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       if (!el) return; // ai/seeker branch — no native view to place.
       const rect = el.getBoundingClientRect();
       const onScreen = rect.width > 0 && rect.height > 0;
-      const visible = !this.state.error && !this.state.isUrlNavigatorOpen && !this.state.findOpen && onScreen;
+      const visible =
+        !this.state.error &&
+        !this.state.isUrlNavigatorOpen &&
+        !this.state.findOpen &&
+        !this.state.headerHover &&
+        onScreen;
       try {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         ipcRenderer.send('web-pane:set-bounds', {
@@ -1001,7 +1017,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (
       prevState.isUrlNavigatorOpen !== this.state.isUrlNavigatorOpen ||
       prevState.findOpen !== this.state.findOpen ||
-      prevState.error !== this.state.error
+      prevState.error !== this.state.error ||
+      prevState.headerHover !== this.state.headerHover
     ) {
       this.reportBounds();
     }
@@ -1224,22 +1241,39 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     };
     rpc.on('web-pane-reload', this._reloadHandler);
 
-    // TODO(webcontentsview Phase 2/3): the old right-click "Find in page" and the
-    // target="_blank"/window.open → split-down flows were correlated by the
-    // guest's webContents id (getWebContentsId), which no longer exists for a
-    // WebContentsView, and the main-process did-attach-webview path that emitted
-    // these is gone. Re-wire via the native view's webContents id / window-open
-    // handler in main and dispatch by pane uid. Registered as no-ops for now so
-    // unmount cleanup stays symmetric and nothing crashes.
+    // TODO(webcontentsview Phase 5): right-click "Find in page" still routes via
+    // the main-process context menu, which needs re-wiring by pane uid. No-op so
+    // unmount cleanup stays symmetric.
     this._findHandler = (_e: any, _guestId: number) => {
-      /* no-op until main re-emits web-pane-find keyed by pane uid */
+      /* no-op until the context-menu "Find in page" is re-keyed by pane uid */
     };
     ipcRenderer.on('web-pane-find', this._findHandler);
 
-    this._openSplitHandler = (_e: any, _guestId: number, _url: string) => {
-      /* no-op until main re-emits web-pane-open-split keyed by pane uid */
+    // target="_blank" / window.open in the page → the manager routes it here
+    // (keyed by pane uid) so we split a new web pane BELOW this one.
+    this._openSplitHandler = (_e: any, payload: {uid: string; url: string}) => {
+      if (payload?.uid !== this.props.groupUid || !payload.url) return;
+      this.props.onSplitWebPane?.(payload.url, 'HORIZONTAL');
     };
-    ipcRenderer.on('web-pane-open-split', this._openSplitHandler);
+    ipcRenderer.on('web-pane:open-split', this._openSplitHandler);
+
+    // Clicking into the page focuses the native view — activate this pane and
+    // dismiss the URL navigator (the DOM can't see clicks inside the view).
+    this._focusHandler = (_e: any, payload: {uid: string}) => {
+      if (payload?.uid !== this.props.groupUid) return;
+      this.props.onActive?.();
+      if (this.state.isUrlNavigatorOpen) this.setState({isUrlNavigatorOpen: false});
+    };
+    ipcRenderer.on('web-pane:focus', this._focusHandler);
+
+    // Freeze-swap: while the native view is hidden (URL navigator / find bar
+    // open), main hands us a still of the last live frame to paint in its place
+    // instead of white. Cleared (null) when the view comes back.
+    this._frozenHandler = (_e: any, payload: {uid: string; shot: string | null}) => {
+      if (payload?.uid !== this.props.groupUid) return;
+      this.setState({frozenShot: payload.shot});
+    };
+    ipcRenderer.on('web-pane:frozen', this._frozenHandler);
 
     this._clickHandler = (data: {uid: string; text?: string; selector?: string}) => {
       if (data.uid !== this.props.groupUid) return;
@@ -1366,7 +1400,13 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       ipcRenderer.removeListener('web-pane-find', this._findHandler);
     }
     if (this._openSplitHandler) {
-      ipcRenderer.removeListener('web-pane-open-split', this._openSplitHandler);
+      ipcRenderer.removeListener('web-pane:open-split', this._openSplitHandler);
+    }
+    if (this._focusHandler) {
+      ipcRenderer.removeListener('web-pane:focus', this._focusHandler);
+    }
+    if (this._frozenHandler) {
+      ipcRenderer.removeListener('web-pane:frozen', this._frozenHandler);
     }
     if (this._reloadHandler) {
       rpc.removeListener('web-pane-reload', this._reloadHandler);
@@ -1842,6 +1882,14 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         onClick={(e) => e.stopPropagation()}
       >
         {showStrip && (
+          // Hovering the header hides the native view (freeze-swap) so the
+          // header's DOM tooltips — which a native WebContentsView would paint
+          // over — are visible. Restored the moment the cursor leaves.
+          <div
+            style={{flexShrink: 0, display: 'flex', flexDirection: 'column'}}
+            onMouseEnter={() => this.setState({headerHover: true})}
+            onMouseLeave={() => this.setState({headerHover: false})}
+          >
           <PaneBand
             ref={this.labelRef}
             paneType={isAi ? 'ai' : 'web'}
@@ -2225,6 +2273,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             onClick={this.props.onActive}
             height={isAi ? 'normal' : 'compact'}
           />
+          </div>
         )}
 
         {/* Click-off backdrop: a click anywhere outside the dropdown (including on
@@ -2535,9 +2584,20 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                   display: error ? 'none' : 'flex',
                   border: 'none',
                   outline: 'none',
+                  position: 'relative',
                   backgroundColor: this.state.pageBgColor || '#ffffff'
                 }}
-              />
+              >
+                {this.state.frozenShot && (
+                  // Still frame of the page shown while the native view is hidden
+                  // (URL navigator / find bar open) so the overlay isn't over white.
+                  <img
+                    src={this.state.frozenShot}
+                    alt=""
+                    style={{position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top left'}}
+                  />
+                )}
+              </div>
             );
           })()}
         </div>

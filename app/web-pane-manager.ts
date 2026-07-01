@@ -12,10 +12,18 @@
 // automatically when its window closes or it's detached — we MUST close it in
 // destroy()/destroyForWindow() or we leak renderer processes.
 
-import {BrowserWindow, WebContentsView, ipcMain, session} from 'electron';
+import {BrowserWindow, WebContentsView, ipcMain, session, shell} from 'electron';
 import type {Session, WebContents} from 'electron';
 
 const PARTITION = 'persist:hyperia-web';
+
+// OAuth / login popups can't run inside an embedded browser — hand them to the
+// system browser (parity with the old <webview> guest handler).
+function isOAuthUrl(url: string): boolean {
+  return /^https?:\/\/(accounts\.google\.|login\.microsoftonline\.|appleid\.apple\.|github\.com\/login|login\.yahoo\.|(www\.)?facebook\.com\/(login|dialog)|api\.twitter\.com\/oauth)/i.test(
+    url
+  );
+}
 
 // Applied once to the shared web-pane session (the Chrome-UA + sec-ch-ua rewrite
 // that beats Cloudflare). Injected by window.ts so we reuse the exact same
@@ -26,6 +34,7 @@ interface WebPaneEntry {
   view: WebContentsView;
   win: BrowserWindow;
   url: string;
+  visible: boolean;
 }
 
 // Keyed by pane uid (unique across windows).
@@ -77,6 +86,29 @@ function wireWebContents(uid: string, wc: WebContents) {
   // Let the renderer run its dom-ready work (scrollbar CSS inject, bg-color probe)
   // via web-pane:execute-js — it can't observe the guest's dom-ready directly.
   wc.on('dom-ready', () => entrySend(uid, 'web-pane:dom-ready', {uid}));
+  // Clicking into the page focuses its webContents — tell the renderer so it can
+  // activate the pane (and dismiss the URL navigator).
+  wc.on('focus', () => entrySend(uid, 'web-pane:focus', {uid}));
+  // OAuth that navigates the MAIN frame (not a popup) → punt to the system
+  // browser, same as the old <webview> path.
+  const oauthBail = (e: Electron.Event, url: string) => {
+    if (isOAuthUrl(url)) {
+      e.preventDefault();
+      void shell.openExternal(url);
+    }
+  };
+  wc.on('will-navigate', oauthBail);
+  wc.on('will-redirect', oauthBail);
+  // Popups / target=_blank / window.open. OAuth → system browser; everything
+  // else → split a new web pane below this one (renderer owns the layout).
+  wc.setWindowOpenHandler(({url}) => {
+    if (isOAuthUrl(url)) {
+      void shell.openExternal(url);
+      return {action: 'deny'};
+    }
+    entrySend(uid, 'web-pane:open-split', {uid, url});
+    return {action: 'deny'};
+  });
 }
 
 function entrySend(uid: string, channel: string, payload: unknown) {
@@ -115,7 +147,7 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
   // White ground avoids the black-flash-between-repaints the old <webview> hit.
   view.setBackgroundColor('#ffffff');
   win.contentView.addChildView(view);
-  const entry: WebPaneEntry = {view, win, url};
+  const entry: WebPaneEntry = {view, win, url, visible: true};
   panes.set(uid, entry);
   wireWebContents(uid, view.webContents);
   if (url) void view.webContents.loadURL(url).catch(() => {});
@@ -161,11 +193,30 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
     if (win) createPane(win, uid, url);
   });
 
-  ipcMain.on('web-pane:set-bounds', (_e, {uid, bounds, visible}: {uid: string; bounds: any; visible: boolean}) => {
+  ipcMain.on('web-pane:set-bounds', async (_e, {uid, bounds, visible}: {uid: string; bounds: any; visible: boolean}) => {
     const entry = panes.get(uid);
     if (!entry) return;
     if (bounds) entry.view.setBounds(roundRect(bounds));
-    entry.view.setVisible(visible !== false);
+    const wantVisible = visible !== false;
+    if (entry.visible && !wantVisible) {
+      // Freeze-swap: capture the LIVE view, hand the still to the renderer, THEN
+      // hide — so a DOM overlay (URL navigator / find bar) paints over a frozen
+      // frame of the page instead of white.
+      entry.visible = false;
+      try {
+        const img = await entry.view.webContents.capturePage();
+        entrySend(uid, 'web-pane:frozen', {uid, shot: img.toDataURL()});
+      } catch {
+        entrySend(uid, 'web-pane:frozen', {uid, shot: null});
+      }
+      if (panes.get(uid) === entry && !entry.view.webContents.isDestroyed()) entry.view.setVisible(false);
+    } else if (!entry.visible && wantVisible) {
+      entry.visible = true;
+      entry.view.setVisible(true);
+      entrySend(uid, 'web-pane:frozen', {uid, shot: null});
+    } else {
+      entry.view.setVisible(wantVisible);
+    }
   });
 
   ipcMain.on('web-pane:set-visible', (_e, {uid, visible}: {uid: string; visible: boolean}) => {
