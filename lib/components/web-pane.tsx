@@ -2425,6 +2425,18 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           />
         )}
 
+        {/* Click-off backdrop: a click anywhere outside the dropdown (including on
+            the page area, whose <webview> clicks never reach this document and
+            whose dimmed wrapper is pointer-events:none) closes the navigator. Sits
+            just under the dropdown (z 9999 < navigator's 10000) so the dropdown
+            itself stays interactive. */}
+        {this.state.isUrlNavigatorOpen && (
+          <div
+            onMouseDown={() => this.setState({isUrlNavigatorOpen: false})}
+            style={{position: 'absolute', inset: 0, zIndex: 9999}}
+          />
+        )}
+
         {this.state.isUrlNavigatorOpen && (
           <UrlNavigator
             url={url}
