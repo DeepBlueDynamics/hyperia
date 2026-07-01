@@ -107,6 +107,9 @@ interface WebPaneState {
   // header's hover tooltips (DOM, which a native view would otherwise occlude)
   // are visible over a frozen frame.
   headerHover?: boolean;
+  // Whether this pane is actually in the viewport (IntersectionObserver). An
+  // inactive tab is parked off-screen, so its native view must be hidden.
+  onScreen?: boolean;
   // Find-in-page (Ctrl+F) bar.
   findOpen: boolean;
   findText: string;
@@ -141,10 +144,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   // requestAnimationFrame token so reportBounds fires at most once per frame.
   _boundsRaf: number | null = null;
   _onScroll: (() => void) | null = null;
-  // Low-frequency bounds poll. Tab switches move a pane to left:-9999em without a
-  // resize/scroll event, so nothing else re-pushes bounds; polling catches it and
-  // slides the native view off-window when its pane is parked. (Phase 5 replaces
-  // this with a proper active-tab signal.)
+  // IntersectionObserver drives instant show/hide on tab switch (the pane leaves
+  // the viewport). A low-frequency poll remains as a safety net for the rare case
+  // where a pane is repositioned (sibling closes) without a resize/scroll/IO event.
+  _io: IntersectionObserver | null = null;
   _boundsInterval: ReturnType<typeof setInterval> | null = null;
   // web-pane:* main→renderer listeners (registered in mount, removed in unmount).
   _stateHandler: ((e: any, payload: any) => void) | null = null;
@@ -248,6 +251,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       pageBgColor: null,
       frozenShot: null,
       headerHover: false,
+      onScreen: true,
       findOpen: false,
       findText: '',
       findActive: 0,
@@ -275,19 +279,24 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       const el = this.bodyRef.current;
       if (!el) return; // ai/seeker branch — no native view to place.
       const rect = el.getBoundingClientRect();
-      const onScreen = rect.width > 0 && rect.height > 0;
-      const visible =
-        !this.state.error &&
-        !this.state.isUrlNavigatorOpen &&
-        !this.state.findOpen &&
-        !this.state.headerHover &&
-        onScreen;
+      const hasSize = rect.width > 0 && rect.height > 0;
+      // IntersectionObserver tells us if the pane is actually in the viewport —
+      // an inactive tab is parked at left:-9999em (still has size), so the rect
+      // check alone can't detect it.
+      const inViewport = this.state.onScreen !== false;
+      const overlayHidden = this.state.isUrlNavigatorOpen || this.state.findOpen || this.state.headerHover;
+      const showable = hasSize && inViewport && !this.state.error;
+      const visible = showable && !overlayHidden;
+      // Freeze (capture a still) ONLY when hiding an on-screen pane for a DOM
+      // overlay — a tab-switch hide is off-screen and needs no capture.
+      const freeze = showable && overlayHidden;
       try {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         ipcRenderer.send('web-pane:set-bounds', {
           uid: this.props.groupUid,
           bounds: {x: rect.left, y: rect.top, width: rect.width, height: rect.height},
-          visible
+          visible,
+          freeze
         });
       } catch {
         /* main not ready */
@@ -1044,7 +1053,23 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       this.resizeObserver.observe(this.webWrapperRef.current);
     }
 
-    // Catch tab-switch reparenting (left:-9999em) that fires no resize/scroll.
+    // Instant show/hide when this pane's tab is (de)activated — it leaves/enters
+    // the viewport (parked at left:-9999em), which no resize/scroll event reports.
+    if (this.bodyRef.current) {
+      this._io = new IntersectionObserver(
+        (entries) => {
+          const e = entries[0];
+          const vis = !!e && e.isIntersecting && e.intersectionRatio > 0;
+          if (vis !== this.state.onScreen) this.setState({onScreen: vis});
+          this.reportBounds();
+        },
+        {threshold: 0}
+      );
+      this._io.observe(this.bodyRef.current);
+    }
+
+    // Safety net for reposition-without-resize (a sibling split closes and this
+    // pane slides over at the same size).
     this._boundsInterval = setInterval(this.reportBounds, 300);
 
     // Check if AI is configured
@@ -1438,6 +1463,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (this._boundsInterval != null) {
       clearInterval(this._boundsInterval);
       this._boundsInterval = null;
+    }
+    if (this._io) {
+      this._io.disconnect();
+      this._io = null;
     }
 
     // Return keyboard focus to the active terminal after the web pane is removed.

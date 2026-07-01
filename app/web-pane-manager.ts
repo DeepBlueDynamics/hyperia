@@ -193,31 +193,39 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
     if (win) createPane(win, uid, url);
   });
 
-  ipcMain.on('web-pane:set-bounds', async (_e, {uid, bounds, visible}: {uid: string; bounds: any; visible: boolean}) => {
-    const entry = panes.get(uid);
-    if (!entry) return;
-    if (bounds) entry.view.setBounds(roundRect(bounds));
-    const wantVisible = visible !== false;
-    if (entry.visible && !wantVisible) {
-      // Freeze-swap: capture the LIVE view, hand the still to the renderer, THEN
-      // hide — so a DOM overlay (URL navigator / find bar) paints over a frozen
-      // frame of the page instead of white.
-      entry.visible = false;
-      try {
-        const img = await entry.view.webContents.capturePage();
-        entrySend(uid, 'web-pane:frozen', {uid, shot: img.toDataURL()});
-      } catch {
+  ipcMain.on(
+    'web-pane:set-bounds',
+    async (_e, {uid, bounds, visible, freeze}: {uid: string; bounds: any; visible: boolean; freeze?: boolean}) => {
+      const entry = panes.get(uid);
+      if (!entry) return;
+      if (bounds) entry.view.setBounds(roundRect(bounds));
+      const wantVisible = visible !== false;
+      if (entry.visible && !wantVisible) {
+        entry.visible = false;
+        if (freeze) {
+          // Freeze-swap: capture the LIVE view and hand the still to the renderer
+          // BEFORE hiding, so a DOM overlay (URL navigator / find bar / header
+          // tooltip) paints over a frozen frame of the page instead of white.
+          try {
+            const img = await entry.view.webContents.capturePage();
+            entrySend(uid, 'web-pane:frozen', {uid, shot: img.toDataURL()});
+          } catch {
+            entrySend(uid, 'web-pane:frozen', {uid, shot: null});
+          }
+        } else {
+          // Off-screen (tab switched away) — no still needed; just hide.
+          entrySend(uid, 'web-pane:frozen', {uid, shot: null});
+        }
+        if (panes.get(uid) === entry && !entry.view.webContents.isDestroyed()) entry.view.setVisible(false);
+      } else if (!entry.visible && wantVisible) {
+        entry.visible = true;
+        entry.view.setVisible(true);
         entrySend(uid, 'web-pane:frozen', {uid, shot: null});
+      } else {
+        entry.view.setVisible(wantVisible);
       }
-      if (panes.get(uid) === entry && !entry.view.webContents.isDestroyed()) entry.view.setVisible(false);
-    } else if (!entry.visible && wantVisible) {
-      entry.visible = true;
-      entry.view.setVisible(true);
-      entrySend(uid, 'web-pane:frozen', {uid, shot: null});
-    } else {
-      entry.view.setVisible(wantVisible);
     }
-  });
+  );
 
   ipcMain.on('web-pane:set-visible', (_e, {uid, visible}: {uid: string; visible: boolean}) => {
     panes.get(uid)?.view.setVisible(!!visible);
