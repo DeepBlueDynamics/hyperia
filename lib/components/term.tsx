@@ -174,6 +174,9 @@ export default class Term extends React.PureComponent<
     navigatorTop: number;
     isGlimmerActive?: boolean;
     showCopied?: boolean;
+    // Pixel offset (within term_fit) to anchor the "Copied!" toast under the
+    // clear-buffer button. Undefined until measured on first copy.
+    copiedPos?: {left: number; top: number};
     isNarrow: boolean;
     paneWidth: number;
     pickerZoom: number;
@@ -239,6 +242,7 @@ export default class Term extends React.PureComponent<
     navigatorTop: 38,
     isGlimmerActive: false,
     showCopied: false,
+    copiedPos: undefined as {left: number; top: number} | undefined,
     isNarrow: false,
     paneWidth: 999,
     findText: '',
@@ -913,9 +917,21 @@ export default class Term extends React.PureComponent<
   };
 
   _copiedTimer: ReturnType<typeof setTimeout> | null = null;
-  // Flash a "Copied!" toast in the bottom-right of the pane when text hits the clipboard.
+  _clearBtnRef = React.createRef<HTMLSpanElement>();
+  // Flash a "Copied!" toast under the clear-buffer button when text hits the
+  // clipboard. Its left edge lines up with the button's left edge (the button
+  // sits in the nav cluster, whose x shifts with the pane name) so it always
+  // lands directly under the button rather than at a fixed corner.
   flashCopied = () => {
-    this.setState({showCopied: true});
+    let copiedPos: {left: number; top: number} | undefined;
+    const btn = this._clearBtnRef.current;
+    const outer = this.termOuterRef.current;
+    if (btn && outer) {
+      const b = btn.getBoundingClientRect();
+      const o = outer.getBoundingClientRect();
+      copiedPos = {left: b.left - o.left, top: b.bottom - o.top + 4};
+    }
+    this.setState({showCopied: true, copiedPos});
     if (this._copiedTimer) clearTimeout(this._copiedTimer);
     this._copiedTimer = setTimeout(() => this.setState({showCopied: false}), 1100);
   };
@@ -2452,11 +2468,15 @@ export default class Term extends React.PureComponent<
           <div
             style={{
               position: 'absolute',
-              top: 40,
-              right: 12,
+              // Anchored under the clear-buffer button (left edges aligned); falls
+              // back to the top-right corner if the button wasn't measured.
+              ...(this.state.copiedPos
+                ? {left: this.state.copiedPos.left, top: this.state.copiedPos.top}
+                : {top: 40, right: 12}),
               zIndex: 50,
               pointerEvents: 'none',
               textAlign: 'left',
+              whiteSpace: 'nowrap',
               background: 'var(--accent-success, #3fb950)',
               color: '#06140a',
               fontSize: '11px',
@@ -2610,6 +2630,7 @@ export default class Term extends React.PureComponent<
                   </div>
                 </span>
                 <span
+                  ref={this._clearBtnRef}
                   className="term_controlIcon term_tooltipTrigger"
                   onClick={() => {
                     this.clear();
