@@ -102,6 +102,8 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
     > = [];
     for (const key of order) {
       const entries = groups[key];
+      // Shortest URL first inside a group — site root on top, deep pages after.
+      entries.sort((a, b) => a.value.length - b.value.length);
       if (entries.length === 1) {
         rows.push({type: 'single', item: entries[0]});
       } else {

@@ -11,6 +11,7 @@ import {countPathHorizontalStacks} from '../utils/term-groups';
 import {
   getSecurityState,
   normalizeUrlKey,
+  stripUrlQuery,
   faviconForUrl,
   isOAuthUrl,
   isValidUrl
@@ -205,6 +206,19 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       }
     } catch (err) {
       console.error('Failed to load history:', err);
+    }
+    // Scrub query strings off previously-saved entries and collapse the former
+    // ?-variants (history is query-less going forward).
+    {
+      const seen = new Set<string>();
+      webHistory = webHistory.filter((e) => {
+        if (e.kind !== 'url' || !e.value) return true;
+        e.value = stripUrlQuery(e.value);
+        const k = normalizeUrlKey(e.value);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
     }
 
     let aiConversations: any[] = [];
@@ -831,6 +845,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (!this.state.saveHistory) {
       return;
     }
+    // History stores query-less URLs — "?tracking=junk" variants never land.
+    if (kind === 'url') value = stripUrlQuery(value);
     const newEntry: WebHistoryEntry = {
       kind,
       value,

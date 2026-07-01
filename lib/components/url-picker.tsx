@@ -12,13 +12,28 @@ interface HistoryEntry {
   titleAtVisit?: string;
 }
 
-// "x.com", "x.com/", "https://x.com/" → one key.
+// Query strings never survive into history ("?tracking=junk" variants collapse).
+function stripUrlQuery(u: string): string {
+  try {
+    const p = new URL(/^[a-z]+:\/\//i.test(u) ? u : 'https://' + u);
+    p.search = '';
+    const out = p.toString();
+    return /^[a-z]+:\/\//i.test(u) ? out : out.replace(/^[a-z]+:\/\//i, '');
+  } catch {
+    const hash = u.indexOf('#');
+    const q = u.indexOf('?');
+    if (q === -1) return u;
+    return hash > q ? u.slice(0, q) + u.slice(hash) : u.slice(0, q);
+  }
+}
+
+// "x.com", "x.com/", "https://x.com/", "x.com/?utm=…" → one key (query ignored).
 function normalizeUrlKey(u: string): string {
   try {
     const p = new URL(/^[a-z]+:\/\//i.test(u) ? u : 'https://' + u);
-    return `${p.protocol}//${p.host.toLowerCase()}${p.pathname.replace(/\/+$/, '')}${p.search}${p.hash}`;
+    return `${p.protocol}//${p.host.toLowerCase()}${p.pathname.replace(/\/+$/, '')}${p.hash}`;
   } catch {
-    return u.trim().toLowerCase().replace(/\/+$/, '');
+    return stripUrlQuery(u).trim().toLowerCase().replace(/\/+$/, '');
   }
 }
 
@@ -56,10 +71,13 @@ function loadHistory(): HistoryEntry[] {
     const out: HistoryEntry[] = [];
     for (const e of arr) {
       if (!e || e.kind !== 'url' || !e.value) continue;
-      const k = normalizeUrlKey(e.value);
+      // Old saved entries may still carry query strings — display clean, and
+      // let former ?-variants collapse into one row.
+      const value = stripUrlQuery(e.value);
+      const k = normalizeUrlKey(value);
       if (seen.has(k)) continue;
       seen.add(k);
-      out.push(e);
+      out.push({...e, value});
     }
     return out;
   } catch {
@@ -136,6 +154,9 @@ export default class UrlPicker extends React.Component<Props, State> {
     const rows: Row[] = [];
     for (const k of order.slice(0, 10)) {
       const entries = groups[k];
+      // Shortest URL first inside a group — the site root floats to the top,
+      // deep pages follow.
+      entries.sort((a, b) => a.value.length - b.value.length);
       if (entries.length === 1) {
         rows.push({type: 'single', entry: entries[0]});
       } else {

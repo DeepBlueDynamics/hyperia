@@ -55,16 +55,34 @@ export const getSecurityState = (urlStr: string): 'https' | 'http' | 'localhost'
   }
 };
 
-// Normalised key for de-duping history: lowercase scheme+host and strip trailing
-// slashes off the path — so "x.com", "x.com/", and "https://x.com/" collapse to
-// a single entry. Query + hash are kept (different ?q= are different pages).
+// Drop the query string from a URL — history never keeps "?tracking=junk"
+// variants. The hash survives (SPA routes live there); the query does not.
+export const stripUrlQuery = (u: string): string => {
+  try {
+    const parsed = new URL(/^[a-z]+:\/\//i.test(u) ? u : 'https://' + u);
+    parsed.search = '';
+    // Preserve the caller's scheme-less style: only return with scheme if the
+    // input had one.
+    const out = parsed.toString();
+    return /^[a-z]+:\/\//i.test(u) ? out : out.replace(/^[a-z]+:\/\//i, '');
+  } catch {
+    const hash = u.indexOf('#');
+    const q = u.indexOf('?');
+    if (q === -1) return u;
+    return hash > q ? u.slice(0, q) + u.slice(hash) : u.slice(0, q);
+  }
+};
+
+// Normalised key for de-duping history: lowercase scheme+host, strip trailing
+// slashes off the path, and IGNORE the query — so "x.com", "x.com/", and
+// "x.com/?utm=…" all collapse to a single entry. Hash is kept (SPA routes).
 export const normalizeUrlKey = (u: string): string => {
   try {
     const parsed = new URL(/^[a-z]+:\/\//i.test(u) ? u : 'https://' + u);
     const path = parsed.pathname.replace(/\/+$/, '');
-    return `${parsed.protocol}//${parsed.host.toLowerCase()}${path}${parsed.search}${parsed.hash}`;
+    return `${parsed.protocol}//${parsed.host.toLowerCase()}${path}${parsed.hash}`;
   } catch {
-    return u.trim().toLowerCase().replace(/\/+$/, '');
+    return stripUrlQuery(u).trim().toLowerCase().replace(/\/+$/, '');
   }
 };
 
