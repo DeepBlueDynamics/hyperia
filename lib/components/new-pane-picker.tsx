@@ -55,6 +55,11 @@ const INSTALL_CATALOG: InstallEntry[] = [
     configure: true
   },
   {
+    name: 'Nemesis8',
+    unix: 'curl -fsSL https://nemesis8.nuts.services/install.sh | sh',
+    win: 'irm https://nemesis8.nuts.services/install.ps1 | iex'
+  },
+  {
     name: 'Claude Code',
     unix: 'npm install -g @anthropic-ai/claude-code',
     win: 'npm install -g @anthropic-ai/claude-code'
@@ -79,11 +84,6 @@ const INSTALL_CATALOG: InstallEntry[] = [
     name: 'Pi',
     unix: 'npm install -g @earendil-works/pi-coding-agent --ignore-scripts',
     win: 'npm install -g @earendil-works/pi-coding-agent --ignore-scripts'
-  },
-  {
-    name: 'Nemesis8',
-    unix: 'curl -fsSL https://nemesis8.nuts.services/install.sh | sh',
-    win: 'irm https://nemesis8.nuts.services/install.ps1 | iex'
   }
 ];
 
@@ -843,6 +843,14 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         onSelect: () => this.launchAgent(p.name)
       });
     }
+    // Nemesis8 (both entries) leads the list; everything else keeps detect order.
+    const agentRank = (label: string): number => {
+      const n = label.toLowerCase();
+      if (n === 'nemesis8') return 0;
+      if (n === 'nemesis8 danger') return 1;
+      return 2;
+    };
+    agentItems.sort((a, b) => agentRank(a.label) - agentRank(b.label));
     // NOTE: the Hyperia agent is intentionally NOT a launchable entry — it isn't
     // "installed" yet. It lives in the install view with a configure flow
     // (launchHyperiaShell kept for that flow to reuse).
