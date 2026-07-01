@@ -54,6 +54,8 @@ interface ComboItem {
 
 interface ComboboxProps {
   label: string;
+  // Static glyph shown at the left of the box (like the URL box's globe).
+  leadingIcon: string;
   items: ComboItem[];
   // Field value when the user hasn't typed anything (e.g. last-used shell).
   defaultText: string;
@@ -70,6 +72,11 @@ interface ComboboxProps {
 interface ComboboxState {
   text: string;
   open: boolean;
+  // `dirty` = the user has typed since focusing. We only FILTER the list once
+  // dirty — otherwise opening the field (pre-filled with the default name)
+  // would filter the dropdown down to just that one default and hide every
+  // other shell/agent. Focused-but-clean shows the whole list.
+  dirty: boolean;
   // Index into rows(); -1 means "nothing highlighted, resolve from text".
   focusedIndex: number;
 }
@@ -85,9 +92,81 @@ const comboRowStyle = (focused: boolean): React.CSSProperties => ({
   background: focused ? 'var(--info-bg)' : undefined
 });
 
+// Shared layout so New Webpane / New Shell / New Agent are the SAME width and
+// look: a fixed-width left label, then a flex box capped at the same maxWidth.
+const PICKER_ROW_MAX = '430px';
+const PICKER_BOX_MAX = '340px';
+const pickerRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-10)',
+  width: '100%',
+  maxWidth: PICKER_ROW_MAX
+};
+const pickerLabelStyle: React.CSSProperties = {
+  width: '80px',
+  flexShrink: 0,
+  fontSize: '11px',
+  color: 'var(--text-secondary)',
+  fontFamily: 'var(--font-sans)',
+  fontWeight: 500
+};
+// Matches the URL box container verbatim (url-picker.tsx).
+const pickerBoxStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 'var(--space-8)',
+  background: 'var(--bg-primary)',
+  border: '0.5px solid var(--border-neutral)',
+  borderRadius: 'var(--radius-6)',
+  padding: '0 var(--space-10)',
+  height: '36px',
+  width: '100%',
+  boxSizing: 'border-box'
+};
+const pickerInputStyle: React.CSSProperties = {
+  flex: 1,
+  background: 'transparent',
+  border: 'none',
+  outline: 'none',
+  color: 'var(--text-primary)',
+  fontSize: '11px',
+  fontFamily: 'var(--font-mono)',
+  height: '100%',
+  padding: 0,
+  minWidth: 0
+};
+// The inline "enter" badge inside the box — identical to the URL box's.
+const pickerEnterBadgeStyle: React.CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: '10px',
+  fontWeight: 600,
+  padding: 'var(--space-2) var(--space-4)',
+  border: '0.5px solid var(--border-neutral)',
+  borderRadius: 'var(--radius-3)',
+  color: 'var(--text-tertiary)',
+  userSelect: 'none',
+  lineHeight: '1.2',
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
+  flexShrink: 0
+};
+const pickerDropdownStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 'calc(100% + var(--space-4))',
+  left: 0,
+  right: 0,
+  zIndex: 20,
+  border: '0.5px solid var(--border-neutral)',
+  borderRadius: 'var(--radius-6)',
+  overflow: 'hidden',
+  background: 'var(--bg-primary)',
+  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.25)'
+};
+
 class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
   inputRef = React.createRef<HTMLInputElement>();
-  state: ComboboxState = {text: this.props.defaultText, open: false, focusedIndex: -1};
+  state: ComboboxState = {text: this.props.defaultText, open: false, dirty: false, focusedIndex: -1};
 
   componentDidUpdate(prev: ComboboxProps) {
     // Refresh the field when the caller's default changes (e.g. "last used"
@@ -97,11 +176,12 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
     }
   }
 
-  // Case-insensitive substring filter on both label and launch key. Empty text
-  // shows everything.
+  // Case-insensitive substring filter on both label and launch key. Only applied
+  // once the user has actually typed (dirty) — a clean/just-focused field shows
+  // the ENTIRE list even though it displays the default name.
   private filteredItems(): ComboItem[] {
     const q = this.state.text.trim().toLowerCase();
-    if (!q) return this.props.items;
+    if (!this.state.dirty || !q) return this.props.items;
     return this.props.items.filter(
       (it) => it.label.toLowerCase().includes(q) || it.key.toLowerCase().includes(q)
     );
@@ -110,7 +190,7 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
   // Show the "create new …" fallback only when the user has typed something
   // that matches no existing item (mirrors the URL box's search fallback).
   private showCreate(): boolean {
-    return this.state.text.trim() !== '' && this.filteredItems().length === 0;
+    return this.state.dirty && this.state.text.trim() !== '' && this.filteredItems().length === 0;
   }
 
   private rows(): ComboRow[] {
@@ -120,11 +200,13 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
     return rows;
   }
 
-  private close = () => this.setState({open: false, focusedIndex: -1});
+  // Closing resets the field back to the default name so a half-typed, un-
+  // committed value never lingers.
+  private close = () => this.setState({open: false, dirty: false, focusedIndex: -1, text: this.props.defaultText});
 
-  // Enter / launch-button with no explicit highlight: resolve from typed text.
-  // Exact name match wins; else the first (type-ahead) filtered item; else the
-  // text matched nothing → route to the add/create flow.
+  // Enter / badge with no explicit highlight: resolve from typed text. Exact
+  // name match wins; else the first substring (type-ahead) match; else the text
+  // matched nothing → route to the add/create flow.
   private commitText = () => {
     const q = this.state.text.trim().toLowerCase();
     if (q) {
@@ -134,10 +216,12 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
         exact.onSelect();
         return;
       }
-      const filtered = this.filteredItems();
-      if (filtered.length > 0) {
+      const match = this.props.items.find(
+        (it) => it.label.toLowerCase().includes(q) || it.key.toLowerCase().includes(q)
+      );
+      if (match) {
         this.close();
-        filtered[0].onSelect();
+        match.onSelect();
         return;
       }
     }
@@ -159,50 +243,19 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
   };
 
   render() {
-    const {label, addLabel, createLabel, placeholder, isGlimmerActive} = this.props;
+    const {label, leadingIcon, addLabel, createLabel, placeholder} = this.props;
     const rows = this.rows();
     const {text, open, focusedIndex} = this.state;
 
     return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 'var(--space-10)',
-          width: '100%',
-          maxWidth: '560px'
-        }}
-      >
-        <div
-          style={{
-            width: '72px',
-            flexShrink: 0,
-            fontSize: '11px',
-            color: 'var(--text-secondary)',
-            fontFamily: 'var(--font-sans)',
-            fontWeight: 500
-          }}
-        >
-          {label}
-        </div>
+      <div style={pickerRowStyle}>
+        <div style={pickerLabelStyle}>{label}</div>
 
-        <div style={{position: 'relative', flex: 1, minWidth: 0}}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 'var(--space-8)',
-              background: 'var(--bg-primary)',
-              border: '0.5px solid var(--border-neutral)',
-              borderRadius: 'var(--radius-6)',
-              padding: '0 var(--space-10)',
-              height: '36px',
-              boxSizing: 'border-box'
-            }}
-          >
+        <div style={{position: 'relative', flex: 1, minWidth: 0, maxWidth: PICKER_BOX_MAX}}>
+          <div style={pickerBoxStyle}>
             <i
-              className="ti ti-chevron-down"
-              style={{fontSize: '12px', color: 'var(--text-tertiary)', flexShrink: 0}}
+              className={leadingIcon}
+              style={{fontSize: '14px', color: 'var(--text-tertiary)', flexShrink: 0}}
               aria-hidden="true"
             />
             <input
@@ -210,11 +263,16 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
               type="text"
               value={text}
               placeholder={placeholder}
-              onFocus={() => this.setState({open: true})}
+              // Focus opens the full list (dirty:false) and selects the text so
+              // the first keystroke replaces the default rather than appending.
+              onFocus={(e) => {
+                e.target.select();
+                this.setState({open: true, dirty: false, focusedIndex: -1});
+              }}
               // Blur closes the dropdown; row clicks use onMouseDown +
               // preventDefault so the selection fires before this blur.
               onBlur={() => this.close()}
-              onChange={(e) => this.setState({text: e.target.value, open: true, focusedIndex: -1})}
+              onChange={(e) => this.setState({text: e.target.value, open: true, dirty: true, focusedIndex: -1})}
               onContextMenu={(e) => {
                 // Don't let a right-click bubble to the chooser's glimmer flash.
                 e.preventDefault();
@@ -237,36 +295,24 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                   this.inputRef.current?.blur();
                 }
               }}
-              style={{
-                flex: 1,
-                background: 'transparent',
-                border: 'none',
-                outline: 'none',
-                color: 'var(--text-primary)',
-                fontSize: '11px',
-                fontFamily: 'var(--font-mono)',
-                height: '100%',
-                padding: 0,
-                minWidth: 0
-              }}
+              style={pickerInputStyle}
             />
+            <span
+              // Inline "enter" badge inside the box, exactly like the URL box.
+              // Keep input focus (preventDefault) so the highlight/text survives.
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onClick={() => this.commit()}
+              style={pickerEnterBadgeStyle}
+            >
+              enter
+            </span>
           </div>
 
           {open && rows.length > 0 && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 'calc(100% + var(--space-4))',
-                left: 0,
-                right: 0,
-                zIndex: 20,
-                border: '0.5px solid var(--border-neutral)',
-                borderRadius: 'var(--radius-6)',
-                overflow: 'hidden',
-                background: 'var(--bg-primary)',
-                boxShadow: '0 4px 16px rgba(0, 0, 0, 0.25)'
-              }}
-            >
+            <div style={pickerDropdownStyle}>
               <div style={{maxHeight: '208px', overflowY: 'auto'}}>
                 {rows.map((row, i) => {
                   const isFocused = i === focusedIndex;
@@ -353,19 +399,6 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
             </div>
           )}
         </div>
-
-        <button
-          className={'term_pickerButton_rev ' + (isGlimmerActive ? 'term_glimmer' : '')}
-          style={{width: 'auto', flexShrink: 0, height: '36px', padding: '0 12px'}}
-          // Keep input focus so the highlighted row / typed text is preserved
-          // when the button fires.
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => this.commit()}
-          title="Launch"
-        >
-          <i className="ti ti-corner-down-left" style={{fontSize: '14px'}} aria-hidden="true" />
-          <span>enter</span>
-        </button>
       </div>
     );
   }
@@ -483,6 +516,8 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     const shellDefaultText = defaultShellItem ? defaultShellItem.label : '';
 
     // --- Agent items ---
+    // The built-in agents are ALWAYS listed (they're first-class launch targets,
+    // not config profiles) — Antigravity only when a profile for it exists.
     const agentItems: ComboItem[] = [];
     agentItems.push({
       key: 'Claude Code',
@@ -491,6 +526,20 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
       iconStyle: {color: 'var(--info-text)'},
       onSelect: () => this.launchAgent('Claude Code')
     });
+    agentItems.push({
+      key: 'Nemesis8',
+      label: 'Nemesis8',
+      iconClass: 'ti ti-robot',
+      iconStyle: {color: 'var(--danger-text)'},
+      onSelect: () => this.launchAgent('Nemesis8')
+    });
+    agentItems.push({
+      key: 'Nemesis8 Danger',
+      label: 'Nemesis8 Danger',
+      iconClass: 'ti ti-shield-off',
+      iconStyle: {color: 'var(--danger-text)'},
+      onSelect: () => this.launchAgent('Nemesis8 Danger')
+    });
     if (has('antigravity')) {
       agentItems.push({
         key: 'Antigravity',
@@ -498,24 +547,6 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         iconClass: 'ti ti-rocket',
         iconStyle: {color: 'var(--info-text)'},
         onSelect: () => this.launchAgent('Antigravity')
-      });
-    }
-    if (has('nemesis8')) {
-      agentItems.push({
-        key: 'Nemesis8',
-        label: 'Nemesis8',
-        iconClass: 'ti ti-robot',
-        iconStyle: {color: 'var(--danger-text)'},
-        onSelect: () => this.launchAgent('Nemesis8')
-      });
-    }
-    if (has('nemesis8 danger')) {
-      agentItems.push({
-        key: 'Nemesis8 Danger',
-        label: 'Nemesis8 Danger',
-        iconClass: 'ti ti-shield-off',
-        iconStyle: {color: 'var(--danger-text)'},
-        onSelect: () => this.launchAgent('Nemesis8 Danger')
       });
     }
     agentItems.push({
@@ -561,49 +592,36 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             flexShrink: 0
           }}
         >
-          <div
-            style={{
-              fontSize: '13px',
-              fontWeight: 500,
-              color: 'var(--text-primary)',
-              fontFamily: 'var(--font-sans)'
-            }}
-          >
-            New Webpane
-          </div>
-
-          {/* URL entry — directly under the title. */}
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              width: '100%',
-              maxWidth: '340px'
-            }}
-          >
-            <UrlPicker
-              value={urlInput || ''}
-              onChange={(v) => this.props.onUrlChange(v)}
-              onNavigate={(url) => this.props.onSubmitUrl(url)}
-            />
-            {urlError && (
-              <div
-                style={{
-                  fontSize: '11px',
-                  color: '#ff3b30',
-                  marginTop: 'var(--space-4)',
-                  textAlign: 'left',
-                  fontFamily: 'var(--font-sans)'
-                }}
-              >
-                {urlError}
-              </div>
-            )}
+          {/* New Webpane row — "New Webpane" label left of the URL box, same
+              width/shape as the shell + agent rows below it. */}
+          <div style={pickerRowStyle}>
+            <div style={pickerLabelStyle}>New Webpane</div>
+            <div style={{flex: 1, minWidth: 0, maxWidth: PICKER_BOX_MAX}}>
+              <UrlPicker
+                value={urlInput || ''}
+                onChange={(v) => this.props.onUrlChange(v)}
+                onNavigate={(url) => this.props.onSubmitUrl(url)}
+              />
+              {urlError && (
+                <div
+                  style={{
+                    fontSize: '11px',
+                    color: '#ff3b30',
+                    marginTop: 'var(--space-4)',
+                    textAlign: 'left',
+                    fontFamily: 'var(--font-sans)'
+                  }}
+                >
+                  {urlError}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* New Shell combobox. */}
           <InlineCombobox
             label="New Shell"
+            leadingIcon="ti ti-terminal-2"
             items={shellItems}
             defaultText={shellDefaultText}
             placeholder="Type to filter shells…"
@@ -616,6 +634,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
           {/* New Agent combobox. */}
           <InlineCombobox
             label="New Agent"
+            leadingIcon="ti ti-robot"
             items={agentItems}
             defaultText={agentDefaultText}
             placeholder="Type to filter agents…"

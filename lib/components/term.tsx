@@ -2452,10 +2452,11 @@ export default class Term extends React.PureComponent<
           <div
             style={{
               position: 'absolute',
-              bottom: 10,
+              top: 40,
               right: 12,
               zIndex: 50,
               pointerEvents: 'none',
+              textAlign: 'left',
               background: 'var(--accent-success, #3fb950)',
               color: '#06140a',
               fontSize: '11px',
