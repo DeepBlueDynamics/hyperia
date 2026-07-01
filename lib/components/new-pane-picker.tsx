@@ -17,8 +17,38 @@ const profileFitsPlatform = (p: any): boolean => {
   return isWindows ? looksWindows : !looksWindows;
 };
 
-// Built-in agent names that live under "New Agent", not the shell list.
-const AGENT_NAMES = new Set(['claude code', 'nemesis8', 'nemesis8 danger', 'antigravity']);
+// Built-in agent names that live under "New Agent", not the shell list. These
+// mirror the harness catalog in app/config/detect.ts (the agents nemesis8 knows
+// how to install) — detected profiles arrive under exactly these names.
+const AGENT_NAMES = new Set([
+  'claude code',
+  'nemesis8',
+  'nemesis8 danger',
+  'antigravity',
+  'codex',
+  'opencode',
+  'grok',
+  'hermes',
+  'pi'
+]);
+
+// "Install <Agent>" profiles: the agent isn't on this host; launching the
+// profile RUNS the platform install command in the new pane.
+const isInstallProfile = (name: string): boolean => name.toLowerCase().startsWith('install ');
+
+// Icon per agent harness (agent entries + their install rows).
+const agentIconClass = (name: string): {icon: string; style?: React.CSSProperties} => {
+  const n = name.toLowerCase().replace(/^install /, '');
+  if (n === 'claude code') return {icon: 'ti ti-sparkles', style: {color: 'var(--info-text)'}};
+  if (n === 'antigravity') return {icon: 'ti ti-rocket', style: {color: 'var(--info-text)'}};
+  if (n === 'nemesis8') return {icon: 'ti ti-robot', style: {color: 'var(--danger-text)'}};
+  if (n === 'nemesis8 danger') return {icon: 'ti ti-shield-off', style: {color: 'var(--danger-text)'}};
+  if (n === 'codex' || n === 'opencode') return {icon: 'ti ti-code', style: {color: 'var(--info-text)'}};
+  if (n === 'grok') return {icon: 'ti ti-planet', style: {color: 'var(--info-text)'}};
+  if (n === 'hermes') return {icon: 'ti ti-feather', style: {color: 'var(--info-text)'}};
+  if (n === 'pi') return {icon: 'ti ti-math-pi', style: {color: 'var(--info-text)'}};
+  return {icon: 'ti ti-robot'};
+};
 
 // Pick a Tabler icon class for a shell profile from its name.
 const shellIconClass = (name: string): string => {
@@ -484,13 +514,12 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
   render() {
     const {profiles, defaultProfile, urlInput, urlError, pickerZoom, isGlimmerActive} = this.props;
     const profileList: any[] = profiles || [];
-    const has = (name: string) => profileList.some((p: any) => p.name.toLowerCase() === name);
 
     // --- Shell items (everything that isn't an agent, platform-filtered) ---
     const shellProfiles = profileList
       .filter((p: any) => {
         const n = p.name.toLowerCase();
-        if (AGENT_NAMES.has(n) || p.kind === 'agent') return false;
+        if (AGENT_NAMES.has(n) || p.kind === 'agent' || isInstallProfile(n)) return false;
         return profileFitsPlatform(p);
       })
       // Stock (system-detected) shells first, user-added custom shells after.
@@ -515,38 +544,22 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
       shellItems[0];
     const shellDefaultText = defaultShellItem ? defaultShellItem.label : '';
 
-    // --- Agent items ---
-    // The built-in agents are ALWAYS listed (they're first-class launch targets,
-    // not config profiles) — Antigravity only when a profile for it exists.
+    // --- Agent items — detection-driven (app/config/detect.ts catalog) ---
+    // INSTALLED harnesses arrive as profiles named exactly per AGENT_NAMES
+    // (Nemesis8 installed also brings "Nemesis8 Danger" = `nemesis8 --danger`).
+    // MISSING-but-installable ones arrive as "Install <Agent>" profiles whose
+    // pane runs the platform install command — listed last with a download icon.
     const agentItems: ComboItem[] = [];
-    agentItems.push({
-      key: 'Claude Code',
-      label: 'Claude Code',
-      iconClass: 'ti ti-sparkles',
-      iconStyle: {color: 'var(--info-text)'},
-      onSelect: () => this.launchAgent('Claude Code')
-    });
-    agentItems.push({
-      key: 'Nemesis8',
-      label: 'Nemesis8',
-      iconClass: 'ti ti-robot',
-      iconStyle: {color: 'var(--danger-text)'},
-      onSelect: () => this.launchAgent('Nemesis8')
-    });
-    agentItems.push({
-      key: 'Nemesis8 Danger',
-      label: 'Nemesis8 Danger',
-      iconClass: 'ti ti-shield-off',
-      iconStyle: {color: 'var(--danger-text)'},
-      onSelect: () => this.launchAgent('Nemesis8 Danger')
-    });
-    if (has('antigravity')) {
+    for (const p of profileList) {
+      const n = p.name.toLowerCase();
+      if (!AGENT_NAMES.has(n) || isInstallProfile(n)) continue;
+      const {icon, style} = agentIconClass(p.name);
       agentItems.push({
-        key: 'Antigravity',
-        label: 'Antigravity',
-        iconClass: 'ti ti-rocket',
-        iconStyle: {color: 'var(--info-text)'},
-        onSelect: () => this.launchAgent('Antigravity')
+        key: p.name,
+        label: p.name,
+        iconClass: icon,
+        iconStyle: style,
+        onSelect: () => this.launchAgent(p.name)
       });
     }
     agentItems.push({
@@ -563,6 +576,16 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         iconClass: 'ti ti-robot',
         onSelect: () => this.launchAgent(p.name),
         onDelete: () => this.confirmDelete('agent', p.name, p.name)
+      });
+    }
+    // Install rows — the harnesses not on this host; launching runs the installer.
+    for (const p of profileList.filter((p: any) => isInstallProfile(p.name))) {
+      agentItems.push({
+        key: p.name,
+        label: p.name,
+        iconClass: 'ti ti-download',
+        iconStyle: {color: 'var(--text-tertiary)'},
+        onSelect: () => this.launchAgent(p.name)
       });
     }
 

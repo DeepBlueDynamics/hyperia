@@ -14,6 +14,67 @@ export interface DetectedProfile {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Agent harness catalog — the TUI coding agents nemesis8 knows how to install
+// (mirrors ../nemesis8/providers/*.toml). Detection: binary on PATH. Installed
+// → a launch profile. Missing (and installable on this host) → an
+// "Install <Agent>" profile whose pane RUNS the platform install command, so
+// the output stays visible and the agent shows up on the next detection.
+// Nemesis8 itself is special-cased below (adds a --danger variant).
+// ---------------------------------------------------------------------------
+interface AgentDef {
+  /** Profile label, e.g. "Claude Code". */
+  name: string;
+  /** Binaries to look for on PATH, first found wins as the launch command. */
+  bins: string[];
+  /** POSIX install command (mac/linux). Empty = not installable on unix. */
+  installSh?: string;
+  /** Windows install command (PowerShell). Empty = not installable on Windows. */
+  installPs?: string;
+}
+
+const AGENT_DEFS: AgentDef[] = [
+  {
+    name: 'Claude Code',
+    bins: ['claude'],
+    installSh: 'npm install -g @anthropic-ai/claude-code',
+    installPs: 'npm install -g @anthropic-ai/claude-code'
+  },
+  // Antigravity ships via Google's own installer (n8 pins a container tarball);
+  // no host install string to offer — detect-only.
+  {name: 'Antigravity', bins: ['agy', 'antigravity']},
+  {
+    name: 'Codex',
+    bins: ['codex'],
+    installSh: 'npm install -g @openai/codex',
+    installPs: 'npm install -g @openai/codex'
+  },
+  {
+    name: 'OpenCode',
+    bins: ['opencode'],
+    installSh: 'npm install -g opencode-ai',
+    installPs: 'npm install -g opencode-ai'
+  },
+  {
+    name: 'Grok',
+    bins: ['grok'],
+    installSh: 'curl -fsSL https://x.ai/cli/install.sh | sh'
+    // install.sh only — no Windows installer.
+  },
+  {
+    name: 'Hermes',
+    bins: ['hermes'],
+    installSh: 'curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | sh'
+    // install.sh only — no Windows installer.
+  },
+  {
+    name: 'Pi',
+    bins: ['pi'],
+    installSh: 'npm install -g @earendil-works/pi-coding-agent --ignore-scripts',
+    installPs: 'npm install -g @earendil-works/pi-coding-agent --ignore-scripts'
+  }
+];
+
 function safeExec(cmd: string, timeoutMs = 4000): string {
   try {
     const result = execSync(cmd, {
@@ -129,44 +190,45 @@ function detectWindows(): DetectedProfile[] {
     });
   }
 
-  // Claude Code (Windows)
-  const claudeInPath = safeExec('where claude').trim();
-  if (claudeInPath && existsSync(claudeInPath.split('\n')[0].trim())) {
-    if (existsSync(cmd)) {
-      profiles.push({name: 'Claude Code', config: {shell: cmd, shellArgs: ['/c', 'claude']}});
-    }
-  }
-
-  // Nemesis8 agent launcher (Windows). Installed → runs `nemesis8` (its GUI
-  // launcher). NOT installed → the button instead opens a PowerShell that installs
-  // it from nemesis8.nuts.services (window stays open to show progress).
-  const n8WhereNem = safeExec('where nemesis8').trim();
-  const n8PathWin = n8WhereNem || safeExec('where n8').trim();
-  const n8Installed = !!(n8PathWin && existsSync(n8PathWin.split('\n')[0].trim()));
-  // Match `powershell -c "irm ... | iex"` (prefer Windows PowerShell 5.x); -NoExit
+  // ── Agent harnesses (Windows) ─────────────────────────────────────────────
+  // Installed → launch profile (cmd /c <bin>). Missing + installable on Windows
+  // → "Install <Agent>" profile that runs the installer in PowerShell; -NoExit
   // keeps the pane open so the install output stays visible.
   const psInstaller = existsSync(ps5) ? ps5 : existsSync(ps7) ? ps7 : '';
-  if (n8Installed && existsSync(cmd)) {
-    const n8Bin = n8WhereNem ? 'nemesis8' : 'n8';
-    profiles.push({name: 'Nemesis8', config: {shell: cmd, shellArgs: ['/c', n8Bin]}});
-    profiles.push({name: 'Nemesis8 Danger', config: {shell: cmd, shellArgs: ['/c', `${n8Bin} --danger`]}});
-  } else if (psInstaller) {
-    profiles.push({
-      name: 'Nemesis8',
-      config: {
-        shell: psInstaller,
-        shellArgs: ['-NoExit', '-c', 'irm https://nemesis8.nuts.services/install.ps1 | iex']
+  const whereBin = (bins: string[]): string => {
+    for (const b of bins) {
+      const found = safeExec(`where ${b}`).trim();
+      if (found && existsSync(found.split('\n')[0].trim())) return b;
+    }
+    return '';
+  };
+  if (existsSync(cmd)) {
+    for (const def of AGENT_DEFS) {
+      const bin = whereBin(def.bins);
+      if (bin) {
+        profiles.push({name: def.name, config: {shell: cmd, shellArgs: ['/c', bin]}});
+      } else if (def.installPs && psInstaller) {
+        profiles.push({
+          name: `Install ${def.name}`,
+          config: {shell: psInstaller, shellArgs: ['-NoExit', '-c', def.installPs]}
+        });
       }
-    });
-  }
-
-  // Antigravity (Google's agentic IDE) — `agy` on PATH. Installed → a profile
-  // that runs it; the picker offers it as an agent.
-  const agyWhere = safeExec('where agy').trim() || safeExec('where antigravity').trim();
-  const agyInstalled = !!(agyWhere && existsSync(agyWhere.split('\n')[0].trim()));
-  if (agyInstalled && existsSync(cmd)) {
-    const agyBin = agyWhere.toLowerCase().includes('antigravity') ? 'antigravity' : 'agy';
-    profiles.push({name: 'Antigravity', config: {shell: cmd, shellArgs: ['/c', agyBin]}});
+    }
+    // Nemesis8 — special-cased: installed adds the --danger variant; missing
+    // installs from nemesis8.nuts.services.
+    const n8Bin = whereBin(['nemesis8', 'n8']);
+    if (n8Bin) {
+      profiles.push({name: 'Nemesis8', config: {shell: cmd, shellArgs: ['/c', n8Bin]}});
+      profiles.push({name: 'Nemesis8 Danger', config: {shell: cmd, shellArgs: ['/c', `${n8Bin} --danger`]}});
+    } else if (psInstaller) {
+      profiles.push({
+        name: 'Install Nemesis8',
+        config: {
+          shell: psInstaller,
+          shellArgs: ['-NoExit', '-c', 'irm https://nemesis8.nuts.services/install.ps1 | iex']
+        }
+      });
+    }
   }
 
   return profiles;
@@ -194,25 +256,38 @@ function detectUnix(): DetectedProfile[] {
     }
   }
 
-  // Claude Code (macOS/Linux)
-  const claudePath = safeExec('which claude').trim();
-  if (claudePath && existsSync(claudePath)) {
-    const defaultShell = profiles[0]?.config.shell || '/bin/zsh';
-    profiles.push({name: 'Claude Code', config: {shell: defaultShell, shellArgs: ['-l', '-c', 'claude']}});
-  }
-
-  // Nemesis8 agent launcher (macOS/Linux). Installed → runs `nemesis8` (GUI
-  // launcher). NOT installed → opens a shell that installs it from
-  // nemesis8.nuts.services, then drops into a login shell.
-  const n8WhichNem = safeExec('which nemesis8').trim();
-  const n8Bin = n8WhichNem ? 'nemesis8' : safeExec('which n8').trim() ? 'n8' : '';
+  // ── Agent harnesses (macOS/Linux) ─────────────────────────────────────────
+  // Installed → launch profile (login shell -c <bin>). Missing → "Install
+  // <Agent>" profile that runs the installer then drops into a login shell so
+  // the pane survives and shows the result.
   const unixShell = profiles[0]?.config.shell || '/bin/bash';
+  const whichBin = (bins: string[]): string => {
+    for (const b of bins) {
+      const found = safeExec(`which ${b}`).trim();
+      if (found && existsSync(found)) return b;
+    }
+    return '';
+  };
+  for (const def of AGENT_DEFS) {
+    const bin = whichBin(def.bins);
+    if (bin) {
+      profiles.push({name: def.name, config: {shell: unixShell, shellArgs: ['-l', '-c', bin]}});
+    } else if (def.installSh) {
+      profiles.push({
+        name: `Install ${def.name}`,
+        config: {shell: unixShell, shellArgs: ['-l', '-c', `${def.installSh}; exec "$SHELL" -l`]}
+      });
+    }
+  }
+  // Nemesis8 — special-cased: installed adds the --danger variant; missing
+  // installs from nemesis8.nuts.services.
+  const n8Bin = whichBin(['nemesis8', 'n8']);
   if (n8Bin) {
     profiles.push({name: 'Nemesis8', config: {shell: unixShell, shellArgs: ['-l', '-c', n8Bin]}});
     profiles.push({name: 'Nemesis8 Danger', config: {shell: unixShell, shellArgs: ['-l', '-c', `${n8Bin} --danger`]}});
   } else {
     profiles.push({
-      name: 'Nemesis8',
+      name: 'Install Nemesis8',
       config: {
         shell: unixShell,
         shellArgs: ['-l', '-c', 'curl -fsSL https://nemesis8.nuts.services/install.sh | sh; exec "$SHELL" -l']
