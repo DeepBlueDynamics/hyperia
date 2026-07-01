@@ -33,6 +33,7 @@ import {
 } from '../bridge';
 import {execCommand} from '../commands';
 import {getDefaultProfile} from '../config';
+import {initWebPaneManager, destroyPanesForWindow} from '../web-pane-manager';
 import {icon, homeDirectory, cfgPath} from '../config/paths';
 import {getAppIcon} from '../utils/icon';
 import fetchNotifications from '../notifications';
@@ -141,12 +142,20 @@ function windowIcon(): Electron.NativeImage | string {
   return getAppIcon();
 }
 
+let webPaneManagerInited = false;
+
 export function newWindow(
   options_: BrowserWindowConstructorOptions,
   cfg: configOptions,
   fn?: (win: BrowserWindow) => void,
   profileName: string = getDefaultProfile()
 ): BrowserWindow {
+  // Register the WebContentsView IPC surface once (idempotent guard). Reuses the
+  // exact same session config the legacy <webview> path uses.
+  if (!webPaneManagerInited) {
+    webPaneManagerInited = true;
+    initWebPaneManager({configureSession: configureWebPaneSession});
+  }
   const classOpts = Object.assign({uid: uuidv4()});
   app.plugins.decorateWindowClass(classOpts);
 
@@ -600,6 +609,10 @@ export function newWindow(
   window.on('unmaximize', onGeometryChange);
   window.on('minimize', onGeometryChange);
   window.on('restore', onGeometryChange);
+
+  // Tear down any native web-pane views this window owns — their webContents are
+  // NOT auto-destroyed, so skipping this leaks renderer processes.
+  window.on('closed', () => destroyPanesForWindow(window));
 
   window.on('move', () => {
     const position = window.getPosition();
