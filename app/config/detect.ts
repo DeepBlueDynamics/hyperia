@@ -191,10 +191,9 @@ function detectWindows(): DetectedProfile[] {
   }
 
   // ── Agent harnesses (Windows) ─────────────────────────────────────────────
-  // Installed → launch profile (cmd /c <bin>). Missing + installable on Windows
-  // → "Install <Agent>" profile that runs the installer in PowerShell; -NoExit
-  // keeps the pane open so the install output stays visible.
-  const psInstaller = existsSync(ps5) ? ps5 : existsSync(ps7) ? ps7 : '';
+  // Detection only: installed (binary on PATH) → launch profile. Missing agents
+  // are NOT auto-installed — the picker's "install an agent" view shows the
+  // install instructions and the user runs them.
   const whereBin = (bins: string[]): string => {
     for (const b of bins) {
       const found = safeExec(`where ${b}`).trim();
@@ -205,29 +204,13 @@ function detectWindows(): DetectedProfile[] {
   if (existsSync(cmd)) {
     for (const def of AGENT_DEFS) {
       const bin = whereBin(def.bins);
-      if (bin) {
-        profiles.push({name: def.name, config: {shell: cmd, shellArgs: ['/c', bin]}});
-      } else if (def.installPs && psInstaller) {
-        profiles.push({
-          name: `Install ${def.name}`,
-          config: {shell: psInstaller, shellArgs: ['-NoExit', '-c', def.installPs]}
-        });
-      }
+      if (bin) profiles.push({name: def.name, config: {shell: cmd, shellArgs: ['/c', bin]}});
     }
-    // Nemesis8 — special-cased: installed adds the --danger variant; missing
-    // installs from nemesis8.nuts.services.
+    // Nemesis8 — installed adds the --danger variant.
     const n8Bin = whereBin(['nemesis8', 'n8']);
     if (n8Bin) {
       profiles.push({name: 'Nemesis8', config: {shell: cmd, shellArgs: ['/c', n8Bin]}});
       profiles.push({name: 'Nemesis8 Danger', config: {shell: cmd, shellArgs: ['/c', `${n8Bin} --danger`]}});
-    } else if (psInstaller) {
-      profiles.push({
-        name: 'Install Nemesis8',
-        config: {
-          shell: psInstaller,
-          shellArgs: ['-NoExit', '-c', 'irm https://nemesis8.nuts.services/install.ps1 | iex']
-        }
-      });
     }
   }
 
@@ -257,9 +240,9 @@ function detectUnix(): DetectedProfile[] {
   }
 
   // ── Agent harnesses (macOS/Linux) ─────────────────────────────────────────
-  // Installed → launch profile (login shell -c <bin>). Missing → "Install
-  // <Agent>" profile that runs the installer then drops into a login shell so
-  // the pane survives and shows the result.
+  // Detection only: installed (binary on PATH) → launch profile. Missing agents
+  // are NOT auto-installed — the picker's "install an agent" view shows the
+  // install instructions and the user runs them.
   const unixShell = profiles[0]?.config.shell || '/bin/bash';
   const whichBin = (bins: string[]): string => {
     for (const b of bins) {
@@ -270,29 +253,13 @@ function detectUnix(): DetectedProfile[] {
   };
   for (const def of AGENT_DEFS) {
     const bin = whichBin(def.bins);
-    if (bin) {
-      profiles.push({name: def.name, config: {shell: unixShell, shellArgs: ['-l', '-c', bin]}});
-    } else if (def.installSh) {
-      profiles.push({
-        name: `Install ${def.name}`,
-        config: {shell: unixShell, shellArgs: ['-l', '-c', `${def.installSh}; exec "$SHELL" -l`]}
-      });
-    }
+    if (bin) profiles.push({name: def.name, config: {shell: unixShell, shellArgs: ['-l', '-c', bin]}});
   }
-  // Nemesis8 — special-cased: installed adds the --danger variant; missing
-  // installs from nemesis8.nuts.services.
+  // Nemesis8 — installed adds the --danger variant.
   const n8Bin = whichBin(['nemesis8', 'n8']);
   if (n8Bin) {
     profiles.push({name: 'Nemesis8', config: {shell: unixShell, shellArgs: ['-l', '-c', n8Bin]}});
     profiles.push({name: 'Nemesis8 Danger', config: {shell: unixShell, shellArgs: ['-l', '-c', `${n8Bin} --danger`]}});
-  } else {
-    profiles.push({
-      name: 'Install Nemesis8',
-      config: {
-        shell: unixShell,
-        shellArgs: ['-l', '-c', 'curl -fsSL https://nemesis8.nuts.services/install.sh | sh; exec "$SHELL" -l']
-      }
-    });
   }
 
   return profiles;

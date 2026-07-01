@@ -21,6 +21,8 @@ export type Session = {
   isNewGroup?: boolean;
   isRestore?: boolean;
   lastCommand?: string;
+  // Typed into the fresh PTY WITHOUT a newline (user reviews, presses Enter).
+  prefillCommand?: string;
   splitPlacement?: 'BEFORE' | 'AFTER';
   layoutPattern?: string;
   shellState?: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
@@ -31,6 +33,7 @@ export type sessionExtraOptions = {
   uid?: string;
   isRestore?: boolean;
   lastCommand?: string;
+  prefillCommand?: string;
   cwd?: string;
   splitDirection?: 'HORIZONTAL' | 'VERTICAL';
   splitPlacement?: 'BEFORE' | 'AFTER';

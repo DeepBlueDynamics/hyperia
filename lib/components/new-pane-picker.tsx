@@ -32,13 +32,65 @@ const AGENT_NAMES = new Set([
   'pi'
 ]);
 
-// "Install <Agent>" profiles: the agent isn't on this host; launching the
-// profile RUNS the platform install command in the new pane.
-const isInstallProfile = (name: string): boolean => name.toLowerCase().startsWith('install ');
+// Install instructions per harness — shown in the picker's "install an agent"
+// view. Nothing here auto-runs: the user copies the command or opens a shell
+// with it pre-typed (never submitted). Mirrors app/config/detect.ts AGENT_DEFS
+// (the catalog nemesis8 supports, ../nemesis8/providers/*.toml).
+interface InstallEntry {
+  name: string;
+  /** POSIX (macOS/Linux) install command. */
+  unix?: string;
+  /** Windows (PowerShell) install command. */
+  win?: string;
+  /** Free-text note when there's no command for this platform. */
+  note?: string;
+  /** Configured (not installed) — shows a "configure" action opening its modal. */
+  configure?: boolean;
+}
 
-// Icon per agent harness (agent entries + their install rows).
+const INSTALL_CATALOG: InstallEntry[] = [
+  {
+    name: 'Hyperia',
+    note: "Hyperia's built-in agent — configure it to enable.",
+    configure: true
+  },
+  {
+    name: 'Claude Code',
+    unix: 'npm install -g @anthropic-ai/claude-code',
+    win: 'npm install -g @anthropic-ai/claude-code'
+  },
+  {
+    name: 'Antigravity',
+    note: "Installs via Google's official Antigravity CLI installer (provides the `agy` binary)."
+  },
+  {name: 'Codex', unix: 'npm install -g @openai/codex', win: 'npm install -g @openai/codex'},
+  {name: 'OpenCode', unix: 'npm install -g opencode-ai', win: 'npm install -g opencode-ai'},
+  {
+    name: 'Grok',
+    unix: 'curl -fsSL https://x.ai/cli/install.sh | sh',
+    note: 'macOS/Linux installer — on Windows run it inside WSL.'
+  },
+  {
+    name: 'Hermes',
+    unix: 'curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | sh',
+    note: 'macOS/Linux installer — on Windows run it inside WSL.'
+  },
+  {
+    name: 'Pi',
+    unix: 'npm install -g @earendil-works/pi-coding-agent --ignore-scripts',
+    win: 'npm install -g @earendil-works/pi-coding-agent --ignore-scripts'
+  },
+  {
+    name: 'Nemesis8',
+    unix: 'curl -fsSL https://nemesis8.nuts.services/install.sh | sh',
+    win: 'irm https://nemesis8.nuts.services/install.ps1 | iex'
+  }
+];
+
+// Icon per agent harness.
 const agentIconClass = (name: string): {icon: string; style?: React.CSSProperties} => {
   const n = name.toLowerCase().replace(/^install /, '');
+  if (n === 'hyperia') return {icon: 'ti ti-ghost', style: {color: 'var(--info-text)'}};
   if (n === 'claude code') return {icon: 'ti ti-sparkles', style: {color: 'var(--info-text)'}};
   if (n === 'antigravity') return {icon: 'ti ti-rocket', style: {color: 'var(--info-text)'}};
   if (n === 'nemesis8') return {icon: 'ti ti-robot', style: {color: 'var(--danger-text)'}};
@@ -463,6 +515,12 @@ interface NewPanePickerState {
   // persisted across sessions.
   lastUsedShell?: string;
   lastUsedAgent?: string;
+  // 'install' swaps the picker content for the agent install-instructions view.
+  view?: 'main' | 'install';
+  // Which install command was just copied (flash feedback).
+  copiedInstall?: string;
+  // Configure-Hyperia-agent modal (placeholder — full config flow TBD).
+  configureHyperiaOpen?: boolean;
 }
 
 // The "New Webpane" chooser shown when a pane has the synthetic `picker`
@@ -511,6 +569,229 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     })();
   };
 
+  // "Open in shell" from the install view: open the default shell in this pane
+  // with the install command TYPED at the prompt but NOT submitted — the user
+  // reviews it and presses Enter themselves.
+  private openInstallShell = (command: string) => {
+    const {groupUid, uid, sessionCwd, cwd} = this.props;
+    rpc.emit('new', {
+      isNewGroup: false,
+      cwd: sessionCwd || cwd,
+      activeUid: uid,
+      groupUid,
+      prefillCommand: command
+    } as any);
+  };
+
+  private copyInstall = (command: string) => {
+    try {
+      void navigator.clipboard.writeText(command);
+    } catch {
+      /* clipboard unavailable */
+    }
+    this.setState({copiedInstall: command});
+    setTimeout(() => {
+      if (this.state.copiedInstall === command) this.setState({copiedInstall: undefined});
+    }, 1200);
+  };
+
+  // The install-instructions view: every harness in the catalog with its
+  // platform install command. Nothing auto-runs.
+  private renderInstallView() {
+    const {profiles, pickerZoom} = this.props;
+    const profileList: any[] = profiles || [];
+    const installedNames = new Set(profileList.map((p: any) => String(p.name).toLowerCase()));
+
+    return (
+      <div className="term_pickerContainer" style={{zoom: pickerZoom, overflowY: 'auto'}}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            padding: 'var(--space-10) 0',
+            gap: 'var(--space-8)',
+            width: '100%',
+            flexShrink: 0
+          }}
+        >
+          <div style={{...pickerRowStyle, alignItems: 'center'}}>
+            <span
+              onClick={() => this.setState({view: 'main'})}
+              style={{
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 'var(--space-4)',
+                fontSize: '11px',
+                color: 'var(--text-secondary)',
+                fontFamily: 'var(--font-sans)'
+              }}
+            >
+              <i className="ti ti-arrow-left" style={{fontSize: '13px'}} aria-hidden="true" />
+              Back
+            </span>
+            <div
+              style={{
+                flex: 1,
+                textAlign: 'center',
+                fontSize: '13px',
+                fontWeight: 500,
+                color: 'var(--text-primary)',
+                fontFamily: 'var(--font-sans)'
+              }}
+            >
+              Install an Agent
+            </div>
+            {/* spacer to balance the back button */}
+            <span style={{width: '48px'}} />
+          </div>
+
+          {INSTALL_CATALOG.map((entry) => {
+            const {icon, style} = agentIconClass(entry.name);
+            const installed = installedNames.has(entry.name.toLowerCase());
+            const command = isWindows ? entry.win : entry.unix;
+            // On Windows a unix-only installer is shown as reference text (run
+            // it in WSL) — no "open in shell" for a command pwsh can't run.
+            const referenceOnly = !command && !!entry.unix;
+            const shown = command || entry.unix;
+            const copied = this.state.copiedInstall === shown;
+            return (
+              <div
+                key={entry.name}
+                style={{
+                  ...pickerRowStyle,
+                  flexDirection: 'column',
+                  alignItems: 'stretch',
+                  gap: 'var(--space-4)',
+                  padding: 'var(--space-6) 0'
+                }}
+              >
+                <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-8)'}}>
+                  <i className={icon} style={{fontSize: '14px', flexShrink: 0, ...(style || {})}} aria-hidden="true" />
+                  <span
+                    style={{
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      color: 'var(--text-primary)',
+                      fontFamily: 'var(--font-sans)'
+                    }}
+                  >
+                    {entry.name}
+                  </span>
+                  {installed && (
+                    <span style={{fontSize: '10px', color: 'var(--success-text, #3fb950)', fontFamily: 'var(--font-sans)'}}>
+                      ✓ installed
+                    </span>
+                  )}
+                  <span style={{flex: 1}} />
+                  {entry.configure && (
+                    <span
+                      onClick={() => this.setState({configureHyperiaOpen: true})}
+                      title="Configure the Hyperia agent"
+                      style={{...pickerEnterBadgeStyle, cursor: 'pointer', color: 'var(--info-text)'}}
+                    >
+                      configure
+                    </span>
+                  )}
+                  {(command || referenceOnly) && (
+                    <span
+                      onClick={() => shown && this.copyInstall(shown)}
+                      title="Copy command"
+                      style={{...pickerEnterBadgeStyle, cursor: 'pointer'}}
+                    >
+                      {copied ? 'copied ✓' : 'copy'}
+                    </span>
+                  )}
+                  {command && (
+                    <span
+                      onClick={() => this.openInstallShell(command)}
+                      title="Open a shell with this command typed — press Enter yourself"
+                      style={{...pickerEnterBadgeStyle, cursor: 'pointer', color: 'var(--info-text)'}}
+                    >
+                      open in shell
+                    </span>
+                  )}
+                </div>
+                {shown && (
+                  <div
+                    style={{
+                      background: 'var(--bg-primary)',
+                      border: '0.5px solid var(--border-neutral)',
+                      borderRadius: 'var(--radius-6)',
+                      padding: 'var(--space-6) var(--space-10)',
+                      fontSize: '11px',
+                      fontFamily: 'var(--font-mono)',
+                      color: 'var(--text-primary)',
+                      overflowX: 'auto',
+                      whiteSpace: 'nowrap',
+                      userSelect: 'text'
+                    }}
+                  >
+                    {shown}
+                  </div>
+                )}
+                {entry.note && (
+                  <div style={{fontSize: '10.5px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
+                    {entry.note}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Configure-Hyperia modal — placeholder shell; the real config flow
+            (identity, model, permissions) lands with its own spec. */}
+        {this.state.configureHyperiaOpen && (
+          <div
+            onClick={() => this.setState({configureHyperiaOpen: false})}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 30,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'rgba(0,0,0,0.45)'
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: 'min(360px, calc(100% - 32px))',
+                background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',
+                border: '0.5px solid var(--border-neutral)',
+                borderRadius: 'var(--radius-6)',
+                padding: 'var(--space-12, 14px)',
+                boxShadow: '0 10px 24px rgba(0,0,0,0.45)',
+                fontFamily: 'var(--font-sans)'
+              }}
+            >
+              <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-8)', marginBottom: 'var(--space-8)'}}>
+                <i className="ti ti-ghost" style={{fontSize: '15px', color: 'var(--info-text)'}} aria-hidden="true" />
+                <span style={{fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)'}}>
+                  Configure Hyperia Agent
+                </span>
+              </div>
+              <div style={{fontSize: '11.5px', color: 'var(--text-secondary)', marginBottom: 'var(--space-10)'}}>
+                Configuration options for the built-in Hyperia agent are coming here.
+              </div>
+              <div style={{display: 'flex', justifyContent: 'flex-end'}}>
+                <span
+                  onClick={() => this.setState({configureHyperiaOpen: false})}
+                  style={{...pickerEnterBadgeStyle, cursor: 'pointer'}}
+                >
+                  close
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   render() {
     const {profiles, defaultProfile, urlInput, urlError, pickerZoom, isGlimmerActive} = this.props;
     const profileList: any[] = profiles || [];
@@ -519,7 +800,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     const shellProfiles = profileList
       .filter((p: any) => {
         const n = p.name.toLowerCase();
-        if (AGENT_NAMES.has(n) || p.kind === 'agent' || isInstallProfile(n)) return false;
+        if (AGENT_NAMES.has(n) || p.kind === 'agent') return false;
         return profileFitsPlatform(p);
       })
       // Stock (system-detected) shells first, user-added custom shells after.
@@ -547,12 +828,12 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     // --- Agent items — detection-driven (app/config/detect.ts catalog) ---
     // INSTALLED harnesses arrive as profiles named exactly per AGENT_NAMES
     // (Nemesis8 installed also brings "Nemesis8 Danger" = `nemesis8 --danger`).
-    // MISSING-but-installable ones arrive as "Install <Agent>" profiles whose
-    // pane runs the platform install command — listed last with a download icon.
+    // Missing ones are NOT listed — the "install an agent" row opens the
+    // instruction view instead.
     const agentItems: ComboItem[] = [];
     for (const p of profileList) {
       const n = p.name.toLowerCase();
-      if (!AGENT_NAMES.has(n) || isInstallProfile(n)) continue;
+      if (!AGENT_NAMES.has(n)) continue;
       const {icon, style} = agentIconClass(p.name);
       agentItems.push({
         key: p.name,
@@ -562,12 +843,9 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         onSelect: () => this.launchAgent(p.name)
       });
     }
-    agentItems.push({
-      key: 'Hyperia Shell',
-      label: 'Hyperia Shell',
-      iconClass: 'ti ti-robot',
-      onSelect: () => this.launchHyperiaShell()
-    });
+    // NOTE: the Hyperia agent is intentionally NOT a launchable entry — it isn't
+    // "installed" yet. It lives in the install view with a configure flow
+    // (launchHyperiaShell kept for that flow to reuse).
     // Custom agents the user saved (kind 'agent').
     for (const p of profileList.filter((p: any) => p.kind === 'agent' && profileFitsPlatform(p))) {
       agentItems.push({
@@ -578,25 +856,21 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         onDelete: () => this.confirmDelete('agent', p.name, p.name)
       });
     }
-    // Install rows — the harnesses not on this host; launching runs the installer.
-    for (const p of profileList.filter((p: any) => isInstallProfile(p.name))) {
-      agentItems.push({
-        key: p.name,
-        label: p.name,
-        iconClass: 'ti ti-download',
-        iconStyle: {color: 'var(--text-tertiary)'},
-        onSelect: () => this.launchAgent(p.name)
-      });
-    }
 
     const defaultAgentItem =
       (this.state.lastUsedAgent && agentItems.find((i) => i.key === this.state.lastUsedAgent)) || agentItems[0];
     const agentDefaultText = defaultAgentItem ? defaultAgentItem.label : '';
 
+    if (this.state.view === 'install') {
+      return this.renderInstallView();
+    }
+
     return (
       <div
         className="term_pickerContainer"
-        style={{zoom: pickerZoom}}
+        // Content pinned to the TOP (no vertical centering) and the whole pane
+        // scrolls when it's too short to show everything.
+        style={{zoom: pickerZoom, overflowY: 'auto'}}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -605,7 +879,6 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
       >
         <div
           style={{
-            margin: 'auto 0',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
@@ -654,16 +927,18 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             isGlimmerActive={isGlimmerActive}
           />
 
-          {/* New Agent combobox. */}
+          {/* New Agent combobox. "install an agent" opens the instruction view
+              (install commands shown, never auto-run) — NOT the custom-profile
+              modal, which stays a shell-only affordance. */}
           <InlineCombobox
             label="New Agent"
             leadingIcon="ti ti-robot"
             items={agentItems}
             defaultText={agentDefaultText}
             placeholder="Type to filter agents…"
-            addLabel="add an agent"
-            createLabel="create new agent"
-            onAdd={() => this.props.onOpenCustomModal('agent')}
+            addLabel="install an agent"
+            createLabel="install an agent:"
+            onAdd={() => this.setState({view: 'install'})}
             isGlimmerActive={isGlimmerActive}
           />
         </div>

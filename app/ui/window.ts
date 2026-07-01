@@ -426,6 +426,7 @@ export function newWindow(
       isNewGroup: extraOptions.isNewGroup,
       isRestore: extraOptions.isRestore,
       lastCommand: extraOptions.lastCommand,
+      prefillCommand: (extraOptions as any).prefillCommand,
       layoutPattern: (extraOptions as any).layoutPattern,
       shellState: (session as any).shellState,
       isAgentInitiated: (extraOptions as any).isAgentInitiated

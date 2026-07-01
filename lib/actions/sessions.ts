@@ -74,14 +74,17 @@ export function addSession(data: Session) {
       }, 50);
     }
 
-    if (isRestore && lastCommand) {
+    // Type (but never run) a command into the fresh PTY: restore re-types the
+    // interrupted command; prefillCommand does the same for new panes (e.g. the
+    // agent-install "Open in shell" — the user reviews and presses Enter).
+    const prefillCommand = (data as any).prefillCommand;
+    if ((isRestore && lastCommand) || prefillCommand) {
+      const text = prefillCommand || lastCommand;
       setTimeout(() => {
         const state = getState();
         if (state.sessions.sessions[uid]) {
-          console.log(
-            `[sessions] Pre-populating terminal buffer for restored session ${uid} with command: ${lastCommand}`
-          );
-          rpc.emit('data', {uid, data: lastCommand});
+          console.log(`[sessions] Pre-populating terminal buffer for session ${uid} with command: ${text}`);
+          rpc.emit('data', {uid, data: text});
         }
       }, 500);
     }
