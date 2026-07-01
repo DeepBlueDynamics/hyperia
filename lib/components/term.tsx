@@ -173,6 +173,7 @@ export default class Term extends React.PureComponent<
     navigatorWidth: number;
     navigatorTop: number;
     isGlimmerActive?: boolean;
+    showCopied?: boolean;
     isNarrow: boolean;
     paneWidth: number;
     pickerZoom: number;
@@ -237,6 +238,7 @@ export default class Term extends React.PureComponent<
     navigatorWidth: 280,
     navigatorTop: 38,
     isGlimmerActive: false,
+    showCopied: false,
     isNarrow: false,
     paneWidth: 999,
     findText: '',
@@ -910,16 +912,26 @@ export default class Term extends React.PureComponent<
     }
   };
 
+  _copiedTimer: ReturnType<typeof setTimeout> | null = null;
+  // Flash a "Copied!" toast in the bottom-right of the pane when text hits the clipboard.
+  flashCopied = () => {
+    this.setState({showCopied: true});
+    if (this._copiedTimer) clearTimeout(this._copiedTimer);
+    this._copiedTimer = setTimeout(() => this.setState({showCopied: false}), 1100);
+  };
+
   onMouseUp = (e: React.MouseEvent) => {
     if (this.props.quickEdit && e.button === 2) {
       if (this.term.hasSelection()) {
         clipboard.writeText(this.term.getSelection());
         this.term.clearSelection();
+        this.flashCopied();
       } else {
         document.execCommand('paste');
       }
     } else if (this.props.copyOnSelect && this.term.hasSelection()) {
       clipboard.writeText(this.term.getSelection());
+      this.flashCopied();
     }
   };
 
@@ -1138,6 +1150,7 @@ export default class Term extends React.PureComponent<
     ) {
       const textToCopy = hasActiveSelection ? this.term.getSelection() : this.lastSelection;
       clipboard.writeText(textToCopy);
+      if (textToCopy) this.flashCopied();
       if (hasActiveSelection) {
         this.term.clearSelection();
       }
@@ -2435,6 +2448,27 @@ export default class Term extends React.PureComponent<
         onMouseUp={this.onMouseUp}
         style={{position: 'relative'}}
       >
+        {this.state.showCopied && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 10,
+              right: 12,
+              zIndex: 50,
+              pointerEvents: 'none',
+              background: 'var(--accent-success, #3fb950)',
+              color: '#06140a',
+              fontSize: '11px',
+              fontWeight: 600,
+              padding: '4px 10px',
+              borderRadius: '6px',
+              fontFamily: 'var(--font-sans)',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.35)'
+            }}
+          >
+            Copied!
+          </div>
+        )}
         {this.props.customChildrenBefore}
         {showLabelStrip && (
           <PaneBand
@@ -2601,7 +2635,7 @@ export default class Term extends React.PureComponent<
                         marginTop: 'var(--space-2)'
                       }}
                     >
-                      Wipe scrollback (keeps prompt)
+                      Wipe scrollback — shell only, not TUIs
                     </div>
                   </div>
                 </span>

@@ -162,7 +162,13 @@ export class NewPanePicker extends React.PureComponent<NewPanePickerProps> {
                 // Agents live under "pick an agent", not the shell grid:
                 // built-in agent names + any custom profile saved as kind 'agent'.
                 // Antigravity gets its own dedicated agent button below.
-                if (n === 'claude code' || n === 'nemesis8' || n === 'antigravity' || p.kind === 'agent')
+                if (
+                  n === 'claude code' ||
+                  n === 'nemesis8' ||
+                  n === 'nemesis8 danger' ||
+                  n === 'antigravity' ||
+                  p.kind === 'agent'
+                )
                   return false;
                 // Don't show shells that belong to another OS (synced config).
                 return profileFitsPlatform(p);
@@ -304,6 +310,17 @@ export class NewPanePicker extends React.PureComponent<NewPanePickerProps> {
               >
                 <i className="ti ti-robot" style={{fontSize: '14px', color: 'var(--danger-text)'}} aria-hidden="true" />
                 <span>Nemesis8</span>
+              </button>
+            )}
+            {profileList.some((p: any) => p.name.toLowerCase() === 'nemesis8 danger') && (
+              <button
+                className={'term_pickerButton_rev ' + (isGlimmerActive ? 'term_glimmer' : '')}
+                onClick={() => {
+                  this.newWithProfile('Nemesis8 Danger');
+                }}
+              >
+                <i className="ti ti-shield-off" style={{fontSize: '14px', color: 'var(--danger-text)'}} aria-hidden="true" />
+                <span>Nemesis8 Danger</span>
               </button>
             )}
             <button

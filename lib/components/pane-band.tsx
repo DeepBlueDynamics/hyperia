@@ -930,6 +930,17 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               </div>
             </div>
 
+            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12}}>
+              <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>For</span>
+              <div style={{display: 'flex', gap: 4}}>
+                {([['15 min', 900], ['1 hour', 3600]] as const).map(([lbl, secs]) => (
+                  <button key={lbl} type="button" onClick={() => setPLifetime(secs)} style={pulseSeg(pLifetime === secs)}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <label
               style={{
                 display: 'flex',
@@ -945,23 +956,15 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               Submit to agent (press Enter) — uncheck to type only
             </label>
 
-            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12}}>
-              <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>For</span>
-              <div style={{display: 'flex', gap: 4}}>
-                {([['15 min', 900], ['1 hour', 3600]] as const).map(([lbl, secs]) => (
-                  <button key={lbl} type="button" onClick={() => setPLifetime(secs)} style={pulseSeg(pLifetime === secs)}>
-                    {lbl}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <div style={{display: 'flex', gap: 8, justifyContent: 'flex-end'}}>
-              {pulseActive && (
-                <button type="button" disabled={pBusy} onClick={clearPulse} style={pulseBtn(false, pBusy)}>
-                  Clear
-                </button>
-              )}
+              <button
+                type="button"
+                disabled={pBusy}
+                onClick={pulseActive ? clearPulse : () => setPulseOpen(false)}
+                style={pulseBtn(false, pBusy)}
+              >
+                {pulseActive ? 'Clear and close' : 'Cancel'}
+              </button>
               <button
                 type="button"
                 disabled={pBusy || !pKeys.trim()}

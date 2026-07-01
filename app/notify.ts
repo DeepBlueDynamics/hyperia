@@ -160,7 +160,7 @@ function updateTrayMenu() {
       }
     },
     {
-      label: 'New Note',
+      label: 'New Stickys',
       click: () => {
         ipcMain.emit('new-sticky', {});
       }

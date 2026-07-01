@@ -102,7 +102,7 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
           </svg>
         </div>
         {/* New sticky note */}
-        <div className="new_tab_btn" onClick={handleNewNote} title="New Note">
+        <div className="new_tab_btn" onClick={handleNewNote} title="New Stickys">
           <svg viewBox="0 0 14 14" width="12" height="12">
             <path
               d="M2 1h10a1 1 0 0 1 1 1v7l-4 4H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z"

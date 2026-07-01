@@ -70,7 +70,7 @@ const Toolbar = ({defaultProfile, profiles, openNewTab, openWebPane}: Props) => 
         </div>
 
         {/* New sticky */}
-        <div className="toolbar_btn" onClick={handleNewSticky} title="New Sticky">
+        <div className="toolbar_btn" onClick={handleNewSticky} title="New Stickys">
           <svg viewBox="0 0 14 14" width="13" height="13">
             <path
               d="M2 1h10a1 1 0 0 1 1 1v7l-4 4H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z"

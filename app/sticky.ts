@@ -717,10 +717,13 @@ function createStickyNote(
     savedNote.source.path = translateContainerPath(savedNote.source.path);
   }
 
-  // Resolve default size (explicit > persisted manual size > default).
+  // Resolve default size (explicit > persisted manual size > default). A brand-new
+  // sticky opens at 25% of the default size (quick small notes); explicit sizes
+  // and restored notes keep their exact dimensions.
+  const NEW_STICKY_SCALE = 0.25;
   const defaultSize = getStickyDefaultSize();
-  let width = options.width || savedNote?.width || defaultSize.width;
-  let height = options.height || savedNote?.height || defaultSize.height;
+  let width = options.width || savedNote?.width || Math.round(defaultSize.width * NEW_STICKY_SCALE);
+  let height = options.height || savedNote?.height || Math.round(defaultSize.height * NEW_STICKY_SCALE);
 
   // Candidate position: explicit > persisted > centered on the cursor.
   const hasPlacedPos = options.x != null || options.y != null || savedNote?.x != null || savedNote?.y != null;
@@ -748,8 +751,8 @@ function createStickyNote(
     height,
     x,
     y,
-    minWidth: 200,
-    minHeight: 150,
+    minWidth: 120,
+    minHeight: 90,
     frame: false,
     transparent: false,
     alwaysOnTop: true,
@@ -1107,7 +1110,7 @@ export function initSticky() {
           }
         },
         {type: 'separator'},
-        {label: 'New Sticky', click: () => createStickyNote({})},
+        {label: 'New Stickys', click: () => createStickyNote({})},
         {
           label: 'Clone This Sticky',
           click: () => {

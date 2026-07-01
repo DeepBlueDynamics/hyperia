@@ -170,7 +170,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         </button>
       )}
 
-      <div className="tabs_newTabPair tabs_newTab_tooltip_trigger">
+      <div className="tabs_newTabPair">
         <button
           className="tabs_newTabBtn"
           onClick={() => props.openNewTab('picker')}
@@ -179,68 +179,6 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         >
           +
         </button>
-
-        <div className="tabs_newTab_tooltip" style={{minWidth: '200px'}}>
-          <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 600, marginBottom: '8px', textAlign: 'center'}}>
-            New Tab Layouts
-          </div>
-          <div className="tabs_layout_grid">
-            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: '3cols'})} title="3 Columns">
-              <div className="layout-preview-box l-3cols">
-                <div /><div /><div />
-              </div>
-            </div>
-            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: '3rows'})} title="3 Rows">
-              <div className="layout-preview-box l-3rows">
-                <div /><div /><div />
-              </div>
-            </div>
-            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'grid2x2'})} title="Grid 2x2">
-              <div className="layout-preview-box l-grid2x2">
-                <div /><div /><div /><div />
-              </div>
-            </div>
-            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'leftHeavy'})} title="Left Heavy">
-              <div className="layout-preview-box l-leftHeavy">
-                <div className="l-col"><div /><div /></div>
-                <div className="l-col"><div /></div>
-              </div>
-            </div>
-            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'rightHeavy'})} title="Right Heavy">
-              <div className="layout-preview-box l-rightHeavy">
-                <div className="l-col"><div /></div>
-                <div className="l-col"><div /><div /></div>
-              </div>
-            </div>
-            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'topHeavy'})} title="Top Heavy">
-              <div className="layout-preview-box l-topHeavy">
-                <div className="l-row"><div /><div /></div>
-                <div className="l-row"><div /></div>
-              </div>
-            </div>
-            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'bottomHeavy'})} title="Bottom Heavy">
-              <div className="layout-preview-box l-bottomHeavy">
-                <div className="l-row"><div /></div>
-                <div className="l-row"><div /><div /></div>
-              </div>
-            </div>
-            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'hsplit212'})} title="H-Split (2-1-2)">
-              <div className="layout-preview-box l-hsplit212">
-                <div className="l-col"><div /><div /></div>
-                <div className="l-col"><div /></div>
-                <div className="l-col"><div /><div /></div>
-              </div>
-            </div>
-            <div className="tabs_layout_item" onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'grid3x2'})} title="Grid 3x2">
-              <div className="layout-preview-box l-grid3x2">
-                <div className="l-col"><div /><div /></div>
-                <div className="l-col"><div /><div /></div>
-                <div className="l-col"><div /><div /></div>
-              </div>
-            </div>
-          </div>
-        </div>
-
 
         <button
           className="tabs_newTabBtn"
@@ -270,7 +208,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             }
           }}
           aria-label="New sticky note"
-          title="New Sticky"
+          title="New Stickys"
         >
           <svg viewBox="0 0 14 14" width="13" height="13">
             <path
