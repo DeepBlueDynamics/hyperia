@@ -9,7 +9,6 @@ import rpc from '../rpc';
 import {toNavigableUrl} from '../utils/navigable-url';
 import {countPathHorizontalStacks} from '../utils/term-groups';
 import {
-  BROWSER_UA,
   getSecurityState,
   normalizeUrlKey,
   faviconForUrl,
@@ -106,6 +105,8 @@ interface WebPaneState {
   findText: string;
   findActive: number;
   findTotal: number;
+  // Native WebContentsView zoom (owned in main; mirrored here for +/- math).
+  zoomFactor: number;
   // Which collapsed history roots (e.g. all "google.com/maps" URLs) are expanded.
   expandedHistoryRoots: {[key: string]: boolean};
 }
@@ -115,7 +116,9 @@ interface WebPaneState {
 const DDG_RESOLVE_FAIL = new Set([-105, -137, -109, -300]);
 
 class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
-  webviewRef = React.createRef<any>();
+  // Geometry anchor for the native WebContentsView (main-process owned). The
+  // native view paints OVER this div; we only read its rect to position it.
+  bodyRef = React.createRef<HTMLDivElement>();
   urlInputRef = React.createRef<HTMLInputElement>();
   urlNavigatorRef = React.createRef<HTMLDivElement>();
   urlBarRef = React.createRef<HTMLDivElement>();
@@ -126,6 +129,18 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   _windowKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
   _findHandler: ((e: any, guestId: number) => void) | null = null;
   _openSplitHandler: ((e: any, guestId: number, url: string) => void) | null = null;
+  // requestAnimationFrame token so reportBounds fires at most once per frame.
+  _boundsRaf: number | null = null;
+  _onScroll: (() => void) | null = null;
+  // Low-frequency bounds poll. Tab switches move a pane to left:-9999em without a
+  // resize/scroll event, so nothing else re-pushes bounds; polling catches it and
+  // slides the native view off-window when its pane is parked. (Phase 5 replaces
+  // this with a proper active-tab signal.)
+  _boundsInterval: ReturnType<typeof setInterval> | null = null;
+  // web-pane:* main→renderer listeners (registered in mount, removed in unmount).
+  _stateHandler: ((e: any, payload: any) => void) | null = null;
+  _foundHandler: ((e: any, payload: any) => void) | null = null;
+  _domReadyHandler: ((e: any, payload: any) => void) | null = null;
   // OAuth hand-off de-bounce: an MS/Google login bounces through many redirects,
   // each of which would otherwise open its own system-browser tab. Open once.
   _lastOAuthOpenAt = 0;
@@ -226,6 +241,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       findText: '',
       findActive: 0,
       findTotal: 0,
+      zoomFactor: 1,
       expandedHistoryRoots: {}
     };
   }
@@ -233,42 +249,48 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   labelRef = React.createRef<HTMLDivElement>();
   inputRef = React.createRef<HTMLInputElement>();
 
-  updateNavigationState = () => {
-    /* eslint-disable @typescript-eslint/no-unsafe-call */
-    if (!this.webviewRef.current) return;
-    const wv = this.webviewRef.current;
-    try {
-      this.setState({
-        canGoBack: wv.canGoBack(),
-        canGoForward: wv.canGoForward()
-      });
-    } catch (err) {
-      // webview might not be fully initialized yet
-    }
-    /* eslint-enable @typescript-eslint/no-unsafe-call */
+  // True when this pane hosts a real web page (native WebContentsView), i.e.
+  // NOT an ai:// thread and NOT the empty-url seeker. Only those get a native
+  // view; ai/seeker render pure DOM the native view must not occlude.
+  isNativeWeb = (url = this.props.url): boolean => !!url && !url.startsWith('ai://');
+
+  // Push the current pixel rect of bodyRef to main so it can position the native
+  // view. Hidden while the URL navigator / find bar is open (so those DOM
+  // overlays aren't occluded) or on an error screen. Coalesced to one send/frame.
+  reportBounds = () => {
+    if (this._boundsRaf != null) return;
+    this._boundsRaf = requestAnimationFrame(() => {
+      this._boundsRaf = null;
+      const el = this.bodyRef.current;
+      if (!el) return; // ai/seeker branch — no native view to place.
+      const rect = el.getBoundingClientRect();
+      const onScreen = rect.width > 0 && rect.height > 0;
+      const visible = !this.state.error && !this.state.isUrlNavigatorOpen && !this.state.findOpen && onScreen;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        ipcRenderer.send('web-pane:set-bounds', {
+          uid: this.props.groupUid,
+          bounds: {x: rect.left, y: rect.top, width: rect.width, height: rect.height},
+          visible
+        });
+      } catch {
+        /* main not ready */
+      }
+    });
   };
 
   reloadWebview = (hard: boolean) => {
-    /* eslint-disable @typescript-eslint/no-unsafe-call */
-    if (!this.webviewRef.current) return;
-    const wv = this.webviewRef.current;
-    try {
-      if (hard) {
-        wv.reloadIgnoringCache();
-      } else {
-        wv.reload();
-      }
-    } catch (err) {
-      console.error('Failed to reload:', err);
-    }
-    /* eslint-enable @typescript-eslint/no-unsafe-call */
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    ipcRenderer.send('web-pane:nav', {
+      uid: this.props.groupUid,
+      action: hard ? 'reloadIgnoringCache' : 'reload'
+    });
   };
 
   // Open the current page in the system browser (Chrome). The reliable bail-out
-  // when an embedded webview can't clear a bot wall (Cloudflare et al.).
+  // when an embedded view can't clear a bot wall (Cloudflare et al.).
   openInExternal = () => {
-    const wv: any = this.webviewRef.current;
-    const u = (wv && typeof wv.getURL === 'function' && wv.getURL()) || this.props.url || this.state.urlInputVal || '';
+    const u = this.state.activeUrl || this.props.url || this.state.urlInputVal || '';
     if (/^https?:\/\//i.test(u)) {
       try {
         shell.openExternal(u);
@@ -276,6 +298,46 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         console.error('openExternal failed:', err);
       }
     }
+  };
+
+  // Run JS in the native view and resolve with its (serializable) value, or
+  // REJECT on failure — so callers can keep the old executeJavaScript
+  // .then/.catch shape. Replaces the removed <webview>.executeJavaScript.
+  execInPage = async (code: string): Promise<any> => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    const res = await ipcRenderer.invoke('web-pane:execute-js', {uid: this.props.groupUid, code});
+    if (res && res.ok) return res.result;
+    throw new Error((res && res.error) || 'execute-js failed');
+  };
+
+  // Sample the page's background color so the pane ground matches it (avoids the
+  // black-flash-between-repaints). Best-effort; failures are ignored.
+  probePageBgColor = () => {
+    this.execInPage(
+      "(function(){try{var pick=function(el){if(!el)return '';var c=getComputedStyle(el).backgroundColor;return (c&&c!=='rgba(0, 0, 0, 0)'&&c!=='transparent')?c:'';};return pick(document.body)||pick(document.documentElement)||'#ffffff';}catch(e){return '';}})()"
+    )
+      .then((color: string) => {
+        if (color && color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') {
+          this.setState({pageBgColor: color});
+        }
+      })
+      .catch(() => {});
+  };
+
+  // Surface a bad HTTP status ("404") in the pane label instead of a meaningless
+  // split letter, and drop the entry from history.
+  probeHttpStatus = () => {
+    this.execInPage(
+      "(function(){try{var entries=performance.getEntriesByType('navigation');return entries.length?entries[0].responseStatus:0;}catch(e){return 0;}})()"
+    )
+      .then((httpStatus: number) => {
+        if (httpStatus === 404 || httpStatus >= 400) {
+          this.setState({httpStatus});
+          const currentUrl = this.state.activeUrl;
+          if (currentUrl) this.removeHistoryEntry('url', currentUrl);
+        }
+      })
+      .catch(() => {});
   };
 
   goBack = () => {
@@ -289,17 +351,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         this.props.onSetUrl?.(targetUrl);
       }
     } else {
-      /* eslint-disable @typescript-eslint/no-unsafe-call */
-      if (!this.webviewRef.current) return;
-      const wv = this.webviewRef.current;
-      try {
-        if (wv.canGoBack()) {
-          wv.goBack();
-        }
-      } catch (err) {
-        console.error('Failed to go back:', err);
-      }
-      /* eslint-enable @typescript-eslint/no-unsafe-call */
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      ipcRenderer.send('web-pane:nav', {uid: this.props.groupUid, action: 'back'});
     }
   };
 
@@ -314,17 +367,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         this.props.onSetUrl?.(targetUrl);
       }
     } else {
-      /* eslint-disable @typescript-eslint/no-unsafe-call */
-      if (!this.webviewRef.current) return;
-      const wv = this.webviewRef.current;
-      try {
-        if (wv.canGoForward()) {
-          wv.goForward();
-        }
-      } catch (err) {
-        console.error('Failed to go forward:', err);
-      }
-      /* eslint-enable @typescript-eslint/no-unsafe-call */
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      ipcRenderer.send('web-pane:nav', {uid: this.props.groupUid, action: 'forward'});
     }
   };
 
@@ -370,18 +414,14 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
     this.props.onSetUrl?.(targetUrl);
     this.addToHistory('url', targetUrl);
-    // Navigate the webview DIRECTLY too — clicking a URL-picker history row only
-    // went through the redux/prop round-trip, which could be a no-op (the src
-    // didn't always change), so the click appeared to do nothing.
+    // Drive the native view DIRECTLY too — clicking a URL-picker history row only
+    // went through the redux/prop round-trip, which could be a no-op (props.url
+    // didn't always change → componentDidUpdate's nav never fired), so the click
+    // appeared to do nothing.
     if (!targetUrl.startsWith('ai://')) {
-      try {
-        const wv: any = this.webviewRef.current;
-        if (wv && typeof wv.loadURL === 'function') {
-          void wv.loadURL(/^[a-z]+:\/\//i.test(targetUrl) ? targetUrl : 'https://' + targetUrl);
-        }
-      } catch {
-        /* webview not ready */
-      }
+      const full = /^[a-z]+:\/\//i.test(targetUrl) ? targetUrl : 'https://' + targetUrl;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      ipcRenderer.send('web-pane:nav', {uid: this.props.groupUid, action: 'load', url: full});
     }
   };
 
@@ -899,6 +939,23 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
   componentDidUpdate(prevProps: WebPaneProps, prevState: any) {
     if (this.props.url !== prevProps.url) {
+      // Native-view lifecycle: create when this pane BECOMES a web page, tear it
+      // down when it stops being one, and re-navigate when the url changes while
+      // it stays a web page. (ai:// / empty-url panes never own a native view.)
+      const wasNative = this.isNativeWeb(prevProps.url);
+      const isNative = this.isNativeWeb(this.props.url);
+      if (isNative && !wasNative) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        ipcRenderer.send('web-pane:create', {uid: this.props.groupUid, url: this.props.url});
+        this.reportBounds();
+      } else if (isNative && wasNative) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        ipcRenderer.send('web-pane:nav', {uid: this.props.groupUid, action: 'load', url: this.props.url});
+      } else if (!isNative && wasNative) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        ipcRenderer.send('web-pane:destroy', {uid: this.props.groupUid});
+      }
+
       const newUrl = this.props.url || '';
       let {paneHistory, paneHistoryIndex} = this.state;
       const currentInHistory = paneHistory[paneHistoryIndex];
@@ -938,6 +995,16 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     } else if (!isActive && wasActive) {
       document.removeEventListener('mousedown', this.handleOutsideClick);
     }
+
+    // Hiding the native view (or laying it out) depends on these — re-push bounds
+    // whenever they flip so the view is hidden behind the URL/find overlays.
+    if (
+      prevState.isUrlNavigatorOpen !== this.state.isUrlNavigatorOpen ||
+      prevState.findOpen !== this.state.findOpen ||
+      prevState.error !== this.state.error
+    ) {
+      this.reportBounds();
+    }
   }
 
   componentDidMount() {
@@ -954,9 +1021,14 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             this.setState({isNarrow, paneWidth: width});
           }
         }
+        // Pane resized → reposition the native view over its new rect.
+        this.reportBounds();
       });
       this.resizeObserver.observe(this.webWrapperRef.current);
     }
+
+    // Catch tab-switch reparenting (left:-9999em) that fires no resize/scroll.
+    this._boundsInterval = setInterval(this.reportBounds, 300);
 
     // Check if AI is configured
     try {
@@ -974,362 +1046,135 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       console.warn('IPC invoke error for has-agent-token:', err);
     }
 
-    if (!this.webviewRef.current) return;
-    const wv = this.webviewRef.current;
-
-    // Belt-and-suspenders: ensure the guest can request popups so the main
-    // process window-open handler fires for target="_blank" (→ split + open).
-    try {
-      wv.setAttribute('allowpopups', 'true');
-    } catch {
-      /* webview not ready */
+    // ── Native WebContentsView wiring ────────────────────────────────────────
+    // The page now lives in a main-process WebContentsView (app/web-pane-manager.ts).
+    // We (1) ask main to create it, (2) push its geometry, and (3) subscribe to the
+    // web-pane:* state pushes that replace the old <webview> DOM events.
+    if (this.isNativeWeb()) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      ipcRenderer.send('web-pane:create', {uid: this.props.groupUid, url: this.props.url});
+      // First bounds push after the layout has painted this frame.
+      requestAnimationFrame(() => this.reportBounds());
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-    wv.addEventListener('did-start-loading', () => {
-      this.setState({loading: true, error: null, httpStatus: null, pageBgColor: null});
-    });
+    // Page state pushed from main (partial — only changed fields present). Maps
+    // onto the same state the old <webview> events fed.
+    this._stateHandler = (_e: any, payload: any) => {
+      if (!payload || payload.uid !== this.props.groupUid) return;
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-    wv.addEventListener('did-stop-loading', async () => {
-      this.setState({loading: false});
-      this.updateNavigationState();
-      try {
-        const color = await wv.executeJavaScript(
-          "(function(){try{var pick=function(el){if(!el)return '';var c=getComputedStyle(el).backgroundColor;return (c&&c!=='rgba(0, 0, 0, 0)'&&c!=='transparent')?c:'';};return pick(document.body)||pick(document.documentElement)||'#ffffff';}catch(e){return '';}})()"
-        );
-        if (color && color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') {
-          this.setState({pageBgColor: color});
+      const prevActiveUrl = this.state.activeUrl;
+      const patch: Partial<WebPaneState> = {};
+
+      if ('loading' in payload) {
+        patch.loading = !!payload.loading;
+        // did-start-loading equivalent: reset per-load derived state.
+        if (payload.loading) {
+          patch.error = null;
+          patch.httpStatus = null;
+          patch.pageBgColor = null;
         }
-      } catch (err) {
-        console.warn('Failed to retrieve page background color:', err);
+      }
+      if ('canGoBack' in payload) patch.canGoBack = !!payload.canGoBack;
+      if ('canGoForward' in payload) patch.canGoForward = !!payload.canGoForward;
+
+      if ('title' in payload && payload.title && this.props.onSetTitle) {
+        this.props.onSetTitle(payload.title);
       }
 
-      // Check HTTP response status code for 404 or other bad status codes
-      try {
-        const httpStatus = await wv.executeJavaScript(
-          "(function(){try{var entries=performance.getEntriesByType('navigation');return entries.length?entries[0].responseStatus:0;}catch(e){return 0;}})()"
-        );
-        if (httpStatus === 404 || httpStatus >= 400) {
-          // Surface the bad status in the pane label ("404") instead of falling
-          // back to a meaningless split letter.
-          this.setState({httpStatus});
-          const currentUrl = wv.getURL();
-          if (currentUrl) {
-            this.removeHistoryEntry('url', currentUrl);
+      let navigatedUrl: string | null = null;
+      if ('url' in payload && typeof payload.url === 'string') {
+        patch.activeUrl = payload.url;
+        // Don't clobber what the user is typing into the URL bar.
+        if (!this.state.isEditingUrl) patch.urlInputVal = payload.url;
+        navigatedUrl = payload.url;
+      }
+
+      // did-fail-load equivalent.
+      let failUrl: string | null = null;
+      let failCode: number | null = null;
+      if ('error' in payload) {
+        if (payload.error) {
+          patch.loading = false;
+          patch.error = payload.error.description || 'Failed to load';
+          failUrl = payload.error.url || this.state.urlInputVal || '';
+          failCode = typeof payload.error.code === 'number' ? payload.error.code : null;
+        } else {
+          patch.error = null;
+        }
+      }
+
+      const loadFinished = 'loading' in payload && payload.loading === false && !payload.error;
+
+      this.setState(patch as any, () => {
+        // Record history for a genuinely new main-frame URL (matches the old
+        // did-navigate behavior: append to webHistory/localStorage + persist the
+        // LIVE url into redux so it survives a remount when a sibling pane closes).
+        if (navigatedUrl && navigatedUrl !== 'about:blank' && navigatedUrl !== prevActiveUrl) {
+          this.addToHistory('url', navigatedUrl);
+          if (navigatedUrl !== this.props.url) this.props.onSetUrl?.(navigatedUrl);
+        }
+        // On failure: drop the bad entry, and DDG-fallback an unresolved host.
+        if (failUrl) {
+          this.removeHistoryEntry('url', failUrl);
+          if (
+            failCode != null &&
+            DDG_RESOLVE_FAIL.has(failCode) &&
+            !/duckduckgo\.com\/\?q=/i.test(failUrl)
+          ) {
+            const q = failUrl.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/+$/, '');
+            this.navigateWebview('https://duckduckgo.com/?q=' + encodeURIComponent(q));
           }
         }
-      } catch (err) {
-        console.warn('Failed to retrieve page HTTP status code:', err);
-      }
-    });
-
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-    wv.addEventListener(
-      'did-fail-load',
-      (e: {errorCode: number; errorDescription: string; validatedURL?: string; isMainFrame?: boolean}) => {
-        if (e.errorCode === -3) return;
-        this.setState({loading: false, error: e.errorDescription || 'Failed to load'});
-        const badUrl = e.validatedURL || this.state.urlInputVal;
-        if (badUrl) {
-          this.removeHistoryEntry('url', badUrl);
+        // Load complete → probe page bg color + HTTP status (old did-stop-loading).
+        if (loadFinished) {
+          this.probePageBgColor();
+          this.probeHttpStatus();
         }
-        // A main-frame URL that didn't resolve (e.g. a typo'd domain like
-        // news.hackernews.com) → fall back to a DuckDuckGo search of it. Guard
-        // against looping if the DDG search itself fails.
-        if (
-          (e.isMainFrame ?? true) &&
-          DDG_RESOLVE_FAIL.has(e.errorCode) &&
-          badUrl &&
-          !/duckduckgo\.com\/\?q=/i.test(badUrl)
-        ) {
-          const q = badUrl.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/+$/, '');
-          this.navigateWebview('https://duckduckgo.com/?q=' + encodeURIComponent(q));
-        }
-      }
-    );
-
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-    wv.addEventListener('page-title-updated', (e: {title?: string}) => {
-      const title = e.title || '';
-      if (title && this.props.onSetTitle) {
-        this.props.onSetTitle(title);
-      }
-    });
-
-    // Listen for did-navigate and did-navigate-in-page to update active URL and history statuses
-    const handleNavigation = (e: any) => {
-      const url = (e.url as string) || '';
-      this.setState({
-        activeUrl: url,
-        urlInputVal: url
       });
-      this.updateNavigationState();
-
-      if (url && url !== 'about:blank') {
-        this.addToHistory('url', url);
-        // Persist the LIVE url into the group's redux webUrl so it survives a
-        // remount. Closing a SIBLING pane collapses the BSP tree and reparents
-        // this pane, which unmounts+remounts the <webview>; without this the
-        // remount reloads the ORIGINAL props.url and the pane jumps back to its
-        // first page (#92). Guard on a real change so did-navigate-in-page spam
-        // (SPA hash churn) doesn't thrash redux.
-        if (url !== this.props.url) {
-          this.props.onSetUrl?.(url);
-        }
-      }
     };
+    ipcRenderer.on('web-pane:state', this._stateHandler);
 
-    /* eslint-disable @typescript-eslint/no-unsafe-call */
-    wv.addEventListener('did-navigate', handleNavigation);
-    wv.addEventListener('did-navigate-in-page', handleNavigation);
-
-    // Find-in-page match counts come back here.
-    wv.addEventListener('found-in-page', (e: any) => {
-      const r = e?.result || {};
+    // Find-in-page match counts.
+    this._foundHandler = (_e: any, payload: any) => {
+      if (!payload || payload.uid !== this.props.groupUid) return;
       this.setState({
-        findActive: typeof r.activeMatchOrdinal === 'number' ? r.activeMatchOrdinal : 0,
-        findTotal: typeof r.matches === 'number' ? r.matches : 0
+        findActive: typeof payload.active === 'number' ? payload.active : 0,
+        findTotal: typeof payload.total === 'number' ? payload.total : 0
       });
-    });
+    };
+    ipcRenderer.on('web-pane:found-in-page', this._foundHandler);
 
-    wv.addEventListener('dom-ready', () => {
-      this.updateNavigationState();
-      // Slim scrollbars — but only as a DEFAULT the page can override. We prepend
-      // a <style> at the very top of <head> so any scrollbar rules the page ships
-      // (later in the cascade) win; pages that DON'T style their scrollbars get
-      // our slim ones instead of Chromium's chunky default.
-      try {
-        void wv.executeJavaScript(
+    // dom-ready → slim-scrollbar inject + bg-color probe (main can't observe the
+    // guest's dom-ready, so it relays the event and we run the JS via execute-js).
+    this._domReadyHandler = (_e: any, payload: any) => {
+      if (!payload || payload.uid !== this.props.groupUid) return;
+      // Slim scrollbars, but only as a DEFAULT the page can override: prepend a
+      // <style> at the very top of <head> so the page's own scrollbar rules win.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      void ipcRenderer.invoke('web-pane:execute-js', {
+        uid: this.props.groupUid,
+        code:
           "(function(){try{var ID='__hyperia_slim_sb__';if(document.getElementById(ID))return;" +
-            "var s=document.createElement('style');s.id=ID;" +
-            "s.textContent='::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(128,128,128,.45);border-radius:6px}::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,.7)}';" +
-            'var h=document.head||document.documentElement;h.insertBefore(s,h.firstChild);}catch(e){}})()'
-        );
-      } catch {
-        /* webview not ready */
-      }
-      try {
-        // <webview>.getWebContents() was REMOVED in modern Electron (that's why the
-        // right-click menu + link handlers silently never attached). Resolve the
-        // guest webContents via its id through @electron/remote instead.
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const remote = require('@electron/remote');
-        const wc = remote.webContents.fromId(wv.getWebContentsId());
-        if (wc) {
-          wc.removeAllListeners('before-input-event');
-          wc.on('before-input-event', (event: any, input: any) => {
-            if (input.type === 'keyDown') {
-              const isPlus = input.key === '=' || input.key === '+';
-              const isMinus = input.key === '-';
-              const isZero = input.key === '0';
+          "var s=document.createElement('style');s.id=ID;" +
+          "s.textContent='::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(128,128,128,.45);border-radius:6px}::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,.7)}';" +
+          'var h=document.head||document.documentElement;h.insertBefore(s,h.firstChild);}catch(e){}})()'
+      }).catch(() => {});
+      this.probePageBgColor();
+      // TODO(webcontentsview Phase 2/3): these all used to attach here via
+      // @electron/remote on the guest webContents and are main-process concerns
+      // for a WebContentsView. Temporarily NOT wired:
+      //   - before-input-event: in-page Ctrl+F / zoom / split-&-tab shortcuts
+      //   - will-navigate / will-redirect: OAuth redirect bail-out to system browser
+      //   - 'focus': clicking INTO the page no longer activates this pane
+      //     (onActive) or closes the URL navigator, since native-view input
+      //     doesn't reach this document.
+    };
+    ipcRenderer.on('web-pane:dom-ready', this._domReadyHandler);
 
-              // Ctrl/Cmd+F → open the find bar (the guest has focus, so this is
-              // the only place the keystroke is observable).
-              if ((input.control || input.meta) && input.key.toLowerCase() === 'f') {
-                event.preventDefault();
-                this.openFind();
-                return;
-              }
-              // Esc closes the find bar if it's open.
-              if (input.key === 'Escape' && this.state.findOpen) {
-                event.preventDefault();
-                this.closeFind();
-                return;
-              }
-
-              if ((input.control || input.meta) && isPlus) {
-                event.preventDefault();
-                try {
-                  const currentZoom = wv.getZoomFactor();
-                  wv.setZoomFactor(Math.min(currentZoom + 0.1, 3.0));
-                } catch (err) {
-                  console.error('Failed to zoom in:', err);
-                }
-              } else if ((input.control || input.meta) && isMinus) {
-                event.preventDefault();
-                try {
-                  const currentZoom = wv.getZoomFactor();
-                  wv.setZoomFactor(Math.max(currentZoom - 0.1, 0.5));
-                } catch (err) {
-                  console.error('Failed to zoom out:', err);
-                }
-              } else if ((input.control || input.meta) && isZero) {
-                event.preventDefault();
-                try {
-                  wv.setZoomFactor(1.0);
-                } catch (err) {
-                  console.error('Failed to reset zoom:', err);
-                }
-              }
-
-              const keyLower = input.key.toLowerCase();
-
-              // Ctrl+Shift+D / Ctrl+Shift+| -> Split Right (vertical split)
-              if ((input.control || input.meta) && input.shift && (keyLower === 'd' || input.key === '|')) {
-                event.preventDefault();
-                rpc.emit('split request vertical', {activeUid: this.props.sessionUid || this.props.groupUid});
-                return;
-              }
-
-              // Ctrl+Shift+_ / Ctrl+Shift+- -> Split Down (horizontal split)
-              if ((input.control || input.meta) && input.shift && (input.key === '_' || input.key === '-')) {
-                event.preventDefault();
-                rpc.emit('split request horizontal', {activeUid: this.props.sessionUid || this.props.groupUid});
-                return;
-              }
-
-              // Ctrl+Alt+Shift+D / Ctrl+Alt+Shift+| -> Clone Right
-              if (
-                (input.control || input.meta) &&
-                input.alt &&
-                input.shift &&
-                (keyLower === 'd' || input.key === '|')
-              ) {
-                event.preventDefault();
-                this.props.onSplitWebPane?.(this.state.activeUrl || this.props.url || '', 'VERTICAL');
-                return;
-              }
-
-              // Ctrl+Alt+Shift+_ / Ctrl+Alt+Shift+- -> Clone Down
-              if (
-                (input.control || input.meta) &&
-                input.alt &&
-                input.shift &&
-                (input.key === '_' || input.key === '-')
-              ) {
-                event.preventDefault();
-                this.props.onSplitWebPane?.(this.state.activeUrl || this.props.url || '', 'HORIZONTAL');
-                return;
-              }
-
-              // Ctrl+Shift+W -> Close Pane
-              if ((input.control || input.meta) && input.shift && keyLower === 'w') {
-                event.preventDefault();
-                if (this.props.hasSession) {
-                  this.props.onClose?.();
-                } else {
-                  (this.props as any).onClosePane();
-                }
-                return;
-              }
-
-              // Ctrl+Shift+T -> new tab/term group
-              if ((input.control || input.meta) && input.shift && keyLower === 't') {
-                event.preventDefault();
-                (rpc.emitter.emit as any)('termgroup add req', {
-                  activeUid: this.props.sessionUid || this.props.groupUid
-                });
-                return;
-              }
-
-              // Ctrl+Tab -> Next tab
-              if ((input.control || input.meta) && !input.shift && input.key === 'Tab') {
-                event.preventDefault();
-                (rpc.emitter.emit as any)('move right req');
-                return;
-              }
-
-              // Ctrl+Shift+Tab -> Prev tab
-              if ((input.control || input.meta) && input.shift && input.key === 'Tab') {
-                event.preventDefault();
-                (rpc.emitter.emit as any)('move left req');
-                return;
-              }
-
-              // Ctrl+1 through Ctrl+9 -> Jump to tab index
-              if ((input.control || input.meta) && /^[1-9]$/.test(input.key)) {
-                event.preventDefault();
-                const index = parseInt(input.key, 10) - 1;
-                (rpc.emitter.emit as any)('move jump req', index);
-                return;
-              }
-            }
-          });
-
-          // NOTE: the right-click menu is built in the MAIN process via
-          // window.webContents 'did-attach-webview' → guest 'context-menu'
-          // (app/ui/window.ts). Registering a second context-menu handler here
-          // popped a competing menu, so the renderer path is intentionally gone.
-
-          // dom-ready fires on EVERY page load and re-runs this block on the same
-          // (stable-id) guest webContents, so without removing first these
-          // listeners accumulate — N copies of will-navigate → N browser tabs
-          // opened for one OAuth redirect. Clear before re-adding.
-          wc.removeAllListeners('focus');
-          wc.removeAllListeners('will-navigate');
-          wc.removeAllListeners('will-redirect');
-
-          // Clicking into the guest page focuses its webContents but never fires
-          // a mousedown in THIS document — so the outside-click handler can't see
-          // it. Close the URL navigator and activate this pane when the page takes focus.
-          wc.on('focus', () => {
-            if (this.state.isUrlNavigatorOpen) {
-              this.setState({isUrlNavigatorOpen: false});
-            }
-            this.props.onActive?.();
-          });
-
-          wc.on('will-navigate', (event: any, url: string) => {
-            if (isOAuthUrl(url)) {
-              event.preventDefault();
-              this.openOAuthExternal(url);
-            }
-          });
-
-          wc.on('will-redirect', (event: any, url: string) => {
-            if (isOAuthUrl(url)) {
-              event.preventDefault();
-              this.openOAuthExternal(url);
-            }
-          });
-        }
-      } catch (err) {
-        console.warn('Failed to access webContents for zoom/contextmenu:', err);
-      }
-
-      // Retrieve page background color on dom-ready as well
-      try {
-        wv.executeJavaScript(
-          "(function(){try{var pick=function(el){if(!el)return '';var c=getComputedStyle(el).backgroundColor;return (c&&c!=='rgba(0, 0, 0, 0)'&&c!=='transparent')?c:'';};return pick(document.body)||pick(document.documentElement)||'#ffffff';}catch(e){return '';}})()"
-        )
-          .then((color: string) => {
-            if (color && color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') {
-              this.setState({pageBgColor: color});
-            }
-          })
-          .catch(() => {});
-      } catch (err) {
-        // ignore
-      }
-    });
-
-    // OAuth bail-out. Google (and a few others) refuse to sign users in from
-    // embedded browsers — per RFC 8252 native apps "should not" embed a user
-    // agent for OAuth. So any nav targeting a known OAuth host gets handed to
-    // the system browser instead. The webview stays put; the user completes
-    // sign-in externally. Hyperia is a terminal, not a Gmail client.
-    // Same-frame redirect → stop, hand to system browser.
-    wv.addEventListener('will-navigate', (e: any) => {
-      const url = (e?.url as string) || '';
-      if (isOAuthUrl(url)) {
-        try {
-          wv.stop();
-        } catch {
-          /* ignore — webview may not be ready */
-        }
-        void shell.openExternal(url);
-      }
-    });
-    // Popup (e.g. clicking "Sign in with Google" usually opens a new window).
-    wv.addEventListener('new-window', (e: any) => {
-      const url = (e?.url as string) || '';
-      if (isOAuthUrl(url)) {
-        e.preventDefault?.();
-        void shell.openExternal(url);
-      }
-    });
-    /* eslint-enable @typescript-eslint/no-unsafe-call */
+    // Keep the native view glued to bodyRef during window resizes and any
+    // scroll that shifts the pane within the layout.
+    this._onScroll = () => this.reportBounds();
+    document.addEventListener('scroll', this._onScroll, true);
 
     // Listen for Ctrl+L shortcut
     this._windowKeydownHandler = (e: KeyboardEvent) => {
@@ -1373,51 +1218,34 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     window.addEventListener('keydown', this._windowKeydownHandler);
     window.addEventListener('resize', this.onWindowResize);
 
-    // Listen for reload requests from the tab right-click menu
+    // Listen for reload requests from the tab right-click menu.
     this._reloadHandler = (uid: string) => {
-      if (uid === this.props.groupUid && this.webviewRef.current) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-        this.webviewRef.current.reload();
-      }
+      if (uid === this.props.groupUid) this.reloadWebview(false);
     };
     rpc.on('web-pane-reload', this._reloadHandler);
 
-    // Right-click → "Find in page" (main process sends the guest's webContents
-    // id; only the matching pane opens its find bar).
-    this._findHandler = (_e: any, guestId: number) => {
-      try {
-        if (this.webviewRef.current && this.webviewRef.current.getWebContentsId() === guestId) {
-          this.openFind();
-        }
-      } catch {
-        /* webview not ready */
-      }
+    // TODO(webcontentsview Phase 2/3): the old right-click "Find in page" and the
+    // target="_blank"/window.open → split-down flows were correlated by the
+    // guest's webContents id (getWebContentsId), which no longer exists for a
+    // WebContentsView, and the main-process did-attach-webview path that emitted
+    // these is gone. Re-wire via the native view's webContents id / window-open
+    // handler in main and dispatch by pane uid. Registered as no-ops for now so
+    // unmount cleanup stays symmetric and nothing crashes.
+    this._findHandler = (_e: any, _guestId: number) => {
+      /* no-op until main re-emits web-pane-find keyed by pane uid */
     };
     ipcRenderer.on('web-pane-find', this._findHandler);
 
-    // target="_blank" / window.open from the guest → split DOWN and open the
-    // link in a new web pane below this one (we have panes, not browser tabs).
-    this._openSplitHandler = (_e: any, guestId: number, url: string) => {
-      try {
-        if (this.webviewRef.current && this.webviewRef.current.getWebContentsId() === guestId) {
-          // Dedicated web-split: makes a clean web pane below (no shell/session),
-          // not the terminal-split path that dragged a phantom shell pane along.
-          rpc.emit('split web pane req', {
-            activeUid: this.props.sessionUid || this.props.groupUid,
-            url
-          });
-        }
-      } catch (err) {
-        console.error('web-pane-open-split failed:', err);
-      }
+    this._openSplitHandler = (_e: any, _guestId: number, _url: string) => {
+      /* no-op until main re-emits web-pane-open-split keyed by pane uid */
     };
     ipcRenderer.on('web-pane-open-split', this._openSplitHandler);
 
     this._clickHandler = (data: {uid: string; text?: string; selector?: string}) => {
-      if (data.uid === this.props.groupUid && this.webviewRef.current) {
-        const wv = this.webviewRef.current;
-        if (data.selector) {
-          const code = `
+      if (data.uid !== this.props.groupUid) return;
+      let code: string | null = null;
+      if (data.selector) {
+        code = `
             (() => {
               const el = document.querySelector(${JSON.stringify(data.selector)});
               if (el) {
@@ -1440,26 +1268,19 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
               return { success: false, error: 'Selector not found' };
             })()
           `;
-          wv.executeJavaScript(code)
-            .then((result: any) => {
-              rpc.emit('web-pane-click-result', {uid: data.uid, result});
-            })
-            .catch((err: any) => {
-              rpc.emit('web-pane-click-result', {uid: data.uid, result: {success: false, error: err.message}});
-            });
-        } else if (data.text) {
-          const code = `
+      } else if (data.text) {
+        code = `
             (${clickFnStr})(${JSON.stringify(data.text)})
           `;
-          wv.executeJavaScript(code)
-            .then((result: any) => {
-              rpc.emit('web-pane-click-result', {uid: data.uid, result});
-            })
-            .catch((err: any) => {
-              rpc.emit('web-pane-click-result', {uid: data.uid, result: {success: false, error: err.message}});
-            });
-        }
       }
+      if (!code) return;
+      this.execInPage(code)
+        .then((result: any) => {
+          rpc.emit('web-pane-click-result', {uid: data.uid, result});
+        })
+        .catch((err: any) => {
+          rpc.emit('web-pane-click-result', {uid: data.uid, result: {success: false, error: err.message}});
+        });
     };
     rpc.on('web-pane-click', this._clickHandler);
 
@@ -1467,9 +1288,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     // see what page the user actually navigated to (the opened URL goes stale)
     // and extract its content without re-fetching.
     this._readHandler = (data: {uid: string}) => {
-      if (data.uid === this.props.groupUid && this.webviewRef.current) {
-        const wv = this.webviewRef.current;
-        const code = `
+      if (data.uid !== this.props.groupUid) return;
+      const code = `
           (() => {
             try {
               return {
@@ -1483,50 +1303,44 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             } catch (e) { return { success: false, error: String(e) }; }
           })()
         `;
-        wv.executeJavaScript(code)
-          .then((result: any) => {
-            rpc.emit('web-pane-read-result', {uid: data.uid, result});
-          })
-          .catch((err: any) => {
-            rpc.emit('web-pane-read-result', {uid: data.uid, result: {success: false, error: err.message}});
-          });
-      }
+      this.execInPage(code)
+        .then((result: any) => {
+          rpc.emit('web-pane-read-result', {uid: data.uid, result});
+        })
+        .catch((err: any) => {
+          rpc.emit('web-pane-read-result', {uid: data.uid, result: {success: false, error: err.message}});
+        });
     };
     rpc.on('web-pane-read', this._readHandler);
 
     // Inject + run arbitrary JS in the page, return its (serializable) value.
     this._evalHandler = (data: {uid: string; js: string}) => {
-      if (data.uid === this.props.groupUid && this.webviewRef.current) {
-        const wv = this.webviewRef.current;
-        // userGesture=true so gesture-gated APIs (focus, play, clipboard) work.
-        wv.executeJavaScript(data.js, true)
-          .then((value: any) => {
-            rpc.emit('web-pane-eval-result', {uid: data.uid, result: {success: true, value}});
-          })
-          .catch((err: any) => {
-            rpc.emit('web-pane-eval-result', {uid: data.uid, result: {success: false, error: err.message}});
-          });
-      }
+      if (data.uid !== this.props.groupUid) return;
+      this.execInPage(data.js)
+        .then((value: any) => {
+          rpc.emit('web-pane-eval-result', {uid: data.uid, result: {success: true, value}});
+        })
+        .catch((err: any) => {
+          rpc.emit('web-pane-eval-result', {uid: data.uid, result: {success: false, error: err.message}});
+        });
     };
     rpc.on('web-pane-eval', this._evalHandler);
 
     // Move / click at a pixel coordinate, with the 👻 ghost cursor gliding there
     // so the human can watch the agent act on the page.
     this._mouseHandler = (data: {uid: string; x: number; y: number; action?: string}) => {
-      if (data.uid === this.props.groupUid && this.webviewRef.current) {
-        const wv = this.webviewRef.current;
-        const x = Number(data.x) || 0;
-        const y = Number(data.y) || 0;
-        const action = data.action === 'click' ? 'click' : 'move';
-        const code = `(${ghostMouseFnStr})(${x}, ${y}, ${JSON.stringify(action)})`;
-        wv.executeJavaScript(code)
-          .then((result: any) => {
-            rpc.emit('web-pane-mouse-result', {uid: data.uid, result});
-          })
-          .catch((err: any) => {
-            rpc.emit('web-pane-mouse-result', {uid: data.uid, result: {success: false, error: err.message}});
-          });
-      }
+      if (data.uid !== this.props.groupUid) return;
+      const x = Number(data.x) || 0;
+      const y = Number(data.y) || 0;
+      const action = data.action === 'click' ? 'click' : 'move';
+      const code = `(${ghostMouseFnStr})(${x}, ${y}, ${JSON.stringify(action)})`;
+      this.execInPage(code)
+        .then((result: any) => {
+          rpc.emit('web-pane-mouse-result', {uid: data.uid, result});
+        })
+        .catch((err: any) => {
+          rpc.emit('web-pane-mouse-result', {uid: data.uid, result: {success: false, error: err.message}});
+        });
     };
     rpc.on('web-pane-mouse', this._mouseHandler);
 
@@ -1569,9 +1383,26 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (this._mouseHandler) {
       rpc.removeListener('web-pane-mouse', this._mouseHandler);
     }
+
+    // Tear down the native view + its state listeners.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    ipcRenderer.send('web-pane:destroy', {uid: this.props.groupUid});
+    if (this._stateHandler) ipcRenderer.removeListener('web-pane:state', this._stateHandler);
+    if (this._foundHandler) ipcRenderer.removeListener('web-pane:found-in-page', this._foundHandler);
+    if (this._domReadyHandler) ipcRenderer.removeListener('web-pane:dom-ready', this._domReadyHandler);
+    if (this._onScroll) document.removeEventListener('scroll', this._onScroll, true);
+    if (this._boundsRaf != null) {
+      cancelAnimationFrame(this._boundsRaf);
+      this._boundsRaf = null;
+    }
+    if (this._boundsInterval != null) {
+      clearInterval(this._boundsInterval);
+      this._boundsInterval = null;
+    }
+
     // Return keyboard focus to the active terminal after the web pane is removed.
-    // The webview captures focus while mounted; without this the xterm textarea
-    // stays unfocused (hollow cursor, input goes nowhere).
+    // The native view captures focus while mounted; without this the xterm
+    // textarea stays unfocused (hollow cursor, input goes nowhere).
     requestAnimationFrame(() => {
       if (typeof window.focusActiveTerm === 'function') {
         window.focusActiveTerm();
@@ -1585,44 +1416,32 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (this.state.isUrlNavigatorOpen) {
       this.setState({isUrlNavigatorOpen: false});
     }
+    // The pane rect shifts with the window → reposition the native view.
+    this.reportBounds();
+  };
+
+  // Zoom is applied to the native view in main; we track the factor here to do
+  // the +/- clamp math (0.5–3.0, 0.1 step) and reflect it back.
+  setZoom = (factor: number) => {
+    const clamped = Math.max(0.5, Math.min(3.0, Math.round(factor * 10) / 10));
+    this.setState({zoomFactor: clamped});
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    ipcRenderer.send('web-pane:zoom', {uid: this.props.groupUid, factor: clamped});
   };
 
   handleZoomIn = (data: {uid: string}) => {
     if (data.uid !== this.props.groupUid) return;
-    const wv = this.webviewRef.current;
-    if (wv) {
-      try {
-        const currentZoom = wv.getZoomFactor();
-        wv.setZoomFactor(Math.min(currentZoom + 0.1, 3.0));
-      } catch (err) {
-        console.error('Failed to zoom in:', err);
-      }
-    }
+    this.setZoom(this.state.zoomFactor + 0.1);
   };
 
   handleZoomOut = (data: {uid: string}) => {
     if (data.uid !== this.props.groupUid) return;
-    const wv = this.webviewRef.current;
-    if (wv) {
-      try {
-        const currentZoom = wv.getZoomFactor();
-        wv.setZoomFactor(Math.max(currentZoom - 0.1, 0.5));
-      } catch (err) {
-        console.error('Failed to zoom out:', err);
-      }
-    }
+    this.setZoom(this.state.zoomFactor - 0.1);
   };
 
   handleZoomReset = (data: {uid: string}) => {
     if (data.uid !== this.props.groupUid) return;
-    const wv = this.webviewRef.current;
-    if (wv) {
-      try {
-        wv.setZoomFactor(1.0);
-      } catch (err) {
-        console.error('Failed to reset zoom:', err);
-      }
-    }
+    this.setZoom(1.0);
   };
 
   _reloadHandler: ((uid: string) => void) | null = null;
@@ -1655,61 +1474,47 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   };
 
   closeFind = (): void => {
-    const wv: any = this.webviewRef.current;
-    try {
-      wv?.stopFindInPage?.('clearSelection');
-    } catch {
-      /* webview not ready */
-    }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    ipcRenderer.send('web-pane:stop-find', {uid: this.props.groupUid});
     this.setState({findOpen: false, findActive: 0, findTotal: 0});
   };
 
   doFind = (text: string, forward = true): void => {
-    const wv: any = this.webviewRef.current;
-    if (!wv) return;
     if (!text) {
-      try {
-        wv.stopFindInPage('clearSelection');
-      } catch {
-        /* ignore */
-      }
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      ipcRenderer.send('web-pane:stop-find', {uid: this.props.groupUid});
       this.setState({findActive: 0, findTotal: 0});
       return;
     }
-    try {
-      // findNext:false starts a fresh search; the 'found-in-page' event updates
-      // the match counts.
-      wv.findInPage(text, {forward, findNext: false});
-    } catch (err) {
-      console.error('findInPage failed:', err);
-    }
+    // findNext:false starts a fresh search; web-pane:found-in-page updates counts.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    ipcRenderer.send('web-pane:find', {uid: this.props.groupUid, text, forward, findNext: false});
   };
 
   findStep = (forward: boolean): void => {
-    const wv: any = this.webviewRef.current;
     const text = this.state.findText;
-    if (!wv || !text) return;
-    try {
-      wv.findInPage(text, {forward, findNext: true});
-    } catch (err) {
-      console.error('findInPage step failed:', err);
-    }
+    if (!text) return;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    ipcRenderer.send('web-pane:find', {uid: this.props.groupUid, text, forward, findNext: true});
   };
 
-  // Screenshot the rendered web pane. Uses the <webview>'s own capturePage()
-  // (renderer-side, no right-click / no main-process round trip — works even on
-  // pages that suppress the context menu). Copies the PNG to the clipboard and
-  // saves a copy under ~/.hyperia/snapshots/. Brief icon flash as confirmation.
+  // Screenshot the rendered web pane. Asks main to capturePage() the native view
+  // (no right-click / context-menu path — works even on pages that suppress it).
+  // Copies the PNG to the clipboard and saves a copy under ~/.hyperia/snapshots/.
+  // Brief icon flash as confirmation.
   captureScreenshot = async (e: React.MouseEvent): Promise<void> => {
     e.stopPropagation();
-    const wv: any = this.webviewRef.current;
-    if (!wv || typeof wv.capturePage !== 'function') return;
+    // Grab the icon BEFORE the await — React pools synthetic events, so
+    // e.currentTarget is null by the time the capture resolves.
     const iconEl = (e.currentTarget as HTMLElement).querySelector('i');
     try {
-      const img = await wv.capturePage();
-      if (!img || img.isEmpty()) return;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      const dataURL: string | null = await ipcRenderer.invoke('web-pane:capture', {uid: this.props.groupUid});
+      if (!dataURL) return;
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const {clipboard} = require('electron');
+      const {clipboard, nativeImage} = require('electron');
+      const img = nativeImage.createFromDataURL(dataURL);
+      if (!img || img.isEmpty()) return;
       clipboard.writeImage(img);
       try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -1748,7 +1553,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   // text (or a trimmed extract of the main content). Sent to the main process,
   // which owns sticky windows.
   newStickyFromPage = (): void => {
-    const wv: any = this.webviewRef.current;
     const fallbackTitle = (this.props as any).webName || this.state.activeUrl || this.props.url || 'Page';
     const fallbackUrl = this.state.activeUrl || this.props.url || '';
     const send = (text: string) => {
@@ -1758,7 +1562,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         console.error('new-sticky send failed:', err);
       }
     };
-    if (!wv) {
+    if (!this.isNativeWeb()) {
       send(`# ${fallbackTitle}\n${fallbackUrl}`);
       return;
     }
@@ -1772,7 +1576,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       ' body = (el && el.innerText ? el.innerText : "").replace(/\\n{3,}/g, "\\n\\n").trim().slice(0, 4000); }' +
       ' return JSON.stringify({title: title, url: url, body: body});' +
       ' } catch (e) { return JSON.stringify({title: document.title || "", url: location.href, body: ""}); } })()';
-    wv.executeJavaScript(js)
+    this.execInPage(js)
       .then((res: string) => {
         try {
           const {title, url, body} = JSON.parse(res);
@@ -1794,9 +1598,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     menu.append(
       new MenuItem({
         label: 'Reload',
-        click: () => {
-          if (this.webviewRef.current) this.webviewRef.current.reload();
-        }
+        click: () => this.reloadWebview(false)
       })
     );
     // Inspect: dock DevTools at the bottom of THIS pane (splits down) and, when
@@ -2720,31 +2522,22 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             }
 
             return (
-              /* Webview — always mounted so it can navigate */
-              /* eslint-disable react/no-unknown-property */
-              <webview
-                ref={this.webviewRef}
-                src={url}
-                useragent={BROWSER_UA}
-                // Without this, the guest can't request new windows, so
-                // target="_blank"/window.open is silently blocked BEFORE the
-                // main-process window-open handler runs — and the "split down +
-                // open in a new pane" never fires. Enabling it lets that handler
-                // intercept the popup and route it to a split.
-                {...({allowpopups: 'true', webpreferences: 'spellcheck=yes'} as any)}
+              // Geometry anchor for the native WebContentsView (main-process
+              // owned). This div paints nothing but its background; the native
+              // view is positioned over its rect via web-pane:set-bounds. Default
+              // WHITE, not transparent — a real dark page paints over it, but a
+              // page that doesn't expose a sampleable body bg (HN's legacy
+              // bgcolor, etc.) still gets a safe ground instead of black flash.
+              <div
+                ref={this.bodyRef}
                 style={{
                   flex: 1,
                   display: error ? 'none' : 'flex',
                   border: 'none',
                   outline: 'none',
-                  // Default WHITE, not transparent — a transparent <webview> paints
-                  // BLACK between repaints, so pages that don't expose a sampleable
-                  // body bg (HN's legacy bgcolor, etc.) render black-on-black /
-                  // flash. White is the safe ground; real dark pages paint over it.
                   backgroundColor: this.state.pageBgColor || '#ffffff'
                 }}
               />
-              /* eslint-enable react/no-unknown-property */
             );
           })()}
         </div>

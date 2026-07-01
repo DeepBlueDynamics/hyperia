@@ -74,6 +74,9 @@ function wireWebContents(uid: string, wc: WebContents) {
       total: result.matches
     });
   });
+  // Let the renderer run its dom-ready work (scrollbar CSS inject, bg-color probe)
+  // via web-pane:execute-js — it can't observe the guest's dom-ready directly.
+  wc.on('dom-ready', () => entrySend(uid, 'web-pane:dom-ready', {uid}));
 }
 
 function entrySend(uid: string, channel: string, payload: unknown) {
