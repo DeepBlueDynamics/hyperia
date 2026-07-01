@@ -12,10 +12,16 @@
 // automatically when its window closes or it's detached — we MUST close it in
 // destroy()/destroyForWindow() or we leak renderer processes.
 
-import {BrowserWindow, WebContentsView, ipcMain, session, shell} from 'electron';
+import {mkdirSync, writeFileSync} from 'fs';
+import {homedir} from 'os';
+import {join} from 'path';
+
+import {BrowserWindow, WebContentsView, ipcMain, session, shell, Menu, clipboard} from 'electron';
 import type {Session, WebContents} from 'electron';
 
 const PARTITION = 'persist:hyperia-web';
+// DevTools docks into the bottom of the pane, taking this fraction of its height.
+const DEVTOOLS_FRACTION = 0.4;
 
 // OAuth / login popups can't run inside an embedded browser — hand them to the
 // system browser (parity with the old <webview> guest handler).
@@ -35,6 +41,11 @@ interface WebPaneEntry {
   win: BrowserWindow;
   url: string;
   visible: boolean;
+  // Last pixel rect pushed from the renderer — used to re-split when the docked
+  // inspector opens/closes without waiting for the next bounds tick.
+  lastBounds?: {x: number; y: number; width: number; height: number};
+  // Docked DevTools view (Inspect → split inside the pane).
+  devtools?: WebContentsView;
 }
 
 // Keyed by pane uid (unique across windows).
@@ -104,6 +115,66 @@ function wireWebContents(uid: string, wc: WebContents) {
       entrySend(uid, 'web-pane:zoom-key', {uid, dir});
     }
   });
+  // Right-click menu — rebuilt on the native webContents (the old <webview>
+  // guest handler in window.ts no longer fires). Reload / screenshot / copy /
+  // paste / back-forward / copy-link / find / inspect-in-split / stickys.
+  wc.on('context-menu', (_e: Electron.Event, params: Electron.ContextMenuParams) => {
+    const entry = panes.get(uid);
+    if (!entry) return;
+    const items: Electron.MenuItemConstructorOptions[] = [];
+    if (params.misspelledWord) {
+      if (params.dictionarySuggestions && params.dictionarySuggestions.length > 0) {
+        for (const s of params.dictionarySuggestions) {
+          items.push({label: s, click: () => void wc.insertText(s)});
+        }
+      } else {
+        items.push({label: 'No spelling suggestions', enabled: false});
+      }
+      items.push(
+        {
+          label: 'Add to Dictionary',
+          click: () => {
+            try {
+              wc.session.addWordToSpellCheckerDictionary(params.misspelledWord);
+            } catch {
+              /* ignore */
+            }
+          }
+        },
+        {type: 'separator'}
+      );
+    }
+    items.push(
+      {label: 'Back', enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack()},
+      {label: 'Forward', enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward()},
+      {label: 'Reload', click: () => wc.reload()},
+      {type: 'separator'}
+    );
+    if (params.linkURL) {
+      items.push(
+        {label: 'Copy Link', click: () => clipboard.writeText(params.linkURL)},
+        {label: 'Open Link in Browser', click: () => void shell.openExternal(params.linkURL)},
+        {type: 'separator'}
+      );
+    }
+    items.push(
+      {label: 'Copy', enabled: !!params.editFlags?.canCopy, click: () => wc.copy()},
+      {label: 'Paste', enabled: !!params.editFlags?.canPaste, click: () => wc.paste()},
+      {label: 'Cut', enabled: !!params.editFlags?.canCut, click: () => wc.cut()},
+      {label: 'Select All', click: () => wc.selectAll()},
+      {type: 'separator'},
+      {label: 'Find in page', accelerator: 'CmdOrCtrl+F', click: () => entrySend(uid, 'web-pane:find-open', {uid})},
+      {label: 'Screenshot', click: () => void screenshotPane(uid)},
+      {type: 'separator'},
+      entry.devtools
+        ? {label: 'Close Inspector', click: () => closeInspector(uid)}
+        : {label: 'Inspect (split)', click: () => openInspector(uid, params.x, params.y)},
+      {type: 'separator'},
+      {label: 'New Stickys', click: () => void ipcMain.emit('new-sticky', {})},
+      {label: 'Search Stickys', click: () => void ipcMain.emit('search-stickies')}
+    );
+    Menu.buildFromTemplate(items).popup({window: entry.win});
+  });
   // OAuth that navigates the MAIN frame (not a popup) → punt to the system
   // browser, same as the old <webview> path.
   const oauthBail = (e: Electron.Event, url: string) => {
@@ -168,10 +239,109 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
   if (url) void view.webContents.loadURL(url).catch(() => {});
 }
 
+// Lay out the page view (and, when open, the docked DevTools view below it)
+// within the pane's last-known rect.
+function positionViews(entry: WebPaneEntry) {
+  const b = entry.lastBounds;
+  if (!b) return;
+  if (entry.devtools) {
+    const dtH = Math.min(b.height, Math.max(80, Math.round(b.height * DEVTOOLS_FRACTION)));
+    const pageH = Math.max(0, b.height - dtH);
+    entry.view.setBounds({x: b.x, y: b.y, width: b.width, height: pageH});
+    entry.devtools.setBounds({x: b.x, y: b.y + pageH, width: b.width, height: dtH});
+  } else {
+    entry.view.setBounds(b);
+  }
+}
+
+async function screenshotPane(uid: string) {
+  const entry = panes.get(uid);
+  if (!entry) return;
+  try {
+    const img = await entry.view.webContents.capturePage();
+    if (img.isEmpty()) return;
+    clipboard.writeImage(img);
+    try {
+      const dir = join(homedir(), '.hyperia', 'snapshots');
+      mkdirSync(dir, {recursive: true});
+      let host = 'page';
+      try {
+        host = new URL(entry.view.webContents.getURL() || entry.url).hostname || 'page';
+      } catch {
+        /* keep 'page' */
+      }
+      writeFileSync(join(dir, `webshot-${host}-${Date.now()}.png`), img.toPNG());
+    } catch {
+      /* clipboard copy already succeeded; disk save is best-effort */
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+// Inspect → dock DevTools into the bottom of THIS pane (a real in-pane split,
+// which a <webview> guest could never do). Renders DevTools into a second
+// WebContentsView we position under the page.
+function openInspector(uid: string, x: number, y: number) {
+  const entry = panes.get(uid);
+  if (!entry || entry.devtools) return;
+  try {
+    const dt = new WebContentsView({webPreferences: {}});
+    entry.win.contentView.addChildView(dt);
+    entry.devtools = dt;
+    entry.view.webContents.setDevToolsWebContents(dt.webContents);
+    entry.view.webContents.openDevTools();
+    positionViews(entry);
+    dt.setVisible(entry.visible);
+    try {
+      entry.view.webContents.inspectElement(x, y);
+    } catch {
+      /* best effort */
+    }
+  } catch {
+    entry.devtools = undefined;
+  }
+}
+
+function closeInspector(uid: string) {
+  const entry = panes.get(uid);
+  if (!entry || !entry.devtools) return;
+  const dt = entry.devtools;
+  entry.devtools = undefined;
+  try {
+    entry.view.webContents.closeDevTools();
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (!entry.win.isDestroyed()) entry.win.contentView.removeChildView(dt);
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (!dt.webContents.isDestroyed()) dt.webContents.close();
+  } catch {
+    /* ignore */
+  }
+  positionViews(entry);
+}
+
 function destroyPane(uid: string) {
   const entry = panes.get(uid);
   if (!entry) return;
   panes.delete(uid);
+  if (entry.devtools) {
+    try {
+      if (!entry.win.isDestroyed()) entry.win.contentView.removeChildView(entry.devtools);
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (!entry.devtools.webContents.isDestroyed()) entry.devtools.webContents.close();
+    } catch {
+      /* ignore */
+    }
+  }
   try {
     if (!entry.win.isDestroyed()) entry.win.contentView.removeChildView(entry.view);
   } catch {
@@ -213,7 +383,10 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
     async (_e, {uid, bounds, visible, freeze}: {uid: string; bounds: any; visible: boolean; freeze?: boolean}) => {
       const entry = panes.get(uid);
       if (!entry) return;
-      if (bounds) entry.view.setBounds(roundRect(bounds));
+      if (bounds) {
+        entry.lastBounds = roundRect(bounds);
+        positionViews(entry);
+      }
       const wantVisible = visible !== false;
       if (entry.visible && !wantVisible) {
         entry.visible = false;
@@ -239,6 +412,8 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
       } else {
         entry.view.setVisible(wantVisible);
       }
+      // The docked inspector tracks the page's visibility.
+      if (entry.devtools) entry.devtools.setVisible(entry.visible);
     }
   );
 

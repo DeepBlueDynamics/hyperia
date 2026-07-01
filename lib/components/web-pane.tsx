@@ -137,7 +137,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   webWrapperRef = React.createRef<HTMLDivElement>();
   resizeObserver: any = null;
   _windowKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
-  _findHandler: ((e: any, guestId: number) => void) | null = null;
+  _findHandler: ((e: any, payload: {uid: string}) => void) | null = null;
   _openSplitHandler: ((e: any, payload: {uid: string; url: string}) => void) | null = null;
   _focusHandler: ((e: any, payload: {uid: string}) => void) | null = null;
   _frozenHandler: ((e: any, payload: {uid: string; shot: string | null}) => void) | null = null;
@@ -1267,13 +1267,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     };
     rpc.on('web-pane-reload', this._reloadHandler);
 
-    // TODO(webcontentsview Phase 5): right-click "Find in page" still routes via
-    // the main-process context menu, which needs re-wiring by pane uid. No-op so
-    // unmount cleanup stays symmetric.
-    this._findHandler = (_e: any, _guestId: number) => {
-      /* no-op until the context-menu "Find in page" is re-keyed by pane uid */
+    // Right-click "Find in page" → the manager sends this (keyed by pane uid).
+    this._findHandler = (_e: any, payload: {uid: string}) => {
+      if ((payload as any)?.uid !== this.props.groupUid) return;
+      this.setState({findOpen: true});
     };
-    ipcRenderer.on('web-pane-find', this._findHandler);
+    ipcRenderer.on('web-pane:find-open', this._findHandler);
 
     // target="_blank" / window.open in the page → the manager routes it here
     // (keyed by pane uid) so we split a new web pane BELOW this one.
@@ -1435,7 +1434,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
     window.removeEventListener('resize', this.onWindowResize);
     if (this._findHandler) {
-      ipcRenderer.removeListener('web-pane-find', this._findHandler);
+      ipcRenderer.removeListener('web-pane:find-open', this._findHandler);
     }
     if (this._openSplitHandler) {
       ipcRenderer.removeListener('web-pane:open-split', this._openSplitHandler);
