@@ -2792,6 +2792,7 @@ export default class Term extends React.PureComponent<
         {isPicker ? (
           <NewPanePicker
             profiles={(this.props as any).profiles}
+            defaultProfile={(this.props as any).defaultProfile}
             groupUid={(this.props as any).groupUid}
             uid={(this.props as any).uid}
             sessionCwd={(this.props as any).sessionCwd}

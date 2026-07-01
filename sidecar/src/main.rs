@@ -2236,6 +2236,7 @@ async fn get_notes(
     match std::fs::read_to_string(&path) {
         Ok(content) => {
             let notes = serde_json::from_str::<Vec<serde_json::Value>>(&content).unwrap_or_default();
+            let total = notes.len();
             let caller_label = id.label();
             let mut allowed_notes = Vec::new();
             for note in notes {
@@ -2254,11 +2255,13 @@ async fn get_notes(
                     allowed_notes.push(note);
                 }
             }
+            // Notes hidden purely by access control (not by the text query below).
+            let withheld = total.saturating_sub(allowed_notes.len());
 
             let query = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
-            if let Some(query) = query {
+            let visible: Vec<serde_json::Value> = if let Some(query) = query {
                 let query = query.to_lowercase();
-                let filtered = allowed_notes
+                allowed_notes
                     .into_iter()
                     .filter(|note| {
                         note["text"]
@@ -2266,17 +2269,34 @@ async fn get_notes(
                             .map(|text| text.to_lowercase().contains(&query))
                             .unwrap_or(false)
                     })
-                    .collect::<Vec<_>>();
-                (
-                    StatusCode::OK,
-                    serde_json::to_string(&filtered).unwrap_or_else(|_| "[]".into()),
-                )
+                    .collect()
             } else {
-                (
-                    StatusCode::OK,
-                    serde_json::to_string(&allowed_notes).unwrap_or_else(|_| "[]".into()),
-                )
+                allowed_notes
+            };
+
+            // Envelope (not a bare array) so we can tell the caller when notes
+            // exist that it simply hasn't been granted access to — otherwise an
+            // agent reads an empty list as "there are no stickys" and gives up,
+            // instead of asking the user for access (which Hyperia will prompt).
+            let count = visible.len();
+            let mut envelope = serde_json::json!({ "notes": visible, "count": count });
+            if withheld > 0 {
+                let who = if id.is_anonymous() {
+                    "You are ANONYMOUS on this request (no Authorization token). Present your \
+                     HYPERIA_AGENT_TOKEN as 'Authorization: Bearer <token>', or call request_token to \
+                     mint a persistent hyp_agent_… token and reconnect — then the user can grant you access."
+                } else {
+                    "You are identified but have not been granted access to these yet."
+                };
+                envelope["withheld"] = serde_json::json!(withheld);
+                envelope["hint"] = serde_json::json!(format!(
+                    "{withheld} more sticky note(s) exist that you can't see — they belong to the user or \
+                     another agent. {who} To read or open one, call sticky_note_read / sticky_note_open with \
+                     its id anyway: Hyperia will ASK THE USER to approve (a consent prompt appears in their \
+                     UI), and on approval the call completes. Notes you create yourself are always visible."
+                ));
             }
+            (StatusCode::OK, envelope.to_string())
         }
         Err(_) => (StatusCode::OK, "[]".into()),
     }

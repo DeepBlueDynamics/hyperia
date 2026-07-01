@@ -2151,7 +2151,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "List all sticky notes. Returns id, name, text preview, color, and position for each note.")]
+    #[tool(description = "List the sticky notes you can see: ones you created, plus any the user has granted you access to. Returns {notes:[{id,name,text,color,position}], count}. If other notes exist that you're not allowed to see, the result ALSO includes withheld (a count) and hint (how to get access) — an empty/short list does NOT mean there are no stickys. To act on a note you don't own, call sticky_note_read / sticky_note_open with its id: Hyperia prompts the USER to approve, and the call completes on approval. If you're anonymous, first present your HYPERIA_AGENT_TOKEN (Authorization: Bearer <token>) so the user can grant you access.")]
     async fn sticky_note_list(&self) -> Result<CallToolResult, ErrorData> {
         let resp = self.get("/api/notes").await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
@@ -2178,7 +2178,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Open (show) a sticky note window by its ID — brings an existing or closed note onto the screen and raises it. Use sticky_note_list to get IDs.")]
+    #[tool(description = "Open (show) a sticky note window by its ID — brings an existing or closed note onto the screen and raises it. Use sticky_note_list to get IDs. For a note you don't own, Hyperia asks the user to approve access first: the call may return a held/pending response while they decide, then completes once approved (don't retry in a loop — wait). Requires identity (send your token) if you're anonymous.")]
     async fn sticky_note_open(
         &self,
         Parameters(req): Parameters<NoteOpenRequest>,
@@ -2210,7 +2210,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Update the text content of an existing sticky note. Use sticky_note_list to get IDs.")]
+    #[tool(description = "Update the text content of an existing sticky note. Use sticky_note_list to get IDs. For a note you don't own, Hyperia asks the user to approve access first: the call may return a held/pending response while they decide, then completes once approved (don't retry in a loop — wait). Requires identity (send your token) if you're anonymous.")]
     async fn sticky_note_update(
         &self,
         Parameters(req): Parameters<StickyNoteUpdateRequest>,
@@ -2229,7 +2229,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Read the full text content of a sticky note by its ID. Use sticky_note_list to get IDs.")]
+    #[tool(description = "Read the full text content of a sticky note by its ID. Use sticky_note_list to get IDs. For a note you don't own, Hyperia asks the user to approve access first: the call may return a held/pending response while they decide, then completes once approved (don't retry in a loop — wait). Requires identity (send your token) if you're anonymous.")]
     async fn sticky_note_read(
         &self,
         Parameters(req): Parameters<StickyNoteReadRequest>,
