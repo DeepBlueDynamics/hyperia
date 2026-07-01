@@ -87,6 +87,16 @@ function configureWebPaneSession(sess: Electron.Session) {
     console.error('[web-pane] failed to enable spellchecker:', err);
   }
   const {ua, brands, fullVersionList, platform, platformVersion} = chromeHeaderSet();
+  // Set the SESSION user agent too — this is what navigator.userAgent reports
+  // inside the page. The header rewrite below only covers HTTP; without this a
+  // WebContentsView page sees the raw Electron UA in JS, and the JS-vs-header
+  // mismatch trips login bot detection (LinkedIn boots the session, e.g.).
+  // (The old <webview> got this via its useragent= attribute.)
+  try {
+    sess.setUserAgent(ua);
+  } catch (err) {
+    console.error('[web-pane] setUserAgent failed:', err);
+  }
   sess.webRequest.onBeforeSendHeaders((details, callback) => {
     const h = details.requestHeaders;
     h['User-Agent'] = ua;
