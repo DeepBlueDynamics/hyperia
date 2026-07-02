@@ -2516,6 +2516,20 @@ export default class Term extends React.PureComponent<
             paneId={this.props.uid}
             tint={isPicker ? 'neutral' : (tint as any)}
             isPlaceholder={isPicker}
+            onSwitchShell={
+              isPicker
+                ? undefined
+                : () => {
+                    // Unload the current shell and show the picker in this pane.
+                    rpc.emit('new', {
+                      isNewGroup: false,
+                      cwd: (this.props as any).sessionCwd || (this.props as any).cwd,
+                      activeUid: this.props.uid,
+                      profile: 'picker',
+                      groupUid: this.props.groupUid
+                    });
+                  }
+            }
             isSplitRightDisabled={hideSplits}
             isSplitDownDisabled={isSplitDownDisabled || hideSplits}
             isBusy={this.isTerminalBusy()}

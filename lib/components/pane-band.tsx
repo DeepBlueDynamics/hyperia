@@ -35,6 +35,8 @@ type PaneBandProps = {
   profileChip?: React.ReactNode;
   isPlaceholder?: boolean; // italic label + neutral tint
   navCluster?: React.ReactNode; // back/forward (+ refresh for web)
+  // Right-click-the-name menu: "Switch Shell…" (unload shell → show picker).
+  onSwitchShell?: () => void;
   locationBar?: React.ReactNode; // path bar, URL bar, or null
   onSplitRight: () => void;
   onSplitDown: () => void;
@@ -88,6 +90,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       profileChip,
       isPlaceholder = false,
       navCluster,
+      onSwitchShell,
       locationBar,
       onSplitRight,
       onSplitDown,
@@ -305,6 +308,15 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               })
             );
           }
+        }
+        if (onSwitchShell) {
+          menu.append(new MenuItem({type: 'separator'}));
+          menu.append(
+            new MenuItem({
+              label: 'Switch Shell…',
+              click: () => onSwitchShell()
+            })
+          );
         }
         menu.popup();
       } catch (err) {
