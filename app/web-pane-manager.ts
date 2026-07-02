@@ -26,7 +26,7 @@ const DEVTOOLS_FRACTION = 0.4;
 // OAuth / login popups can't run inside an embedded browser — hand them to the
 // system browser (parity with the old <webview> guest handler).
 function isOAuthUrl(url: string): boolean {
-  return /^https?:\/\/(accounts\.google\.|login\.microsoftonline\.|appleid\.apple\.|github\.com\/login|login\.yahoo\.|(www\.)?facebook\.com\/(login|dialog)|api\.twitter\.com\/oauth)/i.test(
+  return /^https?:\/\/(accounts\.google\.|login\.microsoftonline\.|appleid\.apple\.|github\.com\/login|login\.yahoo\.|(www\.)?facebook\.com\/(login|dialog)|api\.twitter\.com\/oauth|([a-z0-9-]+\.)?nuts\.services\/(auth|login))/i.test(
     url
   );
 }

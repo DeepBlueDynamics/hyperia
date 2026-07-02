@@ -69,12 +69,7 @@
   </div>
 
   <h2>Services</h2>
-  <div class="svc"><b>nuts.services login</b><span class="tag">coming — system-browser magic link</span></div>
-  <div class="svc"><b>Nemesis8</b> agent runner + MCP<span class="tag" id="svc-nemesis8">detecting…</span></div>
-  <div class="svc"><b>Shivvr</b> embeddings<span class="tag" id="svc-shivvr">detecting…</span></div>
-  <div class="svc"><b>Grub</b> crawler (local container)<span class="tag" id="svc-grub">detecting…</span></div>
-  <div class="svc"><b>Transcription</b> (callback registration)<span class="tag" id="svc-transcription">detecting…</span></div>
-  <div class="svc"><b>Sailfish</b> — optimized local Gemma container (Docker, ≥16 GB GPU)<span class="tag" id="svc-sailfish">detecting…</span></div>
+  <div id="services"></div>
 
   <button id="save">Save configuration</button>
   <button id="unconfigure" class="ghostbtn" title="Clears provider/model — Hyperia drops out of the agent list. Keys are kept.">Unconfigure</button>
@@ -149,30 +144,103 @@ function renderModels() {
     : (cheap && m.value === cheap ? 'Defaulted to the cheapest capable runner — change freely.' : '');
 }
 
+// ── Services: expandable rows, ports, install lines, nuts login, 5s poll ──
+const IS_WIN = /Windows/i.test(navigator.userAgent);
+const SVC_DEFS = [
+  {id:'nuts', label:'nuts.services', login:true},
+  {id:'nemesis8', label:'Nemesis8', desc:'agent runner + MCP', port:9801, install:'nemesis8'},
+  {id:'shivvr', label:'Shivvr', desc:'embeddings', port:0, install:'shivvr'},
+  {id:'grub', label:'Grub crawler', desc:'', port:0, install:'grub'},
+  {id:'transcription', label:'Transcription', desc:'', port:0, install:'transcription'},
+  {id:'sailfish', label:'Sailfish', desc:'optimized local Gemma (Docker, ≥16 GB GPU)', port:22343, install:'sailfish'}
+];
+const installLine = (name) => IS_WIN
+  ? `irm https://${name}.nuts.services/install.ps1 | iex`
+  : `curl -fsSL https://${name}.nuts.services/install.sh | sh`;
+let svcOpen = {};
+let svcState = {};
+
+function svcPort(d) {
+  const saved = ((cfg.services||{})[d.id]||{}).port;
+  return saved || d.port || '';
+}
+
+function renderServices() {
+  const host = $('services');
+  // Don't clobber an in-progress edit (port/email focused) on the 5s poll.
+  if (document.activeElement && host.contains(document.activeElement)) return;
+  host.innerHTML = '';
+  for (const d of SVC_DEFS) {
+    const st = svcState[d.id] || {};
+    const row = document.createElement('div');
+    row.className = 'svc';
+    row.style.flexWrap = 'wrap';
+    const open = !!svcOpen[d.id];
+    let statusHtml = '';
+    if (!d.login) {
+      if (st.running) {
+        const bad = /unhealthy/i.test(st.status||'');
+        const bits = d.id==='nemesis8'
+          ? [st.binary?'binary ✓':'', (st.containers||[]).length?((st.containers||[]).length+' container'+((st.containers||[]).length>1?'s':'')):'', st.mcp?'mcp ✓':''].filter(Boolean).join(' · ')
+          : (st.container||'running') + (bad?' (unhealthy)':'');
+        statusHtml = `<span class="tag" style="color:${bad?'#e8c268':'#3fb950'}">● ${bits}</span>`;
+      } else {
+        statusHtml = `<span class="tag">not detected</span><span class="tag" style="color:#6ea8fe;cursor:pointer" data-add="${d.id}">+ add</span>`;
+      }
+    }
+    row.innerHTML =
+      `<span data-tog="${d.id}" style="cursor:pointer;color:#9a9aa2;width:12px">${open?'▾':'▸'}</span>` +
+      `<b>${d.label}</b>${d.desc?' <span style="color:#9a9aa2;font-size:11px">'+d.desc+'</span>':''}` +
+      `<span style="margin-left:auto;display:flex;gap:6px;align-items:center">${statusHtml}` +
+      (d.login ? '' : `<svg data-tog="${d.id}" style="cursor:pointer" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9a9aa2" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`) +
+      `</span>`;
+    if (open) {
+      const panel = document.createElement('div');
+      panel.style.cssText = 'flex-basis:100%;margin-top:8px;padding-top:8px;border-top:1px solid #2c2c34;display:flex;flex-direction:column;gap:8px;font-size:11.5px';
+      if (d.login) {
+        panel.innerHTML =
+          `<div style="display:flex;gap:8px"><input type="text" id="nutsEmail" placeholder="you@example.com" style="margin-top:0;flex:1">` +
+          `<button style="margin-top:0;padding:7px 16px" data-nutslogin="1">Login</button></div>` +
+          `<div class="note">Opens the nuts.services login in your system browser (magic link). Google/GitHub sign-in hidden when opened from Hyperia.</div>`;
+      } else {
+        panel.innerHTML =
+          `<div style="display:flex;gap:8px;align-items:center">Port <input type="text" data-port="${d.id}" value="${svcPort(d)}" style="margin-top:0;width:90px">` +
+          `<button style="margin-top:0;padding:6px 12px" data-saveport="${d.id}">Save</button>` +
+          `<button class="ghostbtn" style="margin-top:0;padding:6px 12px" data-refresh="1">Refresh</button></div>` +
+          `<div class="note">Install on this machine:</div>` +
+          `<div style="background:#17171c;border:1px solid #2c2c34;border-radius:8px;padding:6px 10px;font-family:ui-monospace,monospace;overflow-x:auto;white-space:nowrap;user-select:text">${installLine(d.install)}</div>`;
+      }
+      row.appendChild(panel);
+    }
+    host.appendChild(row);
+  }
+  host.querySelectorAll('[data-tog]').forEach(el => el.onclick = () => { const id = el.getAttribute('data-tog'); svcOpen[id] = !svcOpen[id]; renderServices(); });
+  host.querySelectorAll('[data-add]').forEach(el => el.onclick = () => { svcOpen[el.getAttribute('data-add')] = true; renderServices(); });
+  host.querySelectorAll('[data-refresh]').forEach(el => el.onclick = () => loadServices());
+  host.querySelectorAll('[data-saveport]').forEach(el => el.onclick = async () => {
+    const id = el.getAttribute('data-saveport');
+    const port = parseInt(host.querySelector(`[data-port="${id}"]`).value, 10) || 0;
+    await fetch('/api/agent/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({services: {[id]: {port}}})});
+    el.textContent = 'saved ✓'; setTimeout(() => { el.textContent = 'Save'; }, 1200);
+  });
+  host.querySelectorAll('[data-nutslogin]').forEach(el => el.onclick = () => {
+    const email = ($('nutsEmail')||{}).value || '';
+    // hide=google,github — the auth page hides (not disables) social logins for
+    // embedded-origin flows. Routed to the SYSTEM browser by the pane manager.
+    window.open(`https://auth.nuts.services/login?email=${encodeURIComponent(email)}&hide=google,github`);
+  });
+}
+
 async function loadServices() {
   try {
     const s = await (await fetch('/api/agent/services')).json();
-    for (const k of ['shivvr','grub','transcription','sailfish']) {
-      const sv = (s.services||{})[k] || {}; const el = $('svc-'+k);
-      if (!el) continue;
-      if (sv.running) {
-        const bad = /unhealthy/i.test(sv.status||'');
-        el.textContent = '● ' + (sv.container||'running') + (bad ? ' (unhealthy)' : '');
-        el.style.color = bad ? '#e8c268' : '#3fb950';
-      } else {
-        el.textContent = s.docker ? 'not detected' : 'docker not available';
-      }
-    }
-    const n8 = (s.services||{}).nemesis8 || {}; const el = $('svc-nemesis8');
-    if (el) {
-      if (n8.running) {
-        const bits = [n8.binary ? 'binary ✓' : '', (n8.containers||[]).length ? (n8.containers.length + ' container' + (n8.containers.length>1?'s':'')) : '', n8.mcp ? 'mcp ✓' : ''].filter(Boolean);
-        el.textContent = '● ' + bits.join(' · ');
-        el.style.color = '#3fb950';
-      } else el.textContent = 'not detected';
-    }
-  } catch { /* tags stay at detecting… */ }
+    svcState = s.services || {};
+    renderServices();
+  } catch { /* keep last state */ }
 }
+// Live detection while the page is open — services the user just started show
+// up within ~5s.
+setInterval(loadServices, 5000);
 
 async function load() {
   loadServices();

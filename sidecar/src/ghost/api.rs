@@ -747,7 +747,9 @@ pub async fn get_agent_config() -> Json<serde_json::Value> {
             "openai": has_key("openai"),
             "grok": has_key("grok"),
             "gemini": has_key("gemini"),
-        }
+        },
+        // Per-service settings (ports etc.) — config.agent.services.<name>.
+        "services": agent["services"].clone()
     }))
 }
 
@@ -794,6 +796,14 @@ pub async fn post_agent_config(
                     json["config"]["agent"]["keys"][k] = serde_json::json!(val);
                 }
             }
+        }
+    }
+    if let Some(svcs) = body["services"].as_object() {
+        if !json["config"]["agent"]["services"].is_object() {
+            json["config"]["agent"]["services"] = serde_json::json!({});
+        }
+        for (name, val) in svcs {
+            json["config"]["agent"]["services"][name] = val.clone();
         }
     }
     match crate::util::write_json_file_atomic(&path, &json) {
