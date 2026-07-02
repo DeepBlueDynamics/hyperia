@@ -1571,6 +1571,7 @@ impl Bridge {
 
             "WindowBounds" => {
                 let window_id = msg["windowId"].as_u64().unwrap_or(0) as u32;
+                tracing::info!(target: "doors", "WindowBounds recv win={} {}x{}", window_id, msg["width"], msg["height"]);
                 if window_id != 0 {
                     self.inner.window_bounds.lock().await.insert(
                         window_id,

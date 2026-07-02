@@ -110,6 +110,14 @@ function connect() {
     for (const [uid, tracked] of trackedSessions) {
       sendSessionRegister(uid, tracked);
     }
+    // Replay window bounds now that the socket is live. The per-window
+    // create/focus/resize sends can fire before the sidecar WS connects
+    // (connect happens last at launch), so send() no-ops silently — this
+    // guarantees the sidecar learns every window's pixel size on connect.
+    try {
+      const winList: BrowserWindow[] = Array.from((app as any).getWindows?.() || []);
+      for (const w of winList) updateWindowBounds(w);
+    } catch { /* best-effort */ }
     startHeartbeat();
   });
 
