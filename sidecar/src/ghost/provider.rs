@@ -781,10 +781,13 @@ impl OllamaProvider {
                     },
                     "reply": {
                         "type": "string",
-                        "description": "Your final response to the user. Use this if you are not calling a tool (i.e., tool_name is 'none')."
+                        "description": "REQUIRED. Your final response to the user. Set to \"\" when calling a tool; otherwise this is what the user sees."
                     }
                 },
-                "required": ["thought", "tool_name", "tool_arguments"]
+                // reply IS required — ornith emitted thought + tool_name:"none"
+                // and legally omitted reply (it wasn't listed), rendering as
+                // thinking followed by pure silence in the shell.
+                "required": ["thought", "tool_name", "tool_arguments", "reply"]
             }))
         } else {
             Some(serde_json::json!({
@@ -941,9 +944,14 @@ impl OllamaProvider {
                 }
             }
 
-            // Emit final direct reply
+            // Emit final direct reply. Belt-and-suspenders: a no-tool turn
+            // with an empty reply would render as thinking → silence (models
+            // can still under-fill even with reply required), so promote the
+            // thought to the visible reply rather than saying nothing.
             if !reply.is_empty() {
                 let _ = tx.send(ProviderEvent::TextDelta(reply)).await;
+            } else if !had_tool_call && !thought.is_empty() {
+                let _ = tx.send(ProviderEvent::TextDelta(thought.clone())).await;
             }
 
             // Emit completion stop reason
