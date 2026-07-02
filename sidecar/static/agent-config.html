@@ -102,12 +102,29 @@ let sel = '';
 
 const $ = (id) => document.getElementById(id);
 
+let keyStatus = {};
+async function loadKeycheck() {
+  try {
+    keyStatus = (await (await fetch('/api/agent/keycheck')).json()).providers || {};
+    renderProviders();
+  } catch {}
+}
+const DOT = {ok:'#3fb950', payment:'#e8c268', bad:'#f85149', none:'#f85149', error:'#e8c268'};
+const DOT_TIP = {ok:'key works', payment:'key present — billing/quota problem', bad:'key rejected', none:'no key', error:'provider unreachable'};
+
 function renderProviders() {
   $('providers').innerHTML = '';
   for (const p of PROVIDERS) {
     const d = document.createElement('div');
     d.className = 'prov' + (sel === p.id ? ' sel' : '') + (p.disabled ? ' disabled' : '');
-    d.textContent = p.label + (p.key && cfg.keys[p.id] ? ' ✓' : '');
+    d.textContent = p.label;
+    if (p.key && keyStatus[p.id]) {
+      const s = document.createElement('span');
+      s.textContent = ' ●';
+      s.style.color = DOT[keyStatus[p.id]] || '#9a9aa2';
+      d.title = DOT_TIP[keyStatus[p.id]] || '';
+      d.appendChild(s);
+    }
     if (!p.disabled) d.onclick = () => { sel = p.id; renderProviders(); renderModels(); };
     $('providers').appendChild(d);
   }
@@ -152,9 +169,12 @@ const SVC_DEFS = [
   {id:'shivvr', label:'Shivvr', desc:'embeddings', port:0, install:'shivvr'},
   {id:'grub', label:'Grub crawler', desc:'', port:0, install:'grub'},
   {id:'transcription', label:'Transcription', desc:'', port:0, install:'transcription'},
-  {id:'sailfish', label:'Sailfish', desc:'optimized local Gemma (Docker, ≥16 GB GPU)', port:22343, install:'sailfish'}
+  {id:'sailfish', label:'Sailfish', desc:'optimized local Gemma (Docker, ≥16 GB GPU)', port:22343, install:'sailfish'},
+  {id:'ollama', label:'Ollama', desc:'local model daemon', port:11434, install:'ollama'}
 ];
-const installLine = (name) => IS_WIN
+const installLine = (name) => name === 'ollama'
+  ? (IS_WIN ? 'winget install Ollama.Ollama' : 'curl -fsSL https://ollama.com/install.sh | sh')
+  : IS_WIN
   ? `irm https://${name}.nuts.services/install.ps1 | iex`
   : `curl -fsSL https://${name}.nuts.services/install.sh | sh`;
 let svcOpen = {};
@@ -250,6 +270,7 @@ setInterval(loadServices, 5000);
 
 async function load() {
   loadServices();
+  loadKeycheck();
   try { cfg = await (await fetch('/api/agent/config')).json(); } catch {}
   sel = cfg.provider || 'anthropic';
   // Providers render instantly; the model list streams in behind a spinner

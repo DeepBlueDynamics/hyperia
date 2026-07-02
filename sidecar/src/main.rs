@@ -2996,6 +2996,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/agent/models", axum::routing::get(ghost::api::get_agent_models))
         .route("/api/agent/services", axum::routing::get(ghost::api::get_agent_services))
+        .route("/api/agent/keycheck", axum::routing::get(ghost::api::get_agent_keycheck))
         .with_state(ghost_state);
 
     // Settings agent routes — separate session, SHARED tool registry so

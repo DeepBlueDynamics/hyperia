@@ -812,6 +812,52 @@ pub async fn post_agent_config(
     }
 }
 
+/// GET /api/agent/keycheck — probe each frontier provider with the configured
+/// key. Status: "none" (no key), "ok" (auth works), "payment" (billing/quota),
+/// "bad" (rejected), "error" (unreachable).
+pub async fn get_agent_keycheck() -> Json<serde_json::Value> {
+    let cfgj = read_shared_config();
+    let key_for = |p: &str| -> String {
+        let k = cfgj["config"]["agent"]["keys"][p].as_str().unwrap_or("").trim().to_string();
+        if !k.is_empty() { return k; }
+        let k = cfgj["config"]["providers"][p]["token"].as_str().unwrap_or("").trim().to_string();
+        if !k.is_empty() { return k; }
+        let envs: &[&str] = match p {
+            "anthropic" => &["ANTHROPIC_API_KEY"], "openai" => &["OPENAI_API_KEY"],
+            "gemini" => &["GEMINI_API_KEY"], "grok" => &["XAI_API_KEY", "GROK_API_KEY"], _ => &[],
+        };
+        envs.iter().find_map(|e| std::env::var(e).ok()).map(|s| s.trim().to_string()).unwrap_or_default()
+    };
+    let client = reqwest::Client::new();
+    let probe = |p: &'static str| {
+        let key = key_for(p);
+        let client = client.clone();
+        async move {
+            if key.is_empty() { return (p, "none".to_string()); }
+            let req = match p {
+                "anthropic" => client.get("https://api.anthropic.com/v1/models")
+                    .header("x-api-key", &key).header("anthropic-version", "2023-06-01"),
+                "openai" => client.get("https://api.openai.com/v1/models").bearer_auth(&key),
+                "grok" => client.get("https://api.x.ai/v1/models").bearer_auth(&key),
+                _ => client.get(format!("https://generativelanguage.googleapis.com/v1beta/models?key={}", key)),
+            };
+            match req.timeout(std::time::Duration::from_secs(6)).send().await {
+                Ok(r) => {
+                    let s = r.status().as_u16();
+                    let body = r.text().await.unwrap_or_default().to_lowercase();
+                    let st = if s == 200 { "ok" }
+                    else if s == 402 || s == 429 || body.contains("quota") || body.contains("billing") || body.contains("credit") { "payment" }
+                    else { "bad" };
+                    (p, st.to_string())
+                }
+                Err(_) => (p, "error".to_string()),
+            }
+        }
+    };
+    let (a, o, g, x) = tokio::join!(probe("anthropic"), probe("openai"), probe("gemini"), probe("grok"));
+    Json(serde_json::json!({"ok": true, "providers": {a.0: a.1, o.0: o.1, g.0: g.1, x.0: x.1}}))
+}
+
 /// GET /api/agent/services — detect DBD services on this host: docker
 /// containers (shivvr / grub / transcription / sailfish / nemesis8) by
 /// name+image match, the nemesis8 binary, and its local MCP endpoint.
@@ -873,10 +919,37 @@ pub async fn get_agent_services() -> Json<serde_json::Value> {
         .map(|(name, _, _, _)| name.clone())
         .collect();
 
+    // Ollama runs native (not docker) — probe its HTTP port. Sailfish exposes
+    // an OpenAI-compatible endpoint; probe its configured port for "connection
+    // up" readiness beyond mere container presence.
+    let cfgj = read_shared_config();
+    let port_of = |name: &str, def: u16| -> u16 {
+        cfgj["config"]["agent"]["services"][name]["port"].as_u64().map(|p| p as u16).unwrap_or(def)
+    };
+    let http_up = |port: u16, path: &'static str| {
+        let client = reqwest::Client::new();
+        async move {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                client.get(format!("http://localhost:{}{}", port, path)).send(),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .is_some()
+        }
+    };
+    let (ollama_up, sailfish_up) = tokio::join!(
+        http_up(port_of("ollama", 11434), "/api/version"),
+        http_up(port_of("sailfish", 22343), "/v1/models")
+    );
+
     Json(serde_json::json!({
         "ok": true,
         "docker": docker.is_some(),
         "services": {
+            "ollama": {"running": ollama_up, "container": if ollama_up { "daemon" } else { "" }},
+            "sailfish_api": sailfish_up,
             "shivvr": find(&["shivvr"]).unwrap_or_else(|| off.clone()),
             "grub": find(&["grub"]).unwrap_or_else(|| off.clone()),
             "transcription": find(&["transcri", "whisper"]).unwrap_or_else(|| off.clone()),
