@@ -828,22 +828,18 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
         Some(v) => v,
         None => return Json(serde_json::json!({"ok": false, "error": "models catalog unreachable"})),
     };
-    // Curate ollama: allowlist by prefix + any extras from config.agent.ollama_allow.
+    // Ollama: the curated list IS the list (not an intersection with the
+    // catalog — these tags are pulled locally via `ollama pull`). Extras come
+    // from config.agent.ollama_allow.
     let mut allow: Vec<String> = OLLAMA_CURATED.iter().map(|s| s.to_string()).collect();
     if let Some(extra) = read_shared_config()["config"]["agent"]["ollama_allow"].as_array() {
         allow.extend(extra.iter().filter_map(|v| v.as_str().map(String::from)));
     }
-    if let Some(models) = val["providers"]["ollama"]["models"].as_array() {
-        let curated: Vec<serde_json::Value> = models
-            .iter()
-            .filter(|m| {
-                let id = m["id"].as_str().unwrap_or("").to_lowercase();
-                allow.iter().any(|a| id.starts_with(&a.to_lowercase()))
-            })
-            .cloned()
-            .collect();
-        val["providers"]["ollama"]["models"] = serde_json::json!(curated);
-    }
+    let curated: Vec<serde_json::Value> = allow
+        .iter()
+        .map(|id| serde_json::json!({"id": id, "label": id}))
+        .collect();
+    val["providers"]["ollama"]["models"] = serde_json::json!(curated);
     val["ok"] = serde_json::json!(true);
     *cache.lock().unwrap() = Some((Instant::now(), val.clone()));
     Json(val)
