@@ -66,6 +66,17 @@
     display: flex;
     gap: 5px;
     align-items: baseline;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 1px 8px;
+    background: var(--bg-soft);
+    transition: border-color 0.5s ease, box-shadow 0.5s ease;
+  }
+  /* Metric badge just updated → brief blue flash. */
+  .titlebar .hud .stat.flash {
+    border-color: #8ab4f8;
+    box-shadow: 0 0 5px rgba(138, 180, 248, 0.45);
+    transition: none;
   }
   .titlebar .hud .v {
     color: var(--text-dim);
@@ -99,12 +110,17 @@
     color: var(--ok);
     animation: blink-soft 2.4s ease-in-out infinite;
   }
+  /* Lights are GREEN only — steady green when enabled, pulsing green when
+     it's the active (answering) model. */
+  .titlebar .models .m::before {
+    animation: none;
+  }
   .titlebar .models .m.active {
     color: var(--text-dim);
   }
   .titlebar .models .m.active::before {
-    color: var(--accent);
-    animation: blink-soft 1s ease-in-out infinite;
+    color: var(--ok);
+    animation: blink-soft 1.2s ease-in-out infinite;
   }
   .usage-badge {
     color: var(--text-faint);
@@ -591,7 +607,7 @@
 <body>
 
 <div class="titlebar">
-  <div class="name">hyperia · shell</div>
+  <div class="name">hyperia shell</div>
   <div class="models" id="hud-models"></div>
   <div class="hud">
     <div class="stat"><span>t/s max</span><span class="v" id="hud-tps-max">0</span></div>
@@ -601,6 +617,7 @@
     <div class="stat"><span>tools</span><span class="v" id="hud-tools">0</span></div>
     <div class="stat"><span>turns</span><span class="v" id="hud-turns">0</span></div>
     <div class="stat reset" id="hud-reset" title="reset metrics" style="cursor: pointer; padding: 0 4px; border: 1px solid var(--line); border-radius: 3px; background: var(--bg-soft); font-size: 8px; font-weight: bold; margin-left: 4px; align-self: center; display: inline-flex; align-items: center; justify-content: center; height: 14px; text-transform: uppercase;">reset</div>
+    <div class="stat reset" id="hud-config" title="agent configuration" onclick="location.href='/agent/config'" style="cursor: pointer; padding: 0 5px; border: 1px solid var(--line); border-radius: 3px; background: var(--bg-soft); font-size: 10px; margin-left: 2px; align-self: center; display: inline-flex; align-items: center; justify-content: center; height: 14px;">⚙</div>
   </div>
 </div>
 
@@ -608,7 +625,6 @@
   <div class="item"><span>sidecar</span><span class="v" id="s-sidecar">…</span></div>
   <div class="item"><span>level</span><span class="v" id="s-level">…</span></div>
   <div class="item clickable" id="s-model-item" title="click to switch model"><span>model</span><span class="v" id="s-model">…</span></div>
-  <div class="item clickable" title="open the agent configuration page" onclick="location.href='/agent/config'"><span>⚙</span><span class="v">config</span></div>
   <div class="item"><span>ferricula</span><span class="v" id="s-ferricula">…</span></div>
 </div>
 
@@ -658,23 +674,42 @@ let turn_out = 0;
 // Decode speed: output tokens over generation time for the CURRENT stream.
 let genStartMs = 0;   // set when the agent starts producing this turn
 let genTokens = 0;    // output tokens produced since genStartMs
+let lastDeltaMs = 0;  // when the LAST token delta arrived — avg counts only
+                      // active generation, not tool-wait/idle wall-clock
 let lastTps = 0;      // last computed tok/s (held between turns)
 let maxTps = 0;       // peak decode speed observed (the ceiling)
 let cumTokens = 0;    // completed-turn tokens, for the running average
 let cumSecs = 0;      // completed-turn generation seconds
+const flashPrev = {}; // last rendered value per badge, for the blue flash
+function setStat(id, text) {
+  const el = $(id);
+  if (!el) return;
+  if (flashPrev[id] !== undefined && flashPrev[id] !== text) {
+    const badge = el.parentElement;
+    badge.classList.add('flash');
+    clearTimeout(badge._flashT);
+    badge._flashT = setTimeout(() => badge.classList.remove('flash'), 450);
+  }
+  flashPrev[id] = text;
+  el.textContent = text;
+}
 function updateHud() {
-  // Average decode speed = all generated tokens / all generation time,
-  // folding the in-flight turn in live so it visibly settles as it streams.
+  // Average decode speed = tokens / ACTIVE generation time. The live window
+  // ends at the last delta, not at now() — otherwise the average decays
+  // toward zero while the agent waits on tools or sits idle.
   let liveTok = 0, liveSecs = 0;
-  if (genStartMs) { liveTok = genTokens; liveSecs = (performance.now() - genStartMs) / 1000; }
+  if (genStartMs && lastDeltaMs > genStartMs) {
+    liveTok = genTokens;
+    liveSecs = (lastDeltaMs - genStartMs) / 1000;
+  }
   const totSecs = cumSecs + liveSecs;
   const avg = totSecs > 0.25 ? (cumTokens + liveTok) / totSecs : 0;
-  $('hud-tps-max').textContent = maxTps ? maxTps.toFixed(1) : '0';
-  $('hud-tps-avg').textContent = avg ? avg.toFixed(1) : '0';
-  $('hud-in').textContent    = STATS.in.toLocaleString();
-  $('hud-out').textContent   = STATS.out.toLocaleString();
-  $('hud-tools').textContent = STATS.tools;
-  $('hud-turns').textContent = STATS.turns;
+  setStat('hud-tps-max', maxTps ? maxTps.toFixed(1) : '0');
+  setStat('hud-tps-avg', avg ? avg.toFixed(1) : '0');
+  setStat('hud-in',    STATS.in.toLocaleString());
+  setStat('hud-out',   STATS.out.toLocaleString());
+  setStat('hud-tools', String(STATS.tools));
+  setStat('hud-turns', String(STATS.turns));
 }
 
 // Accrue generated tokens toward the decode-speed meter. Called for BOTH
@@ -683,9 +718,19 @@ function updateHud() {
 // The clock starts on the first delta of a turn (excludes first-byte latency).
 function accrueDecode(chunk) {
   const est = Math.max(1, ((chunk || '').length / 4) | 0);
-  if (!genStartMs) { genStartMs = performance.now(); genTokens = 0; }
+  const now = performance.now();
+  // A long gap since the last delta = a tool call / new turn boundary — fold
+  // the finished burst into the running average and start a fresh window, so
+  // idle time never counts against the average.
+  if (genStartMs && lastDeltaMs && now - lastDeltaMs > 3000) {
+    const secs = (lastDeltaMs - genStartMs) / 1000;
+    if (secs > 0.05 && genTokens > 0) { cumTokens += genTokens; cumSecs += secs; }
+    genStartMs = 0;
+  }
+  if (!genStartMs) { genStartMs = now; genTokens = 0; }
   genTokens += est;
-  const secs = (performance.now() - genStartMs) / 1000;
+  lastDeltaMs = now;
+  const secs = (now - genStartMs) / 1000;
   if (secs > 0.25) {
     lastTps = genTokens / secs;
     if (lastTps > maxTps) maxTps = lastTps;
@@ -908,9 +953,10 @@ function streamText(chunk) {
 }
 function endAgentStream() {
   if (streamingRow) {
-    // Fold this turn's decode into the running average before the clock stops.
-    if (genStartMs) {
-      const secs = (performance.now() - genStartMs) / 1000;
+    // Fold this turn's decode into the running average before the clock
+    // stops — measured to the LAST delta, not now() (activity time only).
+    if (genStartMs && lastDeltaMs > genStartMs) {
+      const secs = (lastDeltaMs - genStartMs) / 1000;
       if (secs > 0.05 && genTokens > 0) { cumTokens += genTokens; cumSecs += secs; }
       genStartMs = 0;
     }
@@ -2202,6 +2248,8 @@ $('hud-reset').addEventListener('click', () => {
   cumTokens = 0;
   cumSecs = 0;
   lastTps = 0;
+  genStartMs = 0;
+  lastDeltaMs = 0;
   updateHud();
 });
 
