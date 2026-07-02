@@ -104,6 +104,7 @@ let sel = '';
 const $ = (id) => document.getElementById(id);
 
 let keyStatus = {};
+let localStatus = {};
 async function loadKeycheck() {
   try {
     keyStatus = (await (await fetch('/api/agent/keycheck')).json()).providers || {};
@@ -124,6 +125,13 @@ function renderProviders() {
       s.textContent = ' ●';
       s.style.color = DOT[keyStatus[p.id]] || '#9a9aa2';
       d.title = DOT_TIP[keyStatus[p.id]] || '';
+      d.appendChild(s);
+    } else if (!p.key && localStatus[p.id] !== undefined) {
+      // Local providers (Ollama / Sailfish): live endpoint reachability.
+      const s = document.createElement('span');
+      s.textContent = ' ●';
+      s.style.color = localStatus[p.id] ? '#3fb950' : '#f85149';
+      d.title = localStatus[p.id] ? 'endpoint answering' : 'endpoint not reachable';
       d.appendChild(s);
     }
     if (!p.disabled) d.onclick = () => { sel = p.id; renderProviders(); renderModels(); };
@@ -266,6 +274,10 @@ async function loadServices() {
   try {
     const s = await (await fetch('/api/agent/services')).json();
     svcState = s.services || {};
+    // Provider status lights: ollama daemon + sailfish OpenAI-compat API.
+    localStatus.ollama = !!(svcState.ollama || {}).running;
+    localStatus.sailfish = !!svcState.sailfish_api;
+    renderProviders();
     renderServices();
   } catch { /* keep last state */ }
 }
