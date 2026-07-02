@@ -446,7 +446,7 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
               onClick={() => this.commit()}
               style={pickerEnterBadgeStyle}
             >
-              enter
+              {keyHint ? keyHint.toLowerCase() : 'enter'}
             </span>
           </div>
 
@@ -640,7 +640,10 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         } catch {
           /* plain text */
         }
-        if (v) this.setState({latestVersion: v});
+        // Accept ONLY a strict version string — the endpoint may not exist
+        // yet and can return an HTML error page / arbitrary file content,
+        // which previously rendered as garbage in the footer.
+        if (/^v?\d+\.\d+(\.\d+)?$/.test(v)) this.setState({latestVersion: v});
       })
       .catch(() => {});
 
