@@ -896,6 +896,19 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             flexShrink: 0
           }}
         >
+          <div
+            style={{
+              fontSize: '14px',
+              fontWeight: 700,
+              color: 'var(--text-primary)',
+              fontFamily: 'var(--font-sans)',
+              letterSpacing: '0.2px',
+              marginBottom: 'var(--space-2)'
+            }}
+          >
+            webpanes, shells and agents, oh my
+          </div>
+
           {/* New Webpane row — "New Webpane" label left of the URL box, same
               width/shape as the shell + agent rows below it. */}
           <div style={pickerRowStyle}>
