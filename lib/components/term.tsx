@@ -2896,13 +2896,11 @@ export default class Term extends React.PureComponent<
             onClick={() => this.setState({isCustomModalOpen: false})}
           >
             <div
+              // Flat page like the Hyperia agent config — no card, no border.
               style={{
                 width: '100%',
                 maxWidth: '640px',
                 minHeight: 'calc(100% - 8px)',
-                background: 'var(--bg-secondary)',
-                border: '0.5px solid var(--border-neutral)',
-                borderRadius: '8px',
                 padding: '24px 22px 32px',
                 boxSizing: 'border-box',
                 display: 'flex',
