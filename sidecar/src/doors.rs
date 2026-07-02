@@ -726,11 +726,15 @@ mod tests {
 
     #[test]
     fn cap_not_breached_by_a_single_fitting_door() {
-        // ghost core = 11, terminal door = 9 → 20, exactly the default cap.
-        let mut s = DoorState::with_cap(Surface::Ghost, 20);
+        // Cap sized to exactly core + terminal so the door fits with zero
+        // headroom — computed from the live taxonomy so adding a tool to the
+        // terminal door (e.g. terminal_set_window_size) doesn't break this.
+        let core_n = core_tools(Surface::Ghost).len();
+        let term_n = door_by_name("terminal").unwrap().ghost_tools.len();
+        let mut s = DoorState::with_cap(Surface::Ghost, core_n + term_n);
         let evicted = s.open_door("terminal");
         assert!(evicted.is_empty(), "no eviction expected");
-        assert_eq!(s.live_tool_count(), 20);
+        assert_eq!(s.live_tool_count(), core_n + term_n);
         assert_eq!(s.open_doors(), &["terminal".to_string()]);
     }
 
