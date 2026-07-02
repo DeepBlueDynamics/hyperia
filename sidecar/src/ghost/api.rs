@@ -748,6 +748,12 @@ pub async fn ghost_shell_page() -> impl IntoResponse {
 // the OS keystore with #130.
 
 /// GET /agent/config — the Hyperia Agent configuration page.
+/// GET /guide — the web-pane start page: DuckDuckGo/URL search bar + the
+/// Hyperia field guide (MCP add commands, basics, links to the agent).
+pub async fn guide_page() -> impl IntoResponse {
+    Html(include_str!("../../static/guide.html"))
+}
+
 pub async fn agent_config_page() -> impl IntoResponse {
     Html(include_str!("../../static/agent-config.html"))
 }
@@ -783,7 +789,13 @@ pub async fn get_agent_config() -> Json<serde_json::Value> {
             "gemini": has_key("gemini"),
         },
         // Per-service settings (ports etc.) — config.agent.services.<name>.
-        "services": agent["services"].clone()
+        "services": agent["services"].clone(),
+        // Token Maximus (local-model compressor/extractor) settings.
+        "maximus": {
+            "model": json["config"]["maximus"]["model"].as_str().unwrap_or(""),
+            "url": json["config"]["maximus"]["url"].as_str().unwrap_or(""),
+            "disabled": json["config"]["maximus"]["disabled"].as_bool().unwrap_or(false),
+        }
     }))
 }
 
@@ -838,6 +850,22 @@ pub async fn post_agent_config(
         }
         for (name, val) in svcs {
             json["config"]["agent"]["services"][name] = val.clone();
+        }
+    }
+    // Token Maximus (the local-model compressor/extractor): model, url,
+    // disabled. Written under config.maximus.* — the compressor's getters
+    // already prefer this over env/defaults.
+    if let Some(mx) = body["maximus"].as_object() {
+        if !json["config"]["maximus"].is_object() {
+            json["config"]["maximus"] = serde_json::json!({});
+        }
+        for key in ["model", "url"] {
+            if let Some(v) = mx.get(key).and_then(|v| v.as_str()) {
+                json["config"]["maximus"][key] = serde_json::json!(v);
+            }
+        }
+        if let Some(d) = mx.get("disabled").and_then(|v| v.as_bool()) {
+            json["config"]["maximus"]["disabled"] = serde_json::json!(d);
         }
     }
     match crate::util::write_json_file_atomic(&path, &json) {

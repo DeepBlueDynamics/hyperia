@@ -302,6 +302,15 @@ impl ContextCompressor {
             return MaximusResult { content: content.to_string(), meta };
         }
 
+        // Disabled means NOT RUN AT ALL — full tokens pass through to the
+        // agent untouched. (is_available() already gates context compression;
+        // this gates the tool-result extraction path too.)
+        if self.is_disabled() {
+            let meta = MaximusMeta::passthrough(chars_in, "maximus disabled");
+            self.store_last(&meta).await;
+            return MaximusResult { content: content.to_string(), meta };
+        }
+
         if content.len() < FOCUS_MIN_CHARS && focus.trim().is_empty() {
             let meta = MaximusMeta::passthrough(chars_in, "below threshold");
             self.store_last(&meta).await;

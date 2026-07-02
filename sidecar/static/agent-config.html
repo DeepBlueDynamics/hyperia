@@ -68,6 +68,20 @@
     <div class="note">Stored in the Hyperia config file for now — <b>plaintext until the OS-keystore work (#130) lands</b>. Leave blank to keep the saved key. Enter “-” to clear it.</div>
   </div>
 
+  <h2>Token Maximus</h2>
+  <div class="note" style="margin-bottom:8px">
+    Token Maximus <b>downsizes what your agent has to read</b>: a small <b>local</b> model compresses
+    older conversation history and extracts just the relevant part of big tool outputs (terminal
+    screens, files) <i>before</i> they reach the agent above — fewer tokens, lower cost, faster turns.
+    When <b>disabled it does not run at all</b>: full, untouched tokens go straight to your agent.
+    Runs free on your hardware (Ollama / Sailfish); your primary agent choice above is unaffected.
+  </div>
+  <label style="display:flex;align-items:center;gap:8px;margin:6px 0 8px;cursor:pointer">
+    <input type="checkbox" id="mxEnabled" checked> <span>enabled</span>
+  </label>
+  <select id="mxModel"></select>
+  <div class="note">the local Ollama model that does the downsizing — small + fast wins (gemma2:2b, qwen2.5:7b). Sailfish-as-Maximus lands next. saved with the button below.</div>
+
   <h2>Services</h2>
   <div id="services"></div>
 
@@ -298,12 +312,43 @@ async function load() {
   catch { catalog = false; }
   $('modelSpin').style.display = 'none';
   renderModels();
+  renderMaximus();
+}
+
+// ── Token Maximus: local downsizer model + enable toggle ──────────────────
+function renderMaximus() {
+  const mx = (cfg && cfg.maximus) || {};
+  $('mxEnabled').checked = !mx.disabled;
+  const sel2 = $('mxModel');
+  sel2.innerHTML = '';
+  const opts = [];
+  // Ollama tags only for now — the compressor speaks the Ollama API; wiring
+  // the Sailfish appliance (OpenAI-compat) as a Maximus engine is next.
+  const ol = catalog && catalog.providers && catalog.providers.ollama;
+  if (ol) for (const m of (ol.models || [])) opts.push({v: m.id, label: 'ollama · ' + m.id});
+  // Always offer the known-small defaults even if the catalog is down.
+  for (const d of ['gemma2:2b', 'qwen2.5:7b']) {
+    if (!opts.some(o => o.v === d)) opts.push({v: d, label: 'ollama · ' + d});
+  }
+  for (const o of opts) {
+    const el = document.createElement('option');
+    el.value = o.v; el.textContent = o.label;
+    sel2.appendChild(el);
+  }
+  if (mx.model && !opts.some(o => o.v === mx.model)) {
+    const el = document.createElement('option');
+    el.value = mx.model; el.textContent = mx.model + ' (saved)';
+    sel2.appendChild(el);
+  }
+  if (mx.model) sel2.value = mx.model;
 }
 
 $('save').onclick = async () => {
   const p = PROVIDERS.find(x => x.id === sel);
   const body = {provider: sel, model: $('model').value, keys: {}};
   if (p && p.key && $('apiKey').value) body.keys[sel] = $('apiKey').value;
+  // Token Maximus settings ride the same save.
+  body.maximus = {disabled: !$('mxEnabled').checked, model: $('mxModel').value || ''};
   const r = await (await fetch('/api/agent/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)})).json();
   $('status').textContent = r.ok ? 'saved ✓ — Hyperia is in your agent list' : ('error: ' + r.error);
   $('apiKey').value = '';

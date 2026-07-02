@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Hyperia</title>
+<style>
+  :root {
+    --bg: #0a0a10; --bg-soft: #12121c; --line: #23233a; --text: #d8dce6;
+    --text-dim: #9aa1b5; --text-faint: #5d6478; --accent: #7ee8a2; --user: #8ab4f8;
+    --font: 'Cascadia Code', 'Consolas', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px;
+         min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 48px 24px; }
+  .wrap { width: 100%; max-width: 680px; }
+  h1 { font-size: 18px; letter-spacing: 3px; text-transform: uppercase; color: var(--accent);
+       text-align: center; font-weight: 500; margin-bottom: 24px; }
+  .search { display: flex; gap: 0; margin-bottom: 40px; }
+  .search input { flex: 1; background: var(--bg-soft); border: 1px solid var(--line); color: var(--text);
+    font-family: var(--font); font-size: 14px; padding: 12px 14px; outline: none; border-radius: 6px 0 0 6px; }
+  .search input:focus { border-color: var(--accent); }
+  .search button { background: var(--bg-soft); border: 1px solid var(--line); border-left: none; color: var(--text-dim);
+    font-family: var(--font); font-size: 13px; padding: 12px 18px; cursor: pointer; border-radius: 0 6px 6px 0; }
+  .search button:hover { color: var(--accent); }
+  .hint { color: var(--text-faint); font-size: 11px; text-align: center; margin: -30px 0 36px; }
+  h2 { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-dim);
+       border-bottom: 1px solid var(--line); padding-bottom: 6px; margin: 28px 0 12px; }
+  p { color: var(--text-dim); line-height: 1.6; margin-bottom: 10px; }
+  code, .cmd { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 4px;
+    padding: 1px 6px; color: var(--accent); font-family: var(--font); font-size: 12px; }
+  .cmdrow { display: flex; align-items: center; gap: 8px; background: var(--bg-soft); border: 1px solid var(--line);
+    border-radius: 6px; padding: 10px 12px; margin: 8px 0 14px; }
+  .cmdrow code { background: none; border: none; padding: 0; flex: 1; overflow-x: auto; white-space: nowrap; }
+  .copy { background: none; border: 1px solid var(--line); border-radius: 4px; color: var(--text-faint);
+    cursor: pointer; font-family: var(--font); font-size: 10px; padding: 3px 8px; flex: 0 0 auto; }
+  .copy:hover { color: var(--accent); border-color: var(--accent); }
+  ul { margin: 0 0 12px 18px; color: var(--text-dim); line-height: 1.7; }
+  a { color: var(--user); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .links { display: flex; gap: 14px; margin-top: 20px; }
+  .links a { border: 1px solid var(--line); border-radius: 6px; padding: 8px 14px; background: var(--bg-soft); }
+  .links a:hover { border-color: var(--accent); text-decoration: none; color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>hyperia</h1>
+  <form class="search" id="go">
+    <input id="q" autofocus spellcheck="false" placeholder="search DuckDuckGo or enter a URL">
+    <button type="submit">go</button>
+  </form>
+  <div class="hint">a URL navigates · anything else searches</div>
+
+  <h2>field guide</h2>
+  <p>Hyperia is a terminal where agents are first-class: every pane is addressable, every agent
+     gets an identity, and the human approves anything that changes state. Split panes, run agents
+     side by side, and let them drive the terminal through MCP — with your consent.</p>
+  <ul>
+    <li><b>Panes &amp; tabs</b> — right-click any pane for splits, clones, and <code>Open Hyperia</code>. <code>Ctrl+Shift+|</code> splits right, <code>Ctrl+Shift+_</code> splits down.</li>
+    <li><b>Built-in agent</b> — the Hyperia Agent tab talks to your configured model and can drive the terminal with tools.</li>
+    <li><b>Stickys</b> — floating notes with schedules; right-click → New Stickys.</li>
+  </ul>
+
+  <h2>connect an external agent (MCP)</h2>
+  <p>Any MCP-capable agent outside Hyperia (Claude Code, etc.) can drive this terminal:</p>
+  <div class="cmdrow"><code id="mcpcmd">claude mcp add --transport http hyperia http://localhost:9800/mcp</code><button class="copy" data-for="mcpcmd">copy</button></div>
+  <p>Inside a Hyperia pane, agents find their identity in <code>HYPERIA_AGENT_TOKEN</code> automatically.</p>
+
+  <h2>antigravity</h2>
+  <p>Run Antigravity in a pane and it gets the same MCP powers:</p>
+  <div class="cmdrow"><code id="agycmd">agy mcp add --transport http hyperia http://localhost:9800/mcp</code><button class="copy" data-for="agycmd">copy</button></div>
+
+  <div class="links">
+    <a href="/shell">talk to the Hyperia Agent</a>
+    <a href="/agent/config">configure the agent</a>
+  </div>
+</div>
+<script>
+'use strict';
+document.getElementById('go').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const raw = document.getElementById('q').value.trim();
+  if (!raw) return;
+  // URL-ish (scheme, or dotted host with no spaces, or localhost[:port]) → navigate; else DuckDuckGo.
+  const urlish = /^https?:\/\//i.test(raw)
+    || (!/\s/.test(raw) && (/^[\w-]+(\.[\w-]+)+(\/|$|:)/.test(raw) || /^localhost(:\d+)?(\/|$)/.test(raw)));
+  location.href = urlish
+    ? (/^https?:\/\//i.test(raw) ? raw : 'https://' + raw)
+    : 'https://duckduckgo.com/?q=' + encodeURIComponent(raw);
+});
+for (const b of document.querySelectorAll('.copy')) {
+  b.addEventListener('click', () => {
+    const el = document.getElementById(b.dataset.for);
+    navigator.clipboard.writeText(el.textContent).then(() => {
+      b.textContent = 'copied'; setTimeout(() => { b.textContent = 'copy'; }, 1200);
+    });
+  });
+}
+</script>
+</body>
+</html>

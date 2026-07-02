@@ -87,6 +87,35 @@ const INSTALL_CATALOG: InstallEntry[] = [
   }
 ];
 
+// Persisted picker defaults — what the S / A hotkeys launch. Written on every
+// explicit shell/agent selection, read once when the picker mounts, so the
+// quick keys keep working across sessions.
+const LS_DEFAULT_SHELL = 'hyperia.picker.defaultShell';
+const LS_DEFAULT_AGENT = 'hyperia.picker.defaultAgent';
+const readStoredDefault = (key: string): string | undefined => {
+  try {
+    return window.localStorage.getItem(key) || undefined;
+  } catch {
+    return undefined;
+  }
+};
+const writeStoredDefault = (key: string, value: string) => {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    /* storage unavailable */
+  }
+};
+
+// Self-update command shown in the picker footer. Like the install catalog,
+// it never auto-runs: [run] opens a shell with it typed but NOT submitted.
+const UPDATE_COMMAND = isWindows
+  ? 'powershell -c "irm https://hyperia.nuts.services/install.ps1 | iex"'
+  : 'curl -fsSL https://hyperia.nuts.services/install.sh | sh';
+
+// Version strings compare with or without a leading "v" ("0.15.11" == "v0.15.11").
+const normalizeVersion = (v?: string): string => (v || '').trim().replace(/^v/i, '');
+
 // Icon per agent harness.
 const agentIconClass = (name: string): {icon: string; style?: React.CSSProperties} => {
   const n = name.toLowerCase().replace(/^install /, '');
@@ -151,6 +180,10 @@ interface ComboboxProps {
   createLabel: string;
   onAdd: () => void;
   isGlimmerActive?: boolean;
+  // Hotkey chip (e.g. "S") shown next to the label; `keyHintTitle` explains
+  // what pressing the key launches.
+  keyHint?: string;
+  keyHintTitle?: string;
 }
 
 interface ComboboxState {
@@ -177,8 +210,9 @@ const comboRowStyle = (focused: boolean): React.CSSProperties => ({
 });
 
 // Shared layout so New Webpane / New Shell / New Agent are the SAME width and
-// look: a fixed-width left label, then a flex box capped at the same maxWidth.
-const PICKER_ROW_MAX = '430px';
+// look: a fixed-width left label (wide enough for the W/S/A hotkey chip), then
+// a flex box capped at the same maxWidth.
+const PICKER_ROW_MAX = '446px';
 const PICKER_BOX_MAX = '340px';
 const pickerRowStyle: React.CSSProperties = {
   display: 'flex',
@@ -188,7 +222,7 @@ const pickerRowStyle: React.CSSProperties = {
   maxWidth: PICKER_ROW_MAX
 };
 const pickerLabelStyle: React.CSSProperties = {
-  width: '80px',
+  width: '96px',
   flexShrink: 0,
   fontSize: '11px',
   color: 'var(--text-secondary)',
@@ -233,6 +267,20 @@ const pickerEnterBadgeStyle: React.CSSProperties = {
   lineHeight: '1.2',
   whiteSpace: 'nowrap',
   cursor: 'pointer',
+  flexShrink: 0
+};
+// Small hotkey chip ("W" / "S" / "A") next to each section label — same look
+// as the inline enter badge, sized down to fit the label column.
+const pickerKeyHintStyle: React.CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: '9px',
+  fontWeight: 600,
+  padding: '1px var(--space-4)',
+  border: '0.5px solid var(--border-neutral)',
+  borderRadius: 'var(--radius-3)',
+  color: 'var(--text-tertiary)',
+  userSelect: 'none',
+  lineHeight: '1.2',
   flexShrink: 0
 };
 const pickerDropdownStyle: React.CSSProperties = {
@@ -327,13 +375,20 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
   };
 
   render() {
-    const {label, leadingIcon, addLabel, createLabel, placeholder} = this.props;
+    const {label, leadingIcon, addLabel, createLabel, placeholder, keyHint, keyHintTitle} = this.props;
     const rows = this.rows();
     const {text, open, focusedIndex} = this.state;
 
     return (
       <div style={pickerRowStyle}>
-        <div style={pickerLabelStyle}>{label}</div>
+        <div style={{...pickerLabelStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-4)'}}>
+          <span>{label}</span>
+          {keyHint && (
+            <span title={keyHintTitle} style={pickerKeyHintStyle}>
+              {keyHint}
+            </span>
+          )}
+        </div>
 
         <div style={{position: 'relative', flex: 1, minWidth: 0, maxWidth: PICKER_BOX_MAX}}>
           <div style={pickerBoxStyle}>
@@ -520,6 +575,10 @@ export interface NewPanePickerProps {
   pickerZoom: number;
   isGlimmerActive?: boolean;
 
+  // Gate for the W/S/A pane hotkeys — true only while this pane is the active
+  // session and nothing (e.g. the custom-profile modal) covers the picker.
+  hotkeysEnabled?: boolean;
+
   // Callbacks into Term.
   onUrlChange: (value: string) => void;
   onSubmitUrl: (url?: string) => void;
@@ -528,10 +587,15 @@ export interface NewPanePickerProps {
 }
 
 interface NewPanePickerState {
-  // Session-local "last used" so the combobox pre-fills the last choice. Not
-  // persisted across sessions.
+  // Remembered defaults (what the S / A hotkeys launch, and what the combo-
+  // boxes pre-fill). Seeded from localStorage and re-persisted on every
+  // explicit selection, so they survive across sessions.
   lastUsedShell?: string;
   lastUsedAgent?: string;
+  // Running Hyperia version (sidecar /api/status) and the latest published
+  // one (hyperia.nuts.services/version) — drives the footer's update row.
+  currentVersion?: string;
+  latestVersion?: string;
   // 'install' swaps the picker content for the agent install-instructions view.
   view?: 'main' | 'install';
   // Which install command was just copied (flash feedback).
@@ -545,7 +609,10 @@ interface NewPanePickerState {
 // profile. Top→bottom: title, URL entry, a New Shell combobox, a New Agent
 // combobox. No dividers between sections.
 export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePickerState> {
-  state: NewPanePickerState = {};
+  state: NewPanePickerState = {
+    lastUsedShell: readStoredDefault(LS_DEFAULT_SHELL),
+    lastUsedAgent: readStoredDefault(LS_DEFAULT_AGENT)
+  };
 
   componentDidMount() {
     // Is the Hyperia agent configured? (provider+model+key in config.agent.*)
@@ -554,7 +621,89 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
       .then((r) => r.json())
       .then((j) => this.setState({hyperiaConfigured: !!j?.configured}))
       .catch(() => {});
+
+    // Footer: the running version (sidecar) and the latest published one.
+    fetch(`http://localhost:${port}/api/status`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (j?.version) this.setState({currentVersion: String(j.version)});
+      })
+      .catch(() => {});
+    // The endpoint may return plain text ("0.15.11") or JSON ({version: …}).
+    fetch('https://hyperia.nuts.services/version')
+      .then((r) => r.text())
+      .then((t) => {
+        let v = t.trim();
+        try {
+          const j = JSON.parse(v);
+          if (j && typeof j === 'object' && j.version) v = String(j.version).trim();
+        } catch {
+          /* plain text */
+        }
+        if (v) this.setState({latestVersion: v});
+      })
+      .catch(() => {});
+
+    // W/S/A quick-launch hotkeys — window-level because the picker has no
+    // focusable surface of its own; gated on this pane being the active
+    // session (hotkeysEnabled) and on focus not being in a text field.
+    window.addEventListener('keydown', this.handleHotkey);
   }
+
+  componentWillUnmount() {
+    window.removeEventListener('keydown', this.handleHotkey);
+  }
+
+  // W/S/A quick paths. Only in the main view (the hints live on its section
+  // labels), never while typing in an input, and never with modifiers held.
+  private handleHotkey = (e: KeyboardEvent) => {
+    if (!this.props.hotkeysEnabled) return;
+    if ((this.state.view || 'main') !== 'main') return;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+
+    const key = e.key.toLowerCase();
+    if (key === 'w') {
+      e.preventDefault();
+      e.stopPropagation();
+      this.openGuidePane();
+    } else if (key === 's') {
+      e.preventDefault();
+      e.stopPropagation();
+      this.launchDefaultShell();
+    } else if (key === 'a') {
+      e.preventDefault();
+      e.stopPropagation();
+      this.launchDefaultAgent();
+    }
+  };
+
+  // W: swap THIS picker pane into a web pane on the sidecar-served guide —
+  // the same exit + setWebPaneUrl pattern the URL box and agent config use.
+  private openGuidePane = () => {
+    const {groupUid, uid, setWebPaneUrl} = this.props;
+    if (!setWebPaneUrl || !groupUid) return;
+    const port = process.env.HYPERIA_PORT || '9800';
+    rpc.emit('exit', {uid});
+    setWebPaneUrl(groupUid, `http://localhost:${port}/guide`);
+  };
+
+  // S: the remembered default shell; falls back to the same resolution the
+  // combobox displays (configured defaultProfile, then the first shell).
+  private launchDefaultShell = () => {
+    const item = this.resolveDefaultShell(this.buildShellItems());
+    item?.onSelect();
+  };
+
+  // A: the remembered default agent; with nothing remembered (or the agent
+  // gone), the Hyperia Agent path is the fallback.
+  private launchDefaultAgent = () => {
+    const items = this.buildAgentItems();
+    const remembered = this.state.lastUsedAgent && items.find((i) => i.key === this.state.lastUsedAgent);
+    if (remembered) remembered.onSelect();
+    else this.launchHyperiaShell();
+  };
 
   // Open the Hyperia Agent configuration pane (sidecar-served) in this pane.
   private openAgentConfig = () => {
@@ -578,22 +727,26 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
 
   private launchShell = (name: string) => {
     this.setState({lastUsedShell: name});
+    writeStoredDefault(LS_DEFAULT_SHELL, name);
     this.newWithProfile(name);
   };
 
   private launchAgent = (name: string) => {
     this.setState({lastUsedAgent: name});
+    writeStoredDefault(LS_DEFAULT_AGENT, name);
     this.newWithProfile(name);
   };
 
   // Hyperia Agent always gets its OWN tab (labeled "Hyperia Agent"; focuses
   // the existing one if open) — routed through the shared 'open web pane req'
-  // handler in lib/index.tsx. The picker pane closes itself.
+  // handler in lib/index.tsx. The picker pane closes itself. Remembered under
+  // the agent item's key ('Hyperia') so the A hotkey resolves back to it.
   private launchHyperiaShell = () => {
     const {uid} = this.props;
     const port = process.env.HYPERIA_PORT || '9800';
     const shellUrl = `http://localhost:${port}/shell`;
-    this.setState({lastUsedAgent: 'Hyperia Shell'});
+    this.setState({lastUsedAgent: 'Hyperia'});
+    writeStoredDefault(LS_DEFAULT_AGENT, 'Hyperia');
     rpc.emitter.emit('open web pane req', {url: shellUrl});
     rpc.emit('exit', {uid});
   };
@@ -781,11 +934,10 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     );
   }
 
-  render() {
-    const {profiles, defaultProfile, urlInput, urlError, pickerZoom, isGlimmerActive} = this.props;
-    const profileList: any[] = profiles || [];
-
-    // --- Shell items (everything that isn't an agent, platform-filtered) ---
+  // --- Shell items (everything that isn't an agent, platform-filtered) ---
+  // Shared by render() and the S hotkey.
+  private buildShellItems(): ComboItem[] {
+    const profileList: any[] = this.props.profiles || [];
     const shellProfiles = profileList
       .filter((p: any) => {
         const n = p.name.toLowerCase();
@@ -795,7 +947,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
       // Stock (system-detected) shells first, user-added custom shells after.
       .sort((a: any, b: any) => (a.kind ? 1 : 0) - (b.kind ? 1 : 0));
 
-    const shellItems: ComboItem[] = shellProfiles.map((p: any) => {
+    return shellProfiles.map((p: any) => {
       const displayName = capitalize(p.name);
       return {
         key: p.name,
@@ -805,20 +957,26 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         onDelete: p.kind ? () => this.confirmDelete('shell', p.name, displayName) : undefined
       };
     });
+  }
 
-    // Default text: last used → configured defaultProfile (if it's a shell) →
-    // first shell.
-    const defaultShellItem =
+  // Default shell: remembered default → configured defaultProfile (if it's a
+  // shell) → first shell.
+  private resolveDefaultShell(shellItems: ComboItem[]): ComboItem | undefined {
+    const {defaultProfile} = this.props;
+    return (
       (this.state.lastUsedShell && shellItems.find((i) => i.key === this.state.lastUsedShell)) ||
       (defaultProfile && shellItems.find((i) => i.key === defaultProfile)) ||
-      shellItems[0];
-    const shellDefaultText = defaultShellItem ? defaultShellItem.label : '';
+      shellItems[0]
+    );
+  }
 
-    // --- Agent items — detection-driven (app/config/detect.ts catalog) ---
-    // INSTALLED harnesses arrive as profiles named exactly per AGENT_NAMES
-    // (Nemesis8 installed also brings "Nemesis8 Danger" = `nemesis8 --danger`).
-    // Missing ones are NOT listed — the "install an agent" row opens the
-    // instruction view instead.
+  // --- Agent items — detection-driven (app/config/detect.ts catalog) ---
+  // INSTALLED harnesses arrive as profiles named exactly per AGENT_NAMES
+  // (Nemesis8 installed also brings "Nemesis8 Danger" = `nemesis8 --danger`).
+  // Missing ones are NOT listed — the "install an agent" row opens the
+  // instruction view instead. Shared by render() and the A hotkey.
+  private buildAgentItems(): ComboItem[] {
+    const profileList: any[] = this.props.profiles || [];
     const agentItems: ComboItem[] = [];
     for (const p of profileList) {
       const n = p.name.toLowerCase();
@@ -867,10 +1025,28 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         onDelete: () => this.confirmDelete('agent', p.name, p.name)
       });
     }
+    return agentItems;
+  }
 
-    const defaultAgentItem =
-      (this.state.lastUsedAgent && agentItems.find((i) => i.key === this.state.lastUsedAgent)) || agentItems[0];
+  render() {
+    const {urlInput, urlError, pickerZoom, isGlimmerActive} = this.props;
+
+    const shellItems = this.buildShellItems();
+    const defaultShellItem = this.resolveDefaultShell(shellItems);
+    const shellDefaultText = defaultShellItem ? defaultShellItem.label : '';
+
+    const agentItems = this.buildAgentItems();
+    const rememberedAgentItem =
+      this.state.lastUsedAgent && agentItems.find((i) => i.key === this.state.lastUsedAgent);
+    const defaultAgentItem = rememberedAgentItem || agentItems[0];
     const agentDefaultText = defaultAgentItem ? defaultAgentItem.label : '';
+
+    // Footer version status. "Up to date" only when BOTH versions resolved and
+    // match — an unreachable check leaves the run button enabled.
+    const {currentVersion, latestVersion} = this.state;
+    const upToDate =
+      !!currentVersion && !!latestVersion && normalizeVersion(currentVersion) === normalizeVersion(latestVersion);
+    const updateCopied = this.state.copiedInstall === UPDATE_COMMAND;
 
     if (this.state.view === 'install') {
       return this.renderInstallView();
@@ -915,7 +1091,12 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
           {/* New Webpane row — "New Webpane" label left of the URL box, same
               width/shape as the shell + agent rows below it. */}
           <div style={pickerRowStyle}>
-            <div style={pickerLabelStyle}>New Webpane</div>
+            <div style={{...pickerLabelStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-4)'}}>
+              <span>New Webpane</span>
+              <span title="Press W — open the Hyperia guide" style={pickerKeyHintStyle}>
+                W
+              </span>
+            </div>
             <div style={{flex: 1, minWidth: 0, maxWidth: PICKER_BOX_MAX}}>
               <UrlPicker
                 value={urlInput || ''}
@@ -949,6 +1130,8 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             createLabel="create new shell"
             onAdd={() => this.props.onOpenCustomModal('shell')}
             isGlimmerActive={isGlimmerActive}
+            keyHint="S"
+            keyHintTitle={`Press S — launch ${shellDefaultText || 'the default shell'}`}
           />
 
           {/* New Agent combobox. "install an agent" opens the instruction view
@@ -964,7 +1147,81 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             createLabel="install an agent:"
             onAdd={() => this.setState({view: 'install'})}
             isGlimmerActive={isGlimmerActive}
+            keyHint="A"
+            keyHintTitle={`Press A — launch ${
+              rememberedAgentItem ? rememberedAgentItem.label : 'the Hyperia Agent'
+            }`}
           />
+
+          {/* Footer — running version + self-update command. Like the install
+              view, [run] opens a shell with the command TYPED but not
+              submitted; nothing here auto-runs. */}
+          <div
+            style={{
+              ...pickerRowStyle,
+              flexDirection: 'column',
+              alignItems: 'stretch',
+              gap: 'var(--space-4)',
+              marginTop: 'var(--space-10)'
+            }}
+          >
+            <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-8)'}}>
+              <span style={{fontSize: '10.5px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
+                {currentVersion ? `Hyperia v${normalizeVersion(currentVersion)}` : 'Hyperia'}
+              </span>
+              {upToDate ? (
+                <span
+                  style={{fontSize: '10px', color: 'var(--success-text, #3fb950)', fontFamily: 'var(--font-sans)'}}
+                >
+                  ✓ up to date
+                </span>
+              ) : latestVersion ? (
+                <span style={{fontSize: '10px', color: 'var(--info-text)', fontFamily: 'var(--font-sans)'}}>
+                  v{normalizeVersion(latestVersion)} available
+                </span>
+              ) : null}
+              <span style={{flex: 1}} />
+              <span
+                onClick={() => this.copyInstall(UPDATE_COMMAND)}
+                title="Copy the update command"
+                style={{...pickerEnterBadgeStyle, cursor: 'pointer'}}
+              >
+                {updateCopied ? 'copied ✓' : 'copy'}
+              </span>
+              {upToDate ? (
+                <span
+                  title="Already up to date"
+                  style={{...pickerEnterBadgeStyle, cursor: 'default', opacity: 0.45}}
+                >
+                  run
+                </span>
+              ) : (
+                <span
+                  onClick={() => this.openInstallShell(UPDATE_COMMAND)}
+                  title="Open a shell with the update command typed — press Enter yourself"
+                  style={{...pickerEnterBadgeStyle, cursor: 'pointer', color: 'var(--info-text)'}}
+                >
+                  run
+                </span>
+              )}
+            </div>
+            <div
+              style={{
+                background: 'var(--bg-primary)',
+                border: '0.5px solid var(--border-neutral)',
+                borderRadius: 'var(--radius-6)',
+                padding: 'var(--space-6) var(--space-10)',
+                fontSize: '11px',
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--text-primary)',
+                overflowX: 'auto',
+                whiteSpace: 'nowrap',
+                userSelect: 'text'
+              }}
+            >
+              {UPDATE_COMMAND}
+            </div>
+          </div>
         </div>
       </div>
     );

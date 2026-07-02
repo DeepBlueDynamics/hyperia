@@ -2997,6 +2997,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/shell", axum::routing::get(ghost::api::ghost_shell_page))
         // Hyperia Agent configuration (epic #131).
         .route("/agent/config", axum::routing::get(ghost::api::agent_config_page))
+        .route("/guide", axum::routing::get(ghost::api::guide_page))
         .route(
             "/api/agent/config",
             axum::routing::get(ghost::api::get_agent_config).post(ghost::api::post_agent_config)

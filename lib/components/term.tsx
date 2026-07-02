@@ -2868,6 +2868,9 @@ export default class Term extends React.PureComponent<
             urlError={this.state.urlError}
             pickerZoom={this.state.pickerZoom}
             isGlimmerActive={this.state.isGlimmerActive}
+            // W/S/A quick keys only for the active pane, and not while the
+            // custom-profile modal covers the picker.
+            hotkeysEnabled={this.props.isTermActive && !this.state.isCustomModalOpen}
             onUrlChange={(v) => this.setState({urlInput: v, urlError: ''})}
             onSubmitUrl={(url) => this.submitUrl(url)}
             onTriggerGlimmer={() => this.triggerPickerGlimmer()}
