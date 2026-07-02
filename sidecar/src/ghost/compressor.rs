@@ -281,8 +281,11 @@ impl ContextCompressor {
                 out
             }
             Err(e) => {
-                warn!("maximus: compression skipped ({}), using full history", e);
-                messages.to_vec()
+                // The LLM summarizer is down — do NOT fall back to full history
+                // (that's exactly what overflows an 8k window). Trim mechanically
+                // so the prompt still fits.
+                warn!("maximus: compression failed ({}), hard-trimming to fit budget", e);
+                hard_trim_to_budget(messages, budget_tokens, overhead_chars)
             }
         }
     }
@@ -717,6 +720,62 @@ impl ContextCompressor {
 /// Returns `default_keep` when the budget is off (`0`) or the estimate fits.
 /// Otherwise steps down one message per ~1/8 of the budget the estimate is
 /// over, floored at 2 (never drops below the two most recent turns).
+/// Mechanical, LLM-free trim: keep the newest messages that fit within the
+/// token budget (chars/4 estimate, incl. `overhead_chars` for system+tools),
+/// dropping the oldest. Always keeps at least the final message (the current
+/// turn). Strips any leading orphaned `tool` result so the trimmed history
+/// doesn't 400 the provider ("tool message must follow tool_calls"), and
+/// prepends a short note when history was dropped. Used when the LLM
+/// compressor is unavailable/failed — the last line of defense against a
+/// context-window overflow.
+pub fn hard_trim_to_budget(messages: &[Value], budget_tokens: usize, overhead_chars: usize) -> Vec<Value> {
+    if budget_tokens == 0 || messages.is_empty() {
+        return messages.to_vec();
+    }
+    let est = |m: &Value| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0) / 4;
+    let mut budget = budget_tokens.saturating_sub(overhead_chars / 4);
+    let mut kept: Vec<Value> = Vec::new();
+    for m in messages.iter().rev() {
+        let t = est(m);
+        // Always keep the newest message even if it alone blows the budget —
+        // sending a too-big current turn is the provider's problem to report,
+        // whereas sending nothing is useless.
+        if kept.is_empty() || t <= budget {
+            budget = budget.saturating_sub(t);
+            kept.push(m.clone());
+        } else {
+            break;
+        }
+    }
+    kept.reverse();
+    // Drop a leading tool-result whose parent assistant/tool_calls got trimmed.
+    while kept
+        .first()
+        .and_then(|m| m["role"].as_str())
+        .map_or(false, |r| r == "tool")
+    {
+        kept.remove(0);
+    }
+    let dropped = messages.len() - kept.len();
+    if dropped == 0 {
+        return kept;
+    }
+    info!(
+        "maximus: hard-trimmed {} old message(s) to fit ~{} tok context budget",
+        dropped, budget_tokens
+    );
+    let mut out = Vec::with_capacity(kept.len() + 1);
+    out.push(serde_json::json!({
+        "role": "user",
+        "content": format!(
+            "[{} earlier message(s) were dropped to fit the model's context window. Ask the human if you need lost detail.]",
+            dropped
+        )
+    }));
+    out.extend(kept);
+    out
+}
+
 fn budgeted_keep_recent(default_keep: usize, budget_tokens: usize, est_tokens: usize) -> usize {
     if budget_tokens == 0 || est_tokens <= budget_tokens {
         return default_keep;

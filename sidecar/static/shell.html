@@ -75,6 +75,37 @@
     background: var(--line) !important;
     color: var(--text-dim) !important;
   }
+  /* Enabled-model lights — hybrid mode runs more than one; a blinking dot
+     next to each tells you what's live, and the ACTIVE agent model blinks
+     brighter/faster so you can see which one is actually answering. */
+  .titlebar .models {
+    display: flex;
+    gap: 12px;
+    margin-right: 16px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .titlebar .models .m {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-faint);
+    white-space: nowrap;
+  }
+  .titlebar .models .m::before {
+    content: "●";
+    font-size: 9px;
+    color: var(--ok);
+    animation: blink-soft 2.4s ease-in-out infinite;
+  }
+  .titlebar .models .m.active {
+    color: var(--text-dim);
+  }
+  .titlebar .models .m.active::before {
+    color: var(--accent);
+    animation: blink-soft 1s ease-in-out infinite;
+  }
   .usage-badge {
     color: var(--text-faint);
     font-size: 10px;
@@ -561,8 +592,10 @@
 
 <div class="titlebar">
   <div class="name">hyperia · shell</div>
+  <div class="models" id="hud-models"></div>
   <div class="hud">
-    <div class="stat"><span>tok/s</span><span class="v" id="hud-tps">0</span></div>
+    <div class="stat"><span>t/s max</span><span class="v" id="hud-tps-max">0</span></div>
+    <div class="stat"><span>t/s avg</span><span class="v" id="hud-tps-avg">0</span></div>
     <div class="stat"><span>in</span><span class="v" id="hud-in">0</span></div>
     <div class="stat"><span>out</span><span class="v" id="hud-out">0</span></div>
     <div class="stat"><span>tools</span><span class="v" id="hud-tools">0</span></div>
@@ -625,8 +658,18 @@ let turn_out = 0;
 let genStartMs = 0;   // set when the agent starts producing this turn
 let genTokens = 0;    // output tokens produced since genStartMs
 let lastTps = 0;      // last computed tok/s (held between turns)
+let maxTps = 0;       // peak decode speed observed (the ceiling)
+let cumTokens = 0;    // completed-turn tokens, for the running average
+let cumSecs = 0;      // completed-turn generation seconds
 function updateHud() {
-  $('hud-tps').textContent   = lastTps ? lastTps.toFixed(1) : '0';
+  // Average decode speed = all generated tokens / all generation time,
+  // folding the in-flight turn in live so it visibly settles as it streams.
+  let liveTok = 0, liveSecs = 0;
+  if (genStartMs) { liveTok = genTokens; liveSecs = (performance.now() - genStartMs) / 1000; }
+  const totSecs = cumSecs + liveSecs;
+  const avg = totSecs > 0.25 ? (cumTokens + liveTok) / totSecs : 0;
+  $('hud-tps-max').textContent = maxTps ? maxTps.toFixed(1) : '0';
+  $('hud-tps-avg').textContent = avg ? avg.toFixed(1) : '0';
   $('hud-in').textContent    = STATS.in.toLocaleString();
   $('hud-out').textContent   = STATS.out.toLocaleString();
   $('hud-tools').textContent = STATS.tools;
@@ -834,12 +877,21 @@ function streamText(chunk) {
   if (!genStartMs) { genStartMs = performance.now(); genTokens = 0; }
   genTokens += est;
   const secs = (performance.now() - genStartMs) / 1000;
-  if (secs > 0.25) lastTps = genTokens / secs;
+  if (secs > 0.25) {
+    lastTps = genTokens / secs;
+    if (lastTps > maxTps) maxTps = lastTps;
+  }
   updateHud();
   autoscroll();
 }
 function endAgentStream() {
   if (streamingRow) {
+    // Fold this turn's decode into the running average before the clock stops.
+    if (genStartMs) {
+      const secs = (performance.now() - genStartMs) / 1000;
+      if (secs > 0.05 && genTokens > 0) { cumTokens += genTokens; cumSecs += secs; }
+      genStartMs = 0;
+    }
     streamingRow.classList.remove('streaming');
     if (turn_in > 0 || turn_out > 0) {
       const usageEl = document.createElement('span');
@@ -1865,6 +1917,7 @@ async function bootCapabilities() {
   }
   // Cache capabilities for the picker click handler.
   window.__caps__ = caps;
+  void renderModelLights(caps);
   // Auto-prompt model picker on first capabilities load if configured model
   // isn't installed and we have alternatives.
   if (!modelInstalled && providerNm === 'ollama' && ollamaModels.length && !window.__model_prompted__) {
@@ -1877,6 +1930,34 @@ async function bootCapabilities() {
     return null;
   }
   return caps;
+}
+
+// Enabled-model lights in the titlebar. Hybrid mode has more than one brain
+// wired at once (a frontier planner + a local model), and it's otherwise hard
+// to tell which is answering — so paint a blinking dot per enabled model, and
+// mark the ACTIVE agent provider so it's obvious what you're talking to.
+// Local liveness: sailfish from the services probe, ollama from caps. Frontier
+// liveness: keycheck (ok = usable key), the same authoritative signal the
+// config page dots use.
+async function renderModelLights(caps) {
+  const host = $('hud-models');
+  if (!host || !caps) return;
+  const active = (caps.agent && caps.agent.provider) ? caps.agent.provider : '';
+  const chips = [];
+  const ollama = caps.providers && caps.providers.ollama;
+  let sailfishUp = false, keys = {};
+  try { sailfishUp = !!((await (await fetch('/api/agent/services')).json()).services || {}).sailfish_api; } catch (_) {}
+  try { keys = (await (await fetch('/api/agent/keycheck')).json()).providers || {}; } catch (_) {}
+  if (sailfishUp) chips.push('sailfish');
+  if (ollama && ollama.reachable && !ollama.disabled) chips.push('ollama');
+  for (const p of ['anthropic', 'openai', 'gemini', 'grok']) {
+    if (keys[p] === 'ok' || keys[p] === 'payment') chips.push(p);
+  }
+  // The active provider always shows, even if its probe didn't flag it.
+  if (active && !chips.includes(active)) chips.unshift(active);
+  host.innerHTML = chips.map(k =>
+    `<span class="m${k === active ? ' active' : ''}" title="${k === active ? 'active — answering you' : 'enabled'}">${escapeHtml(k)}</span>`
+  ).join('');
 }
 
 // The boot banner (sidecar/providers/level) prints ONCE per shell load — from
@@ -2090,6 +2171,10 @@ $('hud-reset').addEventListener('click', () => {
   STATS.turns = 0;
   turn_in = 0;
   turn_out = 0;
+  maxTps = 0;
+  cumTokens = 0;
+  cumSecs = 0;
+  lastTps = 0;
   updateHud();
 });
 

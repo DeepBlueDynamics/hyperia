@@ -1083,10 +1083,19 @@ impl OpenAIProvider {
             let api_message = serde_json::from_str::<serde_json::Value>(&raw)
                 .ok()
                 .and_then(|j| j["error"]["message"].as_str().map(|s| s.to_string()));
+            // Name the ACTUAL provider, not "OpenAI" — Sailfish/vLLM/etc. ride
+            // this same code path, and labeling every failure "OpenAI error"
+            // makes a local model look like a cloud one. Include the host so
+            // it's unambiguous which endpoint answered.
+            let host = self
+                .endpoint
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
+            let who = format!("{} ({})", self.provider_label, host);
             let label = if let Some(msg) = api_message {
-                format!("OpenAI error {} — {}\nFull response: {}", status, msg, raw)
+                format!("{} error {} — {}\nFull response: {}", who, status, msg, raw)
             } else {
-                format!("OpenAI error {} — {}", status, raw)
+                format!("{} error {} — {}", who, status, raw)
             };
             let _ = tx.send(ProviderEvent::Error(label)).await;
             return Ok(rx);

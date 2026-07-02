@@ -522,16 +522,37 @@ After cleanup, reply to the human and end the turn."
             .map(|v| v.len())
             .unwrap_or(0);
 
+        // Effective context window. Explicit config (config.agent.context_tokens)
+        // wins; otherwise assume the known small-model window (8k) for local/small
+        // providers (Sailfish/Ollama) so the budget guard actually engages — the
+        // config leaves this 0, which used to disable trimming entirely and let an
+        // 8k model 400 with "exceeds context size". Cloud models have huge windows
+        // and manage themselves, so they stay unbounded (0 = no trim).
+        let effective_ctx = if context_tokens > 0 {
+            context_tokens
+        } else if door_config.small {
+            8192
+        } else {
+            0
+        };
+        // Reserve headroom for the model's own output. On a small 8k window, the
+        // old fixed 4096 was half the budget — scale it down so the prompt has room.
+        let out_reserve: u32 = if effective_ctx > 0 && effective_ctx <= 16384 { 1024 } else { 4096 };
+        let prompt_budget = effective_ctx.saturating_sub(out_reserve as usize);
+
         // Compress older messages via local Ollama before sending to the primary model.
         // Recent messages are kept verbatim; `messages` itself is never modified so
-        // tool results continue accumulating against the full history. When a hard
-        // context budget is configured (config.agent.context_tokens), the guard
-        // trims verbatim recent history so system + tools + history fits.
+        // tool results continue accumulating against the full history. When a context
+        // budget is known, trim so system + tools + history fits; if the LLM
+        // compressor is down, still hard-trim mechanically (never send full history
+        // into a bounded window).
+        let overhead_chars = effective_system.len() + tool_schema_bytes;
         let send_messages = if compress {
-            let overhead_chars = effective_system.len() + tool_schema_bytes;
             compressor
-                .compress_messages_budgeted(&messages, context_tokens, overhead_chars)
+                .compress_messages_budgeted(&messages, prompt_budget, overhead_chars)
                 .await
+        } else if prompt_budget > 0 {
+            crate::ghost::compressor::hard_trim_to_budget(&messages, prompt_budget, overhead_chars)
         } else {
             messages.clone()
         };
@@ -550,7 +571,7 @@ After cleanup, reply to the human and end the turn."
 
         // Call the provider
         let mut event_rx = provider
-            .stream(&effective_system, &send_messages, &effective_tool_defs, 4096)
+            .stream(&effective_system, &send_messages, &effective_tool_defs, out_reserve)
             .await?;
 
         // Accumulate assistant content and tool calls
@@ -1090,11 +1111,13 @@ fn open_door_result(
         Some(d) => d.to_string(),
         None => input["door"].as_str().unwrap_or("").trim().to_string(),
     };
+    tracing::info!(target: "doors", door = %door, alias = ?alias, raw_input = %input, "open_tools requested");
 
     // Validate against the ghost surface.
     let valid = door_by_name(&door).map_or(false, |d| !d.ghost_tools.is_empty());
     if !valid {
         let names: Vec<&str> = doors_for(Surface::Ghost).map(|d| d.name).collect();
+        tracing::warn!(target: "doors", door = %door, available = %names.join(", "), "open_tools failed: unknown door");
         return format!(
             "Unknown door '{}'. Available doors: {}",
             door,
@@ -1104,6 +1127,15 @@ fn open_door_result(
 
     let evicted = door_state.open_door(&door);
     let door_def = door_by_name(&door).unwrap();
+    tracing::info!(
+        target: "doors",
+        door = %door,
+        opened_tools = door_def.ghost_tools.len(),
+        live = door_state.live_tool_count(),
+        cap = door_state.cap(),
+        evicted = %evicted.join(","),
+        "open_tools ok"
+    );
 
     // One-line-per-tool listing pulled from the full catalog descriptions.
     let catalog = registry.tool_defs(None, None, None);
