@@ -561,7 +561,7 @@ mod tests {
         use crate::ghost::registry::ToolRegistry;
         let reg = ToolRegistry::new(9800, "test-token".into());
         let catalog: HashSet<String> = reg
-            .tool_defs(None, None)
+            .tool_defs(None, None, None)
             .into_iter()
             .map(|t| t.name)
             .collect();

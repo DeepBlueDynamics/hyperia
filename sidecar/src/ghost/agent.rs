@@ -104,6 +104,34 @@ When the user says \"change my model\", \"switch to OpenAI\", \"use Claude\", or
   4. If the chosen provider has no token configured (settings_get(\"config.providers.<provider>.token\") returns null/empty) and the provider isn't ollama, follow up with show_input(id=\"token\", kind=\"password\") to collect it, then settings_set(\"config.providers.<provider>.token\", <value>).
 Do not invent models. Only present what model_catalog returns.";
 
+/// The exact "## Honesty about tools" paragraph inside [`SYSTEM_PROMPT`]. In
+/// doors mode it is string-replaced with [`DOORS_CONTRACT`] (plan §4.3.5).
+/// MUST stay byte-for-byte identical to the block in SYSTEM_PROMPT or the
+/// replace silently no-ops.
+const HONESTY_ABOUT_TOOLS: &str = "\
+## Honesty about tools
+The tool list above is the COMPLETE set of tools you have. Do not invent tool names — `google:search`, `web_search`, generic shell access, image generation, etc. don't exist unless they're in the list. If the user asks for something you can't do:
+- check `tool_search` for what exists by keyword
+- use `web_fetch` if you can compose a specific URL
+- offer to build a new tool with `tool_create`
+- or tell the user plainly that the capability isn't wired
+
+Never call a tool name that wasn't in your tool definitions for this turn.";
+
+/// Doors-mode replacement for [`HONESTY_ABOUT_TOOLS`]. Explains that the live
+/// tool list is a small core plus opened doors, and how to reveal more.
+const DOORS_CONTRACT: &str = "\
+## Tools behind doors
+Your tool list is NOT the whole catalog — it is a small always-on core plus any doors you have opened. A door is a named category of tools. Two meta-tools drive it:
+- open_tools(door=\"NAME\") makes that door's tools callable on your NEXT turn. Its description lists every door and what each contains.
+- close_tools(door=\"NAME\") puts a door away to free room (there is a live-tool cap; opening a door may evict the least-recently-used one).
+- tool_search(query) searches the FULL catalog (open or closed) and tells you which door each tool is behind.
+
+Rules:
+- If a capability seems missing, DON'T assume it doesn't exist — search first, then open the right door.
+- You may call a tool that is behind a closed door directly; the door auto-opens and the call runs. Prefer open_tools when you know you'll need a whole category.
+- Never invent tool names that are not in the catalog (tool_search will confirm what's real).";
+
 #[derive(Debug, Clone)]
 pub enum SessionState {
     Idle,
@@ -121,6 +149,11 @@ pub struct GhostSession {
     tool_call_count: usize,
     /// Recent (name+input, output) pairs for repeat detection — persists across messages.
     recent_calls: Vec<(String, String)>,
+    /// Progressive-disclosure door state (open doors + cap), persisted across
+    /// messages exactly like `tool_call_count`/`recent_calls`. `enabled` is
+    /// (re)derived per run from `HYPERIA_TOOL_DOORS`; the open-door list rides
+    /// through so a door opened on one message stays open on the next.
+    door_state: crate::doors::DoorState,
     pub stop_requested: Arc<AtomicBool>,
     pub window_closed: Arc<AtomicBool>,
     /// Messages the user typed while the agent was running. Drained by the
@@ -138,6 +171,7 @@ impl GhostSession {
             state: SessionState::Idle,
             tool_call_count: 0,
             recent_calls: Vec::new(),
+            door_state: crate::doors::DoorState::new(crate::doors::Surface::Ghost),
             stop_requested: Arc::new(AtomicBool::new(false)),
             window_closed: Arc::new(AtomicBool::new(false)),
             pending_injects: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -220,6 +254,7 @@ impl GhostSession {
         let turn_start = self.turn;
         let initial_tool_call_count = self.tool_call_count;
         let initial_recent_calls = self.recent_calls.clone();
+        let initial_door_state = self.door_state.clone();
 
         tokio::spawn(async move {
             let result = run_loop(
@@ -236,13 +271,15 @@ impl GhostSession {
                 pending_injects,
                 initial_tool_call_count,
                 initial_recent_calls,
+                initial_door_state,
             ).await;
             match result {
-                Ok((final_messages, stop_reason, final_tool_call_count, final_recent_calls)) => {
+                Ok((final_messages, stop_reason, final_tool_call_count, final_recent_calls, final_door_state)) => {
                     // Write the full conversation history and throttle state back to the session
                     let mut session = session_mutex.lock().await;
                     session.set_messages(final_messages);
                     session.set_throttle_state(final_tool_call_count, final_recent_calls);
+                    session.set_door_state(final_door_state);
                     session.set_state(SessionState::Completed(stop_reason));
                 }
                 Err(e) => {
@@ -272,12 +309,19 @@ impl GhostSession {
         self.recent_calls = recent_calls;
     }
 
+    /// Persist the open-door set back to the session after a run (mirrors
+    /// `set_throttle_state`).
+    pub fn set_door_state(&mut self, door_state: crate::doors::DoorState) {
+        self.door_state = door_state;
+    }
+
     pub fn reset(&mut self) {
         self.messages.clear();
         self.turn = 0;
         self.state = SessionState::Idle;
         self.tool_call_count = 0;
         self.recent_calls.clear();
+        self.door_state = crate::doors::DoorState::new(crate::doors::Surface::Ghost);
         self.stop_requested.store(false, Ordering::Relaxed);
         self.window_closed.store(false, Ordering::Relaxed);
     }
@@ -297,8 +341,19 @@ async fn run_loop(
     pending_injects: Arc<std::sync::Mutex<Vec<String>>>,
     initial_tool_call_count: usize,
     initial_recent_calls: Vec<(String, String)>,
-) -> anyhow::Result<(Vec<serde_json::Value>, String, usize, Vec<(String, String)>)> {
-    let tool_defs = registry.tool_defs(Some(provider.provider_name()), Some(provider.model_name()));
+    initial_door_state: crate::doors::DoorState,
+) -> anyhow::Result<(Vec<serde_json::Value>, String, usize, Vec<(String, String)>, crate::doors::DoorState)> {
+    // Doors mode is gated by env in Phase 2 (config.agent.tool_doors auto-mode
+    // is Phase 3). The open-door set persists across messages via the session;
+    // `enabled` is re-derived here every run.
+    let doors_enabled = std::env::var("HYPERIA_TOOL_DOORS")
+        .map(|v| {
+            let v = v.trim();
+            v == "1" || v.eq_ignore_ascii_case("true")
+        })
+        .unwrap_or(false);
+    let mut door_state = initial_door_state;
+    door_state.set_enabled(doors_enabled);
 
     // Progressive throttle counters — seeded from session so they persist across messages.
     // Reset only when the user explicitly resets the conversation.
@@ -310,6 +365,12 @@ async fn run_loop(
 
     // Recall memories from Ferricula before the first model call
     let mut system = SYSTEM_PROMPT.to_string();
+    // Doors mode: swap the "complete tool list" honesty paragraph for the
+    // doors contract (plan §4.3.5) — in doors mode the tool list is a small
+    // core plus opened doors, not the whole catalog.
+    if doors_enabled {
+        system = system.replace(HONESTY_ABOUT_TOOLS, DOORS_CONTRACT);
+    }
     let recalled = ferricula.recall(user_message).await;
     if !recalled.is_empty() {
         system.push_str(&recalled);
@@ -357,8 +418,18 @@ async fn run_loop(
                     turns: turn_start + turns - 1,
                 })
                 .await;
-            return Ok((messages, "max_turns".into(), tool_call_count, recent_calls));
+            return Ok((messages, "max_turns".into(), tool_call_count, recent_calls, door_state));
         }
+
+        // Assemble the base tool list for THIS iteration. In doors mode this is
+        // core + open doors' schemas (which change as the model opens/closes
+        // doors mid-turn); with doors off it is the full catalog. Throttle-tier
+        // filtering below then applies ON TOP as a stricter emergency brake.
+        let tool_defs = registry.tool_defs(
+            Some(provider.provider_name()),
+            Some(provider.model_name()),
+            Some(&door_state),
+        );
 
         // Compute throttle tier and filter tools accordingly
         let throttle_tier: u8 = if tool_call_count > 32 { 3 }
@@ -516,7 +587,7 @@ After cleanup, reply to the human and end the turn."
                 }
                 ProviderEvent::Error(msg) => {
                     let _ = tx.send(GhostEvent::Error { message: msg }).await;
-                    return Ok((messages, "error".into(), tool_call_count, recent_calls));
+                    return Ok((messages, "error".into(), tool_call_count, recent_calls, door_state));
                 }
             }
         }
@@ -571,14 +642,32 @@ After cleanup, reply to the human and end the turn."
                     })
                     .await;
 
-                // tool_mount: non-blocking dynamic-widget mount. Stash the
-                // payload server-side keyed by a generated mount_id, emit
-                // the SSE event so the renderer can render it inline, and
-                // synthesize a confirmation string for the agent's history.
-                // Skip registry.execute() entirely — there's no blocking
-                // dispatch to run.
+                // Doors meta-tools (only when doors mode is active). A bare door
+                // name (e.g. calling "web") is accepted as an alias for
+                // open_tools(door="web") — cheap and 4B-friendly (plan §7).
                 let output;
-                if tool.name == "tool_mount" {
+                let door_alias: Option<&'static str> = if door_state.enabled() {
+                    crate::doors::door_by_name(&tool.name)
+                        .filter(|d| !d.ghost_tools.is_empty())
+                        .map(|d| d.name)
+                } else {
+                    None
+                };
+
+                if door_state.enabled() && (tool.name == "open_tools" || door_alias.is_some()) {
+                    // Gather-on-entry: mutate loop-local DoorState, synthesize the
+                    // "available next turn" text (plan §4.3.2). Schemas land in the
+                    // next request's tools array, not in the transcript.
+                    output = open_door_result(&registry, &mut door_state, door_alias, &input);
+                } else if door_state.enabled() && tool.name == "close_tools" {
+                    output = close_door_result(&mut door_state, &input);
+                } else if tool.name == "tool_mount" {
+                    // tool_mount: non-blocking dynamic-widget mount. Stash the
+                    // payload server-side keyed by a generated mount_id, emit
+                    // the SSE event so the renderer can render it inline, and
+                    // synthesize a confirmation string for the agent's history.
+                    // Skip registry.execute() entirely — there's no blocking
+                    // dispatch to run.
                     let widget_name = input["name"].as_str().unwrap_or("widget").to_string();
                     let srcdoc = input["srcdoc"].as_str().unwrap_or("").to_string();
                     if srcdoc.is_empty() {
@@ -642,6 +731,24 @@ After cleanup, reply to the human and end the turn."
                         );
                     }
                 } else {
+                    // Closed-door call guard (plan §4.3.3): the model called a
+                    // real catalog tool that is behind a closed door (saw the
+                    // name in tool_search / compressed history / an earlier
+                    // turn). Auto-open the door, run the tool, and annotate the
+                    // result. This is safe by construction — doors are a menu,
+                    // not a permission boundary (consent/identity live at the
+                    // HTTP API). Truly unknown names fall through to the normal
+                    // "Unknown tool: X" from registry.execute.
+                    let mut auto_opened: Option<String> = None;
+                    if door_state.enabled() {
+                        if let Some(dn) = door_state.door_of(&tool.name) {
+                            if !door_state.is_door_open(dn) {
+                                door_state.open_door(dn);
+                                auto_opened = Some(dn.to_string());
+                            }
+                        }
+                    }
+
                     // For show_* tools, surface the widget to the renderer
                     // *before* dispatching (because dispatch blocks until the
                     // user submits via POST /api/ghost/ui-response). The
@@ -659,7 +766,25 @@ After cleanup, reply to the human and end the turn."
                         }
                     }
 
-                    output = registry.execute(&tool.name, &input).await;
+                    // tool_search is door-aware in doors mode (adds open/closed
+                    // hints); otherwise it flows through execute() unchanged.
+                    let raw_output = if door_state.enabled() && tool.name == "tool_search" {
+                        registry.handle_tool_search(&input, Some(&door_state))
+                    } else {
+                        registry.execute(&tool.name, &input).await
+                    };
+
+                    output = match auto_opened {
+                        Some(dn) => format!("[door '{}' auto-opened by this call]\n{}", dn, raw_output),
+                        None => raw_output,
+                    };
+                }
+
+                // Any executed tool touches its door → moves it to MRU so it
+                // survives the next cap eviction longest (no-op for core tools
+                // and closed doors).
+                if door_state.enabled() {
+                    door_state.touch(&tool.name);
                 }
 
                 // Repeat detection: check if we've seen this exact call+output before
@@ -820,7 +945,7 @@ After cleanup, reply to the human and end the turn."
                         turns: turn_start + turns - 1,
                     })
                     .await;
-                return Ok((messages, "watercooler".into(), tool_call_count, recent_calls));
+                return Ok((messages, "watercooler".into(), tool_call_count, recent_calls, door_state));
             }
 
             // Continue the loop
@@ -857,6 +982,104 @@ After cleanup, reply to the human and end the turn."
                 turns: turn_start + turns - 1,
             })
             .await;
-        return Ok((messages, final_stop_reason, tool_call_count, recent_calls));
+        return Ok((messages, final_stop_reason, tool_call_count, recent_calls, door_state));
     }
+}
+
+/// Open a door and synthesize the gather-on-entry result text (plan §4.3.2):
+/// the door name, a one-line-per-tool listing of what it exposes NEXT turn, the
+/// current open-door set, the live-tool budget, and any LRU-evicted doors.
+/// Handles both `open_tools(door=…)` and the bare-door-name alias.
+fn open_door_result(
+    registry: &ToolRegistry,
+    door_state: &mut crate::doors::DoorState,
+    alias: Option<&str>,
+    input: &serde_json::Value,
+) -> String {
+    use crate::doors::{door_by_name, doors_for, Surface};
+
+    let door: String = match alias {
+        Some(d) => d.to_string(),
+        None => input["door"].as_str().unwrap_or("").trim().to_string(),
+    };
+
+    // Validate against the ghost surface.
+    let valid = door_by_name(&door).map_or(false, |d| !d.ghost_tools.is_empty());
+    if !valid {
+        let names: Vec<&str> = doors_for(Surface::Ghost).map(|d| d.name).collect();
+        return format!(
+            "Unknown door '{}'. Available doors: {}",
+            door,
+            names.join(", ")
+        );
+    }
+
+    let evicted = door_state.open_door(&door);
+    let door_def = door_by_name(&door).unwrap();
+
+    // One-line-per-tool listing pulled from the full catalog descriptions.
+    let catalog = registry.tool_defs(None, None, None);
+    let lines: Vec<String> = door_def
+        .ghost_tools
+        .iter()
+        .map(|&t| {
+            let desc = catalog
+                .iter()
+                .find(|c| c.name == t)
+                .map(|c| c.description.as_str())
+                .unwrap_or("");
+            let first = desc.lines().next().unwrap_or("").trim();
+            format!("- {}: {}", t, first)
+        })
+        .collect();
+
+    let open_list = door_state.open_doors().join(", ");
+    let mut out = format!(
+        "Door '{}' opened. Available on your NEXT turn ({} tools):\n{}\n\n\
+         [doors open: {}] [live tools next turn: {}/{}]",
+        door,
+        door_def.ghost_tools.len(),
+        lines.join("\n"),
+        open_list,
+        door_state.live_tool_count(),
+        door_state.cap()
+    );
+    if !evicted.is_empty() {
+        out.push_str(&format!(
+            "\n[evicted: {} — reopen with open_tools if needed]",
+            evicted.join(", ")
+        ));
+    }
+    out
+}
+
+/// Close a door and report the resulting live-tool budget (plan §4.3.2).
+fn close_door_result(
+    door_state: &mut crate::doors::DoorState,
+    input: &serde_json::Value,
+) -> String {
+    let door = input["door"].as_str().unwrap_or("").trim().to_string();
+    if door.is_empty() {
+        return "close_tools requires a 'door' name.".to_string();
+    }
+    let was_open = door_state.is_door_open(&door);
+    door_state.close_door(&door);
+    let open_list = door_state.open_doors().join(", ");
+    let open_disp = if open_list.is_empty() {
+        "none".to_string()
+    } else {
+        open_list
+    };
+    let prefix = if was_open {
+        format!("Door '{}' closed.", door)
+    } else {
+        format!("Door '{}' was not open.", door)
+    };
+    format!(
+        "{} [doors open: {}] [live tools next turn: {}/{}]",
+        prefix,
+        open_disp,
+        door_state.live_tool_count(),
+        door_state.cap()
+    )
 }
