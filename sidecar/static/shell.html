@@ -264,7 +264,7 @@
     align-items: baseline;
     min-width: 0;
     cursor: pointer;
-    user-select: none;
+    user-select: text; /* selectable — the click-toggle skips when a selection exists */
     white-space: nowrap;
   }
   .row.tool .label {
@@ -785,6 +785,8 @@ function addThinkingRow(id) {
   r.id = 'thinking-' + id;
   r.innerHTML = `<div class="summary"><span class="chev">▸</span><span class="label">💭</span><span class="name">thinking</span><span class="arg"></span><span class="meta"></span></div><div class="output" style="display: block;"></div>`;
   r.querySelector('.summary').addEventListener('click', () => {
+    const sel = window.getSelection();
+    if (sel && sel.toString().length > 0) return;
     r.classList.toggle('expanded');
     const out = r.querySelector('.output');
     out.style.display = r.classList.contains('expanded') ? 'block' : 'none';
@@ -820,9 +822,15 @@ function addToolRow(name, id) {
   r.className = 'row tool';
   r.id = 'tool-' + id;
   // Summary line is the only click target — the output region below
-  // doesn't toggle when you click into it (so you can select text).
+  // doesn't toggle when you click into it (so you can select text). The
+  // summary itself is selectable too: a click that ends with a live text
+  // selection (i.e. a drag-select) does NOT toggle.
   r.innerHTML = `<div class="summary"><span class="chev">▸</span><span class="label running">${getEmoji(name)}</span><span class="name">${escapeHtml(name)}</span><span class="arg">running…</span><span class="meta"></span></div><div class="output"></div>`;
-  r.querySelector('.summary').addEventListener('click', () => r.classList.toggle('expanded'));
+  r.querySelector('.summary').addEventListener('click', () => {
+    const sel = window.getSelection();
+    if (sel && sel.toString().length > 0) return;
+    r.classList.toggle('expanded');
+  });
   screen.appendChild(r);
   STATS.tools++; updateHud();
   autoscroll();
@@ -854,7 +862,13 @@ function finishToolRow(id, name, input, output) {
       if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
         try { return JSON.stringify(JSON.parse(t), null, 2); } catch (e) { /* raw */ }
       }
-      return String(v);
+      // Terminal screens of a near-empty pane arrive as dozens of blank
+      // (space-padded) lines — strip trailing spaces per line, collapse 3+
+      // consecutive blank lines, and drop trailing whitespace entirely.
+      return String(v)
+        .replace(/[ \t]+$/gm, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/\s+$/, '');
     };
     // Expanded row shows the FULL call: pretty input args, then output.
     const hasInput = input && (typeof input !== 'object' || Object.keys(input).length > 0);

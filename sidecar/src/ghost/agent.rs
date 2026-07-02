@@ -439,6 +439,20 @@ async fn run_loop(
     if doors_enabled {
         system = system.replace(HONESTY_ABOUT_TOOLS, DOORS_CONTRACT);
     }
+    // Anchor reality for small models: name the actual host platform so they
+    // don't confabulate one (ornith greeted a Windows user with a "2019 Apple
+    // Silicon MacBook Pro").
+    let host_os = match std::env::consts::OS {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        "linux" => "Linux",
+        other => other,
+    };
+    system.push_str(&format!(
+        "\n\n## Host\nThis terminal is running on {} ({}). Never state or guess other host details (hardware model, OS version) unless a tool output told you.",
+        host_os,
+        std::env::consts::ARCH
+    ));
     let recalled = ferricula.recall(user_message).await;
     if !recalled.is_empty() {
         system.push_str(&recalled);
@@ -656,6 +670,17 @@ After cleanup, reply to the human and end the turn."
         let mut stop_reason = String::new();
 
         while let Some(event) = event_rx.recv().await {
+            // Fast stop: honor Escape MID-GENERATION. Previously the flag was
+            // only read between turns, so a ~60s local generation ignored the
+            // user for its whole duration. Dropping event_rx on return unwinds
+            // the provider task's sends; any in-flight HTTP finishes in the
+            // background and is discarded.
+            if stop_requested.load(Ordering::Relaxed) {
+                let _ = tx
+                    .send(GhostEvent::Done { stop_reason: "stopped".into(), turns: turn_start + turns - 1 })
+                    .await;
+                return Ok((messages, "stopped".into(), tool_call_count, recent_calls, door_state));
+            }
             match event {
                 ProviderEvent::ThinkingStart { id } => {
                     text_parts.push("[Thinking: ".to_string());
