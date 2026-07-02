@@ -2849,7 +2849,9 @@ export default class Term extends React.PureComponent<
               bottom: 0,
               background: 'var(--bg-primary)',
               display: 'flex',
-              alignItems: 'center',
+              // Config-pane treatment: top-aligned full-height column (not a
+              // small centered card) so the form has room up and down.
+              alignItems: 'flex-start',
               justifyContent: 'center',
               zIndex: 50,
               color: 'var(--text-primary)',
@@ -2864,15 +2866,16 @@ export default class Term extends React.PureComponent<
             <div
               style={{
                 width: '100%',
-                maxWidth: '460px',
+                maxWidth: '640px',
+                minHeight: 'calc(100% - 8px)',
                 background: 'var(--bg-secondary)',
-                border: '0.5px solid var(--border-focus)',
-                borderRadius: '6px',
-                padding: '20px',
-                boxShadow: '0 8px 30px rgba(0, 0, 0, 0.5)',
+                border: '0.5px solid var(--border-neutral)',
+                borderRadius: '8px',
+                padding: '24px 22px 32px',
+                boxSizing: 'border-box',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '16px'
+                gap: '20px'
               }}
               onClick={(e) => e.stopPropagation()}
             >
