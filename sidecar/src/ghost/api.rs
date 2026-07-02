@@ -331,6 +331,10 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
         .trim()
         .to_lowercase();
     let has_token = |name: &str| -> bool {
+        // The Hyperia Agent config pane's key (config.agent.keys.<name>) counts.
+        if raw_cfg["config"]["agent"]["keys"][name].as_str().map(|s| !s.trim().is_empty()).unwrap_or(false) {
+            return true;
+        }
         if providers[name]["token"].as_str().map(|s| !s.is_empty()).unwrap_or(false) {
             return true;
         }
@@ -338,6 +342,7 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
             "anthropic" => vec!["ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"],
             "openai" => vec!["OPENAI_API_KEY", "OPENAI_TOKEN"],
             "gemini" => vec!["GEMINI_API_KEY", "GEMINI_TOKEN"],
+            "grok" => vec!["XAI_API_KEY", "GROK_API_KEY"],
             _ => vec![],
         };
         for key in env_keys {
@@ -795,6 +800,85 @@ pub async fn post_agent_config(
         Ok(_) => Ok(Json(serde_json::json!({"ok": true}))),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()})))),
     }
+}
+
+/// GET /api/agent/services — detect DBD services on this host: docker
+/// containers (shivvr / grub / transcription / sailfish / nemesis8) by
+/// name+image match, the nemesis8 binary, and its local MCP endpoint.
+pub async fn get_agent_services() -> Json<serde_json::Value> {
+    // docker ps (5s guard) — absent/timed-out docker = everything undetected.
+    let docker = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::process::Command::new("docker")
+            .args(["ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Status}}"])
+            .output(),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.ok());
+    let rows: Vec<(String, String, String, String)> = docker
+        .as_ref()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter_map(|l| {
+                    let p: Vec<&str> = l.split('\t').collect();
+                    (p.len() >= 4).then(|| (p[0].to_string(), p[1].to_string(), p[2].to_string(), p[3].to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let find = |pats: &[&str]| -> Option<serde_json::Value> {
+        rows.iter()
+            .find(|(name, image, _, _)| {
+                let hay = format!("{} {}", name, image).to_lowercase();
+                pats.iter().any(|p| hay.contains(p))
+            })
+            .map(|(name, image, ports, status)| {
+                serde_json::json!({"running": true, "container": name, "image": image, "ports": ports, "status": status})
+            })
+    };
+    let off = serde_json::json!({"running": false});
+
+    // Nemesis8: binary on PATH + local MCP probe (gateway convention :9801/mcp).
+    let which_cmd = if cfg!(windows) { "where" } else { "which" };
+    let n8_bin = tokio::process::Command::new(which_cmd)
+        .arg("nemesis8")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let n8_mcp = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        reqwest::Client::new().get("http://localhost:9801/mcp").send(),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.ok())
+    .is_some();
+    let n8_containers: Vec<String> = rows
+        .iter()
+        .filter(|(name, image, _, _)| name.starts_with("n8-") || image.to_lowercase().contains("nemesis8"))
+        .map(|(name, _, _, _)| name.clone())
+        .collect();
+
+    Json(serde_json::json!({
+        "ok": true,
+        "docker": docker.is_some(),
+        "services": {
+            "shivvr": find(&["shivvr"]).unwrap_or_else(|| off.clone()),
+            "grub": find(&["grub"]).unwrap_or_else(|| off.clone()),
+            "transcription": find(&["transcri", "whisper"]).unwrap_or_else(|| off.clone()),
+            "sailfish": find(&["sailfish", "llama.cpp", "llama-cpp"]).unwrap_or_else(|| off.clone()),
+            "nemesis8": {
+                "running": n8_bin || !n8_containers.is_empty(),
+                "binary": n8_bin,
+                "mcp": n8_mcp,
+                "containers": n8_containers,
+            },
+        }
+    }))
 }
 
 /// Curated Ollama allowlist — Gemma 4 ONLY: the fast local tags (e4b/12b) plus

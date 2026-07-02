@@ -70,10 +70,11 @@
 
   <h2>Services</h2>
   <div class="svc"><b>nuts.services login</b><span class="tag">coming — system-browser magic link</span></div>
-  <div class="svc"><b>Shivvr</b> embeddings<span class="tag">coming</span></div>
-  <div class="svc"><b>Grub</b> crawler (local container)<span class="tag">coming — setup instructions</span></div>
-  <div class="svc"><b>Transcription</b> (callback registration)<span class="tag">coming</span></div>
-  <div class="svc"><b>Sailfish</b> — optimized local Gemma container (Docker, ≥16 GB GPU)<span class="tag">not stood up yet</span></div>
+  <div class="svc"><b>Nemesis8</b> agent runner + MCP<span class="tag" id="svc-nemesis8">detecting…</span></div>
+  <div class="svc"><b>Shivvr</b> embeddings<span class="tag" id="svc-shivvr">detecting…</span></div>
+  <div class="svc"><b>Grub</b> crawler (local container)<span class="tag" id="svc-grub">detecting…</span></div>
+  <div class="svc"><b>Transcription</b> (callback registration)<span class="tag" id="svc-transcription">detecting…</span></div>
+  <div class="svc"><b>Sailfish</b> — optimized local Gemma container (Docker, ≥16 GB GPU)<span class="tag" id="svc-sailfish">detecting…</span></div>
 
   <button id="save">Save configuration</button>
   <button id="unconfigure" class="ghostbtn" title="Clears provider/model — Hyperia drops out of the agent list. Keys are kept.">Unconfigure</button>
@@ -148,7 +149,33 @@ function renderModels() {
     : (cheap && m.value === cheap ? 'Defaulted to the cheapest capable runner — change freely.' : '');
 }
 
+async function loadServices() {
+  try {
+    const s = await (await fetch('/api/agent/services')).json();
+    for (const k of ['shivvr','grub','transcription','sailfish']) {
+      const sv = (s.services||{})[k] || {}; const el = $('svc-'+k);
+      if (!el) continue;
+      if (sv.running) {
+        const bad = /unhealthy/i.test(sv.status||'');
+        el.textContent = '● ' + (sv.container||'running') + (bad ? ' (unhealthy)' : '');
+        el.style.color = bad ? '#e8c268' : '#3fb950';
+      } else {
+        el.textContent = s.docker ? 'not detected' : 'docker not available';
+      }
+    }
+    const n8 = (s.services||{}).nemesis8 || {}; const el = $('svc-nemesis8');
+    if (el) {
+      if (n8.running) {
+        const bits = [n8.binary ? 'binary ✓' : '', (n8.containers||[]).length ? (n8.containers.length + ' container' + (n8.containers.length>1?'s':'')) : '', n8.mcp ? 'mcp ✓' : ''].filter(Boolean);
+        el.textContent = '● ' + bits.join(' · ');
+        el.style.color = '#3fb950';
+      } else el.textContent = 'not detected';
+    }
+  } catch { /* tags stay at detecting… */ }
+}
+
 async function load() {
+  loadServices();
   try { cfg = await (await fetch('/api/agent/config')).json(); } catch {}
   sel = cfg.provider || 'anthropic';
   // Providers render instantly; the model list streams in behind a spinner

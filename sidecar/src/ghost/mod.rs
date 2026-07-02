@@ -92,13 +92,19 @@ pub fn load_config() -> Option<GhostConfig> {
     let providers = &cfg["providers"];
     let provider_section = &providers[&provider];
 
-    // Token: provider-specific first, then stored env from chooser config, then system env, then legacy agentToken.
-    let mut api_key = provider_section["token"].as_str().unwrap_or("").to_string();
+    // Token: the Hyperia Agent config pane's key wins (config.agent.keys.<p>),
+    // then the provider section, then stored env from chooser config, then
+    // system env, then legacy agentToken.
+    let mut api_key = cfg["agent"]["keys"][&provider].as_str().unwrap_or("").trim().to_string();
+    if api_key.is_empty() {
+        api_key = provider_section["token"].as_str().unwrap_or("").to_string();
+    }
     if api_key.is_empty() {
         let env_keys = match provider.as_str() {
             "anthropic" => vec!["ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"],
             "openai" => vec!["OPENAI_API_KEY", "OPENAI_TOKEN"],
             "gemini" => vec!["GEMINI_API_KEY", "GEMINI_TOKEN"],
+            "grok" => vec!["XAI_API_KEY", "GROK_API_KEY"],
             _ => vec![],
         };
         for key in env_keys {
