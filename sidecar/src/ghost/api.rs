@@ -934,6 +934,24 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
         .map(|id| serde_json::json!({"id": id, "label": id}))
         .collect();
     val["providers"]["ollama"]["models"] = serde_json::json!(curated);
+    // OpenAI: drop the dated snapshots (…-YYYY-MM-DD) — every one has a plain
+    // alias, so the picker only shows the plain names.
+    if let Some(models) = val["providers"]["codex"]["models"].as_array() {
+        let is_dated = |id: &str| {
+            let b = id.as_bytes();
+            b.len() > 11
+                && b[b.len() - 11] == b'-'
+                && b[b.len() - 6] == b'-'
+                && b[b.len() - 3] == b'-'
+                && id[b.len() - 10..].chars().filter(|c| c.is_ascii_digit()).count() == 8
+        };
+        let plain: Vec<serde_json::Value> = models
+            .iter()
+            .filter(|m| !is_dated(m["id"].as_str().unwrap_or("")))
+            .cloned()
+            .collect();
+        val["providers"]["codex"]["models"] = serde_json::json!(plain);
+    }
     val["ok"] = serde_json::json!(true);
     *cache.lock().unwrap() = Some((Instant::now(), val.clone()));
     Json(val)

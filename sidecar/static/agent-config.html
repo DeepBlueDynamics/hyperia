@@ -208,7 +208,10 @@ function renderServices() {
           `<button style="margin-top:0;padding:6px 12px" data-saveport="${d.id}">Save</button>` +
           `<button class="ghostbtn" style="margin-top:0;padding:6px 12px" data-refresh="1">Refresh</button></div>` +
           `<div class="note">Install on this machine:</div>` +
-          `<div style="background:#17171c;border:1px solid #2c2c34;border-radius:8px;padding:6px 10px;font-family:ui-monospace,monospace;overflow-x:auto;white-space:nowrap;user-select:text">${installLine(d.install)}</div>`;
+          `<div style="display:flex;align-items:center;gap:6px;background:#17171c;border:1px solid #2c2c34;border-radius:8px;padding:6px 10px">` +
+          `<span style="flex:1;font-family:ui-monospace,monospace;overflow-x:auto;white-space:nowrap;user-select:text">${installLine(d.install)}</span>` +
+          `<svg data-copy="${installLine(d.install).replace(/"/g, '&quot;')}" style="cursor:pointer;flex-shrink:0" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9a9aa2" stroke-width="2" stroke-linecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>` +
+          `</div>`;
       }
       row.appendChild(panel);
     }
@@ -217,6 +220,11 @@ function renderServices() {
   host.querySelectorAll('[data-tog]').forEach(el => el.onclick = () => { const id = el.getAttribute('data-tog'); svcOpen[id] = !svcOpen[id]; renderServices(); });
   host.querySelectorAll('[data-add]').forEach(el => el.onclick = () => { svcOpen[el.getAttribute('data-add')] = true; renderServices(); });
   host.querySelectorAll('[data-refresh]').forEach(el => el.onclick = () => loadServices());
+  host.querySelectorAll('[data-copy]').forEach(el => el.onclick = () => {
+    navigator.clipboard.writeText(el.getAttribute('data-copy'));
+    el.setAttribute('stroke', '#3fb950');
+    setTimeout(() => el.setAttribute('stroke', '#9a9aa2'), 1200);
+  });
   host.querySelectorAll('[data-saveport]').forEach(el => el.onclick = async () => {
     const id = el.getAttribute('data-saveport');
     const port = parseInt(host.querySelector(`[data-port="${id}"]`).value, 10) || 0;
