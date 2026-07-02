@@ -676,6 +676,22 @@ function updateHud() {
   $('hud-turns').textContent = STATS.turns;
 }
 
+// Accrue generated tokens toward the decode-speed meter. Called for BOTH
+// thinking and final-text deltas — they're all tokens the model decoded, so
+// counting only final text made tps read ~0 on thinking-heavy local turns.
+// The clock starts on the first delta of a turn (excludes first-byte latency).
+function accrueDecode(chunk) {
+  const est = Math.max(1, ((chunk || '').length / 4) | 0);
+  if (!genStartMs) { genStartMs = performance.now(); genTokens = 0; }
+  genTokens += est;
+  const secs = (performance.now() - genStartMs) / 1000;
+  if (secs > 0.25) {
+    lastTps = genTokens / secs;
+    if (lastTps > maxTps) maxTps = lastTps;
+  }
+  updateHud();
+}
+
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
 }[c]));
@@ -785,6 +801,7 @@ function streamThinkingText(id, text) {
   if (outEl) {
     outEl.innerHTML += escapeHtml(text).replace(/\n/g, '<br>');
   }
+  accrueDecode(text); // thinking tokens count toward decode speed too
   autoscroll();
 }
 
@@ -869,19 +886,9 @@ function streamText(chunk) {
   const body = streamingRow.querySelector('.body');
   body.innerHTML += escapeHtml(chunk).replace(/\n/g, '<br>');
   const est = Math.max(1, (chunk.length / 4) | 0);
-  STATS.out += est;
+  STATS.out += est;   // output-content tokens (billing-ish) — text only
   turn_out += est;
-  // Live tok/s over this generation. Start the clock on the first real token
-  // (excludes the model's think/first-byte latency, so it reflects decode
-  // speed — ~74 on Sailfish, not dragged down by warmup).
-  if (!genStartMs) { genStartMs = performance.now(); genTokens = 0; }
-  genTokens += est;
-  const secs = (performance.now() - genStartMs) / 1000;
-  if (secs > 0.25) {
-    lastTps = genTokens / secs;
-    if (lastTps > maxTps) maxTps = lastTps;
-  }
-  updateHud();
+  accrueDecode(chunk); // decode-speed meter — text + thinking
   autoscroll();
 }
 function endAgentStream() {

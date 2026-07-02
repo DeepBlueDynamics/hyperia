@@ -130,6 +130,35 @@ pub async fn ghost_status(State(state): State<GhostState>) -> Json<serde_json::V
     }))
 }
 
+/// GET /api/ghost/debug — per-turn run-loop telemetry so a dev or agent can
+/// troubleshoot without the human relaying the shell: the configured
+/// provider/model/endpoint, current state, and a ring buffer of the last
+/// turns (which model answered, in/out tokens per turn + total, decode tps,
+/// context budget, tools called, stop reason, panes opened).
+pub async fn ghost_debug(State(state): State<GhostState>) -> Json<serde_json::Value> {
+    let cfg = super::load_config();
+    let session = state.session.lock().await;
+    let state_str = match session.state() {
+        SessionState::Idle => "idle",
+        SessionState::Running => "running",
+        SessionState::Completed(_) => "completed",
+        SessionState::Error(_) => "error",
+    };
+    Json(serde_json::json!({
+        "state": state_str,
+        "turn": session.turn(),
+        "messages": session.message_count(),
+        "stop_requested": session.stop_requested(),
+        "provider": cfg.as_ref().map(|c| c.provider.clone()),
+        "model": cfg.as_ref().map(|c| c.model.clone()),
+        "endpoint": cfg.as_ref().map(|c| c.endpoint.clone()),
+        "context_tokens_cfg": cfg.as_ref().map(|c| c.context_tokens),
+        "doors_enabled": cfg.as_ref().map(|c| c.doors.enabled),
+        "doors_small": cfg.as_ref().map(|c| c.doors.small),
+        "turns": super::agent::ghost_debug_snapshot(),
+    }))
+}
+
 /// GET /api/ghost/history — return chat messages from Ferricula for restoring the UI.
 pub async fn ghost_history(State(state): State<GhostState>) -> Json<serde_json::Value> {
     let turns = state.ferricula.history(50).await;

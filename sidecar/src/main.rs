@@ -2964,6 +2964,7 @@ async fn main() -> anyhow::Result<()> {
     let ghost_routes = axum::Router::new()
         .route("/api/ghost/chat", axum::routing::post(ghost::api::ghost_chat))
         .route("/api/ghost/status", axum::routing::get(ghost::api::ghost_status))
+        .route("/api/ghost/debug", axum::routing::get(ghost::api::ghost_debug))
         .route("/api/ghost/history", axum::routing::get(ghost::api::ghost_history))
         .route("/api/ghost/memory", axum::routing::get(ghost::api::ghost_memory))
         .route("/api/ghost/session", axum::routing::get(ghost::api::ghost_session_dump))

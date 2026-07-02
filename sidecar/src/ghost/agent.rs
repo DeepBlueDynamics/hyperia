@@ -331,6 +331,30 @@ impl GhostSession {
     }
 }
 
+/// Ring buffer of per-turn ghost telemetry, exposed at GET /api/ghost/debug.
+/// Lets a dev/agent troubleshoot the run loop (which model, token counts,
+/// decode speed, context budget, tools) without a human relaying the shell.
+static GHOST_DEBUG: std::sync::OnceLock<std::sync::Mutex<Vec<serde_json::Value>>> =
+    std::sync::OnceLock::new();
+
+pub fn push_ghost_debug(entry: serde_json::Value) {
+    let buf = GHOST_DEBUG.get_or_init(|| std::sync::Mutex::new(Vec::new()));
+    if let Ok(mut v) = buf.lock() {
+        v.push(entry);
+        let len = v.len();
+        if len > 60 {
+            v.drain(0..len - 60);
+        }
+    }
+}
+
+pub fn ghost_debug_snapshot() -> Vec<serde_json::Value> {
+    GHOST_DEBUG
+        .get()
+        .and_then(|m| m.lock().ok().map(|v| v.clone()))
+        .unwrap_or_default()
+}
+
 async fn run_loop(
     tx: mpsc::Sender<GhostEvent>,
     mut messages: Vec<serde_json::Value>,
@@ -363,6 +387,7 @@ async fn run_loop(
     // Reset only when the user explicitly resets the conversation.
     let mut tool_call_count: usize = initial_tool_call_count;
     let mut screen_poll_streak: usize = 0; // consecutive iterations where ONLY terminal_screen was called (resets per message)
+    let mut view_open_count: usize = 0; // panes/tabs/windows created this message — runaway-open guard (resets per message)
 
     // Track recent tool calls for repeat detection — seeded from session
     let mut recent_calls: Vec<(String, String)> = initial_recent_calls;
@@ -428,9 +453,12 @@ async fn run_loop(
     let mut turns = 0;
     let mut total_input_tokens: u64 = 0;
     let mut total_output_tokens: u64 = 0;
+    let mut prev_in: u64 = 0;
+    let mut prev_out: u64 = 0;
 
     loop {
         turns += 1;
+        let turn_start_at = std::time::Instant::now();
         if turns > max_turns {
             let _ = tx
                 .send(GhostEvent::Done {
@@ -650,6 +678,38 @@ After cleanup, reply to the human and end the turn."
             turns,
         }).await;
 
+        // Per-turn debug telemetry (ring buffer at /api/ghost/debug) so a dev or
+        // agent can see WHICH model handled the turn, token counts, decode speed,
+        // context budget, and tools — without a human relaying the transcript.
+        {
+            let dt_in = total_input_tokens.saturating_sub(prev_in);
+            let dt_out = total_output_tokens.saturating_sub(prev_out);
+            prev_in = total_input_tokens;
+            prev_out = total_output_tokens;
+            let ms = turn_start_at.elapsed().as_millis() as u64;
+            let tps = if ms > 0 { (dt_out as f64) / (ms as f64 / 1000.0) } else { 0.0 };
+            let tools: Vec<&str> = pending_tools.iter().map(|t| t.name.as_str()).collect();
+            push_ghost_debug(serde_json::json!({
+                "turn": turns,
+                "provider": provider.provider_name(),
+                "model": provider.model_name(),
+                "sent_messages": send_messages.len(),
+                "compressed": compress,
+                "effective_ctx": effective_ctx,
+                "prompt_budget": prompt_budget,
+                "out_reserve": out_reserve,
+                "in_tokens_total": total_input_tokens,
+                "out_tokens_total": total_output_tokens,
+                "in_tokens_turn": dt_in,
+                "out_tokens_turn": dt_out,
+                "duration_ms": ms,
+                "tps": (tps * 10.0).round() / 10.0,
+                "tools": tools,
+                "stop_reason": stop_reason,
+                "view_opens": view_open_count,
+            }));
+        }
+
         if stop_reason == "tool_use" && !pending_tools.is_empty() {
             // Build assistant content blocks
             let mut content_blocks: Vec<serde_json::Value> = Vec::new();
@@ -816,11 +876,34 @@ After cleanup, reply to the human and end the turn."
                         }
                     }
 
+                    // Runaway-pane guard: a small model on a fuzzy task can open
+                    // panes/tabs forever — each open is a fresh side effect, so
+                    // the repeat guard (which keys on identical output) never
+                    // trips. Hard-cap view-creating tools per user message; past
+                    // the cap, refuse the side effect and tell it to stop.
+                    // Focus-never-steal makes runaway opens especially disruptive.
+                    const VIEW_CREATORS: [&str; 4] =
+                        ["open_web_pane", "terminal_new_tab", "terminal_new_window", "terminal_split"];
+                    const VIEW_CREATE_CAP: usize = 4;
+                    let is_view_creator = VIEW_CREATORS.contains(&tool.name.as_str());
+
                     // tool_search is door-aware in doors mode (adds open/closed
                     // hints); otherwise it flows through execute() unchanged.
-                    let raw_output = if door_state.enabled() && tool.name == "tool_search" {
+                    let raw_output = if is_view_creator && view_open_count >= VIEW_CREATE_CAP {
+                        tracing::warn!(target: "doors", tool = %tool.name, count = view_open_count, "runaway view-creation blocked");
+                        format!(
+                            "[BLOCKED: refusing to run {} — you've already opened {} panes/tabs/windows \
+                             for this request. Opening more disrupts the human's view. STOP creating panes. \
+                             Use the ones already open (terminal_status lists them), finish the task, or ask \
+                             the user what they want.]",
+                            tool.name, view_open_count
+                        )
+                    } else if door_state.enabled() && tool.name == "tool_search" {
                         registry.handle_tool_search(&input, Some(&door_state))
                     } else {
+                        if is_view_creator {
+                            view_open_count += 1;
+                        }
                         registry.execute(&tool.name, &input).await
                     };
 
