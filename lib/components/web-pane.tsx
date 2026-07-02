@@ -1121,6 +1121,19 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     this._stateHandler = (_e: any, payload: any) => {
       if (!payload || payload.uid !== this.props.groupUid) return;
 
+      // Sentinel from sidecar-served pages (agent config "Back"): swap this web
+      // pane back into a new-pane picker. Never recorded in history.
+      if (typeof payload.url === 'string' && payload.url.includes('#hyperia-back')) {
+        rpc.emit('new', {
+          isNewGroup: false,
+          activeUid: this.props.sessionUid || undefined,
+          profile: 'picker',
+          groupUid: this.props.groupUid
+        } as any);
+        setTimeout(() => this.props.onClose?.(), 250);
+        return;
+      }
+
       const prevActiveUrl = this.state.activeUrl;
       const patch: Partial<WebPaneState> = {};
 

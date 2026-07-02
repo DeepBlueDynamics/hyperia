@@ -45,6 +45,12 @@
 </head>
 <body>
 <div class="wrap">
+  <div style="margin-bottom:10px">
+    <span onclick="goBack()" style="cursor:pointer;color:#9a9aa2;font-size:12px;display:inline-flex;align-items:center;gap:6px">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      Back
+    </span>
+  </div>
   <h1>👻 Hyperia Agent</h1>
   <div class="sub">Pick a brain for your terminal. Cloud providers burn <b>your</b> tokens; local models burn your GPU. A hand-editable copy of everything here lives in your Hyperia config under <code>config.agent</code>.</div>
 
@@ -71,10 +77,19 @@
 
   <button id="save">Save configuration</button>
   <button id="unconfigure" class="ghostbtn" title="Clears provider/model — Hyperia drops out of the agent list. Keys are kept.">Unconfigure</button>
+  <button class="ghostbtn" onclick="goBack()">← Back</button>
   <span id="status"></span>
 </div>
 
 <script>
+// "Back" — inside a Hyperia web pane the hash sentinel tells the renderer to
+// swap this pane back into the new-pane picker; in a plain browser tab it's
+// just history.back().
+function goBack() {
+  if (history.length > 1) { history.back(); return; }
+  location.hash = 'hyperia-back';
+}
+
 const PROVIDERS = [
   {id:'anthropic', label:'Anthropic', cat:'claude',  key:true},
   {id:'openai',    label:'OpenAI',    cat:'codex',   key:true},
