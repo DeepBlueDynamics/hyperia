@@ -939,11 +939,17 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
     if let Some(models) = val["providers"]["codex"]["models"].as_array() {
         let is_dated = |id: &str| {
             let b = id.as_bytes();
-            b.len() > 11
+            // …-YYYY-MM-DD snapshots
+            let ymd = b.len() > 11
                 && b[b.len() - 11] == b'-'
                 && b[b.len() - 6] == b'-'
                 && b[b.len() - 3] == b'-'
-                && id[b.len() - 10..].chars().filter(|c| c.is_ascii_digit()).count() == 8
+                && id[b.len() - 10..].chars().filter(|c| c.is_ascii_digit()).count() == 8;
+            // legacy …-MMDD snapshots (gpt-4-0613, gpt-3.5-turbo-1106)
+            let mmdd = b.len() > 5
+                && b[b.len() - 5] == b'-'
+                && id[b.len() - 4..].chars().all(|c| c.is_ascii_digit());
+            ymd || mmdd
         };
         let plain: Vec<serde_json::Value> = models
             .iter()
