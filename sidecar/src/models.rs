@@ -19,11 +19,13 @@
 /// Default model when the user has set a provider but no model. UI pickers
 /// receive this via /api/ghost/capabilities `model_defaults` — do not
 /// duplicate these ids in HTML/JS.
+/// Defaults are each provider's TOP CHEAP/FAST model (per user policy) — the
+/// picker offers the full catalog for stepping up.
 pub fn default_model(provider: &str) -> &'static str {
     match provider {
-        "anthropic" => "claude-sonnet-5",
-        "openai" => "gpt-4o",
-        "gemini" => "gemini-2.0-flash",
+        "anthropic" => "claude-haiku-4-5",
+        "openai" => "gpt-5-mini",
+        "gemini" => "gemini-3-flash-preview",
         "ollama" => "gemma2:9b",
         // Sailfish: the integration guide's reference client uses "gemma4-e4b"
         // (gemma-4-E4B-it Q4_K_M). Only a fallback — the served id can swap
