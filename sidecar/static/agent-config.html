@@ -52,7 +52,7 @@
     </span>
   </div>
   <h1>👻 Hyperia Agent</h1>
-  <div class="sub">Pick a brain for your terminal. Cloud providers burn <b>your</b> tokens; local models burn your GPU. A hand-editable copy of everything here lives in your Hyperia config under <code>config.agent</code>.</div>
+  <div class="sub">This page configures the <b>model powering Hyperia's built-in agent</b> — the intelligence behind its chat, tools, and automation. It does not manage external agents (Claude Code, Nemesis8, and friends install from the picker). Cloud providers bill your API key per token; local models run on your hardware. Everything here keeps a hand-editable copy at <code>config.agent</code>.</div>
 
   <h2>Provider</h2>
   <div class="providers" id="providers"></div>
@@ -191,9 +191,7 @@ function renderServices() {
     row.innerHTML =
       `<span data-tog="${d.id}" style="cursor:pointer;color:#9a9aa2;width:12px">${open?'▾':'▸'}</span>` +
       `<b>${d.label}</b>${d.desc?' <span style="color:#9a9aa2;font-size:11px">'+d.desc+'</span>':''}` +
-      `<span style="margin-left:auto;display:flex;gap:6px;align-items:center">${statusHtml}` +
-      (d.login ? '' : `<svg data-tog="${d.id}" style="cursor:pointer" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9a9aa2" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`) +
-      `</span>`;
+      `<span style="margin-left:auto;display:flex;gap:6px;align-items:center">${statusHtml}</span>`;
     if (open) {
       const panel = document.createElement('div');
       panel.style.cssText = 'flex-basis:100%;margin-top:8px;padding-top:8px;border-top:1px solid #2c2c34;display:flex;flex-direction:column;gap:8px;font-size:11.5px';
