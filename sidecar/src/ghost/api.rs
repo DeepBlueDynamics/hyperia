@@ -797,10 +797,10 @@ pub async fn post_agent_config(
     }
 }
 
-/// Curated local (Ollama) allowlist — small fast agentic models. E2B-class is
-/// excluded (poorly quantized); E4B + Ornith preferred. Hand-extend via
-/// config.agent.ollama_allow in the shared config.
-const OLLAMA_CURATED: &[&str] = &["gemma3n:e4b", "ornith", "qwen3:4b", "gemma3:4b", "qwen2.5:3b", "llama3.2:3b"];
+/// Curated Ollama allowlist — Gemma 4 ONLY: the fast local tags (e4b/12b) plus
+/// the strong cloud tags. E2B-class excluded (poorly quantized). Hand-extend
+/// via config.agent.ollama_allow in the shared config.
+const OLLAMA_CURATED: &[&str] = &["gemma4:e4b", "gemma4:12b", "gemma4:cloud", "gemma4:31b-cloud"];
 
 /// GET /api/agent/models — the nemesis8.nuts.services/models catalog, cached
 /// for its TTL (1h), with the ollama list filtered to the curated set.
