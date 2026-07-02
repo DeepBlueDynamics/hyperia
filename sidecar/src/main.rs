@@ -9,6 +9,7 @@ mod fsnav;
 mod ghost;
 mod logs;
 mod mcp;
+mod models;
 mod perms;
 mod process;
 mod lume_store;

@@ -479,6 +479,9 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
     Json(serde_json::json!({
         "sidecar": env!("CARGO_PKG_VERSION"),
         "level": level,
+        // Per-provider default model ids for the UI pickers — served from the
+        // models registry so shell.html / agent-config.html never hardcode ids.
+        "model_defaults": crate::models::model_defaults_json(),
         "agent": {
             "provider": if needs_autopick { "ollama".to_string() } else { active_provider },
             "model": active_model,
@@ -995,11 +998,8 @@ pub async fn get_agent_services() -> Json<serde_json::Value> {
     }))
 }
 
-/// Curated Ollama allowlist — the fast local Gemma 4 tags (e4b/12b) plus the
-/// strong cloud tags, and `ornith:latest` for testing. E2B-class excluded
-/// (poorly quantized). Hand-extend via config.agent.ollama_allow in the shared
-/// config.
-const OLLAMA_CURATED: &[&str] = &["gemma4:e4b", "gemma4:12b", "gemma4:cloud", "gemma4:31b-cloud", "ornith:latest"];
+/// Curated Ollama allowlist — single source of truth: crate::models.
+const OLLAMA_CURATED: &[&str] = crate::models::OLLAMA_CURATED;
 
 /// GET /api/agent/models — the nemesis8.nuts.services/models catalog, cached
 /// for its TTL (1h), with the ollama list filtered to the curated set.

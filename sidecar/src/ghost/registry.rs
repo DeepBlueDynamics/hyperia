@@ -2714,16 +2714,16 @@ struct ModelEntry {
 // show_picker flow: pick provider → pick model.
 const MODEL_CATALOG: &[ModelEntry] = &[
     // Anthropic
-    ModelEntry { id: "claude-opus-4-7",         name: "Claude Opus 4.7",        provider: "anthropic", context: 200_000, tier: "frontier", note: "Newest Opus — best reasoning, deepest tool use" },
-    ModelEntry { id: "claude-sonnet-4-6",       name: "Claude Sonnet 4.6",      provider: "anthropic", context: 200_000, tier: "balanced", note: "Strong daily driver — fast and capable" },
+    ModelEntry { id: "claude-opus-4-8",         name: "Claude Opus 4.8",        provider: "anthropic", context: 200_000, tier: "frontier", note: "Newest Opus — best reasoning, deepest tool use" },
+    ModelEntry { id: "claude-sonnet-5",         name: "Claude Sonnet 5",        provider: "anthropic", context: 200_000, tier: "balanced", note: "Strong daily driver — fast and capable" },
     ModelEntry { id: "claude-haiku-4-5",        name: "Claude Haiku 4.5",       provider: "anthropic", context: 200_000, tier: "fast",     note: "Cheapest + fastest Claude — good for routine work" },
-    ModelEntry { id: "claude-3-7-sonnet",       name: "Claude 3.7 Sonnet",      provider: "anthropic", context: 200_000, tier: "balanced", note: "Previous-gen Sonnet — still capable" },
     // OpenAI
+    ModelEntry { id: "gpt-5",                   name: "GPT-5",                  provider: "openai",    context: 400_000, tier: "frontier", note: "Flagship reasoning + chat" },
+    ModelEntry { id: "gpt-5-codex",             name: "GPT-5 Codex",            provider: "openai",    context: 400_000, tier: "frontier", note: "Code-tuned GPT-5 (responses API)" },
     ModelEntry { id: "gpt-4.1",                 name: "GPT-4.1",                provider: "openai",    context: 1_000_000, tier: "frontier", note: "Long-context flagship" },
     ModelEntry { id: "gpt-4o",                  name: "GPT-4o",                 provider: "openai",    context: 128_000, tier: "balanced", note: "Multimodal default — vision + tools" },
     ModelEntry { id: "gpt-4o-mini",             name: "GPT-4o mini",            provider: "openai",    context: 128_000, tier: "fast",     note: "Cheap and quick" },
-    ModelEntry { id: "o3-mini",                 name: "o3-mini",                provider: "openai",    context: 200_000, tier: "reasoning", note: "Smaller reasoning model" },
-    ModelEntry { id: "o1",                      name: "o1",                     provider: "openai",    context: 200_000, tier: "reasoning", note: "Deep reasoning, no streaming" },
+    ModelEntry { id: "o4-mini",                 name: "o4-mini",                provider: "openai",    context: 200_000, tier: "reasoning", note: "Fast reasoning model" },
     // Local Ollama
     ModelEntry { id: "ollama:gemma4:e2b",       name: "Gemma 4 e2b",            provider: "ollama",    context: 8_192,   tier: "tiny",     note: "Maximus's compression model — small + fast" },
     ModelEntry { id: "ollama:gemma4:12b",      name: "Gemma 4 12B",            provider: "ollama",    context: 8_192,   tier: "local",    note: "Ollama gemma4 local model" },

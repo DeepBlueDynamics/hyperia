@@ -98,7 +98,7 @@ impl AnthropicProvider {
         // model_catalog → show_picker → settings_set flow. If it's empty
         // load_config has already defaulted it.
         let model = if config.model.is_empty() {
-            "claude-sonnet-4-6".to_string()
+            crate::models::default_model("anthropic").to_string()
         } else {
             config.model.clone()
         };
@@ -982,7 +982,7 @@ pub struct OpenAIProvider {
 impl OpenAIProvider {
     pub fn new(config: &GhostConfig) -> Self {
         let model = if config.model.is_empty() {
-            "gpt-4o".to_string()
+            crate::models::default_model("openai").to_string()
         } else {
             config.model.clone()
         };
@@ -1044,7 +1044,7 @@ impl OpenAIProvider {
             // all current chat models. OpenAI-COMPATIBLE servers (llama.cpp /
             // Sailfish, vLLM, Ollama) generally only know `max_tokens`, so key
             // off the endpoint.
-            if self.endpoint.contains("api.openai.com") {
+            if crate::models::uses_max_completion_tokens(&self.endpoint) {
                 body["max_completion_tokens"] = serde_json::json!(max_tokens);
             } else {
                 body["max_tokens"] = serde_json::json!(max_tokens);
@@ -1432,8 +1432,8 @@ impl OpenAIProvider {
 /// standard reasoning models (o1/o3/o4-mini) support both, so they stay on
 /// chat/completions.
 fn needs_responses_api(model: &str) -> bool {
-    let m = model.to_ascii_lowercase();
-    m.contains("codex") || m.contains("-pro") || m.contains("deep-research")
+    // Single source of truth: crate::models.
+    crate::models::needs_responses_api(model)
 }
 
 /// Translate internal Anthropic-style message blocks into /v1/responses

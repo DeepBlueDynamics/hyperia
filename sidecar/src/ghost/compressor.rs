@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use super::ferricula::FerriculaBackend;
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
-const DEFAULT_MODEL: &str = "gemma2:2b";
+const DEFAULT_MODEL: &str = crate::models::COMPRESSOR_DEFAULT_MODEL;
 const DEFAULT_KEEP_RECENT: usize = 6;
 const COMPRESS_THRESHOLD: usize = 10;
 pub const FOCUS_MIN_CHARS: usize = 400;

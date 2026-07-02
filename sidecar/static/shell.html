@@ -2055,7 +2055,12 @@ async function boot() {
 
     switch (caps.level) {
       case 'hybrid':
-        return "ready. frontier + local both online. ask anything.";
+        // Truthful hybrid: ONE provider answers (config.agent.provider); local
+        // models are reachable and handle aux jobs (Maximus compression). The
+        // old "frontier + local both online" implied parallel brains.
+        return "ready. hybrid — <code>"
+          + (caps.agent && caps.agent.provider || '?') + "/" + (caps.agent && caps.agent.model || '?')
+          + "</code> is answering; local models are online for compression + aux jobs. ask anything.";
       case 'frontier':
         return ollamaDisabled
           ? "ready on frontier."
@@ -2096,12 +2101,12 @@ function openModelPicker() {
   }
   // For frontier providers we don't have a model list (model_catalog tool
   // owns that), so just offer a default per provider that has a token.
-  const frontierDefaults = {
-    anthropic: 'claude-sonnet-4-6',
-    openai:    'gpt-4o',
-    gemini:    'gemini-2.0-flash',
-  };
+  // Default model ids come from the sidecar's models registry (capabilities
+  // model_defaults) — no model ids hardcoded in the UI. Empty fallback only
+  // if the sidecar predates the registry.
+  const frontierDefaults = (caps.model_defaults) || {};
   for (const p of ['anthropic', 'openai', 'gemini']) {
+    if (!frontierDefaults[p]) continue; // registry didn't supply one — skip
     const pInfo = caps.providers && caps.providers[p];
     const hasToken = !!(pInfo && pInfo.token);
     const suffix = hasToken ? '' : ' (no token)';

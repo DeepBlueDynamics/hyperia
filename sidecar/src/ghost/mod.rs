@@ -200,22 +200,9 @@ pub fn load_config() -> Option<GhostConfig> {
 }
 
 /// Pick a sensible default model when the user has set a provider but no
-/// specific model yet. The settings agent will normally guide them to a
-/// concrete one, but this keeps the chat reachable in the meantime.
+/// specific model yet. Single source of truth: crate::models.
 fn default_model(provider: &str) -> &'static str {
-    match provider {
-        "anthropic" => "claude-sonnet-4-6",
-        "openai" => "gpt-4o",
-        "gemini" => "gemini-2.0-flash",
-        "ollama" => "gemma2:9b",
-        // Sailfish: the integration guide's reference client uses "gemma4-e4b"
-        // (gemma-4-E4B-it Q4_K_M). This is only a fallback — the served id can
-        // swap (stock vs fine-tuned), so the authoritative source is GET
-        // /v1/models, which the config pane probes live (ghost/api.rs
-        // get_agent_models) and the user can pin via config.agent.model.
-        "sailfish" => "gemma4-e4b",
-        _ => "gemma2:9b",
-    }
+    crate::models::default_model(provider)
 }
 
 fn default_local_ollama() -> GhostConfig {

@@ -357,18 +357,9 @@ fn cap_from_env() -> usize {
 /// (Sailfish, llama.cpp, vLLM, …), or a model whose name carries a small-
 /// parameter tag (`e4b`, `2b`, `3b`, `4b`, `mini-local`, …).
 pub fn is_small_model(provider: &str, model: &str, endpoint: &str) -> bool {
-    let p = provider.trim().to_lowercase();
-    // Local appliances: Ollama and Sailfish (llama.cpp CUDA, gemma4-e4b) are
-    // always small/local — tight cap, slim prompt, temperature 0.
-    if p == "ollama" || p == "sailfish" {
-        return true;
-    }
-    if p == "openai" && !endpoint.contains("api.openai.com") {
-        return true;
-    }
-    let m = model.to_lowercase();
-    const SMALL_TAGS: &[&str] = &["e4b", "e2b", "1b", "2b", "3b", "4b", "mini-local"];
-    SMALL_TAGS.iter().any(|t| m.contains(t))
+    // Single source of truth: crate::models (kept as a shim so existing
+    // callers/tests don't churn).
+    crate::models::is_small_model(provider, model, endpoint)
 }
 
 /// Resolved doors settings for one ghost run. Rides on `GhostConfig` so the

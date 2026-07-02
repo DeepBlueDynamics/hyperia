@@ -331,6 +331,45 @@ impl GhostSession {
     }
 }
 
+/// Shrink serialized tool payloads for small/8k-window models: cap each tool
+/// description at its first line (~selection still works from name + one
+/// line) and strip per-property `description` strings from input schemas,
+/// keeping structure (type/enum/required/default). Measured ~15-40% schema
+/// savings. `open_tools` is exempt — its description carries the door menu.
+fn slim_tool_defs(defs: &mut [ToolDef]) {
+    fn strip_schema_descriptions(v: &mut serde_json::Value) {
+        if let Some(obj) = v.as_object_mut() {
+            if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
+                for (_k, prop) in props.iter_mut() {
+                    if let Some(po) = prop.as_object_mut() {
+                        po.remove("description");
+                    }
+                    // Nested objects/arrays keep their structure but lose prose too.
+                    strip_schema_descriptions(prop);
+                }
+            }
+            if let Some(items) = obj.get_mut("items") {
+                strip_schema_descriptions(items);
+            }
+        }
+    }
+    for def in defs.iter_mut() {
+        if def.name == "open_tools" {
+            continue;
+        }
+        if let Some(first) = def.description.lines().next() {
+            let mut line = first.trim().to_string();
+            if line.len() > 200 {
+                line.truncate(200);
+            }
+            if !line.is_empty() && line.len() < def.description.len() {
+                def.description = line;
+            }
+        }
+        strip_schema_descriptions(&mut def.input_schema);
+    }
+}
+
 /// Ring buffer of per-turn ghost telemetry, exposed at GET /api/ghost/debug.
 /// Lets a dev/agent troubleshoot the run loop (which model, token counts,
 /// decode speed, context budget, tools) without a human relaying the shell.
@@ -485,7 +524,7 @@ async fn run_loop(
             else if tool_call_count > 16 { 1 }
             else { 0 };
 
-        let effective_tool_defs: Vec<ToolDef> = match throttle_tier {
+        let mut effective_tool_defs: Vec<ToolDef> = match throttle_tier {
             1 => tool_defs.iter()
                 .filter(|t| t.name != "terminal_screen")
                 .cloned()
@@ -500,6 +539,16 @@ async fn run_loop(
                 .collect(),
             _ => tool_defs.clone(),
         };
+
+        // Small-model payload slim (plan: tool-harness optimization). On an 8k
+        // window every schema byte is context the model can't use — trim tool
+        // descriptions to their first line and drop per-property schema
+        // descriptions (types/enums/required stay). Frontier models keep the
+        // full prose. open_tools keeps its dynamic door listing — that IS the
+        // menu.
+        if door_config.small {
+            slim_tool_defs(&mut effective_tool_defs);
+        }
 
         let mut effective_system = system.clone();
         if throttle_tier == 1 {
@@ -558,10 +607,8 @@ After cleanup, reply to the human and end the turn."
         // and manage themselves, so they stay unbounded (0 = no trim).
         let effective_ctx = if context_tokens > 0 {
             context_tokens
-        } else if door_config.small {
-            8192
         } else {
-            0
+            crate::models::default_context_tokens(door_config.small)
         };
         // Reserve headroom for the model's own output. On a small 8k window, the
         // old fixed 4096 was half the budget — scale it down so the prompt has room.
