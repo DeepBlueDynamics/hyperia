@@ -906,7 +906,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
               marginBottom: 'var(--space-2)'
             }}
           >
-            webpanes, shells and agents, oh my
+            Webpanes, Shells and Agents. Pick one.
           </div>
 
           {/* New Webpane row — "New Webpane" label left of the URL box, same
