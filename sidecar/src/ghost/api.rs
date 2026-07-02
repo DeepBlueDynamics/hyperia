@@ -1052,6 +1052,46 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
             "default": default,
             "models": models,
         });
+        // Ollama cloud tags: ANY installed model with a cloud tag (…:cloud or
+        // …-cloud, e.g. nemotron-3-super:cloud, deepseek-v4-pro:cloud) joins
+        // the curated list automatically. Probed fresh per request — like the
+        // sailfish block above — so a new `ollama pull x:cloud` shows up in
+        // the picker immediately, never stale behind the 1h catalog cache.
+        let ollama_ep = super::default_endpoint("ollama");
+        let tags = async {
+            let resp = reqwest::Client::new()
+                .get(format!("{}/api/tags", ollama_ep))
+                .timeout(std::time::Duration::from_secs(2))
+                .send()
+                .await
+                .ok()?;
+            resp.json::<serde_json::Value>().await.ok()
+        }
+        .await;
+        if let Some(tags) = tags {
+            let installed_cloud: Vec<String> = tags["models"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m["name"].as_str())
+                        .filter(|n| n.ends_with(":cloud") || n.contains("-cloud"))
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !installed_cloud.is_empty() {
+                let mut models = val["providers"]["ollama"]["models"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                for id in installed_cloud {
+                    if !models.iter().any(|m| m["id"].as_str() == Some(id.as_str())) {
+                        models.push(serde_json::json!({"id": id, "label": id}));
+                    }
+                }
+                val["providers"]["ollama"]["models"] = serde_json::json!(models);
+            }
+        }
         val
     }
 
