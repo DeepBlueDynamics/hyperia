@@ -3,6 +3,7 @@
 mod audit;
 mod bridge;
 mod dashboard;
+mod doors;
 mod identity;
 mod fsnav;
 mod ghost;
