@@ -1371,11 +1371,22 @@ impl Bridge {
             });
             // Real OS pixel size (from the renderer's WindowBounds reports), so
             // the agent can answer "how big is the window" and resize by it.
+            // Keep the raw fields for resize math, but ALSO ship a pre-rendered
+            // unambiguous `size` string — a small model reading raw width/height/
+            // x/y tends to confuse the y-offset for the height. The string leaves
+            // no room for that: it can just parrot it.
             if let Some(b) = win_bounds.get(win_id) {
+                let w = b["width"].as_i64().unwrap_or(0);
+                let h = b["height"].as_i64().unwrap_or(0);
+                let x = b["x"].as_i64().unwrap_or(0);
+                let y = b["y"].as_i64().unwrap_or(0);
                 win_obj["width"] = b["width"].clone();
                 win_obj["height"] = b["height"].clone();
                 win_obj["x"] = b["x"].clone();
                 win_obj["y"] = b["y"].clone();
+                win_obj["size"] = serde_json::json!(format!(
+                    "{w} px wide × {h} px tall, positioned at x={x} y={y}"
+                ));
             }
             windows.push(win_obj);
         }
