@@ -211,6 +211,12 @@ struct BridgeInner {
     perms: crate::perms::PermStore,
     /// Persistent external-agent identities (file-backed, survive restarts).
     identity: crate::identity::IdentityStore,
+    /// Agent TOKENS that bypass consent (Hyperia's OWN built-in agent — the
+    /// ghost). Trust is by token, never by name (names are spoofable). The
+    /// user configured this agent deliberately; prompting them to approve its
+    /// every pane action is asking permission for the thing they just asked
+    /// it to do. Populated at startup with the freshly-minted ghost token.
+    trusted_agent_tokens: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl Bridge {
@@ -231,8 +237,32 @@ impl Bridge {
                 lume: crate::lume_store::LumeStore::new(),
                 perms: crate::perms::PermStore::default(),
                 identity: crate::identity::IdentityStore::new(),
+                trusted_agent_tokens: std::sync::Mutex::new(std::collections::HashSet::new()),
             }),
         }
+    }
+
+    /// Mark an agent TOKEN as consent-exempt (Hyperia's own built-in agent).
+    pub fn trust_agent_token(&self, token: &str) {
+        if token.is_empty() {
+            return;
+        }
+        if let Ok(mut set) = self.inner.trusted_agent_tokens.lock() {
+            set.insert(token.to_string());
+        }
+    }
+
+    /// Is this caller a consent-exempt trusted agent (by token, never by name)?
+    fn is_trusted_agent(&self, id: &crate::identity::CallerIdentity) -> bool {
+        if let crate::identity::CallerIdentity::Agent { token, .. } = id {
+            return self
+                .inner
+                .trusted_agent_tokens
+                .lock()
+                .map(|s| s.contains(token))
+                .unwrap_or(false);
+        }
+        false
     }
 
     /// Access the lume store (per-shell log search, sticky search, persistence).
@@ -327,6 +357,11 @@ impl Bridge {
         if !self.inner.perms.enforced() {
             return AuthDecision::Allow;
         }
+        // Hyperia's own agent (trusted token) drives panes without consent —
+        // the user configured it; its actions ARE the user's ask.
+        if self.is_trusted_agent(id) {
+            return AuthDecision::Allow;
+        }
         match id {
             CallerIdentity::System => AuthDecision::Allow,
             CallerIdentity::Pane { pane, .. } if pane == target_pane => AuthDecision::RefuseHome,
@@ -360,6 +395,9 @@ impl Bridge {
         if !self.inner.perms.enforced() {
             return AuthDecision::Allow;
         }
+        if self.is_trusted_agent(id) {
+            return AuthDecision::Allow;
+        }
         match id {
             CallerIdentity::System => AuthDecision::Allow,
             CallerIdentity::Anonymous => AuthDecision::SoftWall,
@@ -388,6 +426,9 @@ impl Bridge {
         use crate::identity::CallerIdentity;
         use crate::perms::AuthDecision;
         if !self.inner.perms.enforced() {
+            return AuthDecision::Allow;
+        }
+        if self.is_trusted_agent(id) {
             return AuthDecision::Allow;
         }
         match id {

@@ -2955,6 +2955,10 @@ async fn main() -> anyhow::Result<()> {
     // Mint Ghost a persistent identity so its sidecar API calls are attributed
     // (not anonymous) — same IdentityStore resolve_caller reads (#22).
     let ghost_token = bridge_for_ghost.identity().mint("Ghost 👻").await.token;
+    // Hyperia's OWN agent is consent-exempt (trusted by TOKEN, never name):
+    // the user configured it, so its pane actions are the user's ask — no
+    // approval prompts for the built-in agent (#131).
+    bridge_for_ghost.trust_agent_token(&ghost_token);
     let ghost_state = ghost::GhostState::new(args.port, ghost_token);
     let shared_registry = ghost_state.registry.clone();
     let ghost_routes = axum::Router::new()

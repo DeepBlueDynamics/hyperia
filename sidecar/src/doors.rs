@@ -206,7 +206,7 @@ pub const DOORS: &[Door] = &[
     // ---- ghost-only doors --------------------------------------------------
     Door {
         name: "terminal",
-        description: "Terminal layout: keys, cd, split, focus, tabs & windows",
+        description: "Terminal layout: keys, cd, split, focus, tabs, windows & resize",
         ghost_tools: &[
             "terminal_keys",
             "terminal_cd",
@@ -215,6 +215,7 @@ pub const DOORS: &[Door] = &[
             "terminal_close",
             "terminal_new_tab",
             "terminal_new_window",
+            "terminal_set_window_size",
             "terminal_rename",
             "terminal_where_pane",
         ],

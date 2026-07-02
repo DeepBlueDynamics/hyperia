@@ -796,6 +796,18 @@ impl ToolRegistry {
                     .send()
                     .await
             }
+            "terminal_set_window_size" => {
+                let body = serde_json::json!({
+                    "window": input["window"],
+                    "width": input["width"],
+                    "height": input["height"],
+                });
+                self.client
+                    .post(format!("{}/api/window/size", base))
+                    .json(&body)
+                    .send()
+                    .await
+            }
             "terminal_new_tab" => {
                 let body = serde_json::json!({
                     "profile": input["profile"],
@@ -2012,6 +2024,19 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
             "name": "terminal_new_window",
             "description": "Open a new Hyperia window (separate OS window). Use terminal_status after to get its window id for targeting. Use this when the user wants a separate window, not just a new tab.",
             "input_schema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "terminal_set_window_size",
+            "description": "Resize a Hyperia window to exact pixel dimensions (width/height). Use for 'make the window wider/taller/1200 tall' requests. Omit window to resize the focused window; get window ids from terminal_status. To double the width, read the current size from terminal_status first.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "window": { "type": "integer", "description": "Window id from terminal_status. Omit for the focused window." },
+                    "width": { "type": "integer", "description": "New window width in pixels" },
+                    "height": { "type": "integer", "description": "New window height in pixels" }
+                },
+                "required": ["width", "height"]
+            }
         },
         {
             "name": "terminal_new_tab",
