@@ -231,6 +231,8 @@ impl GhostSession {
         provider: Arc<AnyProvider>,
         session_mutex: Arc<tokio::sync::Mutex<GhostSession>>,
         ferricula: Arc<FerriculaBackend>,
+        door_config: crate::doors::DoorConfig,
+        context_tokens: usize,
     ) -> mpsc::Receiver<GhostEvent> {
         let (tx, rx) = mpsc::channel(128);
 
@@ -272,6 +274,8 @@ impl GhostSession {
                 initial_tool_call_count,
                 initial_recent_calls,
                 initial_door_state,
+                door_config,
+                context_tokens,
             ).await;
             match result {
                 Ok((final_messages, stop_reason, final_tool_call_count, final_recent_calls, final_door_state)) => {
@@ -342,18 +346,18 @@ async fn run_loop(
     initial_tool_call_count: usize,
     initial_recent_calls: Vec<(String, String)>,
     initial_door_state: crate::doors::DoorState,
+    door_config: crate::doors::DoorConfig,
+    context_tokens: usize,
 ) -> anyhow::Result<(Vec<serde_json::Value>, String, usize, Vec<(String, String)>, crate::doors::DoorState)> {
-    // Doors mode is gated by env in Phase 2 (config.agent.tool_doors auto-mode
-    // is Phase 3). The open-door set persists across messages via the session;
-    // `enabled` is re-derived here every run.
-    let doors_enabled = std::env::var("HYPERIA_TOOL_DOORS")
-        .map(|v| {
-            let v = v.trim();
-            v == "1" || v.eq_ignore_ascii_case("true")
-        })
-        .unwrap_or(false);
+    // Doors mode + cap are resolved once at config load (config.agent.tool_doors
+    // "auto"/"on"/"off" + provider + env override) and passed in via
+    // `door_config`. The open-door set persists across messages via the session;
+    // `enabled`/`cap` are re-applied here every run so a config change takes
+    // effect on the next message without a restart.
+    let doors_enabled = door_config.enabled;
     let mut door_state = initial_door_state;
     door_state.set_enabled(doors_enabled);
+    door_state.set_cap(door_config.cap);
 
     // Progressive throttle counters — seeded from session so they persist across messages.
     // Reset only when the user explicitly resets the conversation.
@@ -375,7 +379,11 @@ async fn run_loop(
     if !recalled.is_empty() {
         system.push_str(&recalled);
     }
-    // Inject current terminal state so the agent knows what's already running
+    // Inject current terminal state so the agent knows what's already running.
+    // In doors mode on a small/local model the full /api/status JSON is a big
+    // fixed cost against an 8k window — trim it to a compact one-line-per-pane
+    // summary (window/tab/pane counts + focused pane) instead (plan §4.3.3).
+    let slim_state = doors_enabled && door_config.small;
     let http_port = std::env::var("HYPERIA_PORT").unwrap_or_else(|_| "9800".into());
     let state_client = reqwest::Client::new();
     if let Ok(resp) = state_client.get(format!("http://localhost:{}/api/status", http_port)).send().await {
@@ -390,8 +398,20 @@ async fn run_loop(
                     _ => "## OS: Unknown platform",
                 };
                 system.push_str(&format!("\n\n{}", os_note));
+
+                if slim_state {
+                    system.push_str(&format!(
+                        "\n\n## Current terminal state (summary)\n{}\n\
+                         Call terminal_status for full pane/tab detail when you need it.",
+                        compact_terminal_state(&parsed)
+                    ));
+                } else {
+                    system.push_str(&format!("\n\n## Current terminal state\n```json\n{}\n```", status));
+                }
+            } else if !slim_state {
+                // Unparseable but we still ship the raw text in full mode.
+                system.push_str(&format!("\n\n## Current terminal state\n```json\n{}\n```", status));
             }
-            system.push_str(&format!("\n\n## Current terminal state\n```json\n{}\n```", status));
         }
     }
 
@@ -495,11 +515,23 @@ After cleanup, reply to the human and end the turn."
             );
         }
 
+        // Serialized tool-schema byte size — used both by the Phase 0
+        // instrumentation below and as compressor overhead (system + tools) for
+        // the token-budget guard.
+        let tool_schema_bytes = serde_json::to_vec(&effective_tool_defs)
+            .map(|v| v.len())
+            .unwrap_or(0);
+
         // Compress older messages via local Ollama before sending to the primary model.
         // Recent messages are kept verbatim; `messages` itself is never modified so
-        // tool results continue accumulating against the full history.
+        // tool results continue accumulating against the full history. When a hard
+        // context budget is configured (config.agent.context_tokens), the guard
+        // trims verbatim recent history so system + tools + history fits.
         let send_messages = if compress {
-            compressor.compress_messages(&messages).await
+            let overhead_chars = effective_system.len() + tool_schema_bytes;
+            compressor
+                .compress_messages_budgeted(&messages, context_tokens, overhead_chars)
+                .await
         } else {
             messages.clone()
         };
@@ -507,9 +539,6 @@ After cleanup, reply to the human and end the turn."
         // Phase 0 instrumentation (no behavior change): measure the live tool
         // surface shipped to the provider this iteration — count + serialized
         // schema byte size. This is the baseline the doors work shrinks.
-        let tool_schema_bytes = serde_json::to_vec(&effective_tool_defs)
-            .map(|v| v.len())
-            .unwrap_or(0);
         tracing::info!(
             target: "doors",
             turn = turns,
@@ -983,6 +1012,59 @@ After cleanup, reply to the human and end the turn."
             })
             .await;
         return Ok((messages, final_stop_reason, tool_call_count, recent_calls, door_state));
+    }
+}
+
+/// Compact one-liner summary of `/api/status` for the slim doors-mode prompt
+/// (plan §4.3.3): total window/tab/pane counts plus the single focused pane.
+/// Keeps a small/local model oriented without paying for the full nested JSON.
+fn compact_terminal_state(status: &serde_json::Value) -> String {
+    let windows = status["windows"].as_array().cloned().unwrap_or_default();
+    let win_count = windows.len();
+    let mut tab_count = 0usize;
+    let mut pane_count = 0usize;
+    let mut focused: Option<String> = None;
+
+    for win in &windows {
+        let win_id = win["id"].as_u64().unwrap_or(0);
+        let win_focused = win["focused"].as_bool().unwrap_or(false);
+        for tab in win["tabs"].as_array().into_iter().flatten() {
+            tab_count += 1;
+            let tab_name = tab["name"].as_str().unwrap_or("shell");
+            let tab_active = tab["active"].as_bool().unwrap_or(false);
+            for pane in tab["panes"].as_array().into_iter().flatten() {
+                pane_count += 1;
+                let pane_active = pane["active"].as_bool().unwrap_or(false);
+                if focused.is_none() && win_focused && tab_active && pane_active {
+                    let label = pane["label"].as_str().unwrap_or("");
+                    let shell = pane["shell"].as_str().unwrap_or("");
+                    let proc = pane["process"].as_str().unwrap_or("");
+                    let cwd = pane["cwd"].as_str().unwrap_or("");
+                    let proc_info = if proc.is_empty() {
+                        shell.to_string()
+                    } else {
+                        format!("{} ({})", shell, proc)
+                    };
+                    focused = Some(format!(
+                        "window {} › tab '{}' › pane {}: {} in `{}`",
+                        win_id,
+                        tab_name,
+                        if label.is_empty() { "-" } else { label },
+                        proc_info,
+                        cwd
+                    ));
+                }
+            }
+        }
+    }
+
+    let counts = format!(
+        "{} window(s), {} tab(s), {} pane(s).",
+        win_count, tab_count, pane_count
+    );
+    match focused {
+        Some(f) => format!("{} Focused: {}", counts, f),
+        None => format!("{} No focused pane reported.", counts),
     }
 }
 

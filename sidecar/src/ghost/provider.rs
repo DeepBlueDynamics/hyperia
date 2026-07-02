@@ -961,6 +961,11 @@ pub struct OpenAIProvider {
     api_key: String,
     pub model: String,
     endpoint: String,
+    /// Send `temperature: 0` on tool turns. True only when doors mode is active
+    /// AND the endpoint is an OpenAI-compatible server (NOT api.openai.com) —
+    /// the Sailfish guide asks for temperature 0 on tool calls, and cloud
+    /// OpenAI o-series models reject the `temperature` field outright.
+    send_zero_temp: bool,
 }
 
 impl OpenAIProvider {
@@ -975,11 +980,13 @@ impl OpenAIProvider {
         } else {
             config.endpoint.trim_end_matches('/').to_string()
         };
+        let send_zero_temp = config.doors.enabled && !endpoint.contains("api.openai.com");
         Self {
             client: reqwest::Client::new(),
             api_key: config.api_key.clone(),
             model,
             endpoint,
+            send_zero_temp,
         }
     }
 
@@ -1031,6 +1038,13 @@ impl OpenAIProvider {
                 })
                 .collect();
             body["tools"] = serde_json::json!(tool_defs);
+
+            // Sailfish/compat guide: deterministic tool selection wants
+            // temperature 0 on tool turns. Guarded to non-api.openai.com
+            // endpoints (cloud o-series rejects `temperature`); see new().
+            if self.send_zero_temp {
+                body["temperature"] = serde_json::json!(0);
+            }
         }
 
         let resp = self

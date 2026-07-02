@@ -324,15 +324,128 @@ pub fn door_of(surface: Surface, tool: &str) -> Option<&'static str> {
         .map(|d| d.name)
 }
 
-/// Default live-tool cap. Overridable per-process via `HYPERIA_TOOL_CAP`.
+/// Default live-tool cap (small / local models). Overridable per-process via
+/// `HYPERIA_TOOL_CAP`.
 pub const DEFAULT_TOOL_CAP: usize = 20;
 
-fn cap_from_env() -> usize {
+/// Live-tool cap for cloud (token-billed) providers in `auto`/`on` mode. Doors
+/// still cut token billing there, so they stay on — just with more headroom
+/// than a small local model needs.
+pub const CLOUD_TOOL_CAP: usize = 24;
+
+fn env_cap_override() -> Option<usize> {
     std::env::var("HYPERIA_TOOL_CAP")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|&c| c > 0)
-        .unwrap_or(DEFAULT_TOOL_CAP)
+}
+
+fn cap_from_env() -> usize {
+    env_cap_override().unwrap_or(DEFAULT_TOOL_CAP)
+}
+
+// ---------------------------------------------------------------------------
+// Doors auto-mode resolution (plan §4.3.6). Shared by GhostConfig load, the run
+// loop's `DoorState`, the OpenAI provider (temperature), and the compressor.
+// ---------------------------------------------------------------------------
+
+/// Heuristic: is this a small / local model that benefits most from a tight
+/// tool menu, a slim system prompt, and `temperature: 0`?
+///
+/// True for Ollama, any OpenAI-compatible endpoint that is NOT `api.openai.com`
+/// (Sailfish, llama.cpp, vLLM, …), or a model whose name carries a small-
+/// parameter tag (`e4b`, `2b`, `3b`, `4b`, `mini-local`, …).
+pub fn is_small_model(provider: &str, model: &str, endpoint: &str) -> bool {
+    let p = provider.trim().to_lowercase();
+    if p == "ollama" {
+        return true;
+    }
+    if p == "openai" && !endpoint.contains("api.openai.com") {
+        return true;
+    }
+    let m = model.to_lowercase();
+    const SMALL_TAGS: &[&str] = &["e4b", "e2b", "1b", "2b", "3b", "4b", "mini-local"];
+    SMALL_TAGS.iter().any(|t| m.contains(t))
+}
+
+/// Resolved doors settings for one ghost run. Rides on `GhostConfig` so the
+/// provider (temperature), the loop (`DoorState`), and the compressor all agree
+/// on a single derivation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DoorConfig {
+    /// Doors mode active this run.
+    pub enabled: bool,
+    /// Live-tool cap (core + open doors).
+    pub cap: usize,
+    /// Small / local model — drives the slim system prompt and `temperature: 0`
+    /// on OpenAI-compatible (non-`api.openai.com`) endpoints.
+    pub small: bool,
+}
+
+impl Default for DoorConfig {
+    fn default() -> Self {
+        Self { enabled: false, cap: DEFAULT_TOOL_CAP, small: false }
+    }
+}
+
+fn env_doors_override() -> Option<bool> {
+    std::env::var("HYPERIA_TOOL_DOORS").ok().and_then(|v| {
+        let v = v.trim();
+        if v == "1" || v.eq_ignore_ascii_case("true") {
+            Some(true)
+        } else if v == "0" || v.eq_ignore_ascii_case("false") {
+            Some(false)
+        } else {
+            None
+        }
+    })
+}
+
+/// Resolve doors settings for a run from the `config.agent.tool_doors` mode
+/// ("on" | "off" | "auto"), the active provider/model/endpoint, and env.
+///
+/// - `"off"` → disabled (legacy full-catalog path).
+/// - `"on"`  → enabled.
+/// - `"auto"` (default, and any unrecognized value) → enabled for every
+///   provider; small/local models get [`DEFAULT_TOOL_CAP`], cloud models get
+///   [`CLOUD_TOOL_CAP`].
+///
+/// `HYPERIA_TOOL_DOORS=0|1` overrides the mode entirely; `HYPERIA_TOOL_CAP`
+/// overrides the resolved cap.
+pub fn resolve_door_config(mode: &str, provider: &str, model: &str, endpoint: &str) -> DoorConfig {
+    resolve_door_config_inner(
+        mode,
+        provider,
+        model,
+        endpoint,
+        env_doors_override(),
+        env_cap_override(),
+    )
+}
+
+/// Pure core of [`resolve_door_config`] — env reads are hoisted out so this is
+/// deterministically unit-testable.
+fn resolve_door_config_inner(
+    mode: &str,
+    provider: &str,
+    model: &str,
+    endpoint: &str,
+    doors_override: Option<bool>,
+    cap_override: Option<usize>,
+) -> DoorConfig {
+    let small = is_small_model(provider, model, endpoint);
+
+    let mode_enabled = match mode.trim().to_lowercase().as_str() {
+        "off" => false,
+        // "on", "auto", "" and anything unrecognized → doors on. Auto differs
+        // from on only by the cap, which is derived from `small` below.
+        _ => true,
+    };
+    let enabled = doors_override.unwrap_or(mode_enabled);
+
+    let cap = cap_override.unwrap_or(if small { DEFAULT_TOOL_CAP } else { CLOUD_TOOL_CAP });
+
+    DoorConfig { enabled, cap, small }
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +495,11 @@ impl DoorState {
     }
     pub fn cap(&self) -> usize {
         self.cap
+    }
+    /// Override the live-tool cap (e.g. from the resolved [`DoorConfig`] at the
+    /// top of a run). Clamped to ≥ 1.
+    pub fn set_cap(&mut self, cap: usize) {
+        self.cap = cap.max(1);
     }
     pub fn enabled(&self) -> bool {
         self.enabled
@@ -726,6 +844,92 @@ mod tests {
         assert_eq!(door_of(Surface::Mcp, "apply_text_edits"), Some("editing"));
         // A ghost-only tool is unknown on the MCP surface.
         assert_eq!(door_of(Surface::Mcp, "tool_create"), None);
+    }
+
+    // ---- set_cap -----------------------------------------------------------
+
+    #[test]
+    fn set_cap_clamps_to_one() {
+        let mut s = DoorState::with_cap(Surface::Ghost, 20);
+        s.set_cap(0);
+        assert_eq!(s.cap(), 1);
+        s.set_cap(15);
+        assert_eq!(s.cap(), 15);
+    }
+
+    // ---- small-model heuristic + auto resolution ---------------------------
+
+    #[test]
+    fn is_small_model_matches_local_and_compat() {
+        // Ollama is always small/local.
+        assert!(is_small_model("ollama", "gemma2:9b", "http://localhost:11434"));
+        // OpenAI-compatible endpoint that isn't api.openai.com → Sailfish/compat.
+        assert!(is_small_model("openai", "gemma4-e4b", "http://localhost:22343"));
+        // Small-parameter tags in the model name.
+        assert!(is_small_model("anthropic", "some-2b-model", "https://api.anthropic.com"));
+        assert!(is_small_model("openai", "phi-4b", "https://api.openai.com"));
+    }
+
+    #[test]
+    fn is_small_model_rejects_cloud_flagships() {
+        assert!(!is_small_model("anthropic", "claude-sonnet-4-6", "https://api.anthropic.com"));
+        assert!(!is_small_model("openai", "gpt-4o", "https://api.openai.com"));
+        assert!(!is_small_model("gemini", "gemini-2.0-flash", "https://generativelanguage.googleapis.com"));
+    }
+
+    #[test]
+    fn resolve_off_disables() {
+        let dc = resolve_door_config_inner("off", "ollama", "gemma2:9b", "http://localhost:11434", None, None);
+        assert!(!dc.enabled);
+        // small is still reported (used elsewhere) but doors are off.
+        assert!(dc.small);
+    }
+
+    #[test]
+    fn resolve_auto_small_uses_default_cap() {
+        let dc = resolve_door_config_inner("auto", "ollama", "gemma2:9b", "http://localhost:11434", None, None);
+        assert!(dc.enabled);
+        assert!(dc.small);
+        assert_eq!(dc.cap, DEFAULT_TOOL_CAP);
+    }
+
+    #[test]
+    fn resolve_auto_sailfish_endpoint_is_small() {
+        let dc = resolve_door_config_inner("auto", "openai", "gemma4-e4b", "http://localhost:22343", None, None);
+        assert!(dc.enabled);
+        assert!(dc.small);
+        assert_eq!(dc.cap, DEFAULT_TOOL_CAP);
+    }
+
+    #[test]
+    fn resolve_auto_cloud_uses_larger_cap() {
+        let dc = resolve_door_config_inner("auto", "anthropic", "claude-sonnet-4-6", "https://api.anthropic.com", None, None);
+        assert!(dc.enabled, "auto mode enables doors on cloud too (token billing)");
+        assert!(!dc.small);
+        assert_eq!(dc.cap, CLOUD_TOOL_CAP);
+    }
+
+    #[test]
+    fn resolve_on_enables_regardless_of_size() {
+        let dc = resolve_door_config_inner("on", "anthropic", "claude-sonnet-4-6", "https://api.anthropic.com", None, None);
+        assert!(dc.enabled);
+        assert_eq!(dc.cap, CLOUD_TOOL_CAP);
+    }
+
+    #[test]
+    fn resolve_env_override_wins() {
+        // env=0 forces off even when mode says on.
+        let off = resolve_door_config_inner("on", "ollama", "gemma2:9b", "http://localhost:11434", Some(false), None);
+        assert!(!off.enabled);
+        // env=1 forces on even when mode says off.
+        let on = resolve_door_config_inner("off", "anthropic", "claude-sonnet-4-6", "https://api.anthropic.com", Some(true), None);
+        assert!(on.enabled);
+    }
+
+    #[test]
+    fn resolve_cap_override_wins() {
+        let dc = resolve_door_config_inner("auto", "ollama", "gemma2:9b", "http://localhost:11434", None, Some(12));
+        assert_eq!(dc.cap, 12);
     }
 
     #[test]

@@ -166,12 +166,21 @@ pub fn load_config() -> Option<GhostConfig> {
     let maximus_url = cfg["maximus"]["url"].as_str().map(|s| s.to_string());
     let maximus_disabled = cfg["maximus"]["disabled"].as_bool().unwrap_or(false);
 
+    // MCP-tool-doors: mode + context budget. `auto` (default) turns doors on
+    // for every provider (small/local get the tight cap; cloud gets a larger
+    // one). Env HYPERIA_TOOL_DOORS overrides. See doors::resolve_door_config.
+    let tool_doors_mode = cfg["agent"]["tool_doors"].as_str().unwrap_or("auto");
+    let doors = crate::doors::resolve_door_config(tool_doors_mode, &provider, &model, &endpoint);
+    let context_tokens = cfg["agent"]["context_tokens"].as_u64().unwrap_or(0) as usize;
+
     Some(GhostConfig {
         provider,
         model,
         api_key,
         endpoint,
         max_turns: 25,
+        doors,
+        context_tokens,
         maximus_model,
         maximus_url,
         maximus_disabled,
@@ -192,12 +201,18 @@ fn default_model(provider: &str) -> &'static str {
 }
 
 fn default_local_ollama() -> GhostConfig {
+    let endpoint = default_endpoint("ollama");
+    // Local Ollama is always a small/local model → auto-doors on with the tight
+    // cap (env still overrides). Keep this consistent with load_config's path.
+    let doors = crate::doors::resolve_door_config("auto", "ollama", "gemma2:9b", &endpoint);
     GhostConfig {
         provider: "ollama".into(),
         model: "gemma2:9b".into(),
         api_key: String::new(),
-        endpoint: default_endpoint("ollama"),
+        endpoint,
         max_turns: 25,
+        doors,
+        context_tokens: 0,
         maximus_model: None,
         maximus_url: None,
         maximus_disabled: false,

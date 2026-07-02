@@ -219,11 +219,45 @@ impl ContextCompressor {
     // -- Message history compression (unchanged) --
 
     pub async fn compress_messages(&self, messages: &[Value]) -> Vec<Value> {
+        self.compress_messages_budgeted(messages, 0, 0).await
+    }
+
+    /// Like [`compress_messages`], but honors a hard token budget (plan §3
+    /// Phase 3). `budget_tokens == 0` disables the guard (identical to
+    /// `compress_messages`). `overhead_chars` is the char length of everything
+    /// else in the request the budget must also cover (system prompt + tool
+    /// schemas). Tokens are estimated at 4 chars/token. When the estimate blows
+    /// the budget, the number of verbatim recent messages kept is stepped down
+    /// from the default (6) toward a floor of 2 so system + tools + history fit
+    /// (e.g. an 8k Sailfish window).
+    pub async fn compress_messages_budgeted(
+        &self,
+        messages: &[Value],
+        budget_tokens: usize,
+        overhead_chars: usize,
+    ) -> Vec<Value> {
+        // Decide how many recent messages to keep verbatim under the budget.
+        let mut keep_recent = self.keep_recent;
+        if budget_tokens > 0 {
+            let history_chars: usize = messages
+                .iter()
+                .map(|m| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0))
+                .sum();
+            let est_tokens = (overhead_chars + history_chars) / 4;
+            keep_recent = budgeted_keep_recent(self.keep_recent, budget_tokens, est_tokens);
+            if keep_recent != self.keep_recent {
+                info!(
+                    "maximus: context budget {} tok exceeded (~{} tok incl. {} overhead chars) — keep_recent {} → {}",
+                    budget_tokens, est_tokens, overhead_chars, self.keep_recent, keep_recent
+                );
+            }
+        }
+
         if messages.len() <= COMPRESS_THRESHOLD {
             return messages.to_vec();
         }
 
-        let split_at = messages.len().saturating_sub(self.keep_recent);
+        let split_at = messages.len().saturating_sub(keep_recent);
         let older = &messages[..split_at];
         let recent = &messages[split_at..];
 
@@ -676,6 +710,23 @@ impl ContextCompressor {
     }
 }
 
+// -- Token-budget guard (plan §3 Phase 3) --
+
+/// How many recent messages to keep verbatim under a hard token budget.
+///
+/// Returns `default_keep` when the budget is off (`0`) or the estimate fits.
+/// Otherwise steps down one message per ~1/8 of the budget the estimate is
+/// over, floored at 2 (never drops below the two most recent turns).
+fn budgeted_keep_recent(default_keep: usize, budget_tokens: usize, est_tokens: usize) -> usize {
+    if budget_tokens == 0 || est_tokens <= budget_tokens {
+        return default_keep;
+    }
+    let over = est_tokens - budget_tokens;
+    let step = (budget_tokens / 8).max(1);
+    let drop = (over / step).min(default_keep.saturating_sub(2));
+    default_keep.saturating_sub(drop).max(2)
+}
+
 // -- Heuristic content type detection (offline, no Ollama) --
 
 fn detect_content_type(content: &str) -> Option<String> {
@@ -985,6 +1036,47 @@ mod tests {
         let ann = ContextCompressor::format_annotation(&meta, true, false);
         assert!(!ann.contains("focus="), "should not hint focus= when already used");
         assert!(ann.contains("raw=true"));
+    }
+
+    // --- budgeted_keep_recent (token budget guard) ---
+
+    #[test]
+    fn budget_off_keeps_default() {
+        assert_eq!(budgeted_keep_recent(6, 0, 999_999), 6);
+    }
+
+    #[test]
+    fn budget_under_keeps_default() {
+        assert_eq!(budgeted_keep_recent(6, 8000, 5000), 6);
+    }
+
+    #[test]
+    fn budget_slightly_over_drops_one() {
+        // 8000 budget, step = 1000. Over by 1200 → drop 1 → 5.
+        assert_eq!(budgeted_keep_recent(6, 8000, 9200), 5);
+    }
+
+    #[test]
+    fn budget_way_over_floors_at_two() {
+        // Massively over budget → floored at 2, never lower.
+        assert_eq!(budgeted_keep_recent(6, 8000, 200_000), 2);
+    }
+
+    #[test]
+    fn budget_never_below_two_even_at_boundary() {
+        // Exactly at budget → no reduction.
+        assert_eq!(budgeted_keep_recent(6, 8000, 8000), 6);
+        // Small default already at floor stays at floor.
+        assert_eq!(budgeted_keep_recent(2, 8000, 100_000), 2);
+    }
+
+    #[tokio::test]
+    async fn compress_budgeted_zero_matches_plain() {
+        let c = ContextCompressor::new("http://127.0.0.1:1", "m");
+        let input = msgs(COMPRESS_THRESHOLD + 5);
+        let plain = c.compress_messages(&input).await;
+        let budgeted = c.compress_messages_budgeted(&input, 0, 0).await;
+        assert_eq!(plain, budgeted);
     }
 
     // --- detect_content_type heuristic ---

@@ -92,10 +92,12 @@ pub async fn ghost_chat(
     let registry = state.registry.clone();
     let session_mutex = state.session.clone();
     let ferricula = state.ferricula.clone();
+    let door_config = config.doors;
+    let context_tokens = config.context_tokens;
 
     let rx = {
         let mut session = state.session.lock().await;
-        session.run(req.message, registry, provider, session_mutex.clone(), ferricula)
+        session.run(req.message, registry, provider, session_mutex.clone(), ferricula, door_config, context_tokens)
     };
 
     let s = async_stream::stream! {

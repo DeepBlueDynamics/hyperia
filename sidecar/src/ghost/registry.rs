@@ -128,9 +128,8 @@ impl ToolRegistry {
     /// is the progressive-disclosure set — core tools + the `open_tools`/
     /// `close_tools`/`tool_search` meta-tools + the full schemas of *only* the
     /// currently-open doors' tools (plan §4.2). When `None` or disabled, the
-    /// full catalog is returned unchanged (the legacy `is_small_ollama`
-    /// allowlist still applies) — so a flag-off build is byte-identical to
-    /// before doors existed.
+    /// full catalog is returned unchanged — so a doors-off build is byte-
+    /// identical to before doors existed.
     pub fn tool_defs(
         &self,
         provider: Option<&str>,
@@ -202,37 +201,11 @@ impl ToolRegistry {
             }
         }
 
-        let is_small_ollama = provider.map_or(false, |p| p.to_lowercase() == "ollama")
-            && model.map_or(false, |m| {
-                let m_lower = m.to_lowercase();
-                m_lower.contains("e2b") || m_lower.contains("2b") || m_lower.contains("3b") || m_lower.contains("1b") || m_lower.contains("small")
-            });
-
-        if is_small_ollama {
-            let allowed_tools = [
-                "terminal_run",
-                "terminal_cd",
-                "terminal_keys",
-                "terminal_screen",
-                "terminal_status",
-                "terminal_split",
-                "file_read",
-                "file_write",
-                "web_fetch",
-                "open_web_pane",
-                "web_pane_content",
-                "web_pane_eval",
-                "web_pane_mouse",
-                "tab_snapshot",
-                "shell_state",
-                "show_input",
-                "show_picker",
-                "tool_search",
-                "help",
-            ];
-            defs.retain(|t| allowed_tools.contains(&t.name.as_str()));
-        }
-
+        // Legacy small-Ollama allowlist removed in Phase 3 — the doors `auto`
+        // mode (resolved in ghost::load_config) now shrinks the surface for
+        // small/local models via progressive disclosure instead of a fixed
+        // hard-coded subset. With doors off, the full catalog ships (byte-for-
+        // byte the pre-doors behavior).
         defs
     }
 
