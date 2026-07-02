@@ -4,7 +4,7 @@ use rmcp::{
     model::*,
     schemars,
     service::{RequestContext, RoleServer},
-    tool, tool_handler, tool_router,
+    tool, tool_router,
 };
 
 use crate::ghost::compressor::{ContextCompressor, FOCUS_MIN_CHARS};
@@ -2901,8 +2901,46 @@ impl HyperiaMcp {
 
 // -- ServerHandler impl --
 
-#[tool_handler]
+// NOTE: the `#[tool_handler]` macro would auto-generate `call_tool`, `list_tools`,
+// and `get_tool` from `self.tool_router`. Phase 0 hand-writes them verbatim (same
+// behavior) so we can add a `tracing::info!` measuring the tool-surface size in
+// `list_tools`. Behavior is byte-identical to the macro; gating comes in Phase 4.
 impl ServerHandler for HyperiaMcp {
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(tcc).await
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        let tools = self.tool_router.list_all();
+        // Phase 0 instrumentation (no behavior change): measure the full MCP
+        // tool surface returned on every tools/list — count + serialized bytes.
+        let schema_bytes = serde_json::to_vec(&tools).map(|v| v.len()).unwrap_or(0);
+        tracing::info!(
+            target: "doors",
+            tool_count = tools.len(),
+            schema_bytes,
+            "mcp tools/list surface"
+        );
+        Ok(rmcp::model::ListToolsResult {
+            tools,
+            meta: None,
+            next_cursor: None,
+        })
+    }
+
+    fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
+        self.tool_router.get(name).cloned()
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(

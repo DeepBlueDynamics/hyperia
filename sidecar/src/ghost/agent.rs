@@ -433,6 +433,21 @@ After cleanup, reply to the human and end the turn."
             messages.clone()
         };
 
+        // Phase 0 instrumentation (no behavior change): measure the live tool
+        // surface shipped to the provider this iteration — count + serialized
+        // schema byte size. This is the baseline the doors work shrinks.
+        let tool_schema_bytes = serde_json::to_vec(&effective_tool_defs)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        tracing::info!(
+            target: "doors",
+            turn = turns,
+            throttle_tier,
+            tool_count = effective_tool_defs.len(),
+            schema_bytes = tool_schema_bytes,
+            "ghost tool surface (per-iteration)"
+        );
+
         // Call the provider
         let mut event_rx = provider
             .stream(&effective_system, &send_messages, &effective_tool_defs, 4096)
