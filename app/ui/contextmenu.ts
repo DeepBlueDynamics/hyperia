@@ -51,6 +51,7 @@ const contextMenuTemplate = (
   menu.push(separator);
   menu.push({label: 'New Tab', accelerator: commandKeys['tab:new'], click: cmd('tab:new')});
   menu.push({label: 'New Window', click: () => createWindow()});
+  menu.push({label: 'Open Hyperia', click: cmd('pane:openShellPane')});
 
   menu.push(separator);
   menu.push({label: 'New Stickys', click: () => ipcMain.emit('new-sticky', {})});
