@@ -173,7 +173,7 @@ function wireWebContents(uid: string, wc: WebContents) {
         : {label: 'Inspect (split)', click: () => openInspector(uid, params.x, params.y)},
       {type: 'separator'},
       {
-        label: 'Open Hyperia',
+        label: 'Hyperia Agent',
         click: () => {
           const port = process.env.HYPERIA_PORT || '9800';
           (entry.win as any).rpc?.emit('open web pane req', {url: `http://localhost:${port}/shell`});
