@@ -132,6 +132,8 @@ interface ComboItem {
   onSelect: () => void;
   // Custom (user-saved) profiles get a right-click-to-delete affordance.
   onDelete?: () => void;
+  // Rows with a config surface (Hyperia) get a gear button on the right.
+  onConfigure?: () => void;
 }
 
 interface ComboboxProps {
@@ -474,6 +476,21 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                       >
                         {it.label}
                       </span>
+                      {it.onConfigure && (
+                        <i
+                          className="ti ti-settings"
+                          title="Configure"
+                          onMouseDown={(ev) => {
+                            // Fire the config action, not the row's launch.
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            this.close();
+                            it.onConfigure!();
+                          }}
+                          style={{fontSize: '13px', color: 'var(--text-tertiary)', flexShrink: 0, cursor: 'pointer'}}
+                          aria-hidden="true"
+                        />
+                      )}
                     </div>
                   );
                 })}
@@ -823,7 +840,8 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         label: 'Hyperia',
         iconClass: 'ti ti-ghost',
         iconStyle: {color: 'var(--info-text)'},
-        onSelect: () => this.launchHyperiaShell()
+        onSelect: () => this.launchHyperiaShell(),
+        onConfigure: () => this.openAgentConfig()
       });
     }
     // Hyperia (when configured) then both Nemesis8 entries lead the list;
