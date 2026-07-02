@@ -44,6 +44,16 @@ if (process.platform === 'win32' && app.isPackaged) {
   } catch {
     /* non-fatal */
   }
+} else if (process.platform === 'win32') {
+  // Dev (`yarn start`) gets its OWN AUMID — never the stable one (poison, see
+  // above) and never Electron's default ("electron.app.Electron"): the default
+  // makes Windows mint Electron.lnk / jump-list entries whose generic icon
+  // bleeds back into the shell's icon caches.
+  try {
+    app.setAppUserModelId('com.deepbluedynamics.hyperia.dev');
+  } catch {
+    /* non-fatal */
+  }
 }
 
 app.name = 'Hyperia';
