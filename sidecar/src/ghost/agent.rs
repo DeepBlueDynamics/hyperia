@@ -816,11 +816,17 @@ After cleanup, reply to the human and end the turn."
                     door_state.touch(&tool.name);
                 }
 
-                // Repeat detection: check if we've seen this exact call+output before
+                // Repeat detection. Two ways a call counts as a loop:
+                //  (a) same call+output as a previous one (deterministic re-fire), OR
+                //  (b) same tool+input issued 3+ times recently even when the
+                //      OUTPUT differs each time — e.g. terminal_split with no
+                //      args spawns a NEW pane every call, so its output never
+                //      repeats and (a) alone would let a small model split
+                //      forever. Counting the signature catches that.
                 let call_sig = format!("{}:{}", tool.name, input.to_string());
-                let is_repeat = recent_calls.iter().any(|(sig, prev_out)| {
-                    sig == &call_sig && prev_out == &output
-                });
+                let same_sig_count = recent_calls.iter().filter(|(sig, _)| sig == &call_sig).count();
+                let is_repeat = same_sig_count >= 2
+                    || recent_calls.iter().any(|(sig, prev_out)| sig == &call_sig && prev_out == &output);
                 recent_calls.push((call_sig, output.clone()));
                 // Keep only last 10
                 if recent_calls.len() > 10 { recent_calls.remove(0); }

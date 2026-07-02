@@ -765,19 +765,22 @@ function finishToolRow(id, name, input, output) {
     : '<span class="ok">✓</span>';
   const outEl = r.querySelector('.output');
   if (outEl) {
-    let formattedOutput = output || '(no output)';
-    if (output) {
-      const trimmed = output.trim();
-      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-        try {
-          const parsed = JSON.parse(trimmed);
-          formattedOutput = JSON.stringify(parsed, null, 2);
-        } catch (e) {
-          // Fallback to raw output
-        }
+    // Pretty-print helper: parse-and-reindent when the value looks like JSON,
+    // else return the raw string.
+    const pretty = (v) => {
+      if (v == null) return '';
+      if (typeof v === 'object') { try { return JSON.stringify(v, null, 2); } catch (e) { return String(v); } }
+      const t = String(v).trim();
+      if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+        try { return JSON.stringify(JSON.parse(t), null, 2); } catch (e) { /* raw */ }
       }
-    }
-    outEl.textContent = formattedOutput;
+      return String(v);
+    };
+    // Expanded row shows the FULL call: pretty input args, then output.
+    const hasInput = input && (typeof input !== 'object' || Object.keys(input).length > 0);
+    const inBlock = hasInput ? ('Input:\n' + pretty(input) + '\n\n') : '';
+    const outBlock = 'Output:\n' + (pretty(output) || '(no output)');
+    outEl.textContent = inBlock + outBlock;
   }
   console.debug('[tool] finished', id, name, 'output bytes:', (output || '').length);
 }
