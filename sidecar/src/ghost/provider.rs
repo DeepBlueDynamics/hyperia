@@ -1018,6 +1018,13 @@ impl OpenAIProvider {
         tools: &[ToolDef],
         max_tokens: u32,
     ) -> anyhow::Result<mpsc::Receiver<ProviderEvent>> {
+        // Newer OpenAI models (gpt-5-codex, *-pro, *-deep-research) are only
+        // served by the /v1/responses endpoint and 404 on /v1/chat/completions
+        // ("Use the v1/responses endpoint instead"). Route them there.
+        if needs_responses_api(&self.model) {
+            return self.stream_responses(system, messages, tools, max_tokens).await;
+        }
+
         let (tx, rx) = mpsc::channel(128);
 
         let openai_messages = build_openai_messages(system, messages);
@@ -1236,6 +1243,264 @@ impl OpenAIProvider {
 
         Ok(rx)
     }
+
+    /// Stream via OpenAI's /v1/responses endpoint (the newer unified API).
+    /// Required for gpt-5-codex / *-pro / *-deep-research; those 404 on
+    /// chat/completions. Different request shape (flat tools, `instructions`,
+    /// `input` items, `max_output_tokens`) and a typed-event SSE stream.
+    pub async fn stream_responses(
+        &self,
+        system: &str,
+        messages: &[serde_json::Value],
+        tools: &[ToolDef],
+        max_tokens: u32,
+    ) -> anyhow::Result<mpsc::Receiver<ProviderEvent>> {
+        let (tx, rx) = mpsc::channel(128);
+
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "input": build_responses_input(messages),
+            "stream": true,
+        });
+        if !system.is_empty() {
+            body["instructions"] = serde_json::json!(system);
+        }
+        if max_tokens > 0 {
+            body["max_output_tokens"] = serde_json::json!(max_tokens);
+        }
+        if !tools.is_empty() {
+            // Responses tools are FLAT (name/description/parameters at top level),
+            // unlike chat/completions which nests under `function`.
+            let tool_defs: Vec<serde_json::Value> = tools
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "type": "function",
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    })
+                })
+                .collect();
+            body["tools"] = serde_json::json!(tool_defs);
+        }
+
+        let resp = self
+            .client
+            .post(format!("{}/v1/responses", self.endpoint))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let raw = resp.text().await.unwrap_or_default();
+            let api_message = serde_json::from_str::<serde_json::Value>(&raw)
+                .ok()
+                .and_then(|j| j["error"]["message"].as_str().map(|s| s.to_string()));
+            let host = self
+                .endpoint
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
+            let who = format!("{} ({}, responses)", self.provider_label, host);
+            let label = if let Some(msg) = api_message {
+                format!("{} error {} — {}\nFull response: {}", who, status, msg, raw)
+            } else {
+                format!("{} error {} — {}", who, status, raw)
+            };
+            let _ = tx.send(ProviderEvent::Error(label)).await;
+            return Ok(rx);
+        }
+
+        let mut stream = resp.bytes_stream();
+
+        tokio::spawn(async move {
+            let mut buffer = String::new();
+            // item_id → call_id, so streamed argument deltas (keyed by item_id)
+            // resolve to the call_id we must echo back as function_call_output.
+            let mut item_to_call: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            let mut active_calls: Vec<String> = Vec::new();
+            let mut saw_tool_call = false;
+
+            while let Some(chunk) = stream.next().await {
+                let chunk = match chunk {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = tx.send(ProviderEvent::Error(e.to_string())).await;
+                        break;
+                    }
+                };
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                while let Some(pos) = buffer.find("\n\n") {
+                    let block = buffer[..pos].to_string();
+                    buffer = buffer[pos + 2..].to_string();
+                    for line in block.lines() {
+                        let lt = line.trim();
+                        if lt.is_empty() || lt == "data: [DONE]" {
+                            continue;
+                        }
+                        // Responses SSE also emits `event:` lines; ignore them and
+                        // key off the `type` field inside the JSON `data:` payload.
+                        let Some(data) = lt.strip_prefix("data:") else { continue };
+                        let d = data.trim();
+                        if d.is_empty() {
+                            continue;
+                        }
+                        let Ok(val) = serde_json::from_str::<serde_json::Value>(d) else { continue };
+                        match val["type"].as_str().unwrap_or("") {
+                            "response.output_text.delta" => {
+                                if let Some(delta) = val["delta"].as_str() {
+                                    if !delta.is_empty() {
+                                        let _ = tx.send(ProviderEvent::TextDelta(delta.to_string())).await;
+                                    }
+                                }
+                            }
+                            "response.reasoning_summary_text.delta" => {
+                                if let Some(delta) = val["delta"].as_str() {
+                                    if !delta.is_empty() {
+                                        let id = val["item_id"].as_str().unwrap_or("reason").to_string();
+                                        let _ = tx.send(ProviderEvent::ThinkingDelta { id, text: delta.to_string() }).await;
+                                    }
+                                }
+                            }
+                            "response.output_item.added" => {
+                                let item = &val["item"];
+                                if item["type"] == "function_call" {
+                                    let item_id = item["id"].as_str().unwrap_or("").to_string();
+                                    let call_id = item["call_id"].as_str().unwrap_or("").to_string();
+                                    let name = item["name"].as_str().unwrap_or("").to_string();
+                                    if !call_id.is_empty() {
+                                        item_to_call.insert(item_id, call_id.clone());
+                                        active_calls.push(call_id.clone());
+                                        saw_tool_call = true;
+                                        let _ = tx.send(ProviderEvent::ToolCallStart { id: call_id, name }).await;
+                                    }
+                                }
+                            }
+                            "response.function_call_arguments.delta" => {
+                                let item_id = val["item_id"].as_str().unwrap_or("");
+                                if let Some(call_id) = item_to_call.get(item_id) {
+                                    if let Some(delta) = val["delta"].as_str() {
+                                        let _ = tx.send(ProviderEvent::ToolCallDelta {
+                                            id: call_id.clone(),
+                                            json_fragment: delta.to_string(),
+                                        }).await;
+                                    }
+                                }
+                            }
+                            "response.completed" => {
+                                let usage = &val["response"]["usage"];
+                                let it = usage["input_tokens"].as_u64().unwrap_or(0);
+                                let ot = usage["output_tokens"].as_u64().unwrap_or(0);
+                                if it > 0 || ot > 0 {
+                                    let _ = tx.send(ProviderEvent::Usage { input_tokens: it, output_tokens: ot }).await;
+                                }
+                            }
+                            "response.failed" => {
+                                let msg = val["response"]["error"]["message"]
+                                    .as_str()
+                                    .unwrap_or("response failed")
+                                    .to_string();
+                                let _ = tx.send(ProviderEvent::Error(msg)).await;
+                            }
+                            "error" => {
+                                let msg = val["message"].as_str().unwrap_or("stream error").to_string();
+                                let _ = tx.send(ProviderEvent::Error(msg)).await;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            for id in active_calls {
+                let _ = tx.send(ProviderEvent::ToolCallEnd { id }).await;
+            }
+            let stop = if saw_tool_call { "tool_use" } else { "end_turn" };
+            let _ = tx.send(ProviderEvent::MessageStop { stop_reason: stop.to_string() }).await;
+        });
+
+        Ok(rx)
+    }
+}
+
+/// Models served ONLY by /v1/responses (they 404 on /v1/chat/completions):
+/// the codex, -pro, and deep-research variants. Base chat models and the
+/// standard reasoning models (o1/o3/o4-mini) support both, so they stay on
+/// chat/completions.
+fn needs_responses_api(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    m.contains("codex") || m.contains("-pro") || m.contains("deep-research")
+}
+
+/// Translate internal Anthropic-style message blocks into /v1/responses
+/// `input` items: user/assistant text stay as role messages; `tool_use`
+/// becomes a `function_call` item and `tool_result` a `function_call_output`,
+/// correlated by call_id (the same id we assigned at ToolCallStart).
+fn build_responses_input(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for msg in messages {
+        let role = msg["role"].as_str().unwrap_or("user");
+        if msg["content"].is_string() {
+            out.push(serde_json::json!({ "role": role, "content": msg["content"].as_str().unwrap_or("") }));
+        } else if let Some(arr) = msg["content"].as_array() {
+            if role == "user" {
+                for block in arr {
+                    match block["type"].as_str() {
+                        Some("tool_result") => {
+                            let call_id = block["tool_use_id"].as_str().unwrap_or("");
+                            let content_val = &block["content"];
+                            let output = if content_val.is_string() {
+                                content_val.as_str().unwrap_or("").to_string()
+                            } else {
+                                content_val.to_string()
+                            };
+                            out.push(serde_json::json!({
+                                "type": "function_call_output",
+                                "call_id": call_id,
+                                "output": output,
+                            }));
+                        }
+                        Some("text") => {
+                            out.push(serde_json::json!({ "role": "user", "content": block["text"].as_str().unwrap_or("") }));
+                        }
+                        _ => {}
+                    }
+                }
+            } else if role == "assistant" {
+                let mut text_content = String::new();
+                let mut calls = Vec::new();
+                for block in arr {
+                    match block["type"].as_str() {
+                        Some("text") => {
+                            if let Some(t) = block["text"].as_str() {
+                                text_content.push_str(t);
+                            }
+                        }
+                        Some("tool_use") => {
+                            let id = block["id"].as_str().unwrap_or("");
+                            let name = block["name"].as_str().unwrap_or("");
+                            calls.push(serde_json::json!({
+                                "type": "function_call",
+                                "call_id": id,
+                                "name": name,
+                                "arguments": block["input"].to_string(),
+                            }));
+                        }
+                        _ => {}
+                    }
+                }
+                if !text_content.is_empty() {
+                    out.push(serde_json::json!({ "role": "assistant", "content": text_content }));
+                }
+                out.extend(calls);
+            }
+        }
+    }
+    out
 }
 
 fn build_openai_messages(system: &str, messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
