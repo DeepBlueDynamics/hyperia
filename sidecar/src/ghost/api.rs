@@ -790,6 +790,9 @@ pub async fn get_agent_config() -> Json<serde_json::Value> {
         },
         // Per-service settings (ports etc.) — config.agent.services.<name>.
         "services": agent["services"].clone(),
+        // Absolute path of the hand-editable config file — the page links it
+        // to a code-mode sticky for direct editing.
+        "config_path": config_raw_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
         // Token Maximus (local-model compressor/extractor) settings.
         "maximus": {
             "model": json["config"]["maximus"]["model"].as_str().unwrap_or(""),

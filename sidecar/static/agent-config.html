@@ -52,7 +52,7 @@
     </span>
   </div>
   <h1>👻 Hyperia Agent</h1>
-  <div class="sub">This page configures the <b>model powering Hyperia's built-in agent</b> — the intelligence behind its chat, tools, and automation. <b>Note:</b> the Hyperia agent bills against the provider API keys you add here, per token. External agents — Claude Code, Nemesis8, and friends — run on their own subscriptions and logins; the two are entirely separate. Local models run on your hardware for free. Everything here keeps a hand-editable copy at <code>config.agent</code>.</div>
+  <div class="sub">This page configures the <b>model powering Hyperia's built-in agent</b> — the intelligence behind its chat, tools, and automation. <b>Note:</b> the Hyperia agent bills against the provider API keys you add here, per token. External agents — Claude Code, Nemesis8, and friends — run on their own subscriptions and logins; the two are entirely separate. Local models run on your hardware for free. Everything here keeps a hand-editable copy at <a href="#" onclick="openConfigSticky(); return false" title="open the config file in a code sticky (syntax-highlighted, editable)"><code>config.agent</code></a>.</div>
 
   <h2>Provider</h2>
   <div class="providers" id="providers"></div>
@@ -313,6 +313,15 @@ async function load() {
   $('modelSpin').style.display = 'none';
   renderModels();
   renderMaximus();
+}
+
+// Open the raw config file in a CODE-mode sticky (syntax-highlighted,
+// editable, bound to the file) so the user can hand-edit config.agent.
+async function openConfigSticky() {
+  const p = cfg && cfg.config_path;
+  if (!p) return;
+  await fetch('/api/notes', {method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({file_path: p, color: 'code:dark', width: 800, height: 600})});
 }
 
 // ── Token Maximus: local downsizer model + enable toggle ──────────────────
