@@ -357,7 +357,9 @@ fn cap_from_env() -> usize {
 /// parameter tag (`e4b`, `2b`, `3b`, `4b`, `mini-local`, …).
 pub fn is_small_model(provider: &str, model: &str, endpoint: &str) -> bool {
     let p = provider.trim().to_lowercase();
-    if p == "ollama" {
+    // Local appliances: Ollama and Sailfish (llama.cpp CUDA, gemma4-e4b) are
+    // always small/local — tight cap, slim prompt, temperature 0.
+    if p == "ollama" || p == "sailfish" {
         return true;
     }
     if p == "openai" && !endpoint.contains("api.openai.com") {
@@ -896,6 +898,29 @@ mod tests {
     #[test]
     fn resolve_auto_sailfish_endpoint_is_small() {
         let dc = resolve_door_config_inner("auto", "openai", "gemma4-e4b", "http://localhost:22343", None, None);
+        assert!(dc.enabled);
+        assert!(dc.small);
+        assert_eq!(dc.cap, DEFAULT_TOOL_CAP);
+    }
+
+    #[test]
+    fn is_small_model_matches_sailfish_provider() {
+        // The "sailfish" provider id is always local/small regardless of model.
+        assert!(is_small_model("sailfish", "gemma4-e4b", "http://localhost:22343"));
+        assert!(is_small_model("sailfish", "anything", "http://localhost:22343"));
+    }
+
+    #[test]
+    fn resolve_auto_sailfish_provider_is_small_default_cap() {
+        // Phase 6: provider == "sailfish" classifies as small → tight cap 20.
+        let dc = resolve_door_config_inner(
+            "auto",
+            "sailfish",
+            "gemma4-e4b",
+            "http://localhost:22343",
+            None,
+            None,
+        );
         assert!(dc.enabled);
         assert!(dc.small);
         assert_eq!(dc.cap, DEFAULT_TOOL_CAP);

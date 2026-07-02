@@ -26,6 +26,11 @@ impl AnyProvider {
             "anthropic" => AnyProvider::Anthropic(AnthropicProvider::new(config)),
             "ollama" => AnyProvider::Ollama(OllamaProvider::new(config)),
             "openai" => AnyProvider::OpenAI(OpenAIProvider::new(config)),
+            // Sailfish is a local OpenAI-compatible endpoint (llama.cpp CUDA,
+            // http://localhost:22343/v1). It rides OpenAIProvider verbatim — the
+            // only difference is provider_name() reports "sailfish" (via the
+            // provider_label carried on OpenAIProvider from config.provider).
+            "sailfish" => AnyProvider::OpenAI(OpenAIProvider::new(config)),
             "gemini" => AnyProvider::Unsupported("gemini".into()),
             other => AnyProvider::Unsupported(other.to_string()),
         }
@@ -35,7 +40,9 @@ impl AnyProvider {
         match self {
             AnyProvider::Anthropic(_) => "anthropic",
             AnyProvider::Ollama(_) => "ollama",
-            AnyProvider::OpenAI(_) => "openai",
+            // "openai" or "sailfish" — both ride OpenAIProvider; the label is
+            // carried from config.provider so doors/telemetry can tell them apart.
+            AnyProvider::OpenAI(p) => &p.provider_label,
             AnyProvider::Unsupported(name) => name,
         }
     }
@@ -966,6 +973,10 @@ pub struct OpenAIProvider {
     /// the Sailfish guide asks for temperature 0 on tool calls, and cloud
     /// OpenAI o-series models reject the `temperature` field outright.
     send_zero_temp: bool,
+    /// The configured provider id ("openai" or "sailfish"). Reported by
+    /// `AnyProvider::provider_name()` so a Sailfish run is distinguishable from
+    /// a stock OpenAI run even though they share this provider implementation.
+    provider_label: String,
 }
 
 impl OpenAIProvider {
@@ -981,12 +992,22 @@ impl OpenAIProvider {
             config.endpoint.trim_end_matches('/').to_string()
         };
         let send_zero_temp = config.doors.enabled && !endpoint.contains("api.openai.com");
+        let provider_label = if config.provider.is_empty() {
+            "openai".to_string()
+        } else {
+            config.provider.clone()
+        };
         Self {
+            // No request-level timeout on the client: the Sailfish appliance can
+            // take ~120 s to answer the first call after idle (model/graph warm,
+            // per HYPERIA_INTEGRATION.md). A reqwest timeout here would abort the
+            // warmup; instead we let the stream run and the shell shows progress.
             client: reqwest::Client::new(),
             api_key: config.api_key.clone(),
             model,
             endpoint,
             send_zero_temp,
+            provider_label,
         }
     }
 

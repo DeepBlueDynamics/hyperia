@@ -141,16 +141,28 @@ pub fn load_config() -> Option<GhostConfig> {
         }
     };
 
+    // Sailfish's default endpoint is derived from the shared config's service
+    // port (config.agent.services.sailfish.port, default 22343) — default_endpoint
+    // can't see the config, so resolve it here when no per-provider override is set.
+    if provider == "sailfish" && endpoint.is_empty() {
+        let port = cfg["agent"]["services"]["sailfish"]["port"]
+            .as_u64()
+            .unwrap_or(22343);
+        endpoint = format!("http://localhost:{}", port);
+    }
+
     if provider == "ollama" && std::path::Path::new("/.dockerenv").exists() {
         if endpoint == "http://localhost:11434" || endpoint == "http://127.0.0.1:11434" {
             endpoint = "http://host.docker.internal:11434".to_string();
         }
     }
 
-    // Ollama doesn't require a token. Cloud providers do — without one we
-    // can't honor the user's choice, so fall back to local Ollama and let
-    // the doctor probe surface what's missing.
-    if provider != "ollama" && api_key.is_empty() {
+    // Local providers (Ollama, Sailfish) don't require a token — they're
+    // localhost-only appliances. Cloud providers do — without one we can't
+    // honor the user's choice, so fall back to local Ollama and let the doctor
+    // probe surface what's missing. Sailfish must NOT fall back to Ollama on an
+    // empty key (it's a valid keyless local endpoint).
+    if provider != "ollama" && provider != "sailfish" && api_key.is_empty() {
         tracing::warn!(
             "agent.provider = '{}' but no token configured at config.providers.{}.token — falling back to local Ollama. Use the settings agent to paste a key.",
             provider, provider
@@ -196,6 +208,12 @@ fn default_model(provider: &str) -> &'static str {
         "openai" => "gpt-4o",
         "gemini" => "gemini-2.0-flash",
         "ollama" => "gemma2:9b",
+        // Sailfish: the integration guide's reference client uses "gemma4-e4b"
+        // (gemma-4-E4B-it Q4_K_M). This is only a fallback — the served id can
+        // swap (stock vs fine-tuned), so the authoritative source is GET
+        // /v1/models, which the config pane probes live (ghost/api.rs
+        // get_agent_models) and the user can pin via config.agent.model.
+        "sailfish" => "gemma4-e4b",
         _ => "gemma2:9b",
     }
 }

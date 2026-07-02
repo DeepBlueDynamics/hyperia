@@ -978,10 +978,65 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
     use std::time::{Duration, Instant};
     static CACHE: OnceLock<Mutex<Option<(Instant, serde_json::Value)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(None));
-    if let Some((at, val)) = cache.lock().unwrap().clone() {
-        if at.elapsed() < Duration::from_secs(3600) {
-            return Json(val);
+
+    // The nemesis8 catalog (frontier + curated ollama) is cached for 1h. Sailfish
+    // is NOT cached — its availability flips as the local container starts/stops
+    // and warms up, so we probe it fresh on every call and inject after the cache
+    // lookup. `inject_sailfish` funnels both the cache-hit and fresh paths.
+    async fn inject_sailfish(mut val: serde_json::Value) -> serde_json::Value {
+        let sf_port = read_shared_config()["config"]["agent"]["services"]["sailfish"]["port"]
+            .as_u64()
+            .unwrap_or(22343);
+        let probed = async {
+            let resp = reqwest::Client::new()
+                .get(format!("http://localhost:{}/v1/models", sf_port))
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await
+                .ok()?;
+            if !resp.status().is_success() {
+                return None;
+            }
+            resp.json::<serde_json::Value>().await.ok()
         }
+        .await;
+        let models: Vec<serde_json::Value> = probed
+            .as_ref()
+            .and_then(|j| j["data"].as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        let id = m["id"].as_str()?;
+                        Some(serde_json::json!({"id": id, "label": id}))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let default = models
+            .first()
+            .and_then(|m| m["id"].as_str())
+            .unwrap_or("")
+            .to_string();
+        val["providers"]["sailfish"] = serde_json::json!({
+            "ok": !models.is_empty(),
+            "default": default,
+            "models": models,
+        });
+        val
+    }
+
+    // Snapshot the cached catalog and drop the MutexGuard BEFORE any await —
+    // holding a std Mutex guard across .await makes the future non-Send and
+    // breaks the axum Handler bound.
+    let cached = {
+        let guard = cache.lock().unwrap();
+        match guard.clone() {
+            Some((at, val)) if at.elapsed() < Duration::from_secs(3600) => Some(val),
+            _ => None,
+        }
+    };
+    if let Some(val) = cached {
+        return Json(inject_sailfish(val).await);
     }
     let fetched = async {
         let resp = reqwest::Client::new()
@@ -993,10 +1048,10 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
         resp.json::<serde_json::Value>().await.ok()
     }
     .await;
-    let mut val = match fetched {
-        Some(v) => v,
-        None => return Json(serde_json::json!({"ok": false, "error": "models catalog unreachable"})),
-    };
+    // When the nemesis8 catalog is unreachable we still return a usable payload
+    // (curated ollama + a fresh sailfish probe below) rather than a hard error,
+    // so the picker keeps working for the local providers.
+    let mut val = fetched.unwrap_or_else(|| serde_json::json!({"providers": {}}));
     // Ollama: the curated list IS the list (not an intersection with the
     // catalog — these tags are pulled locally via `ollama pull`). Extras come
     // from config.agent.ollama_allow.
@@ -1034,6 +1089,8 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
         val["providers"]["codex"]["models"] = serde_json::json!(plain);
     }
     val["ok"] = serde_json::json!(true);
+    // Cache the nemesis8-derived catalog WITHOUT sailfish, then inject a fresh
+    // sailfish probe so its availability is never stale behind the 1h TTL.
     *cache.lock().unwrap() = Some((Instant::now(), val.clone()));
-    Json(val)
+    Json(inject_sailfish(val).await)
 }

@@ -92,10 +92,11 @@ const PROVIDERS = [
   {id:'grok',      label:'Grok',      cat:'grok',    key:true},
   {id:'gemini',    label:'Gemini',    cat:'gemini',  key:true},
   {id:'ollama',    label:'Ollama (local)', cat:'ollama', key:false},
-  {id:'sailfish',  label:'Sailfish (local)', cat:null, key:false, disabled:true}
+  {id:'sailfish',  label:'Sailfish (local)', cat:'sailfish', key:false}
 ];
 // Best-in-class cheapest agentic runner per provider (user-changeable).
-const CHEAP_PICK = {claude:/haiku/i, codex:/mini/i, gemini:/flash/i, grok:/build/i, ollama:/e4b|ornith/i};
+// Sailfish serves one model at a time (gemma4-e4b) — match anything → first id.
+const CHEAP_PICK = {claude:/haiku/i, codex:/mini/i, gemini:/flash/i, grok:/build/i, ollama:/e4b|ornith/i, sailfish:/.*/};
 let cfg = {provider:'', model:'', keys:{}};
 let catalog = null;
 let sel = '';
@@ -158,6 +159,10 @@ function renderModels() {
   m.value = ids.includes(cfg.model) ? cfg.model : (cheap || prov.default || ids[0] || '');
   $('modelNote').textContent = p.id === 'ollama'
     ? 'Curated: small, fast, tool-capable local models (E4B-class + Ornith). Extend via config.agent.ollama_allow.'
+    : p.id === 'sailfish'
+    ? (models.length
+        ? 'Local OpenAI-compatible endpoint (llama.cpp CUDA). First call after idle can take ~120s to warm up.'
+        : 'Sailfish not reachable on :22343 — start the appliance (Services → Sailfish) then reopen.')
     : (cheap && m.value === cheap ? 'Defaulted to the cheapest capable runner — change freely.' : '');
 }
 
