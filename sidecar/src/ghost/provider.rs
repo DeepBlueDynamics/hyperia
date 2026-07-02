@@ -1004,7 +1004,16 @@ impl OpenAIProvider {
         });
 
         if max_tokens > 0 {
-            body["max_tokens"] = serde_json::json!(max_tokens);
+            // api.openai.com rejects `max_tokens` on reasoning/gpt-5.x models
+            // ("use max_completion_tokens"); it accepts max_completion_tokens on
+            // all current chat models. OpenAI-COMPATIBLE servers (llama.cpp /
+            // Sailfish, vLLM, Ollama) generally only know `max_tokens`, so key
+            // off the endpoint.
+            if self.endpoint.contains("api.openai.com") {
+                body["max_completion_tokens"] = serde_json::json!(max_tokens);
+            } else {
+                body["max_tokens"] = serde_json::json!(max_tokens);
+            }
         }
 
         if !tools.is_empty() {
