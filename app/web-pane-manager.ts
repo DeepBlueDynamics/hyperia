@@ -233,6 +233,19 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
     entry.view.setVisible(entry.visible);
     return;
   }
+  // Reparent with a NEW group uid (some layout collapses re-key the group):
+  // adopt a pending-destroy view in the same window with the same URL instead
+  // of building a fresh one — this is what preserves page state (chat logs).
+  for (const [oldUid, entry] of panes) {
+    if (entry.win === win && entry.destroyTimer && entry.url === url) {
+      clearTimeout(entry.destroyTimer);
+      entry.destroyTimer = undefined;
+      panes.delete(oldUid);
+      panes.set(uid, entry);
+      entry.view.setVisible(true);
+      return;
+    }
+  }
   const view = new WebContentsView({
     webPreferences: {
       session: getSharedSession(),
