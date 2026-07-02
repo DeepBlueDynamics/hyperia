@@ -387,6 +387,24 @@ export default class Term extends React.PureComponent<
       })
     );
 
+    menu.append(
+      new MenuItem({
+        label: 'Switch Shell…',
+        enabled: !isPicker,
+        click: () => {
+          // Unload the current shell and show the picker in this pane — the
+          // same in-group replacement launchShell does, in reverse.
+          rpc.emit('new', {
+            isNewGroup: false,
+            cwd: (this.props as any).sessionCwd || (this.props as any).cwd,
+            activeUid: this.props.uid,
+            profile: 'picker',
+            groupUid: this.props.groupUid
+          });
+        }
+      })
+    );
+
     menu.append(new MenuItem({type: 'separator'}));
 
     const termGroup = (this.props as any).allTermGroups?.[this.props.groupUid!];
