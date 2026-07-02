@@ -586,16 +586,16 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     this.newWithProfile(name);
   };
 
-  // Hyperia Shell isn't a profile launch — it swaps the pane for a web pane
-  // pointed at the local shell UI. Preserved verbatim from the old button.
+  // Hyperia Agent always gets its OWN tab (labeled "Hyperia Agent"; focuses
+  // the existing one if open) — routed through the shared 'open web pane req'
+  // handler in lib/index.tsx. The picker pane closes itself.
   private launchHyperiaShell = () => {
-    const {groupUid, uid, setWebPaneUrl} = this.props;
-    if (!setWebPaneUrl || !groupUid) return;
+    const {uid} = this.props;
     const port = process.env.HYPERIA_PORT || '9800';
     const shellUrl = `http://localhost:${port}/shell`;
     this.setState({lastUsedAgent: 'Hyperia Shell'});
+    rpc.emitter.emit('open web pane req', {url: shellUrl});
     rpc.emit('exit', {uid});
-    setWebPaneUrl(groupUid, shellUrl);
   };
 
   private confirmDelete = (type: 'shell' | 'agent', name: string, displayName: string) => {

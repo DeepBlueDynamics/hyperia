@@ -600,9 +600,37 @@ rpc.on(
   }
 );
 
+// The Hyperia Agent shell (sidecar /shell page) always gets its OWN tab,
+// labeled "Hyperia Agent" — and only one: re-opening focuses the existing tab.
+const isHyperiaShellUrl = (u: string): boolean => {
+  try {
+    const parsed = new URL(u);
+    const localHost =
+      parsed.hostname === 'localhost' ||
+      parsed.hostname === '127.0.0.1' ||
+      parsed.hostname === 'hyperia.local';
+    return localHost && parsed.pathname.startsWith('/shell');
+  } catch {
+    return false;
+  }
+};
+
 rpc.on('open web pane req', ({url}: {url?: string}) => {
   if (url) {
     const full = /^https?:\/\//i.test(url) ? url : 'https://' + url;
+    if (isHyperiaShellUrl(full)) {
+      // One dedicated tab: focus it if it already exists anywhere.
+      const {termGroups} = store_.getState();
+      const existing = Object.values(termGroups.termGroups).find(
+        (g: any) => !g.parentUid && g.webUrl && isHyperiaShellUrl(g.webUrl)
+      );
+      if (existing) {
+        store_.dispatch({type: 'TERM_GROUP_ACTIVATE_WEB_TAB', uid: (existing as any).uid} as any);
+        return;
+      }
+      store_.dispatch(termGroupActions.openWebPaneInNewTab(full, 'Hyperia Agent') as any);
+      return;
+    }
     store_.dispatch(termGroupActions.openWebPaneInNewTab(full) as any);
   } else {
     showWebPaneDialog((full) => {

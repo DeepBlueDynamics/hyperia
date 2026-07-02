@@ -403,15 +403,20 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       return state.setIn(['termGroups', uid, 'webUrl'], url);
     }
     case TERM_GROUP_ADD_WEB_TAB: {
-      const {url} = act;
+      const {url, name} = act as any;
       const uid = uuidv4();
       const termGroup = TermGroup({uid});
-      return state
+      let nextState = state
         .setIn(['termGroups', uid], termGroup)
         .setIn(['termGroups', uid, 'webUrl'], url)
         .setIn(['activeSessions', uid], null as any)
         .set('activeRootGroup', uid)
         .set('activeTermGroup', uid);
+      // Optional fixed tab label (e.g. "Hyperia Agent" for the shell tab).
+      if (name) {
+        nextState = nextState.setIn(['termGroups', uid, 'tabName'], name);
+      }
+      return nextState;
     }
     case 'TERM_GROUP_SPLIT_WEB' as any: {
       return splitWebGroup(state, act);
