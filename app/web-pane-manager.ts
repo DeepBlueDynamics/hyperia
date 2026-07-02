@@ -41,6 +41,8 @@ interface WebPaneEntry {
   win: BrowserWindow;
   url: string;
   visible: boolean;
+  // Pending delayed teardown (see destroyPane) — cancelled if the pane remounts.
+  destroyTimer?: ReturnType<typeof setTimeout>;
   // Last pixel rect pushed from the renderer — used to re-split when the docked
   // inspector opens/closes without waiting for the next bounds tick.
   lastBounds?: {x: number; y: number; width: number; height: number};
@@ -214,10 +216,21 @@ function roundRect(b: {x: number; y: number; width: number; height: number}) {
 
 function createPane(win: BrowserWindow, uid: string, url: string) {
   if (panes.has(uid)) {
-    // Re-navigate an existing view instead of leaking a second one.
     const entry = panes.get(uid)!;
-    entry.url = url;
-    if (url) void entry.view.webContents.loadURL(url).catch(() => {});
+    // A React remount (sibling pane closed → BSP reparent, or any layout
+    // reshuffle) fires destroy+create for the SAME pane. Cancel the pending
+    // teardown and REUSE the live view — reloading would wipe page state
+    // (e.g. the agent chat log).
+    if (entry.destroyTimer) {
+      clearTimeout(entry.destroyTimer);
+      entry.destroyTimer = undefined;
+    }
+    const current = entry.view.webContents.getURL();
+    if (url && url !== entry.url && url !== current) {
+      entry.url = url;
+      void entry.view.webContents.loadURL(url).catch(() => {});
+    }
+    entry.view.setVisible(entry.visible);
     return;
   }
   const view = new WebContentsView({
@@ -326,9 +339,19 @@ function closeInspector(uid: string) {
   positionViews(entry);
 }
 
-function destroyPane(uid: string) {
+// Renderer-driven destroy is DELAYED: an unmount is often half of a remount
+// (layout reparent). Hide immediately; kill for real only if no create() lands
+// within the grace window. Window teardown uses immediate=true.
+function destroyPane(uid: string, immediate = false) {
   const entry = panes.get(uid);
   if (!entry) return;
+  if (!immediate) {
+    entry.view.setVisible(false);
+    if (entry.destroyTimer) clearTimeout(entry.destroyTimer);
+    entry.destroyTimer = setTimeout(() => destroyPane(uid, true), 400);
+    return;
+  }
+  if (entry.destroyTimer) clearTimeout(entry.destroyTimer);
   panes.delete(uid);
   if (entry.devtools) {
     try {
@@ -358,7 +381,7 @@ function destroyPane(uid: string) {
 // Tear down every pane belonging to a window (call on window close).
 export function destroyPanesForWindow(win: BrowserWindow) {
   for (const [uid, entry] of panes) {
-    if (entry.win === win) destroyPane(uid);
+    if (entry.win === win) destroyPane(uid, true);
   }
 }
 
