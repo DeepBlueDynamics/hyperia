@@ -717,13 +717,12 @@ function createStickyNote(
     savedNote.source.path = translateContainerPath(savedNote.source.path);
   }
 
-  // Resolve default size (explicit > persisted manual size > default). A brand-new
-  // sticky opens at 25% of the default size (quick small notes); explicit sizes
-  // and restored notes keep their exact dimensions.
-  const NEW_STICKY_SCALE = 0.25;
+  // Resolve default size (explicit > persisted manual size > default). New
+  // stickys open at the user's default size — the old 25% "quick note" scale
+  // made them ridiculously small (~117×104) and unusable.
   const defaultSize = getStickyDefaultSize();
-  let width = options.width || savedNote?.width || Math.round(defaultSize.width * NEW_STICKY_SCALE);
-  let height = options.height || savedNote?.height || Math.round(defaultSize.height * NEW_STICKY_SCALE);
+  let width = options.width || savedNote?.width || defaultSize.width;
+  let height = options.height || savedNote?.height || defaultSize.height;
 
   // Candidate position: explicit > persisted > centered on the cursor.
   const hasPlacedPos = options.x != null || options.y != null || savedNote?.x != null || savedNote?.y != null;
@@ -738,6 +737,10 @@ function createStickyNote(
   const wa = targetDisplay.workArea;
   width = Math.min(width, wa.width);
   height = Math.min(height, wa.height);
+  // Hard floor: never open a sticky too small to read/use, whatever the
+  // source (corrupt persisted geometry, tiny explicit sizes).
+  width = Math.max(width, 220);
+  height = Math.max(height, 170);
   x = Math.max(wa.x, Math.min(x, wa.x + wa.width - width));
   y = Math.max(wa.y, Math.min(y, wa.y + wa.height - height));
 
