@@ -381,13 +381,8 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
 
     return (
       <div style={pickerRowStyle}>
-        <div style={{...pickerLabelStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-4)'}}>
+        <div style={{...pickerLabelStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-4)'}} title={keyHintTitle}>
           <span>{label}</span>
-          {keyHint && (
-            <span title={keyHintTitle} style={pickerKeyHintStyle}>
-              {keyHint}
-            </span>
-          )}
         </div>
 
         <div style={{position: 'relative', flex: 1, minWidth: 0, maxWidth: PICKER_BOX_MAX}}>
@@ -1094,11 +1089,8 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
           {/* New Webpane row — "New Webpane" label left of the URL box, same
               width/shape as the shell + agent rows below it. */}
           <div style={pickerRowStyle}>
-            <div style={{...pickerLabelStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-4)'}}>
+            <div style={{...pickerLabelStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-4)'}} title="Press W — open the Hyperia guide">
               <span>New Webpane</span>
-              <span title="Press W — open the Hyperia guide" style={pickerKeyHintStyle}>
-                W
-              </span>
             </div>
             <div style={{flex: 1, minWidth: 0, maxWidth: PICKER_BOX_MAX}}>
               <UrlPicker
