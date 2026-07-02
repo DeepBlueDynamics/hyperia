@@ -56,6 +56,28 @@ if (process.platform === 'win32' && app.isPackaged) {
   }
 }
 
+// Self-healing icon-poison sweep: Electron's Windows toast-notification path
+// SELF-INSTALLS a Start Menu shortcut carrying its AUMID (toasts require one).
+// In dev that materializes as "Electron.lnk" → node_modules\electron\dist\
+// electron.exe, whose generic icon contaminates the shell icon caches. Any
+// launch that finds one pointing at a dev electron.exe deletes it on sight.
+if (process.platform === 'win32') {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const {shell: electronShell} = require('electron');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const {unlinkSync} = require('fs');
+    const lnk = resolve(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Electron.lnk');
+    const target = String(electronShell.readShortcutLink(lnk).target || '');
+    if (/node_modules[\\/]electron[\\/]dist[\\/]electron\.exe$/i.test(target)) {
+      unlinkSync(lnk);
+      console.warn('[win-icon] removed poisonous Electron.lnk (dev electron target):', target);
+    }
+  } catch {
+    /* no Electron.lnk — nothing to heal */
+  }
+}
+
 app.name = 'Hyperia';
 app.setName('Hyperia');
 
