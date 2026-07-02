@@ -35,6 +35,12 @@
   .svc b { font-size:12.5px; }
   .svc .tag { margin-left:auto; font-size:10px; color:#9a9aa2; border:1px solid #2c2c34; border-radius:4px; padding:2px 6px; white-space:nowrap; }
   #status { margin-left:10px; font-size:12px; color:#3fb950; }
+  .spin {
+    display:inline-block; width:12px; height:12px; margin-left:8px; vertical-align:-1px;
+    border:2px solid #2c2c34; border-top-color:#6ea8fe; border-radius:50%;
+    animation:spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -46,7 +52,7 @@
   <div class="providers" id="providers"></div>
   <div class="warn" id="burnWarn" style="display:none">⚠ This provider bills per token against the API key you paste below. The agent runs tools in loops — it <i>will</i> burn tokens.</div>
 
-  <h2>Model</h2>
+  <h2>Model <span id="modelSpin" class="spin" style="display:none"></span></h2>
   <select id="model"></select>
   <div class="note" id="modelNote"></div>
 
@@ -103,7 +109,14 @@ function renderModels() {
   const p = PROVIDERS.find(x => x.id === sel);
   const m = $('model');
   m.innerHTML = '';
-  if (!p || !catalog) { $('modelNote').textContent = ''; return; }
+  if (!p || !catalog) {
+    const o = document.createElement('option');
+    o.textContent = catalog === false ? 'model catalog unreachable' : 'loading models…';
+    o.disabled = true; o.selected = true;
+    m.appendChild(o);
+    $('modelNote').textContent = '';
+    return;
+  }
   const prov = (catalog.providers || {})[p.cat] || {};
   const models = prov.models || [];
   for (const mm of models) {
@@ -123,8 +136,14 @@ function renderModels() {
 async function load() {
   try { cfg = await (await fetch('/api/agent/config')).json(); } catch {}
   sel = cfg.provider || 'anthropic';
-  try { catalog = await (await fetch('/api/agent/models')).json(); } catch {}
+  // Providers render instantly; the model list streams in behind a spinner
+  // (first catalog fetch can take a few seconds).
   renderProviders(); renderModels();
+  $('modelSpin').style.display = '';
+  try { catalog = await (await fetch('/api/agent/models')).json(); }
+  catch { catalog = false; }
+  $('modelSpin').style.display = 'none';
+  renderModels();
 }
 
 $('save').onclick = async () => {
