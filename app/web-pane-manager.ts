@@ -172,6 +172,14 @@ function wireWebContents(uid: string, wc: WebContents) {
         ? {label: 'Close Inspector', click: () => closeInspector(uid)}
         : {label: 'Inspect (split)', click: () => openInspector(uid, params.x, params.y)},
       {type: 'separator'},
+      {
+        label: 'Open Hyperia',
+        click: () => {
+          const port = process.env.HYPERIA_PORT || '9800';
+          (entry.win as any).rpc?.emit('open web pane req', {url: `http://localhost:${port}/shell`});
+        }
+      },
+      {type: 'separator'},
       {label: 'New Stickys', click: () => void ipcMain.emit('new-sticky', {})},
       {label: 'Search Stickys', click: () => void ipcMain.emit('search-stickies')}
     );

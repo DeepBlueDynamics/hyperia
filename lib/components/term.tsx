@@ -376,6 +376,18 @@ export default class Term extends React.PureComponent<
 
     menu.append(
       new MenuItem({
+        label: 'Open Hyperia',
+        click: () => {
+          const port = process.env.HYPERIA_PORT || '9800';
+          openUrl(`http://localhost:${port}/shell`);
+        }
+      })
+    );
+
+    menu.append(new MenuItem({type: 'separator'}));
+
+    menu.append(
+      new MenuItem({
         label: 'Rename Pane',
         enabled: !isPicker,
         click: () => {
