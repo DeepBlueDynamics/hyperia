@@ -781,7 +781,7 @@ impl OllamaProvider {
                     },
                     "reply": {
                         "type": "string",
-                        "description": "REQUIRED. Your final response to the user. Set to \"\" when calling a tool; otherwise this is what the user sees."
+                        "description": "REQUIRED. Your final answer to the user's question — shown to them verbatim. MUST be \"\" when tool_name is not 'none'; never narrate tool calls here."
                     }
                 },
                 // reply IS required — ornith emitted thought + tool_name:"none"
@@ -944,14 +944,20 @@ impl OllamaProvider {
                 }
             }
 
-            // Emit final direct reply. Belt-and-suspenders: a no-tool turn
-            // with an empty reply would render as thinking → silence (models
-            // can still under-fill even with reply required), so promote the
-            // thought to the visible reply rather than saying nothing.
-            if !reply.is_empty() {
-                let _ = tx.send(ProviderEvent::TextDelta(reply)).await;
-            } else if !had_tool_call && !thought.is_empty() {
-                let _ = tx.send(ProviderEvent::TextDelta(thought.clone())).await;
+            // Emit final direct reply — but ONLY on non-tool turns. Now that
+            // `reply` is required, small models fill it with self-narration on
+            // every tool call ("I'm checking the status…"); emitting that per
+            // turn renders as the agent talking to itself while it polls. On
+            // tool turns the thinking row already shows the reasoning — the
+            // user-visible reply belongs to the turn that ANSWERS.
+            // Belt-and-suspenders: a no-tool turn with an empty reply promotes
+            // the thought instead of saying nothing.
+            if !had_tool_call {
+                if !reply.is_empty() {
+                    let _ = tx.send(ProviderEvent::TextDelta(reply)).await;
+                } else if !thought.is_empty() {
+                    let _ = tx.send(ProviderEvent::TextDelta(thought.clone())).await;
+                }
             }
 
             // Emit completion stop reason
