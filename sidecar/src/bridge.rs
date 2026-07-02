@@ -211,6 +211,9 @@ struct BridgeInner {
     perms: crate::perms::PermStore,
     /// Persistent external-agent identities (file-backed, survive restarts).
     identity: crate::identity::IdentityStore,
+    /// OS pixel bounds per window id (from the renderer): {width,height,x,y}.
+    /// Lets terminal_status report real window size + resize relative to it.
+    window_bounds: Mutex<HashMap<u32, serde_json::Value>>,
     /// Agent TOKENS that bypass consent (Hyperia's OWN built-in agent — the
     /// ghost). Trust is by token, never by name (names are spoofable). The
     /// user configured this agent deliberately; prompting them to approve its
@@ -237,6 +240,7 @@ impl Bridge {
                 lume: crate::lume_store::LumeStore::new(),
                 perms: crate::perms::PermStore::default(),
                 identity: crate::identity::IdentityStore::new(),
+                window_bounds: Mutex::new(HashMap::new()),
                 trusted_agent_tokens: std::sync::Mutex::new(std::collections::HashSet::new()),
             }),
         }
@@ -1226,6 +1230,7 @@ impl Bridge {
         sys.refresh_processes(ProcessesToUpdate::All, true);
 
         let focused_window_id = *self.inner.focused_window_id.lock().await;
+        let win_bounds = self.inner.window_bounds.lock().await.clone();
         let sessions = self.inner.sessions.lock().await;
 
         // Group sessions by window_id
@@ -1359,11 +1364,20 @@ impl Bridge {
             }
 
             let focused = focused_window_id.map(|id| id == *win_id).unwrap_or_else(|| windows.is_empty());
-            windows.push(serde_json::json!({
+            let mut win_obj = serde_json::json!({
                 "id": win_id,
                 "focused": focused,
                 "tabs": tabs,
-            }));
+            });
+            // Real OS pixel size (from the renderer's WindowBounds reports), so
+            // the agent can answer "how big is the window" and resize by it.
+            if let Some(b) = win_bounds.get(win_id) {
+                win_obj["width"] = b["width"].clone();
+                win_obj["height"] = b["height"].clone();
+                win_obj["x"] = b["x"].clone();
+                win_obj["y"] = b["y"].clone();
+            }
+            windows.push(win_obj);
         }
 
         serde_json::json!({ "version": env!("CARGO_PKG_VERSION"), "windows": windows })
@@ -1552,6 +1566,19 @@ impl Bridge {
                 }
                 if let Some(info) = sessions.get_mut(uid) {
                     info.pane_active = true;
+                }
+            }
+
+            "WindowBounds" => {
+                let window_id = msg["windowId"].as_u64().unwrap_or(0) as u32;
+                if window_id != 0 {
+                    self.inner.window_bounds.lock().await.insert(
+                        window_id,
+                        serde_json::json!({
+                            "width": msg["width"], "height": msg["height"],
+                            "x": msg["x"], "y": msg["y"],
+                        }),
+                    );
                 }
             }
 

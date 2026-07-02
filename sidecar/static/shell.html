@@ -562,6 +562,7 @@
 <div class="titlebar">
   <div class="name">hyperia · shell</div>
   <div class="hud">
+    <div class="stat"><span>tok/s</span><span class="v" id="hud-tps">0</span></div>
     <div class="stat"><span>in</span><span class="v" id="hud-in">0</span></div>
     <div class="stat"><span>out</span><span class="v" id="hud-out">0</span></div>
     <div class="stat"><span>tools</span><span class="v" id="hud-tools">0</span></div>
@@ -603,10 +604,29 @@ const promptline = $('promptline');
 const hint       = $('hint');
 const promptLbl  = $('prompt-label');
 
+// Click anywhere in the transcript → focus the input, so you can just click and
+// type. BUT stay out of the way of real interactions: don't steal focus if the
+// user is selecting text, or clicked a link / button / input / expandable tool
+// row / widget. Guarding on a live selection also handles drag-selects (a drag
+// ends in a click, but leaves a selection, so we skip).
+document.addEventListener('mouseup', (e) => {
+  const sel = window.getSelection();
+  if (sel && sel.toString().length > 0) return;            // selecting text
+  if (e.target.closest('a, button, input, textarea, select, [contenteditable], .summary, .tool, iframe, .widget-mount')) return;
+  // Only within the transcript area, not the status bar / model picker chrome.
+  if (!e.target.closest('#screen')) return;
+  input.focus();
+});
+
 const STATS = { in: 0, out: 0, tools: 0, turns: 0 };
 let turn_in = 0;
 let turn_out = 0;
+// Decode speed: output tokens over generation time for the CURRENT stream.
+let genStartMs = 0;   // set when the agent starts producing this turn
+let genTokens = 0;    // output tokens produced since genStartMs
+let lastTps = 0;      // last computed tok/s (held between turns)
 function updateHud() {
+  $('hud-tps').textContent   = lastTps ? lastTps.toFixed(1) : '0';
   $('hud-in').textContent    = STATS.in.toLocaleString();
   $('hud-out').textContent   = STATS.out.toLocaleString();
   $('hud-tools').textContent = STATS.tools;
@@ -791,6 +811,7 @@ function startAgentStream() {
   endAgentStream();
   streamingRow = addRow('agent', 'hyperia~&gt;', '', { streaming: true });
   streamSeenContent = false;
+  genStartMs = 0; // restart the tok/s clock for this turn
 }
 function streamText(chunk) {
   if (!streamingRow) startAgentStream();
@@ -807,6 +828,13 @@ function streamText(chunk) {
   const est = Math.max(1, (chunk.length / 4) | 0);
   STATS.out += est;
   turn_out += est;
+  // Live tok/s over this generation. Start the clock on the first real token
+  // (excludes the model's think/first-byte latency, so it reflects decode
+  // speed — ~74 on Sailfish, not dragged down by warmup).
+  if (!genStartMs) { genStartMs = performance.now(); genTokens = 0; }
+  genTokens += est;
+  const secs = (performance.now() - genStartMs) / 1000;
+  if (secs > 0.25) lastTps = genTokens / secs;
   updateHud();
   autoscroll();
 }

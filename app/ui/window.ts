@@ -27,6 +27,7 @@ import {
   updateSessionLayout,
   updateSessionActive,
   updateWindowFocus,
+  updateWindowBounds,
   getSessionRootTab,
   forceRemoveSession,
   executeSessionCd
@@ -615,10 +616,21 @@ export function newWindow(
   // Same deal as above, grabbing the window titlebar when the window
   // is maximized on Windows results in unmaximize, without hitting any
   // app buttons
-  const onGeometryChange = () => rpc.emit('windowGeometry change', {isMaximized: window.isMaximized()});
+  const onGeometryChange = () => {
+    rpc.emit('windowGeometry change', {isMaximized: window.isMaximized()});
+    updateWindowBounds(window);
+  };
   window.on('maximize', onGeometryChange);
   window.on('unmaximize', onGeometryChange);
   window.on('minimize', onGeometryChange);
+  // Report OS pixel size to the sidecar on resize (debounced) + once at ready,
+  // so terminal_status carries the live window dimensions.
+  let _boundsT: ReturnType<typeof setTimeout> | null = null;
+  window.on('resize', () => {
+    if (_boundsT) clearTimeout(_boundsT);
+    _boundsT = setTimeout(() => updateWindowBounds(window), 200);
+  });
+  window.once('ready-to-show', () => updateWindowBounds(window));
   window.on('restore', onGeometryChange);
 
   // Tear down any native web-pane views this window owns — their webContents are
