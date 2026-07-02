@@ -1848,27 +1848,43 @@ async function bootCapabilities() {
     addRow('error', 'err!', 'could not reach sidecar at /api/ghost/capabilities');
     return null;
   }
+  return caps;
+}
 
-  // Boot lines
+// The boot banner (sidecar/providers/level) prints ONCE per shell load — from
+// boot() only. Re-probes (set-model, wipe) refresh the status strip silently
+// instead of re-spamming these rows.
+let bannerPrinted = false;
+async function printBootBanner(caps) {
+  if (!caps || bannerPrinted) return;
+  bannerPrinted = true;
   addRow('system', 'system=&gt;', `hyperia sidecar <code>v${escapeHtml(caps.sidecar)}</code>`);
   const provider = caps.agent && caps.agent.provider ? caps.agent.provider : '(none)';
   const model    = caps.agent && caps.agent.model    ? caps.agent.model    : '(none)';
+
+  // Local-provider status: ollama from caps, sailfish from the services probe.
   const ollama = caps.providers && caps.providers.ollama;
-  if (ollama && ollama.reachable) {
-    addRow('system', 'system=&gt;', `ollama: <em class="ok">reachable</em> at <code>${escapeHtml(ollama.endpoint || '')}</code>`);
-  } else if (ollama && ollama.disabled) {
-    addRow('system', 'system=&gt;', `ollama: <em class="fail">disabled</em>`);
+  let sailfishUp = false;
+  try {
+    const svc = (await (await fetch('/api/agent/services')).json()).services || {};
+    sailfishUp = !!svc.sailfish_api;
+  } catch (_) {}
+
+  // Show the ACTIVE local provider's line first; only show the other if it's up.
+  const line = (name, up, extra) => addRow('system', 'system=&gt;',
+    `${name}: ${up ? '<em class="ok">reachable</em>' : '<em class="fail">unreachable</em>'}${up && extra ? ' at <code>' + escapeHtml(extra) + '</code>' : ''}`);
+  if (provider === 'sailfish') {
+    line('sailfish', sailfishUp, 'localhost:22343');
+    if (ollama && ollama.reachable) line('ollama', true, ollama.endpoint || '');
   } else {
-    addRow('system', 'system=&gt;', `ollama: <em class="fail">unreachable</em>`);
+    if (ollama && ollama.reachable) line('ollama', true, ollama.endpoint || '');
+    else if (ollama && ollama.disabled) addRow('system', 'system=&gt;', 'ollama: <em class="fail">disabled</em>');
+    else line('ollama', false);
+    if (sailfishUp) line('sailfish', true, 'localhost:22343');
   }
-  if (caps.ferricula && caps.ferricula.reachable) {
-    addRow('system', 'system=&gt;', `ferricula: <em class="ok">reachable</em>`);
-  } else {
-    addRow('system', 'system=&gt;', `ferricula: <em class="fail">unreachable</em>`);
-  }
+
   addRow('system', 'system=&gt;', `agent: provider=<code>${escapeHtml(provider)}</code> model=<code>${escapeHtml(model)}</code>`);
   addRow('system', 'system=&gt;', `level: <em class="ok">${escapeHtml(caps.level)}</em>`);
-  return caps;
 }
 
 // Post any uncaught JS error from the shell pane up to the sidecar's
@@ -1912,6 +1928,7 @@ async function maybeAutoResetIfStale() {
 async function boot() {
   await maybeAutoResetIfStale();
   const caps = await bootCapabilities();
+  await printBootBanner(caps);
   await seedHistory();
   await seedAssets();
   const greeting = (() => {
