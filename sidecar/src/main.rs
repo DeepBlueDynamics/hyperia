@@ -2988,6 +2988,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ghost/assets", axum::routing::get(ghost::api::ghost_asset_list))
         // Static page: the agentic shell pane's HTML.
         .route("/shell", axum::routing::get(ghost::api::ghost_shell_page))
+        // Hyperia Agent configuration (epic #131).
+        .route("/agent/config", axum::routing::get(ghost::api::agent_config_page))
+        .route(
+            "/api/agent/config",
+            axum::routing::get(ghost::api::get_agent_config).post(ghost::api::post_agent_config)
+        )
+        .route("/api/agent/models", axum::routing::get(ghost::api::get_agent_models))
         .with_state(ghost_state);
 
     // Settings agent routes — separate session, SHARED tool registry so

@@ -701,3 +701,150 @@ pub async fn ghost_bootchat(
 pub async fn ghost_shell_page() -> impl IntoResponse {
     Html(include_str!("../../static/shell.html"))
 }
+
+// ─── Hyperia Agent configuration (epic #131) ────────────────────────────────
+// GET /agent/config serves the config page; the API reads/writes
+// config.agent.* in the shared Hyperia config (hand-editable by design).
+// API keys live in config.agent.keys.<provider> — PLAINTEXT for now, moves to
+// the OS keystore with #130.
+
+/// GET /agent/config — the Hyperia Agent configuration page.
+pub async fn agent_config_page() -> impl IntoResponse {
+    Html(include_str!("../../static/agent-config.html"))
+}
+
+fn read_shared_config() -> serde_json::Value {
+    config_raw_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({ "config": {} }))
+}
+
+/// GET /api/agent/config — current agent config. Keys are reported as
+/// booleans (set / not set), never echoed back.
+pub async fn get_agent_config() -> Json<serde_json::Value> {
+    let json = read_shared_config();
+    let agent = &json["config"]["agent"];
+    let keys = agent["keys"].as_object();
+    let has_key = |p: &str| keys.map(|k| k.get(p).and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false)).unwrap_or(false);
+    let provider = agent["provider"].as_str().unwrap_or("").to_string();
+    let model = agent["model"].as_str().unwrap_or("").to_string();
+    // Configured = provider+model chosen, and (local provider OR its key set).
+    let local = provider == "ollama" || provider == "sailfish";
+    let configured = !provider.is_empty() && !model.is_empty() && (local || has_key(&provider));
+    Json(serde_json::json!({
+        "ok": true,
+        "configured": configured,
+        "provider": provider,
+        "model": model,
+        "keys": {
+            "anthropic": has_key("anthropic"),
+            "openai": has_key("openai"),
+            "grok": has_key("grok"),
+            "gemini": has_key("gemini"),
+        }
+    }))
+}
+
+/// POST /api/agent/config — write provider/model and any pasted keys into the
+/// shared config. Body: { provider?, model?, keys?: {anthropic?, ...} }.
+/// Empty-string key = leave unchanged; "-" = clear. provider="" clears the
+/// agent config (unconfigure — Hyperia drops out of the agent list).
+pub async fn post_agent_config(
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let path = config_raw_path().ok_or_else(|| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": "no home dir"})))
+    })?;
+    let mut json = read_shared_config();
+    if !json["config"].is_object() {
+        json["config"] = serde_json::json!({});
+    }
+    if !json["config"]["agent"].is_object() {
+        json["config"]["agent"] = serde_json::json!({});
+    }
+    if let Some(p) = body["provider"].as_str() {
+        if p.is_empty() {
+            // Unconfigure: drop provider/model, keep keys (they're credentials).
+            json["config"]["agent"]["provider"] = serde_json::json!("");
+            json["config"]["agent"]["model"] = serde_json::json!("");
+        } else {
+            json["config"]["agent"]["provider"] = serde_json::json!(p.to_lowercase());
+        }
+    }
+    if let Some(m) = body["model"].as_str() {
+        if !m.is_empty() {
+            json["config"]["agent"]["model"] = serde_json::json!(m);
+        }
+    }
+    if let Some(keys) = body["keys"].as_object() {
+        if !json["config"]["agent"]["keys"].is_object() {
+            json["config"]["agent"]["keys"] = serde_json::json!({});
+        }
+        for (k, v) in keys {
+            if let Some(val) = v.as_str() {
+                if val == "-" {
+                    json["config"]["agent"]["keys"][k] = serde_json::json!("");
+                } else if !val.is_empty() {
+                    json["config"]["agent"]["keys"][k] = serde_json::json!(val);
+                }
+            }
+        }
+    }
+    match crate::util::write_json_file_atomic(&path, &json) {
+        Ok(_) => Ok(Json(serde_json::json!({"ok": true}))),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()})))),
+    }
+}
+
+/// Curated local (Ollama) allowlist — small fast agentic models. E2B-class is
+/// excluded (poorly quantized); E4B + Ornith preferred. Hand-extend via
+/// config.agent.ollama_allow in the shared config.
+const OLLAMA_CURATED: &[&str] = &["gemma3n:e4b", "ornith", "qwen3:4b", "gemma3:4b", "qwen2.5:3b", "llama3.2:3b"];
+
+/// GET /api/agent/models — the nemesis8.nuts.services/models catalog, cached
+/// for its TTL (1h), with the ollama list filtered to the curated set.
+pub async fn get_agent_models() -> Json<serde_json::Value> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+    static CACHE: OnceLock<Mutex<Option<(Instant, serde_json::Value)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    if let Some((at, val)) = cache.lock().unwrap().clone() {
+        if at.elapsed() < Duration::from_secs(3600) {
+            return Json(val);
+        }
+    }
+    let fetched = async {
+        let resp = reqwest::Client::new()
+            .get("https://nemesis8.nuts.services/models")
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .ok()?;
+        resp.json::<serde_json::Value>().await.ok()
+    }
+    .await;
+    let mut val = match fetched {
+        Some(v) => v,
+        None => return Json(serde_json::json!({"ok": false, "error": "models catalog unreachable"})),
+    };
+    // Curate ollama: allowlist by prefix + any extras from config.agent.ollama_allow.
+    let mut allow: Vec<String> = OLLAMA_CURATED.iter().map(|s| s.to_string()).collect();
+    if let Some(extra) = read_shared_config()["config"]["agent"]["ollama_allow"].as_array() {
+        allow.extend(extra.iter().filter_map(|v| v.as_str().map(String::from)));
+    }
+    if let Some(models) = val["providers"]["ollama"]["models"].as_array() {
+        let curated: Vec<serde_json::Value> = models
+            .iter()
+            .filter(|m| {
+                let id = m["id"].as_str().unwrap_or("").to_lowercase();
+                allow.iter().any(|a| id.starts_with(&a.to_lowercase()))
+            })
+            .cloned()
+            .collect();
+        val["providers"]["ollama"]["models"] = serde_json::json!(curated);
+    }
+    val["ok"] = serde_json::json!(true);
+    *cache.lock().unwrap() = Some((Instant::now(), val.clone()));
+    Json(val)
+}

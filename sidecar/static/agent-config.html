@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Hyperia Agent — Configuration</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#101014; color:#e8e8ea; font:13px/1.5 system-ui, sans-serif; }
+  .wrap { max-width:640px; margin:0 auto; padding:22px 18px 60px; }
+  h1 { font-size:17px; margin:0 0 2px; display:flex; align-items:center; gap:8px; }
+  .sub { color:#9a9aa2; font-size:11.5px; margin-bottom:18px; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:1px; color:#9a9aa2; margin:26px 0 8px; }
+  .providers { display:flex; gap:6px; flex-wrap:wrap; }
+  .prov { padding:7px 14px; border:1px solid #2c2c34; border-radius:8px; cursor:pointer; font-size:12.5px; background:#17171c; }
+  .prov.sel { border-color:#6ea8fe; color:#fff; background:#1b2333; }
+  .prov.disabled { opacity:.45; cursor:default; }
+  select, input[type=password], input[type=text] {
+    width:100%; box-sizing:border-box; background:#17171c; color:#e8e8ea;
+    border:1px solid #2c2c34; border-radius:8px; padding:8px 10px; font-size:12.5px; margin-top:6px;
+  }
+  .warn { background:#2a2113; border:1px solid #7a5c1e; color:#e8c268; border-radius:8px; padding:8px 12px; font-size:11.5px; margin-top:10px; }
+  .note { color:#9a9aa2; font-size:11px; margin-top:6px; }
+  .row { margin-top:10px; }
+  button { background:#2456c4; color:#fff; border:0; border-radius:8px; padding:9px 20px; font-size:13px; cursor:pointer; margin-top:20px; }
+  button.ghostbtn { background:transparent; border:1px solid #2c2c34; color:#9a9aa2; margin-left:8px; }
+  .svc { border:1px solid #2c2c34; border-radius:8px; padding:10px 12px; margin-top:8px; display:flex; align-items:center; gap:10px; }
+  .svc b { font-size:12.5px; }
+  .svc .tag { margin-left:auto; font-size:10px; color:#9a9aa2; border:1px solid #2c2c34; border-radius:4px; padding:2px 6px; white-space:nowrap; }
+  #status { margin-left:10px; font-size:12px; color:#3fb950; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>👻 Hyperia Agent</h1>
+  <div class="sub">Pick a brain for your terminal. Cloud providers burn <b>your</b> tokens; local models burn your GPU. A hand-editable copy of everything here lives in your Hyperia config under <code>config.agent</code>.</div>
+
+  <h2>Provider</h2>
+  <div class="providers" id="providers"></div>
+  <div class="warn" id="burnWarn" style="display:none">⚠ This provider bills per token against the API key you paste below. The agent runs tools in loops — it <i>will</i> burn tokens.</div>
+
+  <h2>Model</h2>
+  <select id="model"></select>
+  <div class="note" id="modelNote"></div>
+
+  <div id="keyBlock">
+    <h2>API key</h2>
+    <input type="password" id="apiKey" placeholder="paste your API key (stored locally)">
+    <div class="note">Stored in the Hyperia config file for now — <b>plaintext until the OS-keystore work (#130) lands</b>. Leave blank to keep the saved key. Enter “-” to clear it.</div>
+  </div>
+
+  <h2>Services</h2>
+  <div class="svc"><b>nuts.services login</b><span class="tag">coming — system-browser magic link</span></div>
+  <div class="svc"><b>Shivvr</b> embeddings<span class="tag">coming</span></div>
+  <div class="svc"><b>Grub</b> crawler (local container)<span class="tag">coming — setup instructions</span></div>
+  <div class="svc"><b>Transcription</b> (callback registration)<span class="tag">coming</span></div>
+  <div class="svc"><b>Sailfish</b> — optimized local Gemma container (Docker, ≥16 GB GPU)<span class="tag">not stood up yet</span></div>
+
+  <button id="save">Save configuration</button>
+  <button id="unconfigure" class="ghostbtn" title="Clears provider/model — Hyperia drops out of the agent list. Keys are kept.">Unconfigure</button>
+  <span id="status"></span>
+</div>
+
+<script>
+const PROVIDERS = [
+  {id:'anthropic', label:'Anthropic', cat:'claude',  key:true},
+  {id:'openai',    label:'OpenAI',    cat:'codex',   key:true},
+  {id:'grok',      label:'Grok',      cat:'grok',    key:true},
+  {id:'gemini',    label:'Gemini',    cat:'gemini',  key:true},
+  {id:'ollama',    label:'Ollama (local)', cat:'ollama', key:false},
+  {id:'sailfish',  label:'Sailfish (local)', cat:null, key:false, disabled:true}
+];
+// Best-in-class cheapest agentic runner per provider (user-changeable).
+const CHEAP_PICK = {claude:/haiku/i, codex:/mini/i, gemini:/flash/i, grok:/build/i, ollama:/e4b|ornith/i};
+let cfg = {provider:'', model:'', keys:{}};
+let catalog = null;
+let sel = '';
+
+const $ = (id) => document.getElementById(id);
+
+function renderProviders() {
+  $('providers').innerHTML = '';
+  for (const p of PROVIDERS) {
+    const d = document.createElement('div');
+    d.className = 'prov' + (sel === p.id ? ' sel' : '') + (p.disabled ? ' disabled' : '');
+    d.textContent = p.label + (p.key && cfg.keys[p.id] ? ' ✓' : '');
+    if (!p.disabled) d.onclick = () => { sel = p.id; renderProviders(); renderModels(); };
+    $('providers').appendChild(d);
+  }
+  const p = PROVIDERS.find(x => x.id === sel);
+  $('burnWarn').style.display = p && p.key ? '' : 'none';
+  $('keyBlock').style.display = p && p.key ? '' : 'none';
+}
+
+function renderModels() {
+  const p = PROVIDERS.find(x => x.id === sel);
+  const m = $('model');
+  m.innerHTML = '';
+  if (!p || !catalog) { $('modelNote').textContent = ''; return; }
+  const prov = (catalog.providers || {})[p.cat] || {};
+  const models = prov.models || [];
+  for (const mm of models) {
+    const o = document.createElement('option');
+    o.value = mm.id; o.textContent = mm.label || mm.id;
+    m.appendChild(o);
+  }
+  // Default: saved model → cheapest agentic pick → catalog default → first.
+  const ids = models.map(x => x.id);
+  const cheap = ids.find(id => (CHEAP_PICK[p.cat] || /$^/).test(id));
+  m.value = ids.includes(cfg.model) ? cfg.model : (cheap || prov.default || ids[0] || '');
+  $('modelNote').textContent = p.id === 'ollama'
+    ? 'Curated: small, fast, tool-capable local models (E4B-class + Ornith). Extend via config.agent.ollama_allow.'
+    : (cheap && m.value === cheap ? 'Defaulted to the cheapest capable runner — change freely.' : '');
+}
+
+async function load() {
+  try { cfg = await (await fetch('/api/agent/config')).json(); } catch {}
+  sel = cfg.provider || 'anthropic';
+  try { catalog = await (await fetch('/api/agent/models')).json(); } catch {}
+  renderProviders(); renderModels();
+}
+
+$('save').onclick = async () => {
+  const p = PROVIDERS.find(x => x.id === sel);
+  const body = {provider: sel, model: $('model').value, keys: {}};
+  if (p && p.key && $('apiKey').value) body.keys[sel] = $('apiKey').value;
+  const r = await (await fetch('/api/agent/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)})).json();
+  $('status').textContent = r.ok ? 'saved ✓ — Hyperia is in your agent list' : ('error: ' + r.error);
+  $('apiKey').value = '';
+  load();
+};
+$('unconfigure').onclick = async () => {
+  await fetch('/api/agent/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({provider:''})});
+  $('status').textContent = 'unconfigured — removed from the agent list';
+  load();
+};
+load();
+</script>
+</body>
+</html>

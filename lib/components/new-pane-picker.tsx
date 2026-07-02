@@ -519,8 +519,9 @@ interface NewPanePickerState {
   view?: 'main' | 'install';
   // Which install command was just copied (flash feedback).
   copiedInstall?: string;
-  // Configure-Hyperia-agent modal (placeholder — full config flow TBD).
-  configureHyperiaOpen?: boolean;
+  // Whether the Hyperia agent is configured (provider+model+key) — adds it to
+  // the agent pulldown. Fetched from the sidecar on mount.
+  hyperiaConfigured?: boolean;
 }
 
 // The "New Webpane" chooser shown when a pane has the synthetic `picker`
@@ -528,6 +529,24 @@ interface NewPanePickerState {
 // combobox. No dividers between sections.
 export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePickerState> {
   state: NewPanePickerState = {};
+
+  componentDidMount() {
+    // Is the Hyperia agent configured? (provider+model+key in config.agent.*)
+    const port = process.env.HYPERIA_PORT || '9800';
+    fetch(`http://localhost:${port}/api/agent/config`)
+      .then((r) => r.json())
+      .then((j) => this.setState({hyperiaConfigured: !!j?.configured}))
+      .catch(() => {});
+  }
+
+  // Open the Hyperia Agent configuration pane (sidecar-served) in this pane.
+  private openAgentConfig = () => {
+    const {groupUid, uid, setWebPaneUrl} = this.props;
+    if (!setWebPaneUrl || !groupUid) return;
+    const port = process.env.HYPERIA_PORT || '9800';
+    rpc.emit('exit', {uid});
+    setWebPaneUrl(groupUid, `http://localhost:${port}/agent/config`);
+  };
 
   private newWithProfile = (profile: string) => {
     const {groupUid, uid, sessionCwd, cwd} = this.props;
@@ -687,7 +706,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                   <span style={{flex: 1}} />
                   {entry.configure && (
                     <span
-                      onClick={() => this.setState({configureHyperiaOpen: true})}
+                      onClick={() => this.openAgentConfig()}
                       title="Configure the Hyperia agent"
                       style={{...pickerEnterBadgeStyle, cursor: 'pointer', color: 'var(--info-text)'}}
                     >
@@ -741,53 +760,6 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
           })}
         </div>
 
-        {/* Configure-Hyperia modal — placeholder shell; the real config flow
-            (identity, model, permissions) lands with its own spec. */}
-        {this.state.configureHyperiaOpen && (
-          <div
-            onClick={() => this.setState({configureHyperiaOpen: false})}
-            style={{
-              position: 'absolute',
-              inset: 0,
-              zIndex: 30,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: 'rgba(0,0,0,0.45)'
-            }}
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                width: 'min(360px, calc(100% - 32px))',
-                background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',
-                border: '0.5px solid var(--border-neutral)',
-                borderRadius: 'var(--radius-6)',
-                padding: 'var(--space-12, 14px)',
-                boxShadow: '0 10px 24px rgba(0,0,0,0.45)',
-                fontFamily: 'var(--font-sans)'
-              }}
-            >
-              <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-8)', marginBottom: 'var(--space-8)'}}>
-                <i className="ti ti-ghost" style={{fontSize: '15px', color: 'var(--info-text)'}} aria-hidden="true" />
-                <span style={{fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)'}}>
-                  Configure Hyperia Agent
-                </span>
-              </div>
-              <div style={{fontSize: '11.5px', color: 'var(--text-secondary)', marginBottom: 'var(--space-10)'}}>
-                Configuration options for the built-in Hyperia agent are coming here.
-              </div>
-              <div style={{display: 'flex', justifyContent: 'flex-end'}}>
-                <span
-                  onClick={() => this.setState({configureHyperiaOpen: false})}
-                  style={{...pickerEnterBadgeStyle, cursor: 'pointer'}}
-                >
-                  close
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     );
   }
@@ -843,12 +815,25 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         onSelect: () => this.launchAgent(p.name)
       });
     }
-    // Nemesis8 (both entries) leads the list; everything else keeps detect order.
+    // Hyperia's own agent — only once CONFIGURED (provider+model+key via the
+    // config pane). Launches the agent shell; reconfigure via the install view.
+    if (this.state.hyperiaConfigured) {
+      agentItems.push({
+        key: 'Hyperia',
+        label: 'Hyperia',
+        iconClass: 'ti ti-ghost',
+        iconStyle: {color: 'var(--info-text)'},
+        onSelect: () => this.launchHyperiaShell()
+      });
+    }
+    // Hyperia (when configured) then both Nemesis8 entries lead the list;
+    // everything else keeps detect order.
     const agentRank = (label: string): number => {
       const n = label.toLowerCase();
-      if (n === 'nemesis8') return 0;
-      if (n === 'nemesis8 danger') return 1;
-      return 2;
+      if (n === 'hyperia') return 0;
+      if (n === 'nemesis8') return 1;
+      if (n === 'nemesis8 danger') return 2;
+      return 3;
     };
     agentItems.sort((a, b) => agentRank(a.label) - agentRank(b.label));
     // NOTE: the Hyperia agent is intentionally NOT a launchable entry — it isn't
