@@ -979,11 +979,19 @@ export function newWindow(
   const updateFocusTime = () => {
     window.focusTime = process.uptime();
     updateWindowFocus(window.id);
+    // Piggyback pixel bounds — focus fires at launch, after the sidecar WS is
+    // up, so terminal_status gets the window size even with no resize/maximize.
+    updateWindowBounds(window);
   };
 
   window.on('focus', () => {
     updateFocusTime();
   });
+
+  // Safety net: a fresh window may be focused before the sidecar WS connects,
+  // so ready-to-show / focus bounds can be dropped. Resend a couple of times.
+  setTimeout(() => updateWindowBounds(window), 1500);
+  setTimeout(() => updateWindowBounds(window), 4000);
 
   // the window can be closed by the browser process itself
   window.clean = () => {
