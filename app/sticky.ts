@@ -865,8 +865,10 @@ function createStickyNote(
     const bounds = win.getBounds();
     const note = getNote(noteId);
     if (note) {
+      // Persist THIS note's geometry only. Resizing a note must NOT rewrite
+      // the global default — one huge note poisoned every future sticky
+      // ("how many times do I have to ask for a normal sized sticky?").
       upsertNote({...note, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height});
-      saveStickyDefaultSize(bounds.width, bounds.height);
     }
   };
   win.on('moved', saveGeom);
