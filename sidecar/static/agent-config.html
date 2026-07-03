@@ -256,9 +256,11 @@ function renderServices() {
         statusHtml = `<span class="tag">not detected</span><span class="tag" style="color:#6ea8fe;cursor:pointer" data-add="${d.id}">+ add</span>`;
       }
     }
+    // The WHOLE header line toggles (data-tog on each piece), not just the
+    // chevron — buttons/links inside the status area stop propagation.
     row.innerHTML =
       `<span data-tog="${d.id}" style="cursor:pointer;color:#9a9aa2;width:12px">${open?'▾':'▸'}</span>` +
-      `<b>${d.label}</b>${d.desc?' <span style="color:#9a9aa2;font-size:11px">'+d.desc+'</span>':''}` +
+      `<span data-tog="${d.id}" style="cursor:pointer;display:flex;gap:6px;align-items:baseline;flex:1"><b>${d.label}</b>${d.desc?' <span style="color:#9a9aa2;font-size:11px">'+d.desc+'</span>':''}</span>` +
       `<span style="margin-left:auto;display:flex;gap:6px;align-items:center">${statusHtml}</span>`;
     if (open) {
       const panel = document.createElement('div');

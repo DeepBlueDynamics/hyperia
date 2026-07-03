@@ -75,21 +75,34 @@ function navState(wc: WebContents) {
   return {url: wc.getURL(), canGoBack: wc.navigationHistory.canGoBack(), canGoForward: wc.navigationHistory.canGoForward()};
 }
 
-function wireWebContents(uid: string, wc: WebContents) {
-  wc.on('did-start-loading', () => pushState(uid, {loading: true, error: null}));
-  wc.on('did-stop-loading', () => pushState(uid, {loading: false, ...navState(wc)}));
-  wc.on('did-navigate', () => pushState(uid, {...navState(wc)}));
+// Panes get ADOPTED across React remounts (delayed-destroy + create re-keys the
+// map), so a uid captured by wireWebContents closures can go STALE — lookups by
+// it silently no-op (the invisible-context-menu bug). Resolve the CURRENT uid
+// from the webContents every time.
+function liveUidOf(wc: WebContents, fallback: string): string {
+  for (const [id, e] of panes) {
+    if (!e.view.webContents.isDestroyed() && e.view.webContents === wc) return id;
+  }
+  return fallback;
+}
+
+function wireWebContents(initialUid: string, wc: WebContents) {
+  const u = () => liveUidOf(wc, initialUid);
+  wc.on('did-start-loading', () => pushState(u(), {loading: true, error: null}));
+  wc.on('did-stop-loading', () => pushState(u(), {loading: false, ...navState(wc)}));
+  wc.on('did-navigate', () => pushState(u(), {...navState(wc)}));
   wc.on('did-navigate-in-page', (_e, _url, isMainFrame) => {
-    if (isMainFrame) pushState(uid, {...navState(wc)});
+    if (isMainFrame) pushState(u(), {...navState(wc)});
   });
-  wc.on('page-title-updated', (_e, title) => pushState(uid, {title}));
+  wc.on('page-title-updated', (_e, title) => pushState(u(), {title}));
   wc.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
     // -3 = ERR_ABORTED (user/redirect navigation), not a real failure.
     if (isMainFrame && errorCode !== -3) {
-      pushState(uid, {loading: false, error: {code: errorCode, description: errorDescription, url: validatedURL}});
+      pushState(u(), {loading: false, error: {code: errorCode, description: errorDescription, url: validatedURL}});
     }
   });
   wc.on('found-in-page', (_e, result) => {
+    const uid = u();
     entrySend(uid, 'web-pane:found-in-page', {
       uid,
       active: result.activeMatchOrdinal,
@@ -98,10 +111,10 @@ function wireWebContents(uid: string, wc: WebContents) {
   });
   // Let the renderer run its dom-ready work (scrollbar CSS inject, bg-color probe)
   // via web-pane:execute-js — it can't observe the guest's dom-ready directly.
-  wc.on('dom-ready', () => entrySend(uid, 'web-pane:dom-ready', {uid}));
+  wc.on('dom-ready', () => { const uid = u(); entrySend(uid, 'web-pane:dom-ready', {uid}); });
   // Clicking into the page focuses its webContents — tell the renderer so it can
   // activate the pane (and dismiss the URL navigator).
-  wc.on('focus', () => entrySend(uid, 'web-pane:focus', {uid}));
+  wc.on('focus', () => { const uid = u(); entrySend(uid, 'web-pane:focus', {uid}); });
   // Zoom shortcuts pressed while the PAGE has focus never reach the renderer's
   // window (the native view captures them), so intercept Ctrl/Cmd +/-/0 here and
   // route to the renderer's zoom handlers (which own the zoom-factor state).
@@ -114,6 +127,7 @@ function wireWebContents(uid: string, wc: WebContents) {
     else if (k === '0') dir = 'reset';
     if (dir) {
       event.preventDefault();
+      const uid = u();
       entrySend(uid, 'web-pane:zoom-key', {uid, dir});
     }
   });
@@ -121,6 +135,7 @@ function wireWebContents(uid: string, wc: WebContents) {
   // guest handler in window.ts no longer fires). Reload / screenshot / copy /
   // paste / back-forward / copy-link / find / inspect-in-split / stickys.
   wc.on('context-menu', (_e: Electron.Event, params: Electron.ContextMenuParams) => {
+    const uid = u();
     const entry = panes.get(uid);
     if (!entry) return;
     const items: Electron.MenuItemConstructorOptions[] = [];
@@ -172,13 +187,15 @@ function wireWebContents(uid: string, wc: WebContents) {
         ? {label: 'Close Inspector', click: () => closeInspector(uid)}
         : {label: 'Inspect (split)', click: () => openInspector(uid, params.x, params.y)},
       {type: 'separator'},
-      {
+      // Not offered when this pane IS the agent shell (renderer dedupes to a
+      // single Hyperia Agent tab anyway — the item would just focus itself).
+      ...(/\/shell\b/.test(wc.getURL()) ? [] : [{
         label: 'Hyperia Agent',
         click: () => {
           const port = process.env.HYPERIA_PORT || '9800';
           (entry.win as any).rpc?.emit('open web pane req', {url: `http://localhost:${port}/shell`});
         }
-      },
+      } as Electron.MenuItemConstructorOptions]),
       {type: 'separator'},
       {label: 'New Stickys', click: () => void ipcMain.emit('new-sticky', {})},
       {label: 'Search Stickys', click: () => void ipcMain.emit('search-stickies')}
@@ -202,7 +219,8 @@ function wireWebContents(uid: string, wc: WebContents) {
       void shell.openExternal(url);
       return {action: 'deny'};
     }
-    entrySend(uid, 'web-pane:open-split', {uid, url});
+    const liveUid = u();
+    entrySend(liveUid, 'web-pane:open-split', {uid: liveUid, url});
     return {action: 'deny'};
   });
 }
