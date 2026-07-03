@@ -29,6 +29,7 @@ import {getRootGroups} from './selectors';
 import configureStore from './store/configure-store';
 import * as config from './utils/config';
 import {getBase64FileData} from './utils/file';
+import {toNavigableUrl} from './utils/navigable-url';
 import * as plugins from './utils/plugins';
 
 // On Linux, the default zoom was somehow changed with Electron 3 (or maybe 2).
@@ -594,7 +595,7 @@ rpc.on(
   'split web pane req',
   ({activeUid, url, direction, isAgentInitiated}: {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'; isAgentInitiated?: boolean}) => {
     if (url) {
-      const full = /^[a-z]+:\/\//i.test(url) ? url : 'https://' + url;
+      const full = toNavigableUrl(url);
       store_.dispatch(termGroupActions.splitWebPane(activeUid ?? undefined, full, direction ?? 'HORIZONTAL', isAgentInitiated) as any);
     }
   }
@@ -617,7 +618,7 @@ const isHyperiaShellUrl = (u: string): boolean => {
 
 rpc.on('open web pane req', ({url}: {url?: string}) => {
   if (url) {
-    const full = /^https?:\/\//i.test(url) ? url : 'https://' + url;
+    const full = toNavigableUrl(url);
     if (isHyperiaShellUrl(full)) {
       // One dedicated tab: focus it if it already exists anywhere.
       const {termGroups} = store_.getState();
