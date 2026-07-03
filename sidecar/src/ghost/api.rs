@@ -804,8 +804,8 @@ pub async fn get_agent_config() -> Json<serde_json::Value> {
 
 /// POST /api/agent/config — write provider/model and any pasted keys into the
 /// shared config. Body: { provider?, model?, keys?: {anthropic?, ...} }.
-/// Empty-string key = leave unchanged; "-" = clear. provider="" clears the
-/// agent config (unconfigure — Hyperia drops out of the agent list).
+/// Empty-string key = leave unchanged; "-" = clear. Empty provider is ignored
+/// (Hyperia is always in the agent list; there is no unconfigure).
 pub async fn post_agent_config(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
@@ -819,12 +819,10 @@ pub async fn post_agent_config(
     if !json["config"]["agent"].is_object() {
         json["config"]["agent"] = serde_json::json!({});
     }
+    // Hyperia is ALWAYS in the agent list and always configurable — there is
+    // no "unconfigure". An empty provider is simply ignored.
     if let Some(p) = body["provider"].as_str() {
-        if p.is_empty() {
-            // Unconfigure: drop provider/model, keep keys (they're credentials).
-            json["config"]["agent"]["provider"] = serde_json::json!("");
-            json["config"]["agent"]["model"] = serde_json::json!("");
-        } else {
+        if !p.is_empty() {
             json["config"]["agent"]["provider"] = serde_json::json!(p.to_lowercase());
         }
     }
