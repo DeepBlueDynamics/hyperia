@@ -5,6 +5,7 @@ import {connect} from 'react-redux';
 
 import type {HyperDispatch} from '../../typings/hyper';
 import {clearWebPane, userExitTermGroup, splitWebPane, popOutPane} from '../actions/term-groups';
+import {markTabBell, clearTabBell} from '../actions/ui';
 import rpc from '../rpc';
 import {toNavigableUrl} from '../utils/navigable-url';
 import {countPathHorizontalStacks} from '../utils/term-groups';
@@ -21,6 +22,7 @@ import {clickFnStr, ghostMouseFnStr} from '../utils/webview-scripts';
 import {AskAiView} from './ask-ai-view';
 import FindBar from './find-bar';
 import {PaneBand} from './pane-band';
+import {activeTerminals} from './term';
 import {UrlNavigator} from './url-navigator';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -40,6 +42,11 @@ interface WebPaneProps {
   webName?: string;
   onActive?: () => void;
   onSplitWebPane?: (url: string, direction: 'HORIZONTAL' | 'VERTICAL') => void;
+  // True when this pane's ROOT term group is the active tab (mapped from redux).
+  isTabActive?: boolean;
+  // Standard tab-bell plumbing (ui.bellMarkers — the same store terminal BELs use).
+  onTabBell?: (uid: string) => void;
+  onTabBellClear?: (uid: string) => void;
 }
 
 export interface WebHistoryEntry {
@@ -104,9 +111,12 @@ interface WebPaneState {
   // Freeze-swap still shown in place of the (hidden) native view while an
   // occluding DOM overlay is open. null = live view visible.
   frozenShot?: string | null;
-  // True while the cursor is over the pane header — hides the native view so the
-  // header's hover tooltips (DOM, which a native view would otherwise occlude)
-  // are visible over a frozen frame.
+  // True only after the cursor has DWELLED on the pane header (see
+  // HEADER_HOVER_DWELL_MS) — hides the native view so the header's hover
+  // tooltips (DOM, which a native view would otherwise occlude) are visible
+  // over a frozen frame. Deliberately NOT set on transient mouse passes: a
+  // freeze-swap on every header crossing made the pane flash constantly while
+  // simply mousing in/out of it.
   headerHover?: boolean;
   // Whether this pane is actually in the viewport (IntersectionObserver). An
   // inactive tab is parked off-screen, so its native view must be hidden.
@@ -125,6 +135,12 @@ interface WebPaneState {
 // net error codes where the site couldn't be reached → fall back to a DDG search:
 // ERR_NAME_NOT_RESOLVED, ERR_NAME_RESOLUTION_FAILED, ERR_ADDRESS_UNREACHABLE, ERR_INVALID_URL.
 const DDG_RESOLVE_FAIL = new Set([-105, -137, -109, -300]);
+
+// How long the cursor must REST on the pane header before the native view is
+// frozen+hidden to reveal the header's DOM tooltips. Transient passes (mousing
+// out of the pane across the header, moving to another pane/tab) never trigger
+// the swap — hiding on every crossing made web panes flash constantly.
+const HEADER_HOVER_DWELL_MS = 350;
 
 class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   // Geometry anchor for the native WebContentsView (main-process owned). The
@@ -155,6 +171,15 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   _stateHandler: ((e: any, payload: any) => void) | null = null;
   _foundHandler: ((e: any, payload: any) => void) | null = null;
   _domReadyHandler: ((e: any, payload: any) => void) | null = null;
+  // Pending header-hover dwell (freeze-swap only fires after the cursor rests).
+  _headerHoverTimer: ReturnType<typeof setTimeout> | null = null;
+  // ── Background-tab notify for the agent shell pane ───────────────────────
+  // Last <title> the shell page reported (null until the first push) and a
+  // burst guard so rapid-fire title ticks ring at most once per window.
+  _lastShellTitle: string | null = null;
+  _lastShellBellAt = 0;
+  // True while OUR group-uid bell marker is set (cleared on tab activation).
+  _bellPending = false;
   searchAbortCtrl: AbortController | null = null;
 
   constructor(props: WebPaneProps) {
@@ -1045,6 +1070,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     ) {
       this.reportBounds();
     }
+
+    // The human switched TO this pane's tab → the shell-update bell has served
+    // its purpose (mirror of SESSION_SET_ACTIVE clearing terminal bells).
+    if (!prevProps.isTabActive && this.props.isTabActive) {
+      this.clearPendingBell();
+    }
   }
 
   componentDidMount() {
@@ -1146,8 +1177,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       if ('canGoBack' in payload) patch.canGoBack = !!payload.canGoBack;
       if ('canGoForward' in payload) patch.canGoForward = !!payload.canGoForward;
 
-      if ('title' in payload && payload.title && this.props.onSetTitle) {
-        this.props.onSetTitle(payload.title);
+      if ('title' in payload && payload.title) {
+        this.props.onSetTitle?.(payload.title);
+        // Agent shell pane finished a turn in a background tab → tab bell.
+        this.maybeBellOnShellUpdate(String(payload.title));
       }
 
       let navigatedUrl: string | null = null;
@@ -1497,6 +1530,13 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       clearInterval(this._boundsInterval);
       this._boundsInterval = null;
     }
+    if (this._headerHoverTimer != null) {
+      clearTimeout(this._headerHoverTimer);
+      this._headerHoverTimer = null;
+    }
+    // Don't leave an orphaned group-uid bell marker behind (sessions get the
+    // same cleanup via SESSION_PTY_EXIT).
+    this.clearPendingBell();
     if (this._io) {
       this._io.disconnect();
       this._io = null;
@@ -1520,6 +1560,65 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
     // The pane rect shifts with the window → reposition the native view.
     this.reportBounds();
+  };
+
+  // ── Header hover (dwell-gated freeze-swap) ──────────────────────────────
+  // The header's DOM tooltips drop over the page area, which the native view
+  // would occlude — so a dwell on the header freeze-swaps the view out. The
+  // dwell gate is the anti-flash: crossing the header (mousing out of the pane,
+  // reaching for the tab bar) must NOT capture/hide/show the native view.
+  onHeaderMouseEnter = () => {
+    if (this._headerHoverTimer) clearTimeout(this._headerHoverTimer);
+    this._headerHoverTimer = setTimeout(() => {
+      this._headerHoverTimer = null;
+      this.setState({headerHover: true});
+    }, HEADER_HOVER_DWELL_MS);
+  };
+
+  onHeaderMouseLeave = () => {
+    if (this._headerHoverTimer) {
+      clearTimeout(this._headerHoverTimer);
+      this._headerHoverTimer = null;
+    }
+    if (this.state.headerHover) this.setState({headerHover: false});
+  };
+
+  // ── Background-tab notify for the agent shell pane ──────────────────────
+  // The Hyperia Agent page (sidecar /shell) signals a completed turn by
+  // changing its <title> (relayed here via the manager's page-title-updated →
+  // web-pane:state push). If that lands while this pane's TAB is inactive,
+  // raise the STANDARD tab notify — the same ui.bellMarkers 🔔/flash a
+  // terminal BEL sets, plus the same bell sound rung through a live Term
+  // (which respects the user's bell config: silent when bell=false). Never
+  // touches focus — the human's view is theirs.
+  isAgentShellUrl = (u: string): boolean => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/shell([/?#]|$)/i.test(u);
+
+  maybeBellOnShellUpdate = (title: string): void => {
+    const url = this.state.activeUrl || this.props.url || '';
+    if (!this.isAgentShellUrl(url)) return;
+    const prev = this._lastShellTitle;
+    this._lastShellTitle = title;
+    if (prev === null || title === prev) return; // initial title / no change
+    if (this.props.isTabActive !== false) return; // tab is (or may be) active — no notify
+    const now = Date.now();
+    if (now - this._lastShellBellAt < 3000) return; // burst guard
+    this._lastShellBellAt = now;
+    // Keyed by GROUP uid (not sessionUid) so we never clobber a bell the
+    // underlying terminal session rang; header.ts counts leaf-group markers.
+    this.props.onTabBell?.(this.props.groupUid);
+    this._bellPending = true;
+    // Reuse the exact terminal bell sound: any live Term's ringBell() plays
+    // the shared configured Audio (they're all built from the same config).
+    for (const t of activeTerminals.values()) {
+      t.ringBell();
+      break;
+    }
+  };
+
+  clearPendingBell = (): void => {
+    if (!this._bellPending) return;
+    this._bellPending = false;
+    this.props.onTabBellClear?.(this.props.groupUid);
   };
 
   // Zoom is applied to the native view in main; we track the factor here to do
@@ -1936,13 +2035,15 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         onClick={(e) => e.stopPropagation()}
       >
         {showStrip && (
-          // Hovering the header hides the native view (freeze-swap) so the
+          // DWELLING on the header hides the native view (freeze-swap) so the
           // header's DOM tooltips — which a native WebContentsView would paint
-          // over — are visible. Restored the moment the cursor leaves.
+          // over — are visible. Gated behind HEADER_HOVER_DWELL_MS so transient
+          // mouse passes never flash the view; restored the moment the cursor
+          // leaves.
           <div
             style={{flexShrink: 0, display: 'flex', flexDirection: 'column'}}
-            onMouseEnter={() => this.setState({headerHover: true})}
-            onMouseLeave={() => this.setState({headerHover: false})}
+            onMouseEnter={this.onHeaderMouseEnter}
+            onMouseLeave={this.onHeaderMouseLeave}
           >
           <PaneBand
             ref={this.labelRef}
@@ -3098,7 +3199,14 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 }
 
 const mapStateToProps = (state: any, ownProps: WebPaneProps) => {
-  const termGroup = state.termGroups.termGroups[ownProps.groupUid];
+  const termGroups = state.termGroups.termGroups;
+  const termGroup = termGroups[ownProps.groupUid];
+  // Walk up to this pane's ROOT group — its tab is active iff that root is the
+  // active root group (used to gate the background-tab shell bell).
+  let rootUid = ownProps.groupUid;
+  while (termGroups[rootUid]?.parentUid) {
+    rootUid = termGroups[rootUid].parentUid;
+  }
   return {
     defaultProfile: state.ui.defaultProfile,
     profiles: state.ui.profiles
@@ -3107,7 +3215,8 @@ const mapStateToProps = (state: any, ownProps: WebPaneProps) => {
           state.ui.profiles.asMutable({deep: true})
         : state.ui.profiles
       : [],
-    webName: termGroup ? termGroup.webName : undefined
+    webName: termGroup ? termGroup.webName : undefined,
+    isTabActive: rootUid === state.termGroups.activeRootGroup
   };
 };
 
@@ -3132,6 +3241,12 @@ const mapDispatchToProps = (dispatch: HyperDispatch, ownProps: WebPaneProps) => 
   },
   onSplitWebPane(url: string, direction: 'HORIZONTAL' | 'VERTICAL') {
     dispatch(splitWebPane(ownProps.groupUid, url, direction) as any);
+  },
+  onTabBell(uid: string) {
+    dispatch(markTabBell(uid) as any);
+  },
+  onTabBellClear(uid: string) {
+    dispatch(clearTabBell(uid) as any);
   }
 });
 

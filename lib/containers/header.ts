@@ -110,9 +110,14 @@ const getTabs = createSelector(
       };
       const paneColors = leaves.map((leaf, idx) => mapLeafToColor(leaf, idx));
 
-      // Check overall activity and bell markers across all sessions in this tab
+      // Check overall activity and bell markers across all sessions in this tab.
+      // Bell markers are keyed by SESSION uid for terminal BELs; web panes (e.g.
+      // the Hyperia Agent shell notifying a background tab) mark their term-group
+      // uid instead — count both so either rings the tab.
       const hasActivity = leaves.some((leaf) => leaf.sessionUid && activityMarkers[leaf.sessionUid]);
-      const hasBell = leaves.some((leaf) => leaf.sessionUid && bellMarkers[leaf.sessionUid]);
+      const hasBell = leaves.some(
+        (leaf) => (leaf.sessionUid && bellMarkers[leaf.sessionUid]) || bellMarkers[leaf.uid as string]
+      );
 
       // Agent status from active session or first session
       const activeSessionUid = activeSessions[t.uid];
