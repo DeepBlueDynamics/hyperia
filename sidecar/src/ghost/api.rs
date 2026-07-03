@@ -615,7 +615,7 @@ pub async fn ghost_wipe_config(
     }
 }
 
-fn config_raw_path() -> Option<std::path::PathBuf> {
+pub fn config_raw_path() -> Option<std::path::PathBuf> {
     super::config_path()
 }
 

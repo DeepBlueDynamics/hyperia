@@ -61,6 +61,10 @@
   <h2>Model <span id="modelSpin" class="spin" style="display:none"></span></h2>
   <select id="model"></select>
   <div class="note" id="modelNote"></div>
+  <div id="ollamaPortRow" style="display:none;align-items:center;gap:8px;margin-top:6px">
+    Port <input type="text" id="olPort" style="margin-top:0;width:90px">
+    <span class="note" style="margin:0">Ollama daemon port (default 11434) — saved with Save.</span>
+  </div>
 
   <div id="keyBlock">
     <h2>API key <span id="keySet" style="display:none;color:#3fb950;font-size:11px;text-transform:none">[set]</span></h2>
@@ -88,9 +92,9 @@
   <h2>Services</h2>
   <div id="services"></div>
 
-  <button id="save">Save configuration</button>
-  <button class="ghostbtn" onclick="openConfigSticky()" title="open the raw config file in a syntax-highlighted, editable code sticky">Open config</button>
   <button class="ghostbtn" onclick="goBack()">← Back</button>
+  <button id="save">Save</button>
+  <button class="ghostbtn" onclick="openConfigSticky()" title="open the raw config file in a syntax-highlighted code sticky">Edit config</button>
   <span id="status"></span>
 </div>
 
@@ -158,6 +162,15 @@ function renderProviders() {
   $('burnWarn').style.display = p && p.key ? '' : 'none';
   $('keyBlock').style.display = p && p.key ? '' : 'none';
   renderKeyState();
+  // Ollama daemon port lives under the model select (not in Services).
+  const opr = $('ollamaPortRow');
+  if (opr) {
+    opr.style.display = sel === 'ollama' ? 'flex' : 'none';
+    if (sel === 'ollama' && !$('olPort').value) {
+      const saved = cfg && cfg.services && cfg.services.ollama && cfg.services.ollama.port;
+      $('olPort').value = saved || 11434;
+    }
+  }
 }
 
 function renderModels() {
@@ -197,11 +210,10 @@ const IS_WIN = /Windows/i.test(navigator.userAgent);
 const SVC_DEFS = [
   {id:'nuts', label:'nuts.services', login:true},
   {id:'nemesis8', label:'Nemesis8', desc:'agent runner + MCP', port:9801, install:'nemesis8'},
-  {id:'shivvr', label:'Shivvr', desc:'embeddings', port:0, install:'shivvr'},
-  {id:'grub', label:'Grub crawler', desc:'', port:0, install:'grub'},
-  {id:'transcription', label:'Transcription', desc:'', port:0, install:'transcription'},
+  {id:'shivvr', label:'Shivvr', desc:'embeddings', port:8085, install:'shivvr'},
+  {id:'grub', label:'Grub crawler', desc:'', port:6792, install:'grub'},
+  {id:'transcription', label:'Transcription', desc:'', port:8765, install:'transcription'},
   {id:'sailfish', label:'Sailfish', desc:'optimized local Gemma (Docker, ≥16 GB GPU)', port:22343, install:'sailfish'},
-  {id:'ollama', label:'Ollama', desc:'local model daemon', port:11434, install:'ollama'}
 ];
 const installLine = (name) => name === 'ollama'
   ? (IS_WIN ? 'winget install Ollama.Ollama' : 'curl -fsSL https://ollama.com/install.sh | sh')
@@ -250,7 +262,7 @@ function renderServices() {
         panel.innerHTML =
           `<div style="display:flex;gap:8px"><input type="text" id="nutsEmail" placeholder="you@example.com" style="margin-top:0;flex:1">` +
           `<button style="margin-top:0;padding:7px 16px" data-nutslogin="1">Login</button></div>` +
-          `<div class="note">Opens the nuts.services login in your system browser (magic link). Google/GitHub sign-in hidden when opened from Hyperia.</div>`;
+          `<div class="note">WIP — allows use of nuts.services serverless services. Coming soon.</div>`;
       } else {
         panel.innerHTML =
           `<div style="display:flex;gap:8px;align-items:center">Port <input type="text" data-port="${d.id}" value="${svcPort(d)}" style="margin-top:0;width:90px">` +
@@ -341,10 +353,10 @@ $('keyRemove').onclick = async () => {
 // Open the raw config file in a CODE-mode sticky (syntax-highlighted,
 // editable, bound to the file) so the user can hand-edit config.agent.
 async function openConfigSticky() {
-  const p = cfg && cfg.config_path;
-  if (!p) return;
-  await fetch('/api/notes', {method:'POST', headers:{'content-type':'application/json'},
-    body: JSON.stringify({file_path: p, color: 'code:dark', width: 800, height: 600})});
+  // Dedicated endpoint — the page's fetch is anonymous, so the general
+  // /api/notes create is identity-gated and silently refused. This one can
+  // only ever open THE config file.
+  await fetch('/api/agent/config/edit', {method:'POST'});
 }
 
 // ── Token Maximus: local downsizer model + enable toggle ──────────────────
@@ -381,6 +393,11 @@ $('save').onclick = async () => {
   if (p && p.key && $('apiKey').value) body.keys[sel] = $('apiKey').value;
   // Token Maximus settings ride the same save.
   body.maximus = {disabled: !$('mxEnabled').checked, model: $('mxModel').value || ''};
+  // Ollama port (shown under the model when ollama is selected).
+  if (sel === 'ollama') {
+    const port = parseInt($('olPort').value, 10);
+    if (port > 0) body.services = {ollama: {port}};
+  }
   const r = await (await fetch('/api/agent/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)})).json();
   $('status').textContent = r.ok ? 'saved ✓' : ('error: ' + r.error);
   $('apiKey').value = '';

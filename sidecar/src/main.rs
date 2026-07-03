@@ -2329,6 +2329,27 @@ async fn post_note_create(
     }
 }
 
+/// POST /api/agent/config/edit — open THE Hyperia config file in a
+/// syntax-highlighted code sticky. Fixed action for the config page's
+/// "Edit config" button: the page's fetch is anonymous so the general
+/// /api/notes create is identity-gated, but this endpoint can only ever
+/// open the one local config file, user-initiated — System-side by design.
+async fn post_open_config_sticky(State(state): State<AppState>) -> (StatusCode, String) {
+    let Some(path) = crate::ghost::api::config_raw_path() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "no home dir".into());
+    };
+    let cmd = serde_json::json!({
+        "type": "NoteCreate",
+        "color": "code:dark",
+        "filePath": path.to_string_lossy(),
+        "creator": "Hyperia",
+    });
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
 async fn post_note_close(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3002,6 +3023,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/agent/config",
             axum::routing::get(ghost::api::get_agent_config).post(ghost::api::post_agent_config)
         )
+        .route("/api/agent/config/edit", axum::routing::post(post_open_config_sticky))
         .route("/api/agent/models", axum::routing::get(ghost::api::get_agent_models))
         .route("/api/agent/services", axum::routing::get(ghost::api::get_agent_services))
         .route("/api/agent/keycheck", axum::routing::get(ghost::api::get_agent_keycheck))
