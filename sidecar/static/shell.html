@@ -610,14 +610,14 @@
   <div class="name">hyperia shell</div>
   <div class="models" id="hud-models"></div>
   <div class="hud">
-    <div class="stat"><span>t/s max</span><span class="v" id="hud-tps-max">0</span></div>
-    <div class="stat"><span>t/s avg</span><span class="v" id="hud-tps-avg">0</span></div>
+    <div class="stat"><span>TPS max</span><span class="v" id="hud-tps-max">0</span></div>
+    <div class="stat"><span>TPS avg</span><span class="v" id="hud-tps-avg">0</span></div>
     <div class="stat"><span>in</span><span class="v" id="hud-in">0</span></div>
     <div class="stat"><span>out</span><span class="v" id="hud-out">0</span></div>
     <div class="stat"><span>tools</span><span class="v" id="hud-tools">0</span></div>
     <div class="stat"><span>turns</span><span class="v" id="hud-turns">0</span></div>
-    <div class="stat reset" id="hud-reset" title="reset metrics" style="cursor: pointer; padding: 0 4px; border: 1px solid var(--line); border-radius: 3px; background: var(--bg-soft); font-size: 8px; font-weight: bold; margin-left: 4px; align-self: center; display: inline-flex; align-items: center; justify-content: center; height: 14px; text-transform: uppercase;">reset</div>
-    <div class="stat reset" id="hud-config" title="agent configuration" onclick="location.href='/agent/config'" style="cursor: pointer; padding: 0 5px; border: 1px solid var(--line); border-radius: 3px; background: var(--bg-soft); font-size: 10px; margin-left: 2px; align-self: center; display: inline-flex; align-items: center; justify-content: center; height: 14px;">⚙</div>
+    <span id="hud-reset" title="reset" style="cursor: pointer; color: #f85149; font-size: 12px; margin-left: 6px; align-self: center; line-height: 1;">✕</span>
+    <span id="hud-config" title="agent configuration" onclick="location.href='/agent/config'" style="cursor: pointer; font-size: 13px; margin-left: 2px; align-self: center; line-height: 1;">⚙</span>
   </div>
 </div>
 
@@ -676,6 +676,7 @@ let genStartMs = 0;   // set when the agent starts producing this turn
 let genTokens = 0;    // output tokens produced since genStartMs
 let lastDeltaMs = 0;  // when the LAST token delta arrived — avg counts only
                       // active generation, not tool-wait/idle wall-clock
+let statsLastMs = 0;  // last stats event — usage-delta TPS for cloud tool turns
 let lastTps = 0;      // last computed tok/s (held between turns)
 let maxTps = 0;       // peak decode speed observed (the ceiling)
 let cumTokens = 0;    // completed-turn tokens, for the running average
@@ -1530,6 +1531,21 @@ function handleEvent(ev) {
       if (delta_out > 0) {
         STATS.out += delta_out;
         turn_out = ev.output_tokens;
+        // TPS from API-reported usage. Cloud tool-call turns stream NO
+        // visible text (arguments aren't text_deltas), so the char-count
+        // meter reads 0 for e.g. gpt-5-codex — usage deltas over wall time
+        // between stats events is provider-truth for every model.
+        const now = performance.now();
+        if (statsLastMs && now - statsLastMs < 300000) {
+          const secs = (now - statsLastMs) / 1000;
+          if (secs > 0.25) {
+            const tps = delta_out / secs;
+            if (tps > maxTps) maxTps = tps;
+            cumTokens += delta_out;
+            cumSecs += secs;
+          }
+        }
+        statsLastMs = now;
       }
       STATS.tools  = ev.tool_calls    != null ? ev.tool_calls : STATS.tools;
       STATS.turns  = ev.turns         || STATS.turns;
@@ -2256,6 +2272,7 @@ $('hud-reset').addEventListener('click', () => {
   lastTps = 0;
   genStartMs = 0;
   lastDeltaMs = 0;
+  statsLastMs = 0;
   updateHud();
 });
 
