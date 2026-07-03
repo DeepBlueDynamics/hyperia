@@ -401,7 +401,7 @@ export default class Term extends React.PureComponent<
 
     menu.append(
       new MenuItem({
-        label: 'Switch Shell…',
+        label: 'Picker',
         enabled: !isPicker,
         click: () => {
           // Unload the current shell and show the picker in this pane — the

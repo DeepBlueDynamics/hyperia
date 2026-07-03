@@ -1759,6 +1759,24 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     menu.append(
       new MenuItem({
+        label: 'Picker',
+        click: () => {
+          // Swap THIS web pane back to the picker (same in-group replacement
+          // the terminal's Picker item uses).
+          rpc.emit('new', {
+            isNewGroup: false,
+            activeUid: this.props.sessionUid || this.props.groupUid,
+            profile: 'picker',
+            groupUid: this.props.groupUid
+          });
+        }
+      })
+    );
+
+    menu.append(new MenuItem({type: 'separator'}));
+
+    menu.append(
+      new MenuItem({
         label: 'Split Right',
         accelerator: 'Ctrl+Shift+|',
         registerAccelerator: false,
