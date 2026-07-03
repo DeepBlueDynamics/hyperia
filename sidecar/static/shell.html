@@ -72,10 +72,10 @@
     background: var(--bg-soft);
     transition: border-color 0.5s ease, box-shadow 0.5s ease;
   }
-  /* Metric badge just updated → brief blue flash. */
+  /* Metric badge just updated → subtle yellow flash (throttled in JS so a
+     streaming turn doesn't strobe the whole HUD). */
   .titlebar .hud .stat.flash {
-    border-color: #8ab4f8;
-    box-shadow: 0 0 5px rgba(138, 180, 248, 0.45);
+    border-color: rgba(232, 194, 104, 0.55);
     transition: none;
   }
   .titlebar .hud .v {
@@ -680,15 +680,21 @@ let lastTps = 0;      // last computed tok/s (held between turns)
 let maxTps = 0;       // peak decode speed observed (the ceiling)
 let cumTokens = 0;    // completed-turn tokens, for the running average
 let cumSecs = 0;      // completed-turn generation seconds
-const flashPrev = {}; // last rendered value per badge, for the blue flash
+const flashPrev = {}; // last rendered value per badge
+const flashLast = {}; // last flash time per badge — throttle so streaming
+                      // (a value change per token) doesn't strobe the HUD
 function setStat(id, text) {
   const el = $(id);
   if (!el) return;
   if (flashPrev[id] !== undefined && flashPrev[id] !== text) {
-    const badge = el.parentElement;
-    badge.classList.add('flash');
-    clearTimeout(badge._flashT);
-    badge._flashT = setTimeout(() => badge.classList.remove('flash'), 450);
+    const now = performance.now();
+    if (!flashLast[id] || now - flashLast[id] > 1500) {
+      flashLast[id] = now;
+      const badge = el.parentElement;
+      badge.classList.add('flash');
+      clearTimeout(badge._flashT);
+      badge._flashT = setTimeout(() => badge.classList.remove('flash'), 400);
+    }
   }
   flashPrev[id] = text;
   el.textContent = text;
