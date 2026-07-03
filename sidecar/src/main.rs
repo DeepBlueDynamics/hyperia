@@ -2956,6 +2956,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ui/key", axum::routing::post(post_ui_key))
         .route("/api/pane/describe", axum::routing::post(post_auto_describe))
         .route("/api/notes", axum::routing::get(get_notes).post(post_note_create))
+        .route("/api/agent/config/edit", axum::routing::post(post_open_config_sticky))
         .route("/api/notes/highlight", axum::routing::post(post_notes_highlight))
         .route("/api/notes/{id}", axum::routing::get(get_note).delete(delete_note).patch(patch_note))
         .route("/api/notes/{id}/schedule", axum::routing::post(post_note_schedule))
@@ -3023,7 +3024,6 @@ async fn main() -> anyhow::Result<()> {
             "/api/agent/config",
             axum::routing::get(ghost::api::get_agent_config).post(ghost::api::post_agent_config)
         )
-        .route("/api/agent/config/edit", axum::routing::post(post_open_config_sticky))
         .route("/api/agent/models", axum::routing::get(ghost::api::get_agent_models))
         .route("/api/agent/services", axum::routing::get(ghost::api::get_agent_services))
         .route("/api/agent/keycheck", axum::routing::get(ghost::api::get_agent_keycheck))
