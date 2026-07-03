@@ -47,7 +47,7 @@ export default function FindBar(props: FindBarProps) {
         ref={inputRef}
         type="text"
         // The bar mounts when Ctrl+F opens it; autoFocus reliably grabs the
-        // cursor (the manual ref.focus in openFind races with the <webview>
+        // cursor (the manual ref.focus in openFind races with the native view
         // stealing focus back). Select any existing query so you can retype.
         autoFocus
         onFocus={(e) => e.currentTarget.select()}

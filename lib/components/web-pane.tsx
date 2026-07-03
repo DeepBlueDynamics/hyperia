@@ -155,9 +155,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   _stateHandler: ((e: any, payload: any) => void) | null = null;
   _foundHandler: ((e: any, payload: any) => void) | null = null;
   _domReadyHandler: ((e: any, payload: any) => void) | null = null;
-  // OAuth hand-off de-bounce: an MS/Google login bounces through many redirects,
-  // each of which would otherwise open its own system-browser tab. Open once.
-  _lastOAuthOpenAt = 0;
   searchAbortCtrl: AbortController | null = null;
 
   constructor(props: WebPaneProps) {
@@ -949,8 +946,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
 
     // Click anywhere outside the dropdown and the URL bar → close it. (Clicks
-    // INSIDE the guest <webview> don't reach this document, so those are handled
-    // separately by the guest 'focus' listener in dom-ready.)
+    // INSIDE the native view don't reach this document — those are handled by
+    // the web-pane:focus push from the manager.)
     if (
       this.state.isUrlNavigatorOpen &&
       this.urlNavigatorRef.current &&
@@ -1232,14 +1229,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           'var h=document.head||document.documentElement;h.insertBefore(s,h.firstChild);}catch(e){}})()'
       }).catch(() => {});
       this.probePageBgColor();
-      // TODO(webcontentsview Phase 2/3): these all used to attach here via
-      // @electron/remote on the guest webContents and are main-process concerns
-      // for a WebContentsView. Temporarily NOT wired:
-      //   - before-input-event: in-page Ctrl+F / zoom / split-&-tab shortcuts
-      //   - will-navigate / will-redirect: OAuth redirect bail-out to system browser
-      //   - 'focus': clicking INTO the page no longer activates this pane
-      //     (onActive) or closes the URL navigator, since native-view input
-      //     doesn't reach this document.
+      // In-page input concerns (zoom shortcuts, OAuth redirect bail-out, focus →
+      // pane activation) are wired on the native webContents in
+      // app/web-pane-manager.ts and relayed here over web-pane:* IPC.
     };
     ipcRenderer.on('web-pane:dom-ready', this._domReadyHandler);
 
@@ -1560,16 +1552,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   _evalHandler: ((data: {uid: string; js: string}) => void) | null = null;
   _mouseHandler: ((data: {uid: string; x: number; y: number; action?: string}) => void) | null = null;
 
-  // Hand an OAuth URL to the system browser, but only ONCE per flow. A single
-  // sign-in bounces through many redirects (login → authorize → consent → …),
-  // each matching isOAuthUrl; without this guard every hop opened a new tab.
-  openOAuthExternal = (url: string): void => {
-    const now = Date.now();
-    if (now - this._lastOAuthOpenAt < 8000) return;
-    this._lastOAuthOpenAt = now;
-    void shell.openExternal(url);
-  };
-
   // ── Find-in-page (Ctrl+F) ────────────────────────────────────────────────
   openFind = (): void => {
     this.setState({findOpen: true}, () => {
@@ -1699,7 +1681,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       .catch(() => send(`# ${fallbackTitle}\n${fallbackUrl}`));
   };
 
-  handleContextMenu = (e: React.MouseEvent | any, params?: any, wc?: any) => {
+  // Right-click on the pane's DOM chrome (toolbar, error screen — NOT the page
+  // itself; the native view's in-page menu is built in app/web-pane-manager.ts).
+  handleContextMenu = (e: React.MouseEvent) => {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
     /* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
     const remote = require('@electron/remote');
@@ -1711,24 +1695,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         click: () => this.reloadWebview(false)
       })
     );
-    // Inspect: dock DevTools at the bottom of THIS pane (splits down) and, when
-    // we have the right-click coordinates, jump straight to that element.
-    if (wc) {
-      menu.append(new MenuItem({type: 'separator'}));
-      menu.append(
-        new MenuItem({
-          label: 'Inspect',
-          click: () => {
-            try {
-              if (!wc.isDevToolsOpened()) wc.openDevTools({mode: 'bottom'});
-              if (params && typeof params.x === 'number') wc.inspectElement(params.x, params.y);
-            } catch (err) {
-              console.error('Inspect failed:', err);
-            }
-          }
-        })
-      );
-    }
     menu.append(new MenuItem({type: 'separator'}));
     menu.append(new MenuItem({label: 'New Stickys', click: () => void ipcMain.emit('new-sticky', {})}));
     menu.append(new MenuItem({label: 'Search Stickys', click: () => void ipcMain.emit('search-stickies')}));
@@ -2365,7 +2331,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         )}
 
         {/* Click-off backdrop: a click anywhere outside the dropdown (including on
-            the page area, whose <webview> clicks never reach this document and
+            the page area, whose native-view clicks never reach this document and
             whose dimmed wrapper is pointer-events:none) closes the navigator. Sits
             just under the dropdown (z 9999 < navigator's 10000) so the dropdown
             itself stays interactive. */}
@@ -3094,13 +3060,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             padding-top: var(--space-10);
             border-top: 0.5px dashed var(--border-neutral);
             user-select: none;
-          }
-
-          webview {
-            border: none !important;
-            outline: none !important;
-            width: 100%;
-            height: 100%;
           }
 
           .web_fit {
