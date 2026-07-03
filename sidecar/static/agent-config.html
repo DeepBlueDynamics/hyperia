@@ -63,9 +63,12 @@
   <div class="note" id="modelNote"></div>
 
   <div id="keyBlock">
-    <h2>API key</h2>
-    <input type="password" id="apiKey" placeholder="paste your API key (stored locally)">
-    <div class="note">Stored in the Hyperia config file for now — <b>plaintext until the OS-keystore work (#130) lands</b>. Leave blank to keep the saved key. Enter “-” to clear it.</div>
+    <h2>API key <span id="keySet" style="display:none;color:#3fb950;font-size:11px;text-transform:none">[set]</span></h2>
+    <div style="position:relative">
+      <button id="keyRemove" title="remove the stored key for this provider" style="display:none;position:absolute;left:6px;top:50%;transform:translateY(-50%);background:#12121c;color:#f85149;border:1px solid #23233a;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:10px;cursor:pointer;z-index:2">remove</button>
+      <input type="password" id="apiKey" placeholder="paste your API key (stored locally)" style="width:100%">
+    </div>
+    <div class="note">Stored in the Hyperia config file for now — <b>plaintext until the OS-keystore work (#130) lands</b>. Paste to replace; leave blank to keep the saved key.</div>
   </div>
 
   <h2>Token Maximus</h2>
@@ -87,6 +90,7 @@
 
   <button id="save">Save configuration</button>
   <button id="unconfigure" class="ghostbtn" title="Clears provider/model — Hyperia drops out of the agent list. Keys are kept.">Unconfigure</button>
+  <button class="ghostbtn" onclick="openConfigSticky()" title="open the raw config file in a syntax-highlighted, editable code sticky">Open config</button>
   <button class="ghostbtn" onclick="goBack()">← Back</button>
   <span id="status"></span>
 </div>
@@ -154,6 +158,7 @@ function renderProviders() {
   const p = PROVIDERS.find(x => x.id === sel);
   $('burnWarn').style.display = p && p.key ? '' : 'none';
   $('keyBlock').style.display = p && p.key ? '' : 'none';
+  renderKeyState();
 }
 
 function renderModels() {
@@ -314,6 +319,26 @@ async function load() {
   renderModels();
   renderMaximus();
 }
+
+// Stored-key state: "[set]" tag on the heading + a remove button INSIDE the
+// entry box (left). Removing sends the "-" clear sentinel for this provider.
+function renderKeyState() {
+  const has = !!(cfg && cfg.keys && cfg.keys[sel]);
+  const tag = $('keySet'), btn = $('keyRemove'), inp = $('apiKey');
+  if (!tag || !btn || !inp) return;
+  tag.style.display = has ? '' : 'none';
+  btn.style.display = has ? '' : 'none';
+  inp.style.paddingLeft = has ? '74px' : '';
+  inp.placeholder = has ? 'key is set — paste to replace' : 'paste your API key (stored locally)';
+}
+$('keyRemove').onclick = async () => {
+  await fetch('/api/agent/config', {method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({keys: {[sel]: '-'}})});
+  if (cfg && cfg.keys) cfg.keys[sel] = false;
+  $('apiKey').value = '';
+  renderKeyState();
+  loadKeycheck();
+};
 
 // Open the raw config file in a CODE-mode sticky (syntax-highlighted,
 // editable, bound to the file) so the user can hand-edit config.agent.
