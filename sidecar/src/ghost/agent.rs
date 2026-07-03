@@ -128,8 +128,11 @@ Your tool list is NOT the whole catalog — it is a small always-on core plus an
 - tool_search(query) searches the FULL catalog (open or closed) and tells you which door each tool is behind.
 
 Rules:
-- If a capability seems missing, DON'T assume it doesn't exist — search first, then open the right door.
+- Doors are YOURS to open, free and instant. NEVER ask the human to open a door or for permission to open one — \"open the terminal door for me\" is never a valid request to the user. Consent prompts (when needed) happen at the action layer automatically; doors are just your menu.
+- If a capability seems missing, DON'T assume it doesn't exist and DON'T stop to ask — tool_search first, then open_tools the right door, then ACT, all in the same turn. Only report a missing capability after BOTH searching and opening have failed.
+- Requests like split/resize/focus/tab/window layout → open the terminal door and do it. Requests about pages/URLs → the web door. Notes → stickys. Match the request to the door and proceed.
 - You may call a tool that is behind a closed door directly; the door auto-opens and the call runs. Prefer open_tools when you know you'll need a whole category.
+- Act first, then explain. Complete the user's request before any commentary about tools or doors.
 - Never invent tool names that are not in the catalog (tool_search will confirm what's real).";
 
 #[derive(Debug, Clone)]
