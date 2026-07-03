@@ -92,10 +92,12 @@ pub async fn ghost_chat(
     let registry = state.registry.clone();
     let session_mutex = state.session.clone();
     let ferricula = state.ferricula.clone();
+    let door_config = config.doors;
+    let context_tokens = config.context_tokens;
 
     let rx = {
         let mut session = state.session.lock().await;
-        session.run(req.message, registry, provider, session_mutex.clone(), ferricula)
+        session.run(req.message, registry, provider, session_mutex.clone(), ferricula, door_config, context_tokens)
     };
 
     let s = async_stream::stream! {
@@ -125,6 +127,35 @@ pub async fn ghost_status(State(state): State<GhostState>) -> Json<serde_json::V
         "messages": session.message_count(),
         "stop_requested": session.stop_requested(),
         "has_token": has_token,
+    }))
+}
+
+/// GET /api/ghost/debug — per-turn run-loop telemetry so a dev or agent can
+/// troubleshoot without the human relaying the shell: the configured
+/// provider/model/endpoint, current state, and a ring buffer of the last
+/// turns (which model answered, in/out tokens per turn + total, decode tps,
+/// context budget, tools called, stop reason, panes opened).
+pub async fn ghost_debug(State(state): State<GhostState>) -> Json<serde_json::Value> {
+    let cfg = super::load_config();
+    let session = state.session.lock().await;
+    let state_str = match session.state() {
+        SessionState::Idle => "idle",
+        SessionState::Running => "running",
+        SessionState::Completed(_) => "completed",
+        SessionState::Error(_) => "error",
+    };
+    Json(serde_json::json!({
+        "state": state_str,
+        "turn": session.turn(),
+        "messages": session.message_count(),
+        "stop_requested": session.stop_requested(),
+        "provider": cfg.as_ref().map(|c| c.provider.clone()),
+        "model": cfg.as_ref().map(|c| c.model.clone()),
+        "endpoint": cfg.as_ref().map(|c| c.endpoint.clone()),
+        "context_tokens_cfg": cfg.as_ref().map(|c| c.context_tokens),
+        "doors_enabled": cfg.as_ref().map(|c| c.doors.enabled),
+        "doors_small": cfg.as_ref().map(|c| c.doors.small),
+        "turns": super::agent::ghost_debug_snapshot(),
     }))
 }
 
@@ -448,6 +479,9 @@ pub async fn ghost_capabilities(State(state): State<GhostState>) -> Json<serde_j
     Json(serde_json::json!({
         "sidecar": env!("CARGO_PKG_VERSION"),
         "level": level,
+        // Per-provider default model ids for the UI pickers — served from the
+        // models registry so shell.html / agent-config.html never hardcode ids.
+        "model_defaults": crate::models::model_defaults_json(),
         "agent": {
             "provider": if needs_autopick { "ollama".to_string() } else { active_provider },
             "model": active_model,
@@ -581,7 +615,7 @@ pub async fn ghost_wipe_config(
     }
 }
 
-fn config_raw_path() -> Option<std::path::PathBuf> {
+pub fn config_raw_path() -> Option<std::path::PathBuf> {
     super::config_path()
 }
 
@@ -714,6 +748,12 @@ pub async fn ghost_shell_page() -> impl IntoResponse {
 // the OS keystore with #130.
 
 /// GET /agent/config — the Hyperia Agent configuration page.
+/// GET /guide — the web-pane start page: DuckDuckGo/URL search bar + the
+/// Hyperia field guide (MCP add commands, basics, links to the agent).
+pub async fn guide_page() -> impl IntoResponse {
+    Html(include_str!("../../static/guide.html"))
+}
+
 pub async fn agent_config_page() -> impl IntoResponse {
     Html(include_str!("../../static/agent-config.html"))
 }
@@ -749,14 +789,23 @@ pub async fn get_agent_config() -> Json<serde_json::Value> {
             "gemini": has_key("gemini"),
         },
         // Per-service settings (ports etc.) — config.agent.services.<name>.
-        "services": agent["services"].clone()
+        "services": agent["services"].clone(),
+        // Absolute path of the hand-editable config file — the page links it
+        // to a code-mode sticky for direct editing.
+        "config_path": config_raw_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        // Token Maximus (local-model compressor/extractor) settings.
+        "maximus": {
+            "model": json["config"]["maximus"]["model"].as_str().unwrap_or(""),
+            "url": json["config"]["maximus"]["url"].as_str().unwrap_or(""),
+            "disabled": json["config"]["maximus"]["disabled"].as_bool().unwrap_or(false),
+        }
     }))
 }
 
 /// POST /api/agent/config — write provider/model and any pasted keys into the
 /// shared config. Body: { provider?, model?, keys?: {anthropic?, ...} }.
-/// Empty-string key = leave unchanged; "-" = clear. provider="" clears the
-/// agent config (unconfigure — Hyperia drops out of the agent list).
+/// Empty-string key = leave unchanged; "-" = clear. Empty provider is ignored
+/// (Hyperia is always in the agent list; there is no unconfigure).
 pub async fn post_agent_config(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
@@ -770,12 +819,10 @@ pub async fn post_agent_config(
     if !json["config"]["agent"].is_object() {
         json["config"]["agent"] = serde_json::json!({});
     }
+    // Hyperia is ALWAYS in the agent list and always configurable — there is
+    // no "unconfigure". An empty provider is simply ignored.
     if let Some(p) = body["provider"].as_str() {
-        if p.is_empty() {
-            // Unconfigure: drop provider/model, keep keys (they're credentials).
-            json["config"]["agent"]["provider"] = serde_json::json!("");
-            json["config"]["agent"]["model"] = serde_json::json!("");
-        } else {
+        if !p.is_empty() {
             json["config"]["agent"]["provider"] = serde_json::json!(p.to_lowercase());
         }
     }
@@ -804,6 +851,22 @@ pub async fn post_agent_config(
         }
         for (name, val) in svcs {
             json["config"]["agent"]["services"][name] = val.clone();
+        }
+    }
+    // Token Maximus (the local-model compressor/extractor): model, url,
+    // disabled. Written under config.maximus.* — the compressor's getters
+    // already prefer this over env/defaults.
+    if let Some(mx) = body["maximus"].as_object() {
+        if !json["config"]["maximus"].is_object() {
+            json["config"]["maximus"] = serde_json::json!({});
+        }
+        for key in ["model", "url"] {
+            if let Some(v) = mx.get(key).and_then(|v| v.as_str()) {
+                json["config"]["maximus"][key] = serde_json::json!(v);
+            }
+        }
+        if let Some(d) = mx.get("disabled").and_then(|v| v.as_bool()) {
+            json["config"]["maximus"]["disabled"] = serde_json::json!(d);
         }
     }
     match crate::util::write_json_file_atomic(&path, &json) {
@@ -964,10 +1027,8 @@ pub async fn get_agent_services() -> Json<serde_json::Value> {
     }))
 }
 
-/// Curated Ollama allowlist — Gemma 4 ONLY: the fast local tags (e4b/12b) plus
-/// the strong cloud tags. E2B-class excluded (poorly quantized). Hand-extend
-/// via config.agent.ollama_allow in the shared config.
-const OLLAMA_CURATED: &[&str] = &["gemma4:e4b", "gemma4:12b", "gemma4:cloud", "gemma4:31b-cloud"];
+/// Curated Ollama allowlist — single source of truth: crate::models.
+const OLLAMA_CURATED: &[&str] = crate::models::OLLAMA_CURATED;
 
 /// GET /api/agent/models — the nemesis8.nuts.services/models catalog, cached
 /// for its TTL (1h), with the ollama list filtered to the curated set.
@@ -976,10 +1037,105 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
     use std::time::{Duration, Instant};
     static CACHE: OnceLock<Mutex<Option<(Instant, serde_json::Value)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(None));
-    if let Some((at, val)) = cache.lock().unwrap().clone() {
-        if at.elapsed() < Duration::from_secs(3600) {
-            return Json(val);
+
+    // The nemesis8 catalog (frontier + curated ollama) is cached for 1h. Sailfish
+    // is NOT cached — its availability flips as the local container starts/stops
+    // and warms up, so we probe it fresh on every call and inject after the cache
+    // lookup. `inject_sailfish` funnels both the cache-hit and fresh paths.
+    async fn inject_sailfish(mut val: serde_json::Value) -> serde_json::Value {
+        let sf_port = read_shared_config()["config"]["agent"]["services"]["sailfish"]["port"]
+            .as_u64()
+            .unwrap_or(22343);
+        let probed = async {
+            let resp = reqwest::Client::new()
+                .get(format!("http://localhost:{}/v1/models", sf_port))
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await
+                .ok()?;
+            if !resp.status().is_success() {
+                return None;
+            }
+            resp.json::<serde_json::Value>().await.ok()
         }
+        .await;
+        let models: Vec<serde_json::Value> = probed
+            .as_ref()
+            .and_then(|j| j["data"].as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        let id = m["id"].as_str()?;
+                        Some(serde_json::json!({"id": id, "label": id}))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let default = models
+            .first()
+            .and_then(|m| m["id"].as_str())
+            .unwrap_or("")
+            .to_string();
+        val["providers"]["sailfish"] = serde_json::json!({
+            "ok": !models.is_empty(),
+            "default": default,
+            "models": models,
+        });
+        // Ollama cloud tags: ANY installed model with a cloud tag (…:cloud or
+        // …-cloud, e.g. nemotron-3-super:cloud, deepseek-v4-pro:cloud) joins
+        // the curated list automatically. Probed fresh per request — like the
+        // sailfish block above — so a new `ollama pull x:cloud` shows up in
+        // the picker immediately, never stale behind the 1h catalog cache.
+        let ollama_ep = super::default_endpoint("ollama");
+        let tags = async {
+            let resp = reqwest::Client::new()
+                .get(format!("{}/api/tags", ollama_ep))
+                .timeout(std::time::Duration::from_secs(2))
+                .send()
+                .await
+                .ok()?;
+            resp.json::<serde_json::Value>().await.ok()
+        }
+        .await;
+        if let Some(tags) = tags {
+            let installed_cloud: Vec<String> = tags["models"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m["name"].as_str())
+                        .filter(|n| n.ends_with(":cloud") || n.contains("-cloud"))
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !installed_cloud.is_empty() {
+                let mut models = val["providers"]["ollama"]["models"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                for id in installed_cloud {
+                    if !models.iter().any(|m| m["id"].as_str() == Some(id.as_str())) {
+                        models.push(serde_json::json!({"id": id, "label": id}));
+                    }
+                }
+                val["providers"]["ollama"]["models"] = serde_json::json!(models);
+            }
+        }
+        val
+    }
+
+    // Snapshot the cached catalog and drop the MutexGuard BEFORE any await —
+    // holding a std Mutex guard across .await makes the future non-Send and
+    // breaks the axum Handler bound.
+    let cached = {
+        let guard = cache.lock().unwrap();
+        match guard.clone() {
+            Some((at, val)) if at.elapsed() < Duration::from_secs(3600) => Some(val),
+            _ => None,
+        }
+    };
+    if let Some(val) = cached {
+        return Json(inject_sailfish(val).await);
     }
     let fetched = async {
         let resp = reqwest::Client::new()
@@ -991,10 +1147,10 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
         resp.json::<serde_json::Value>().await.ok()
     }
     .await;
-    let mut val = match fetched {
-        Some(v) => v,
-        None => return Json(serde_json::json!({"ok": false, "error": "models catalog unreachable"})),
-    };
+    // When the nemesis8 catalog is unreachable we still return a usable payload
+    // (curated ollama + a fresh sailfish probe below) rather than a hard error,
+    // so the picker keeps working for the local providers.
+    let mut val = fetched.unwrap_or_else(|| serde_json::json!({"providers": {}}));
     // Ollama: the curated list IS the list (not an intersection with the
     // catalog — these tags are pulled locally via `ollama pull`). Extras come
     // from config.agent.ollama_allow.
@@ -1032,6 +1188,8 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
         val["providers"]["codex"]["models"] = serde_json::json!(plain);
     }
     val["ok"] = serde_json::json!(true);
+    // Cache the nemesis8-derived catalog WITHOUT sailfish, then inject a fresh
+    // sailfish probe so its availability is never stale behind the 1h TTL.
     *cache.lock().unwrap() = Some((Instant::now(), val.clone()));
-    Json(val)
+    Json(inject_sailfish(val).await)
 }

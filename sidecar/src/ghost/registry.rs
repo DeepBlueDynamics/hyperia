@@ -123,7 +123,19 @@ impl ToolRegistry {
     }
 
     /// All tool definitions for sending to the Anthropic API.
-    pub fn tool_defs(&self, provider: Option<&str>, model: Option<&str>) -> Vec<ToolDef> {
+    ///
+    /// `doors`: when `Some(state)` **and** `state.enabled()`, the returned list
+    /// is the progressive-disclosure set — core tools + the `open_tools`/
+    /// `close_tools`/`tool_search` meta-tools + the full schemas of *only* the
+    /// currently-open doors' tools (plan §4.2). When `None` or disabled, the
+    /// full catalog is returned unchanged — so a doors-off build is byte-
+    /// identical to before doors existed.
+    pub fn tool_defs(
+        &self,
+        provider: Option<&str>,
+        model: Option<&str>,
+        doors: Option<&crate::doors::DoorState>,
+    ) -> Vec<ToolDef> {
         let mut defs = self.builtins.clone();
         defs.push(tool_search_def());
         defs.push(tool_create_def());
@@ -156,38 +168,44 @@ impl ToolRegistry {
         for dt in dynamic.iter() {
             defs.push(dt.def.clone());
         }
+        drop(dynamic);
 
-        let is_small_ollama = provider.map_or(false, |p| p.to_lowercase() == "ollama")
-            && model.map_or(false, |m| {
-                let m_lower = m.to_lowercase();
-                m_lower.contains("e2b") || m_lower.contains("2b") || m_lower.contains("3b") || m_lower.contains("1b") || m_lower.contains("small")
-            });
-
-        if is_small_ollama {
-            let allowed_tools = [
-                "terminal_run",
-                "terminal_cd",
-                "terminal_keys",
-                "terminal_screen",
-                "terminal_status",
-                "terminal_split",
-                "file_read",
-                "file_write",
-                "web_fetch",
-                "open_web_pane",
-                "web_pane_content",
-                "web_pane_eval",
-                "web_pane_mouse",
-                "tab_snapshot",
-                "shell_state",
-                "show_input",
-                "show_picker",
-                "tool_search",
-                "help",
-            ];
-            defs.retain(|t| allowed_tools.contains(&t.name.as_str()));
+        // Doors mode: progressive disclosure overrides the full catalog.
+        // Emit core + meta-tools + only the open doors' tool schemas, in
+        // core-then-LRU order (see DoorState::live_tools).
+        if let Some(ds) = doors {
+            if ds.enabled() {
+                let open_meta = open_tools_def();
+                let close_meta = close_tools_def();
+                let mut out: Vec<ToolDef> = Vec::new();
+                for name in ds.live_tools() {
+                    if name == "open_tools" {
+                        out.push(open_meta.clone());
+                    } else if name == "close_tools" {
+                        out.push(close_meta.clone());
+                    } else if let Some(d) = defs.iter().find(|d| d.name == name) {
+                        out.push(d.clone());
+                    }
+                    // A live-tool name with no catalog def (should not happen —
+                    // the doors taxonomy is unit-tested against the registry) is
+                    // silently skipped.
+                }
+                // The `create` door also surfaces every runtime-authored tool.
+                if ds.is_door_open("create") {
+                    let dynamic = self.dynamic.lock().unwrap();
+                    for dt in dynamic.iter() {
+                        out.push(dt.def.clone());
+                    }
+                }
+                return out;
+            }
         }
 
+        // Legacy small-Ollama allowlist removed in Phase 3 — the doors `auto`
+        // mode (resolved in ghost::load_config) now shrinks the surface for
+        // small/local models via progressive disclosure instead of a fixed
+        // hard-coded subset. With doors off, the full catalog ships (byte-for-
+        // byte the pre-doors behavior).
         defs
     }
 
@@ -199,7 +217,7 @@ impl ToolRegistry {
     pub async fn execute(&self, name: &str, input: &serde_json::Value) -> String {
         // Internal tools bypass Maximus entirely
         match name {
-            "tool_search" => return self.handle_tool_search(input),
+            "tool_search" => return self.handle_tool_search(input, None),
             "tool_create" => return self.handle_tool_create(input),
             "watercooler" => {
                 let msg = input["message"].as_str().unwrap_or("Checking in");
@@ -391,22 +409,53 @@ impl ToolRegistry {
         self.builtins.iter().any(|t| t.name == name)
     }
 
-    fn handle_tool_search(&self, input: &serde_json::Value) -> String {
+    /// Keyword search over the **full** tool catalog (always — that is the
+    /// point of the search door: it sees everything, open or closed).
+    ///
+    /// When `doors` is `Some`, each result line gains a `[door: X — open|closed]`
+    /// hint and the result ends with an `open_tools` instruction so a model can
+    /// discover-then-unlock. When `None` (doors disabled / settings agent) the
+    /// output is byte-identical to the pre-doors format.
+    pub fn handle_tool_search(
+        &self,
+        input: &serde_json::Value,
+        doors: Option<&crate::doors::DoorState>,
+    ) -> String {
         let query = input["query"].as_str().unwrap_or("").to_lowercase();
-        let all_defs = self.tool_defs(None, None);
+        let all_defs = self.tool_defs(None, None, None);
         let matches: Vec<_> = all_defs
             .iter()
             .filter(|t| {
                 t.name.to_lowercase().contains(&query)
                     || t.description.to_lowercase().contains(&query)
             })
-            .map(|t| format!("- {}: {}", t.name, t.description))
+            .map(|t| match doors {
+                Some(ds) => {
+                    let hint = match ds.door_of(&t.name) {
+                        Some(dn) => {
+                            let state = if ds.is_door_open(dn) { "open" } else { "closed" };
+                            format!(" [door: {} — {}]", dn, state)
+                        }
+                        // Core tool (always live) or untaxonomied — no door hint.
+                        None => String::new(),
+                    };
+                    format!("- {}{}: {}", t.name, hint, t.description)
+                }
+                None => format!("- {}: {}", t.name, t.description),
+            })
             .collect();
 
         if matches.is_empty() {
             format!("No tools found matching '{}'", query)
         } else {
-            format!("Found {} tool(s):\n{}", matches.len(), matches.join("\n"))
+            let mut out = format!("Found {} tool(s):\n{}", matches.len(), matches.join("\n"));
+            if doors.is_some() {
+                out.push_str(
+                    "\n\nTools marked [door: X — closed] are not callable yet. \
+                     Call open_tools(door=\"X\") to make them callable on your next turn.",
+                );
+            }
+            out
         }
     }
 
@@ -744,6 +793,18 @@ impl ToolRegistry {
                 self.client
                     .post(format!("{}/api/window/new", base))
                     .json(&serde_json::json!({}))
+                    .send()
+                    .await
+            }
+            "terminal_set_window_size" => {
+                let body = serde_json::json!({
+                    "window": input["window"],
+                    "width": input["width"],
+                    "height": input["height"],
+                });
+                self.client
+                    .post(format!("{}/api/window/size", base))
+                    .json(&body)
                     .send()
                     .await
             }
@@ -1293,6 +1354,53 @@ fn tool_search_def() -> ToolDef {
                 "query": { "type": "string", "description": "Search keywords" }
             },
             "required": ["query"]
+        }),
+    }
+}
+
+/// Meta-tool: open a door so its tools become callable next turn.
+/// The description lists every ghost door + its one-liner — this listing is
+/// the *entire* cost of the closed catalog in the menu.
+fn open_tools_def() -> ToolDef {
+    use crate::doors::{doors_for, Surface};
+    let names: Vec<&str> = doors_for(Surface::Ghost).map(|d| d.name).collect();
+    let listing = doors_for(Surface::Ghost)
+        .map(|d| format!("- {}: {}", d.name, d.description))
+        .collect::<Vec<_>>()
+        .join("\n");
+    ToolDef {
+        name: "open_tools".into(),
+        description: format!(
+            "Open a door — a category of tools — so its tools become callable on your NEXT turn. \
+             Your live tool list is a small core plus any doors you have opened; open a door to \
+             reveal more. Available doors:\n{}",
+            listing
+        ),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "door": { "type": "string", "enum": names, "description": "Door to open" }
+            },
+            "required": ["door"]
+        }),
+    }
+}
+
+/// Meta-tool: close a door, freeing its slice of the live-tool budget.
+fn close_tools_def() -> ToolDef {
+    use crate::doors::{doors_for, Surface};
+    let names: Vec<&str> = doors_for(Surface::Ghost).map(|d| d.name).collect();
+    ToolDef {
+        name: "close_tools".into(),
+        description: "Close a door you previously opened, removing its tools from your live list \
+                      to make room for others."
+            .into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "door": { "type": "string", "enum": names, "description": "Door to close" }
+            },
+            "required": ["door"]
         }),
     }
 }
@@ -1916,6 +2024,19 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
             "name": "terminal_new_window",
             "description": "Open a new Hyperia window (separate OS window). Use terminal_status after to get its window id for targeting. Use this when the user wants a separate window, not just a new tab.",
             "input_schema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "terminal_set_window_size",
+            "description": "Resize a Hyperia window to exact pixel dimensions (width/height). Use for 'make the window wider/taller/1200 tall' requests. Omit window to resize the focused window; get window ids from terminal_status. To double the width, read the current size from terminal_status first.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "window": { "type": "integer", "description": "Window id from terminal_status. Omit for the focused window." },
+                    "width": { "type": "integer", "description": "New window width in pixels" },
+                    "height": { "type": "integer", "description": "New window height in pixels" }
+                },
+                "required": ["width", "height"]
+            }
         },
         {
             "name": "terminal_new_tab",
@@ -2593,16 +2714,16 @@ struct ModelEntry {
 // show_picker flow: pick provider → pick model.
 const MODEL_CATALOG: &[ModelEntry] = &[
     // Anthropic
-    ModelEntry { id: "claude-opus-4-7",         name: "Claude Opus 4.7",        provider: "anthropic", context: 200_000, tier: "frontier", note: "Newest Opus — best reasoning, deepest tool use" },
-    ModelEntry { id: "claude-sonnet-4-6",       name: "Claude Sonnet 4.6",      provider: "anthropic", context: 200_000, tier: "balanced", note: "Strong daily driver — fast and capable" },
+    ModelEntry { id: "claude-opus-4-8",         name: "Claude Opus 4.8",        provider: "anthropic", context: 200_000, tier: "frontier", note: "Newest Opus — best reasoning, deepest tool use" },
+    ModelEntry { id: "claude-sonnet-5",         name: "Claude Sonnet 5",        provider: "anthropic", context: 200_000, tier: "balanced", note: "Strong daily driver — fast and capable" },
     ModelEntry { id: "claude-haiku-4-5",        name: "Claude Haiku 4.5",       provider: "anthropic", context: 200_000, tier: "fast",     note: "Cheapest + fastest Claude — good for routine work" },
-    ModelEntry { id: "claude-3-7-sonnet",       name: "Claude 3.7 Sonnet",      provider: "anthropic", context: 200_000, tier: "balanced", note: "Previous-gen Sonnet — still capable" },
     // OpenAI
+    ModelEntry { id: "gpt-5",                   name: "GPT-5",                  provider: "openai",    context: 400_000, tier: "frontier", note: "Flagship reasoning + chat" },
+    ModelEntry { id: "gpt-5-codex",             name: "GPT-5 Codex",            provider: "openai",    context: 400_000, tier: "frontier", note: "Code-tuned GPT-5 (responses API)" },
     ModelEntry { id: "gpt-4.1",                 name: "GPT-4.1",                provider: "openai",    context: 1_000_000, tier: "frontier", note: "Long-context flagship" },
     ModelEntry { id: "gpt-4o",                  name: "GPT-4o",                 provider: "openai",    context: 128_000, tier: "balanced", note: "Multimodal default — vision + tools" },
     ModelEntry { id: "gpt-4o-mini",             name: "GPT-4o mini",            provider: "openai",    context: 128_000, tier: "fast",     note: "Cheap and quick" },
-    ModelEntry { id: "o3-mini",                 name: "o3-mini",                provider: "openai",    context: 200_000, tier: "reasoning", note: "Smaller reasoning model" },
-    ModelEntry { id: "o1",                      name: "o1",                     provider: "openai",    context: 200_000, tier: "reasoning", note: "Deep reasoning, no streaming" },
+    ModelEntry { id: "o4-mini",                 name: "o4-mini",                provider: "openai",    context: 200_000, tier: "reasoning", note: "Fast reasoning model" },
     // Local Ollama
     ModelEntry { id: "ollama:gemma4:e2b",       name: "Gemma 4 e2b",            provider: "ollama",    context: 8_192,   tier: "tiny",     note: "Maximus's compression model — small + fast" },
     ModelEntry { id: "ollama:gemma4:12b",      name: "Gemma 4 12B",            provider: "ollama",    context: 8_192,   tier: "local",    note: "Ollama gemma4 local model" },
@@ -2743,5 +2864,123 @@ async fn probe_ollama() -> serde_json::Value {
             })
         }
         _ => serde_json::json!({ "running": false, "url": url, "models": [], "gpu": null }),
+    }
+}
+
+#[cfg(test)]
+mod doors_tests {
+    use super::*;
+    use crate::doors::{DoorState, Surface};
+
+    fn reg() -> ToolRegistry {
+        ToolRegistry::new(9800, "test-token".into())
+    }
+
+    /// Flag OFF must be byte-for-byte identical to the pre-doors behavior:
+    /// `tool_defs(_, _, None)` and `tool_defs(_, _, Some(disabled))` both yield
+    /// the full catalog with the same count and ordering.
+    #[test]
+    fn doors_off_is_identical_to_full_catalog() {
+        let r = reg();
+        let full = r.tool_defs(None, None, None);
+        let disabled = DoorState::new(Surface::Ghost); // enabled == false by default
+        let via_disabled = r.tool_defs(None, None, Some(&disabled));
+
+        assert_eq!(
+            full.len(),
+            via_disabled.len(),
+            "disabled DoorState must not change the tool count"
+        );
+        let a: Vec<&str> = full.iter().map(|t| t.name.as_str()).collect();
+        let b: Vec<&str> = via_disabled.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(a, b, "disabled DoorState must not change tool ordering");
+
+        // Sanity: the full catalog is the large legacy surface, not the doored one.
+        assert!(full.len() > 40, "full catalog should be the whole ~57-tool surface");
+    }
+
+    /// Enabled with no open doors → exactly the core (11 ghost core defs,
+    /// including the open_tools/close_tools meta-tools).
+    #[test]
+    fn doors_on_no_open_doors_is_core_only() {
+        let r = reg();
+        let ds = DoorState::new(Surface::Ghost).with_enabled(true);
+        let defs = r.tool_defs(None, None, Some(&ds));
+
+        let names: std::collections::HashSet<&str> =
+            defs.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(defs.len(), crate::doors::GHOST_CORE.len(), "core-only count");
+        for &c in crate::doors::GHOST_CORE {
+            assert!(names.contains(c), "core tool '{c}' missing from doored defs");
+        }
+        // The meta-tools are present and closed-door tools are not.
+        assert!(names.contains("open_tools"));
+        assert!(names.contains("close_tools"));
+        assert!(!names.contains("web_pane_eval"), "closed door tool leaked");
+    }
+
+    /// Enabled with an open door → core + that door's tools, nothing else.
+    #[test]
+    fn doors_on_open_door_adds_only_that_door() {
+        let r = reg();
+        let mut ds = DoorState::new(Surface::Ghost).with_enabled(true);
+        ds.open_door("web");
+        let defs = r.tool_defs(None, None, Some(&ds));
+        let names: std::collections::HashSet<&str> =
+            defs.iter().map(|t| t.name.as_str()).collect();
+
+        // core still present
+        assert!(names.contains("terminal_run"));
+        // web door now present
+        assert!(names.contains("web_pane_eval"));
+        assert!(names.contains("open_web_pane"));
+        // an unopened door's tool is absent
+        assert!(!names.contains("sticky_note_list"));
+        // count == core + web door tools
+        let web_n = crate::doors::door_by_name("web").unwrap().ghost_tools.len();
+        assert_eq!(defs.len(), crate::doors::GHOST_CORE.len() + web_n);
+    }
+
+    /// The ≤cap invariant survives into the emitted def list: opening a second
+    /// door that would breach the cap evicts the first, so the doored def count
+    /// never exceeds core + a single (fitting) door.
+    #[test]
+    fn doors_on_respects_cap_via_eviction() {
+        let r = reg();
+        let mut ds = DoorState::with_cap(Surface::Ghost, 20).with_enabled(true);
+        ds.open_door("terminal"); // core 11 + 9 = 20 (at cap)
+        ds.open_door("web"); // would be 27 > 20 → evicts terminal
+        let defs = r.tool_defs(None, None, Some(&ds));
+        let names: std::collections::HashSet<&str> =
+            defs.iter().map(|t| t.name.as_str()).collect();
+
+        assert!(names.contains("web_pane_eval"), "web (MRU) should be live");
+        assert!(!names.contains("terminal_split"), "terminal should be evicted");
+        assert!(defs.len() <= 20, "live tool count must stay within cap");
+    }
+
+    /// tool_search is door-aware when a DoorState is passed: closed doors get a
+    /// "closed" hint, open doors get "open", core tools get no hint, and the
+    /// result ends with an open_tools instruction. With `None` the output is the
+    /// legacy format (no hints, no trailer).
+    #[test]
+    fn tool_search_door_hints() {
+        let r = reg();
+        let mut ds = DoorState::new(Surface::Ghost).with_enabled(true);
+        ds.open_door("web");
+
+        let input = serde_json::json!({ "query": "web_pane_eval" });
+        let with_doors = r.handle_tool_search(&input, Some(&ds));
+        assert!(with_doors.contains("[door: web — open]"), "got: {with_doors}");
+        assert!(with_doors.contains("open_tools"), "should include the unlock hint");
+
+        let closed = serde_json::json!({ "query": "sticky_note_list" });
+        let closed_res = r.handle_tool_search(&closed, Some(&ds));
+        assert!(closed_res.contains("[door: stickys — closed]"), "got: {closed_res}");
+
+        // None → legacy format, no door hints or trailer.
+        let legacy = r.handle_tool_search(&input, None);
+        assert!(!legacy.contains("[door:"), "legacy output must not add hints");
+        assert!(!legacy.contains("open_tools(door"), "legacy output must not add trailer");
     }
 }

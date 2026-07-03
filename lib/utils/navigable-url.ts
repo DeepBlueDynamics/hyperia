@@ -24,13 +24,14 @@ export function toNavigableUrl(input: string): string {
     return 'http://' + t;
   }
 
-  // 3. No whitespace AND every character is URL-legal → treat as a host/URL and
-  //    default to https://. (The dotted-host case "example.com" is the common
-  //    member of this set; host:port and single-label hosts also qualify.)
-  if (/^[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+$/.test(t)) {
+  // 3. Host-LIKE tokens only: a dotted host (example.com, sub.host.io/path) or
+  //    an explicit host:port (myhost:8080). A bare word ("hello") is NOT a
+  //    host — it won't resolve, so it falls through to search instead of
+  //    dead-ending at https://hello.
+  if (/^[\w-]+(\.[\w-]+)+([:/?#].*)?$/.test(t) || /^[\w-]+:\d+([/?#].*)?$/.test(t)) {
     return 'https://' + t;
   }
 
-  // 4. Free text (spaces or non-URL characters) → search.
+  // 4. Everything else (bare words, free text, spaces) → search.
   return 'https://duckduckgo.com/?q=' + encodeURIComponent(t);
 }

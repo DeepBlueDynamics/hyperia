@@ -424,6 +424,13 @@ impl FerriculaBackend {
 ///   2. shared Hyperia config → config.ferricula.url
 ///   3. Default http://localhost:8765
 pub fn load_ferricula_config() -> FerriculaConfig {
+    // DISABLED for now (user call, 2026-07-02): ferricula recall/remember adds
+    // latency/timeouts while the service is down and small-model work is the
+    // focus. Empty url = backend no-ops. Re-enable by removing this early
+    // return (env/config plumbing below is intact).
+    if std::env::var("HYPERIA_FERRICULA").map(|v| v == "1").unwrap_or(false) == false {
+        return FerriculaConfig { url: String::new() };
+    }
     if let Ok(url) = std::env::var("FERRICULA_URL") {
         let url = url.trim().trim_end_matches('/').to_string();
         if !url.is_empty() {

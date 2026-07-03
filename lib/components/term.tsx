@@ -376,6 +376,18 @@ export default class Term extends React.PureComponent<
 
     menu.append(
       new MenuItem({
+        label: 'Hyperia Agent',
+        click: () => {
+          const port = process.env.HYPERIA_PORT || '9800';
+          openUrl(`http://localhost:${port}/shell`);
+        }
+      })
+    );
+
+    menu.append(new MenuItem({type: 'separator'}));
+
+    menu.append(
+      new MenuItem({
         label: 'Rename Pane',
         enabled: !isPicker,
         click: () => {
@@ -389,7 +401,7 @@ export default class Term extends React.PureComponent<
 
     menu.append(
       new MenuItem({
-        label: 'Switch Shell…',
+        label: 'Picker',
         enabled: !isPicker,
         click: () => {
           // Unload the current shell and show the picker in this pane — the
@@ -2856,6 +2868,9 @@ export default class Term extends React.PureComponent<
             urlError={this.state.urlError}
             pickerZoom={this.state.pickerZoom}
             isGlimmerActive={this.state.isGlimmerActive}
+            // W/S/A quick keys only for the active pane, and not while the
+            // custom-profile modal covers the picker.
+            hotkeysEnabled={this.props.isTermActive && !this.state.isCustomModalOpen}
             onUrlChange={(v) => this.setState({urlInput: v, urlError: ''})}
             onSubmitUrl={(url) => this.submitUrl(url)}
             onTriggerGlimmer={() => this.triggerPickerGlimmer()}

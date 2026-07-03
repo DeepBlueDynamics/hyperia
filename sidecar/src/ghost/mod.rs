@@ -141,16 +141,28 @@ pub fn load_config() -> Option<GhostConfig> {
         }
     };
 
+    // Sailfish's default endpoint is derived from the shared config's service
+    // port (config.agent.services.sailfish.port, default 22343) — default_endpoint
+    // can't see the config, so resolve it here when no per-provider override is set.
+    if provider == "sailfish" && endpoint.is_empty() {
+        let port = cfg["agent"]["services"]["sailfish"]["port"]
+            .as_u64()
+            .unwrap_or(22343);
+        endpoint = format!("http://localhost:{}", port);
+    }
+
     if provider == "ollama" && std::path::Path::new("/.dockerenv").exists() {
         if endpoint == "http://localhost:11434" || endpoint == "http://127.0.0.1:11434" {
             endpoint = "http://host.docker.internal:11434".to_string();
         }
     }
 
-    // Ollama doesn't require a token. Cloud providers do — without one we
-    // can't honor the user's choice, so fall back to local Ollama and let
-    // the doctor probe surface what's missing.
-    if provider != "ollama" && api_key.is_empty() {
+    // Local providers (Ollama, Sailfish) don't require a token — they're
+    // localhost-only appliances. Cloud providers do — without one we can't
+    // honor the user's choice, so fall back to local Ollama and let the doctor
+    // probe surface what's missing. Sailfish must NOT fall back to Ollama on an
+    // empty key (it's a valid keyless local endpoint).
+    if provider != "ollama" && provider != "sailfish" && api_key.is_empty() {
         tracing::warn!(
             "agent.provider = '{}' but no token configured at config.providers.{}.token — falling back to local Ollama. Use the settings agent to paste a key.",
             provider, provider
@@ -166,12 +178,21 @@ pub fn load_config() -> Option<GhostConfig> {
     let maximus_url = cfg["maximus"]["url"].as_str().map(|s| s.to_string());
     let maximus_disabled = cfg["maximus"]["disabled"].as_bool().unwrap_or(false);
 
+    // MCP-tool-doors: mode + context budget. `auto` (default) turns doors on
+    // for every provider (small/local get the tight cap; cloud gets a larger
+    // one). Env HYPERIA_TOOL_DOORS overrides. See doors::resolve_door_config.
+    let tool_doors_mode = cfg["agent"]["tool_doors"].as_str().unwrap_or("auto");
+    let doors = crate::doors::resolve_door_config(tool_doors_mode, &provider, &model, &endpoint);
+    let context_tokens = cfg["agent"]["context_tokens"].as_u64().unwrap_or(0) as usize;
+
     Some(GhostConfig {
         provider,
         model,
         api_key,
         endpoint,
         max_turns: 25,
+        doors,
+        context_tokens,
         maximus_model,
         maximus_url,
         maximus_disabled,
@@ -179,25 +200,24 @@ pub fn load_config() -> Option<GhostConfig> {
 }
 
 /// Pick a sensible default model when the user has set a provider but no
-/// specific model yet. The settings agent will normally guide them to a
-/// concrete one, but this keeps the chat reachable in the meantime.
+/// specific model yet. Single source of truth: crate::models.
 fn default_model(provider: &str) -> &'static str {
-    match provider {
-        "anthropic" => "claude-sonnet-4-6",
-        "openai" => "gpt-4o",
-        "gemini" => "gemini-2.0-flash",
-        "ollama" => "gemma2:9b",
-        _ => "gemma2:9b",
-    }
+    crate::models::default_model(provider)
 }
 
 fn default_local_ollama() -> GhostConfig {
+    let endpoint = default_endpoint("ollama");
+    // Local Ollama is always a small/local model → auto-doors on with the tight
+    // cap (env still overrides). Keep this consistent with load_config's path.
+    let doors = crate::doors::resolve_door_config("auto", "ollama", "gemma2:9b", &endpoint);
     GhostConfig {
         provider: "ollama".into(),
         model: "gemma2:9b".into(),
         api_key: String::new(),
-        endpoint: default_endpoint("ollama"),
+        endpoint,
         max_turns: 25,
+        doors,
+        context_tokens: 0,
         maximus_model: None,
         maximus_url: None,
         maximus_disabled: false,

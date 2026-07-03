@@ -3,11 +3,13 @@
 mod audit;
 mod bridge;
 mod dashboard;
+mod doors;
 mod identity;
 mod fsnav;
 mod ghost;
 mod logs;
 mod mcp;
+mod models;
 mod perms;
 mod process;
 mod lume_store;
@@ -704,24 +706,32 @@ async fn post_split(
     let profile = parsed["profile"].as_str().unwrap_or("").to_string();
     let command = parsed["command"].as_str().unwrap_or("").to_string();
 
-    // Resolve an explicit split target (window/tab/pane) to a session uid so the
-    // split lands on the pane the caller named instead of whatever the UI happens
-    // to have focused. Omitting all three keeps the old focused-pane behavior.
-    let target_uid = if parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string() {
-        match state
-            .bridge
-            .resolve_pane_uid(
-                parsed["window"].as_u64().map(|v| v as u32),
-                parsed["tab"].as_str(),
-                parsed["pane"].as_str(),
-            )
-            .await
-        {
-            Some(u) => Some(u),
-            None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
+    // Resolve the split target to a session uid. #119: even when window/tab/pane
+    // are ALL omitted we now resolve to sane defaults — the focused window's
+    // active tab's active pane — instead of passing a null uid and letting the
+    // renderer pick from its own (possibly divergent) UI focus. An explicitly
+    // named address that matches nothing is a hard 404; an omitted address that
+    // resolves to nothing (no sessions yet) falls back to null so the renderer
+    // can bootstrap the very first pane.
+    let addressed =
+        parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string();
+    let target_uid = match state
+        .bridge
+        .resolve_pane_uid(
+            parsed["window"].as_u64().map(|v| v as u32),
+            parsed["tab"].as_str(),
+            parsed["pane"].as_str(),
+        )
+        .await
+    {
+        Some(u) => Some(u),
+        None if addressed => {
+            return (
+                StatusCode::NOT_FOUND,
+                "No pane at that window/tab/pane address".into(),
+            );
         }
-    } else {
-        None
+        None => None,
     };
 
     let url = parsed["url"].as_str().unwrap_or("").to_string();
@@ -1847,7 +1857,24 @@ async fn post_new_tab(
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let profile = parsed["profile"].as_str().unwrap_or("").to_string();
     let command = parsed["command"].as_str().unwrap_or("").to_string();
-    let cmd = serde_json::json!({"type": "NewTab", "profile": profile, "command": command});
+
+    // #119: resolve the target window. Omitted → the focused window (the
+    // sidecar's tracked focus, which the renderer honors via `windowId` and
+    // falls back to its own focused window if absent). An explicitly named
+    // window that doesn't exist is a hard 404 rather than silently opening the
+    // tab in the wrong window.
+    let requested_window = parsed["window"].as_u64().map(|v| v as u32);
+    let window_id = state.bridge.resolve_window_id(requested_window).await;
+    if requested_window.is_some() && window_id.is_none() {
+        return (StatusCode::NOT_FOUND, "No such window".into());
+    }
+
+    let cmd = serde_json::json!({
+        "type": "NewTab",
+        "profile": profile,
+        "command": command,
+        "windowId": window_id,
+    });
     match state.bridge.send_command(cmd).await {
         Ok(r) => {
             stamp_created_pane(&state, &headers, &r).await;
@@ -2320,6 +2347,27 @@ async fn post_note_create(
         "color": parsed["color"],
         "filePath": parsed["file_path"],
         "creator": creator,
+    });
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+/// POST /api/agent/config/edit — open THE Hyperia config file in a
+/// syntax-highlighted code sticky. Fixed action for the config page's
+/// "Edit config" button: the page's fetch is anonymous so the general
+/// /api/notes create is identity-gated, but this endpoint can only ever
+/// open the one local config file, user-initiated — System-side by design.
+async fn post_open_config_sticky(State(state): State<AppState>) -> (StatusCode, String) {
+    let Some(path) = crate::ghost::api::config_raw_path() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "no home dir".into());
+    };
+    let cmd = serde_json::json!({
+        "type": "NoteCreate",
+        "color": "code:dark",
+        "filePath": path.to_string_lossy(),
+        "creator": "Hyperia",
     });
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
@@ -2933,6 +2981,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ui/key", axum::routing::post(post_ui_key))
         .route("/api/pane/describe", axum::routing::post(post_auto_describe))
         .route("/api/notes", axum::routing::get(get_notes).post(post_note_create))
+        .route("/api/agent/config/edit", axum::routing::post(post_open_config_sticky))
         .route("/api/notes/highlight", axum::routing::post(post_notes_highlight))
         .route("/api/notes/{id}", axum::routing::get(get_note).delete(delete_note).patch(patch_note))
         .route("/api/notes/{id}/schedule", axum::routing::post(post_note_schedule))
@@ -2954,11 +3003,16 @@ async fn main() -> anyhow::Result<()> {
     // Mint Ghost a persistent identity so its sidecar API calls are attributed
     // (not anonymous) — same IdentityStore resolve_caller reads (#22).
     let ghost_token = bridge_for_ghost.identity().mint("Ghost 👻").await.token;
+    // Hyperia's OWN agent is consent-exempt (trusted by TOKEN, never name):
+    // the user configured it, so its pane actions are the user's ask — no
+    // approval prompts for the built-in agent (#131).
+    bridge_for_ghost.trust_agent_token(&ghost_token);
     let ghost_state = ghost::GhostState::new(args.port, ghost_token);
     let shared_registry = ghost_state.registry.clone();
     let ghost_routes = axum::Router::new()
         .route("/api/ghost/chat", axum::routing::post(ghost::api::ghost_chat))
         .route("/api/ghost/status", axum::routing::get(ghost::api::ghost_status))
+        .route("/api/ghost/debug", axum::routing::get(ghost::api::ghost_debug))
         .route("/api/ghost/history", axum::routing::get(ghost::api::ghost_history))
         .route("/api/ghost/memory", axum::routing::get(ghost::api::ghost_memory))
         .route("/api/ghost/session", axum::routing::get(ghost::api::ghost_session_dump))
@@ -2990,6 +3044,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/shell", axum::routing::get(ghost::api::ghost_shell_page))
         // Hyperia Agent configuration (epic #131).
         .route("/agent/config", axum::routing::get(ghost::api::agent_config_page))
+        .route("/guide", axum::routing::get(ghost::api::guide_page))
         .route(
             "/api/agent/config",
             axum::routing::get(ghost::api::get_agent_config).post(ghost::api::post_agent_config)

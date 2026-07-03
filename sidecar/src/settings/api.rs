@@ -138,7 +138,10 @@ pub async fn settings_chat(
             "role": "user",
             "content": req.message,
         }));
-        (session.messages.clone(), registry.tool_defs(Some(provider.provider_name()), Some(provider.model_name())))
+        // Doors: settings agent passes None for now — it gets its own
+        // DoorState in a later phase (plan §7); today it sees the full catalog
+        // exactly as before.
+        (session.messages.clone(), registry.tool_defs(Some(provider.provider_name()), Some(provider.model_name()), None))
     };
 
     let (tx, mut rx_inner) = mpsc::channel::<GhostEvent>(128);

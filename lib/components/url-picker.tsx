@@ -282,7 +282,7 @@ export default class UrlPicker extends React.Component<Props, State> {
               cursor: 'pointer'
             }}
           >
-            enter
+            w
           </span>
         </div>
 

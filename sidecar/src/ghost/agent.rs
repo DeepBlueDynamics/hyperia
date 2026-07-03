@@ -33,9 +33,14 @@ Never call a tool name that wasn't in your tool definitions for this turn.
 
 ## Rules
 - Be concise. Act, don't narrate. Never say what you're about to do — just do it.
+- FULL SEND is the default: do NOT ask permission for routine actions (splits, tabs, windows, reading screens, typing into panes, opening pages). Hyperia's consent layer will prompt the human itself when an action needs approval — asking first is double-asking. Execute, then report: done / failed / next fix.
+- The ONLY things you confirm first: deleting files, force-push, credential changes, or anything irreversible outside the workspace.
+- Finish the WHOLE request before replying. If it says open+split+list+close, do all of it; never report done with steps remaining.
+- NEVER claim an action happened unless YOU called the tool and saw its result in THIS conversation. Saying \"Done\" without the tool call is fabrication — the user sees their screen and will catch it. If the tool you need isn't in your live list, your next action MUST be open_tools/tool_search, not a reply.
 - Never repeat a tool call you already made this turn. If you have the result, use it.
 - Read tool results before calling more tools. terminal_run already returns the screen.
-- For destructive operations, confirm with the user first.
+- To SHOW a web page, use open_web_pane (web door) — NEVER `start <url>`/xdg-open/system browser; those leave Hyperia.
+- Typing into an AI/TUI pane (claude, codex, vim): the message goes with terminal_keys, then submit is a separate Enter — send a carriage return (\\r). A trailing newline (\\n) often does NOT submit in TUIs.
 - STRUCTURED WORKFLOWS:
   - Web Content: open_web_pane -> terminal_status -> Parse tabId -> web_pane_content.
   - Terminal Execution: terminal_status -> Parse active paneId -> terminal_run -> terminal_screen.
@@ -104,6 +109,37 @@ When the user says \"change my model\", \"switch to OpenAI\", \"use Claude\", or
   4. If the chosen provider has no token configured (settings_get(\"config.providers.<provider>.token\") returns null/empty) and the provider isn't ollama, follow up with show_input(id=\"token\", kind=\"password\") to collect it, then settings_set(\"config.providers.<provider>.token\", <value>).
 Do not invent models. Only present what model_catalog returns.";
 
+/// The exact "## Honesty about tools" paragraph inside [`SYSTEM_PROMPT`]. In
+/// doors mode it is string-replaced with [`DOORS_CONTRACT`] (plan §4.3.5).
+/// MUST stay byte-for-byte identical to the block in SYSTEM_PROMPT or the
+/// replace silently no-ops.
+const HONESTY_ABOUT_TOOLS: &str = "\
+## Honesty about tools
+The tool list above is the COMPLETE set of tools you have. Do not invent tool names — `google:search`, `web_search`, generic shell access, image generation, etc. don't exist unless they're in the list. If the user asks for something you can't do:
+- check `tool_search` for what exists by keyword
+- use `web_fetch` if you can compose a specific URL
+- offer to build a new tool with `tool_create`
+- or tell the user plainly that the capability isn't wired
+
+Never call a tool name that wasn't in your tool definitions for this turn.";
+
+/// Doors-mode replacement for [`HONESTY_ABOUT_TOOLS`]. Explains that the live
+/// tool list is a small core plus opened doors, and how to reveal more.
+const DOORS_CONTRACT: &str = "\
+## Tools behind doors
+Your tool list is NOT the whole catalog — it is a small always-on core plus any doors you have opened. A door is a named category of tools. Two meta-tools drive it:
+- open_tools(door=\"NAME\") makes that door's tools callable on your NEXT turn. Its description lists every door and what each contains.
+- close_tools(door=\"NAME\") puts a door away to free room (there is a live-tool cap; opening a door may evict the least-recently-used one).
+- tool_search(query) searches the FULL catalog (open or closed) and tells you which door each tool is behind.
+
+Rules:
+- Doors are YOURS to open, free and instant. NEVER ask the human to open a door or for permission to open one — \"open the terminal door for me\" is never a valid request to the user. Consent prompts (when needed) happen at the action layer automatically; doors are just your menu.
+- If a capability seems missing, DON'T assume it doesn't exist and DON'T stop to ask — tool_search first, then open_tools the right door, then ACT, all in the same turn. Only report a missing capability after BOTH searching and opening have failed.
+- Requests like split/resize/focus/tab/window layout → open the terminal door and do it. Requests about pages/URLs → the web door. Notes → stickys. Match the request to the door and proceed.
+- You may call a tool that is behind a closed door directly; the door auto-opens and the call runs. Prefer open_tools when you know you'll need a whole category.
+- Act first, then explain. Complete the user's request before any commentary about tools or doors.
+- Never invent tool names that are not in the catalog (tool_search will confirm what's real).";
+
 #[derive(Debug, Clone)]
 pub enum SessionState {
     Idle,
@@ -121,6 +157,11 @@ pub struct GhostSession {
     tool_call_count: usize,
     /// Recent (name+input, output) pairs for repeat detection — persists across messages.
     recent_calls: Vec<(String, String)>,
+    /// Progressive-disclosure door state (open doors + cap), persisted across
+    /// messages exactly like `tool_call_count`/`recent_calls`. `enabled` is
+    /// (re)derived per run from `HYPERIA_TOOL_DOORS`; the open-door list rides
+    /// through so a door opened on one message stays open on the next.
+    door_state: crate::doors::DoorState,
     pub stop_requested: Arc<AtomicBool>,
     pub window_closed: Arc<AtomicBool>,
     /// Messages the user typed while the agent was running. Drained by the
@@ -138,6 +179,7 @@ impl GhostSession {
             state: SessionState::Idle,
             tool_call_count: 0,
             recent_calls: Vec::new(),
+            door_state: crate::doors::DoorState::new(crate::doors::Surface::Ghost),
             stop_requested: Arc::new(AtomicBool::new(false)),
             window_closed: Arc::new(AtomicBool::new(false)),
             pending_injects: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -197,6 +239,8 @@ impl GhostSession {
         provider: Arc<AnyProvider>,
         session_mutex: Arc<tokio::sync::Mutex<GhostSession>>,
         ferricula: Arc<FerriculaBackend>,
+        door_config: crate::doors::DoorConfig,
+        context_tokens: usize,
     ) -> mpsc::Receiver<GhostEvent> {
         let (tx, rx) = mpsc::channel(128);
 
@@ -220,6 +264,7 @@ impl GhostSession {
         let turn_start = self.turn;
         let initial_tool_call_count = self.tool_call_count;
         let initial_recent_calls = self.recent_calls.clone();
+        let initial_door_state = self.door_state.clone();
 
         tokio::spawn(async move {
             let result = run_loop(
@@ -236,13 +281,17 @@ impl GhostSession {
                 pending_injects,
                 initial_tool_call_count,
                 initial_recent_calls,
+                initial_door_state,
+                door_config,
+                context_tokens,
             ).await;
             match result {
-                Ok((final_messages, stop_reason, final_tool_call_count, final_recent_calls)) => {
+                Ok((final_messages, stop_reason, final_tool_call_count, final_recent_calls, final_door_state)) => {
                     // Write the full conversation history and throttle state back to the session
                     let mut session = session_mutex.lock().await;
                     session.set_messages(final_messages);
                     session.set_throttle_state(final_tool_call_count, final_recent_calls);
+                    session.set_door_state(final_door_state);
                     session.set_state(SessionState::Completed(stop_reason));
                 }
                 Err(e) => {
@@ -272,15 +321,85 @@ impl GhostSession {
         self.recent_calls = recent_calls;
     }
 
+    /// Persist the open-door set back to the session after a run (mirrors
+    /// `set_throttle_state`).
+    pub fn set_door_state(&mut self, door_state: crate::doors::DoorState) {
+        self.door_state = door_state;
+    }
+
     pub fn reset(&mut self) {
         self.messages.clear();
         self.turn = 0;
         self.state = SessionState::Idle;
         self.tool_call_count = 0;
         self.recent_calls.clear();
+        self.door_state = crate::doors::DoorState::new(crate::doors::Surface::Ghost);
         self.stop_requested.store(false, Ordering::Relaxed);
         self.window_closed.store(false, Ordering::Relaxed);
     }
+}
+
+/// Shrink serialized tool payloads for small/8k-window models: cap each tool
+/// description at its first line (~selection still works from name + one
+/// line) and strip per-property `description` strings from input schemas,
+/// keeping structure (type/enum/required/default). Measured ~15-40% schema
+/// savings. `open_tools` is exempt — its description carries the door menu.
+fn slim_tool_defs(defs: &mut [ToolDef]) {
+    fn strip_schema_descriptions(v: &mut serde_json::Value) {
+        if let Some(obj) = v.as_object_mut() {
+            if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
+                for (_k, prop) in props.iter_mut() {
+                    if let Some(po) = prop.as_object_mut() {
+                        po.remove("description");
+                    }
+                    // Nested objects/arrays keep their structure but lose prose too.
+                    strip_schema_descriptions(prop);
+                }
+            }
+            if let Some(items) = obj.get_mut("items") {
+                strip_schema_descriptions(items);
+            }
+        }
+    }
+    for def in defs.iter_mut() {
+        if def.name == "open_tools" {
+            continue;
+        }
+        if let Some(first) = def.description.lines().next() {
+            let mut line = first.trim().to_string();
+            if line.len() > 200 {
+                line.truncate(200);
+            }
+            if !line.is_empty() && line.len() < def.description.len() {
+                def.description = line;
+            }
+        }
+        strip_schema_descriptions(&mut def.input_schema);
+    }
+}
+
+/// Ring buffer of per-turn ghost telemetry, exposed at GET /api/ghost/debug.
+/// Lets a dev/agent troubleshoot the run loop (which model, token counts,
+/// decode speed, context budget, tools) without a human relaying the shell.
+static GHOST_DEBUG: std::sync::OnceLock<std::sync::Mutex<Vec<serde_json::Value>>> =
+    std::sync::OnceLock::new();
+
+pub fn push_ghost_debug(entry: serde_json::Value) {
+    let buf = GHOST_DEBUG.get_or_init(|| std::sync::Mutex::new(Vec::new()));
+    if let Ok(mut v) = buf.lock() {
+        v.push(entry);
+        let len = v.len();
+        if len > 60 {
+            v.drain(0..len - 60);
+        }
+    }
+}
+
+pub fn ghost_debug_snapshot() -> Vec<serde_json::Value> {
+    GHOST_DEBUG
+        .get()
+        .and_then(|m| m.lock().ok().map(|v| v.clone()))
+        .unwrap_or_default()
 }
 
 async fn run_loop(
@@ -297,24 +416,60 @@ async fn run_loop(
     pending_injects: Arc<std::sync::Mutex<Vec<String>>>,
     initial_tool_call_count: usize,
     initial_recent_calls: Vec<(String, String)>,
-) -> anyhow::Result<(Vec<serde_json::Value>, String, usize, Vec<(String, String)>)> {
-    let tool_defs = registry.tool_defs(Some(provider.provider_name()), Some(provider.model_name()));
+    initial_door_state: crate::doors::DoorState,
+    door_config: crate::doors::DoorConfig,
+    context_tokens: usize,
+) -> anyhow::Result<(Vec<serde_json::Value>, String, usize, Vec<(String, String)>, crate::doors::DoorState)> {
+    // Doors mode + cap are resolved once at config load (config.agent.tool_doors
+    // "auto"/"on"/"off" + provider + env override) and passed in via
+    // `door_config`. The open-door set persists across messages via the session;
+    // `enabled`/`cap` are re-applied here every run so a config change takes
+    // effect on the next message without a restart.
+    let doors_enabled = door_config.enabled;
+    let mut door_state = initial_door_state;
+    door_state.set_enabled(doors_enabled);
+    door_state.set_cap(door_config.cap);
 
     // Progressive throttle counters — seeded from session so they persist across messages.
     // Reset only when the user explicitly resets the conversation.
     let mut tool_call_count: usize = initial_tool_call_count;
     let mut screen_poll_streak: usize = 0; // consecutive iterations where ONLY terminal_screen was called (resets per message)
+    let mut view_open_count: usize = 0; // panes/tabs/windows created this message — runaway-open guard (resets per message)
 
     // Track recent tool calls for repeat detection — seeded from session
     let mut recent_calls: Vec<(String, String)> = initial_recent_calls;
 
     // Recall memories from Ferricula before the first model call
     let mut system = SYSTEM_PROMPT.to_string();
+    // Doors mode: swap the "complete tool list" honesty paragraph for the
+    // doors contract (plan §4.3.5) — in doors mode the tool list is a small
+    // core plus opened doors, not the whole catalog.
+    if doors_enabled {
+        system = system.replace(HONESTY_ABOUT_TOOLS, DOORS_CONTRACT);
+    }
+    // Anchor reality for small models: name the actual host platform so they
+    // don't confabulate one (ornith greeted a Windows user with a "2019 Apple
+    // Silicon MacBook Pro").
+    let host_os = match std::env::consts::OS {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        "linux" => "Linux",
+        other => other,
+    };
+    system.push_str(&format!(
+        "\n\n## Host\nThis terminal is running on {} ({}). Never state or guess other host details (hardware model, OS version) unless a tool output told you.",
+        host_os,
+        std::env::consts::ARCH
+    ));
     let recalled = ferricula.recall(user_message).await;
     if !recalled.is_empty() {
         system.push_str(&recalled);
     }
-    // Inject current terminal state so the agent knows what's already running
+    // Inject current terminal state so the agent knows what's already running.
+    // In doors mode on a small/local model the full /api/status JSON is a big
+    // fixed cost against an 8k window — trim it to a compact one-line-per-pane
+    // summary (window/tab/pane counts + focused pane) instead (plan §4.3.3).
+    let slim_state = doors_enabled && door_config.small;
     let http_port = std::env::var("HYPERIA_PORT").unwrap_or_else(|_| "9800".into());
     let state_client = reqwest::Client::new();
     if let Ok(resp) = state_client.get(format!("http://localhost:{}/api/status", http_port)).send().await {
@@ -329,8 +484,20 @@ async fn run_loop(
                     _ => "## OS: Unknown platform",
                 };
                 system.push_str(&format!("\n\n{}", os_note));
+
+                if slim_state {
+                    system.push_str(&format!(
+                        "\n\n## Current terminal state (summary)\n{}\n\
+                         Call terminal_status for full pane/tab detail when you need it.",
+                        compact_terminal_state(&parsed)
+                    ));
+                } else {
+                    system.push_str(&format!("\n\n## Current terminal state\n```json\n{}\n```", status));
+                }
+            } else if !slim_state {
+                // Unparseable but we still ship the raw text in full mode.
+                system.push_str(&format!("\n\n## Current terminal state\n```json\n{}\n```", status));
             }
-            system.push_str(&format!("\n\n## Current terminal state\n```json\n{}\n```", status));
         }
     }
 
@@ -347,9 +514,12 @@ async fn run_loop(
     let mut turns = 0;
     let mut total_input_tokens: u64 = 0;
     let mut total_output_tokens: u64 = 0;
+    let mut prev_in: u64 = 0;
+    let mut prev_out: u64 = 0;
 
     loop {
         turns += 1;
+        let turn_start_at = std::time::Instant::now();
         if turns > max_turns {
             let _ = tx
                 .send(GhostEvent::Done {
@@ -357,8 +527,18 @@ async fn run_loop(
                     turns: turn_start + turns - 1,
                 })
                 .await;
-            return Ok((messages, "max_turns".into(), tool_call_count, recent_calls));
+            return Ok((messages, "max_turns".into(), tool_call_count, recent_calls, door_state));
         }
+
+        // Assemble the base tool list for THIS iteration. In doors mode this is
+        // core + open doors' schemas (which change as the model opens/closes
+        // doors mid-turn); with doors off it is the full catalog. Throttle-tier
+        // filtering below then applies ON TOP as a stricter emergency brake.
+        let tool_defs = registry.tool_defs(
+            Some(provider.provider_name()),
+            Some(provider.model_name()),
+            Some(&door_state),
+        );
 
         // Compute throttle tier and filter tools accordingly
         let throttle_tier: u8 = if tool_call_count > 32 { 3 }
@@ -366,7 +546,7 @@ async fn run_loop(
             else if tool_call_count > 16 { 1 }
             else { 0 };
 
-        let effective_tool_defs: Vec<ToolDef> = match throttle_tier {
+        let mut effective_tool_defs: Vec<ToolDef> = match throttle_tier {
             1 => tool_defs.iter()
                 .filter(|t| t.name != "terminal_screen")
                 .cloned()
@@ -381,6 +561,16 @@ async fn run_loop(
                 .collect(),
             _ => tool_defs.clone(),
         };
+
+        // Small-model payload slim (plan: tool-harness optimization). On an 8k
+        // window every schema byte is context the model can't use — trim tool
+        // descriptions to their first line and drop per-property schema
+        // descriptions (types/enums/required stay). Frontier models keep the
+        // full prose. open_tools keeps its dynamic door listing — that IS the
+        // menu.
+        if door_config.small {
+            slim_tool_defs(&mut effective_tool_defs);
+        }
 
         let mut effective_system = system.clone();
         if throttle_tier == 1 {
@@ -424,18 +614,61 @@ After cleanup, reply to the human and end the turn."
             );
         }
 
+        // Serialized tool-schema byte size — used both by the Phase 0
+        // instrumentation below and as compressor overhead (system + tools) for
+        // the token-budget guard.
+        let tool_schema_bytes = serde_json::to_vec(&effective_tool_defs)
+            .map(|v| v.len())
+            .unwrap_or(0);
+
+        // Effective context window. Explicit config (config.agent.context_tokens)
+        // wins; otherwise assume the known small-model window (8k) for local/small
+        // providers (Sailfish/Ollama) so the budget guard actually engages — the
+        // config leaves this 0, which used to disable trimming entirely and let an
+        // 8k model 400 with "exceeds context size". Cloud models have huge windows
+        // and manage themselves, so they stay unbounded (0 = no trim).
+        let effective_ctx = if context_tokens > 0 {
+            context_tokens
+        } else {
+            crate::models::default_context_tokens(door_config.small)
+        };
+        // Reserve headroom for the model's own output. On a small 8k window, the
+        // old fixed 4096 was half the budget — scale it down so the prompt has room.
+        let out_reserve: u32 = if effective_ctx > 0 && effective_ctx <= 16384 { 1024 } else { 4096 };
+        let prompt_budget = effective_ctx.saturating_sub(out_reserve as usize);
+
         // Compress older messages via local Ollama before sending to the primary model.
         // Recent messages are kept verbatim; `messages` itself is never modified so
-        // tool results continue accumulating against the full history.
+        // tool results continue accumulating against the full history. When a context
+        // budget is known, trim so system + tools + history fits; if the LLM
+        // compressor is down, still hard-trim mechanically (never send full history
+        // into a bounded window).
+        let overhead_chars = effective_system.len() + tool_schema_bytes;
         let send_messages = if compress {
-            compressor.compress_messages(&messages).await
+            compressor
+                .compress_messages_budgeted(&messages, prompt_budget, overhead_chars)
+                .await
+        } else if prompt_budget > 0 {
+            crate::ghost::compressor::hard_trim_to_budget(&messages, prompt_budget, overhead_chars)
         } else {
             messages.clone()
         };
 
+        // Phase 0 instrumentation (no behavior change): measure the live tool
+        // surface shipped to the provider this iteration — count + serialized
+        // schema byte size. This is the baseline the doors work shrinks.
+        tracing::info!(
+            target: "doors",
+            turn = turns,
+            throttle_tier,
+            tool_count = effective_tool_defs.len(),
+            schema_bytes = tool_schema_bytes,
+            "ghost tool surface (per-iteration)"
+        );
+
         // Call the provider
         let mut event_rx = provider
-            .stream(&effective_system, &send_messages, &effective_tool_defs, 4096)
+            .stream(&effective_system, &send_messages, &effective_tool_defs, out_reserve)
             .await?;
 
         // Accumulate assistant content and tool calls
@@ -445,6 +678,17 @@ After cleanup, reply to the human and end the turn."
         let mut stop_reason = String::new();
 
         while let Some(event) = event_rx.recv().await {
+            // Fast stop: honor Escape MID-GENERATION. Previously the flag was
+            // only read between turns, so a ~60s local generation ignored the
+            // user for its whole duration. Dropping event_rx on return unwinds
+            // the provider task's sends; any in-flight HTTP finishes in the
+            // background and is discarded.
+            if stop_requested.load(Ordering::Relaxed) {
+                let _ = tx
+                    .send(GhostEvent::Done { stop_reason: "stopped".into(), turns: turn_start + turns - 1 })
+                    .await;
+                return Ok((messages, "stopped".into(), tool_call_count, recent_calls, door_state));
+            }
             match event {
                 ProviderEvent::ThinkingStart { id } => {
                     text_parts.push("[Thinking: ".to_string());
@@ -501,7 +745,7 @@ After cleanup, reply to the human and end the turn."
                 }
                 ProviderEvent::Error(msg) => {
                     let _ = tx.send(GhostEvent::Error { message: msg }).await;
-                    return Ok((messages, "error".into(), tool_call_count, recent_calls));
+                    return Ok((messages, "error".into(), tool_call_count, recent_calls, door_state));
                 }
             }
         }
@@ -513,6 +757,38 @@ After cleanup, reply to the human and end the turn."
             tool_calls: tool_call_count,
             turns,
         }).await;
+
+        // Per-turn debug telemetry (ring buffer at /api/ghost/debug) so a dev or
+        // agent can see WHICH model handled the turn, token counts, decode speed,
+        // context budget, and tools — without a human relaying the transcript.
+        {
+            let dt_in = total_input_tokens.saturating_sub(prev_in);
+            let dt_out = total_output_tokens.saturating_sub(prev_out);
+            prev_in = total_input_tokens;
+            prev_out = total_output_tokens;
+            let ms = turn_start_at.elapsed().as_millis() as u64;
+            let tps = if ms > 0 { (dt_out as f64) / (ms as f64 / 1000.0) } else { 0.0 };
+            let tools: Vec<&str> = pending_tools.iter().map(|t| t.name.as_str()).collect();
+            push_ghost_debug(serde_json::json!({
+                "turn": turns,
+                "provider": provider.provider_name(),
+                "model": provider.model_name(),
+                "sent_messages": send_messages.len(),
+                "compressed": compress,
+                "effective_ctx": effective_ctx,
+                "prompt_budget": prompt_budget,
+                "out_reserve": out_reserve,
+                "in_tokens_total": total_input_tokens,
+                "out_tokens_total": total_output_tokens,
+                "in_tokens_turn": dt_in,
+                "out_tokens_turn": dt_out,
+                "duration_ms": ms,
+                "tps": (tps * 10.0).round() / 10.0,
+                "tools": tools,
+                "stop_reason": stop_reason,
+                "view_opens": view_open_count,
+            }));
+        }
 
         if stop_reason == "tool_use" && !pending_tools.is_empty() {
             // Build assistant content blocks
@@ -556,14 +832,32 @@ After cleanup, reply to the human and end the turn."
                     })
                     .await;
 
-                // tool_mount: non-blocking dynamic-widget mount. Stash the
-                // payload server-side keyed by a generated mount_id, emit
-                // the SSE event so the renderer can render it inline, and
-                // synthesize a confirmation string for the agent's history.
-                // Skip registry.execute() entirely — there's no blocking
-                // dispatch to run.
+                // Doors meta-tools (only when doors mode is active). A bare door
+                // name (e.g. calling "web") is accepted as an alias for
+                // open_tools(door="web") — cheap and 4B-friendly (plan §7).
                 let output;
-                if tool.name == "tool_mount" {
+                let door_alias: Option<&'static str> = if door_state.enabled() {
+                    crate::doors::door_by_name(&tool.name)
+                        .filter(|d| !d.ghost_tools.is_empty())
+                        .map(|d| d.name)
+                } else {
+                    None
+                };
+
+                if door_state.enabled() && (tool.name == "open_tools" || door_alias.is_some()) {
+                    // Gather-on-entry: mutate loop-local DoorState, synthesize the
+                    // "available next turn" text (plan §4.3.2). Schemas land in the
+                    // next request's tools array, not in the transcript.
+                    output = open_door_result(&registry, &mut door_state, door_alias, &input);
+                } else if door_state.enabled() && tool.name == "close_tools" {
+                    output = close_door_result(&mut door_state, &input);
+                } else if tool.name == "tool_mount" {
+                    // tool_mount: non-blocking dynamic-widget mount. Stash the
+                    // payload server-side keyed by a generated mount_id, emit
+                    // the SSE event so the renderer can render it inline, and
+                    // synthesize a confirmation string for the agent's history.
+                    // Skip registry.execute() entirely — there's no blocking
+                    // dispatch to run.
                     let widget_name = input["name"].as_str().unwrap_or("widget").to_string();
                     let srcdoc = input["srcdoc"].as_str().unwrap_or("").to_string();
                     if srcdoc.is_empty() {
@@ -627,6 +921,24 @@ After cleanup, reply to the human and end the turn."
                         );
                     }
                 } else {
+                    // Closed-door call guard (plan §4.3.3): the model called a
+                    // real catalog tool that is behind a closed door (saw the
+                    // name in tool_search / compressed history / an earlier
+                    // turn). Auto-open the door, run the tool, and annotate the
+                    // result. This is safe by construction — doors are a menu,
+                    // not a permission boundary (consent/identity live at the
+                    // HTTP API). Truly unknown names fall through to the normal
+                    // "Unknown tool: X" from registry.execute.
+                    let mut auto_opened: Option<String> = None;
+                    if door_state.enabled() {
+                        if let Some(dn) = door_state.door_of(&tool.name) {
+                            if !door_state.is_door_open(dn) {
+                                door_state.open_door(dn);
+                                auto_opened = Some(dn.to_string());
+                            }
+                        }
+                    }
+
                     // For show_* tools, surface the widget to the renderer
                     // *before* dispatching (because dispatch blocks until the
                     // user submits via POST /api/ghost/ui-response). The
@@ -644,14 +956,61 @@ After cleanup, reply to the human and end the turn."
                         }
                     }
 
-                    output = registry.execute(&tool.name, &input).await;
+                    // Runaway-pane guard: a small model on a fuzzy task can open
+                    // panes/tabs forever — each open is a fresh side effect, so
+                    // the repeat guard (which keys on identical output) never
+                    // trips. Hard-cap view-creating tools per user message; past
+                    // the cap, refuse the side effect and tell it to stop.
+                    // Focus-never-steal makes runaway opens especially disruptive.
+                    const VIEW_CREATORS: [&str; 4] =
+                        ["open_web_pane", "terminal_new_tab", "terminal_new_window", "terminal_split"];
+                    const VIEW_CREATE_CAP: usize = 4;
+                    let is_view_creator = VIEW_CREATORS.contains(&tool.name.as_str());
+
+                    // tool_search is door-aware in doors mode (adds open/closed
+                    // hints); otherwise it flows through execute() unchanged.
+                    let raw_output = if is_view_creator && view_open_count >= VIEW_CREATE_CAP {
+                        tracing::warn!(target: "doors", tool = %tool.name, count = view_open_count, "runaway view-creation blocked");
+                        format!(
+                            "[BLOCKED: refusing to run {} — you've already opened {} panes/tabs/windows \
+                             for this request. Opening more disrupts the human's view. STOP creating panes. \
+                             Use the ones already open (terminal_status lists them), finish the task, or ask \
+                             the user what they want.]",
+                            tool.name, view_open_count
+                        )
+                    } else if door_state.enabled() && tool.name == "tool_search" {
+                        registry.handle_tool_search(&input, Some(&door_state))
+                    } else {
+                        if is_view_creator {
+                            view_open_count += 1;
+                        }
+                        registry.execute(&tool.name, &input).await
+                    };
+
+                    output = match auto_opened {
+                        Some(dn) => format!("[door '{}' auto-opened by this call]\n{}", dn, raw_output),
+                        None => raw_output,
+                    };
                 }
 
-                // Repeat detection: check if we've seen this exact call+output before
+                // Any executed tool touches its door → moves it to MRU so it
+                // survives the next cap eviction longest (no-op for core tools
+                // and closed doors).
+                if door_state.enabled() {
+                    door_state.touch(&tool.name);
+                }
+
+                // Repeat detection. Two ways a call counts as a loop:
+                //  (a) same call+output as a previous one (deterministic re-fire), OR
+                //  (b) same tool+input issued 3+ times recently even when the
+                //      OUTPUT differs each time — e.g. terminal_split with no
+                //      args spawns a NEW pane every call, so its output never
+                //      repeats and (a) alone would let a small model split
+                //      forever. Counting the signature catches that.
                 let call_sig = format!("{}:{}", tool.name, input.to_string());
-                let is_repeat = recent_calls.iter().any(|(sig, prev_out)| {
-                    sig == &call_sig && prev_out == &output
-                });
+                let same_sig_count = recent_calls.iter().filter(|(sig, _)| sig == &call_sig).count();
+                let is_repeat = same_sig_count >= 2
+                    || recent_calls.iter().any(|(sig, prev_out)| sig == &call_sig && prev_out == &output);
                 recent_calls.push((call_sig, output.clone()));
                 // Keep only last 10
                 if recent_calls.len() > 10 { recent_calls.remove(0); }
@@ -805,7 +1164,7 @@ After cleanup, reply to the human and end the turn."
                         turns: turn_start + turns - 1,
                     })
                     .await;
-                return Ok((messages, "watercooler".into(), tool_call_count, recent_calls));
+                return Ok((messages, "watercooler".into(), tool_call_count, recent_calls, door_state));
             }
 
             // Continue the loop
@@ -842,6 +1201,168 @@ After cleanup, reply to the human and end the turn."
                 turns: turn_start + turns - 1,
             })
             .await;
-        return Ok((messages, final_stop_reason, tool_call_count, recent_calls));
+        return Ok((messages, final_stop_reason, tool_call_count, recent_calls, door_state));
     }
+}
+
+/// Compact one-liner summary of `/api/status` for the slim doors-mode prompt
+/// (plan §4.3.3): total window/tab/pane counts plus the single focused pane.
+/// Keeps a small/local model oriented without paying for the full nested JSON.
+fn compact_terminal_state(status: &serde_json::Value) -> String {
+    let windows = status["windows"].as_array().cloned().unwrap_or_default();
+    let win_count = windows.len();
+    let mut tab_count = 0usize;
+    let mut pane_count = 0usize;
+    let mut focused: Option<String> = None;
+
+    for win in &windows {
+        let win_id = win["id"].as_u64().unwrap_or(0);
+        let win_focused = win["focused"].as_bool().unwrap_or(false);
+        for tab in win["tabs"].as_array().into_iter().flatten() {
+            tab_count += 1;
+            let tab_name = tab["name"].as_str().unwrap_or("shell");
+            let tab_active = tab["active"].as_bool().unwrap_or(false);
+            for pane in tab["panes"].as_array().into_iter().flatten() {
+                pane_count += 1;
+                let pane_active = pane["active"].as_bool().unwrap_or(false);
+                if focused.is_none() && win_focused && tab_active && pane_active {
+                    let label = pane["label"].as_str().unwrap_or("");
+                    let shell = pane["shell"].as_str().unwrap_or("");
+                    let proc = pane["process"].as_str().unwrap_or("");
+                    let cwd = pane["cwd"].as_str().unwrap_or("");
+                    let proc_info = if proc.is_empty() {
+                        shell.to_string()
+                    } else {
+                        format!("{} ({})", shell, proc)
+                    };
+                    focused = Some(format!(
+                        "window {} › tab '{}' › pane {}: {} in `{}`",
+                        win_id,
+                        tab_name,
+                        if label.is_empty() { "-" } else { label },
+                        proc_info,
+                        cwd
+                    ));
+                }
+            }
+        }
+    }
+
+    let counts = format!(
+        "{} window(s), {} tab(s), {} pane(s).",
+        win_count, tab_count, pane_count
+    );
+    match focused {
+        Some(f) => format!("{} Focused: {}", counts, f),
+        None => format!("{} No focused pane reported.", counts),
+    }
+}
+
+/// Open a door and synthesize the gather-on-entry result text (plan §4.3.2):
+/// the door name, a one-line-per-tool listing of what it exposes NEXT turn, the
+/// current open-door set, the live-tool budget, and any LRU-evicted doors.
+/// Handles both `open_tools(door=…)` and the bare-door-name alias.
+fn open_door_result(
+    registry: &ToolRegistry,
+    door_state: &mut crate::doors::DoorState,
+    alias: Option<&str>,
+    input: &serde_json::Value,
+) -> String {
+    use crate::doors::{door_by_name, doors_for, Surface};
+
+    let door: String = match alias {
+        Some(d) => d.to_string(),
+        None => input["door"].as_str().unwrap_or("").trim().to_string(),
+    };
+    tracing::info!(target: "doors", door = %door, alias = ?alias, raw_input = %input, "open_tools requested");
+
+    // Validate against the ghost surface.
+    let valid = door_by_name(&door).map_or(false, |d| !d.ghost_tools.is_empty());
+    if !valid {
+        let names: Vec<&str> = doors_for(Surface::Ghost).map(|d| d.name).collect();
+        tracing::warn!(target: "doors", door = %door, available = %names.join(", "), "open_tools failed: unknown door");
+        return format!(
+            "Unknown door '{}'. Available doors: {}",
+            door,
+            names.join(", ")
+        );
+    }
+
+    let evicted = door_state.open_door(&door);
+    let door_def = door_by_name(&door).unwrap();
+    tracing::info!(
+        target: "doors",
+        door = %door,
+        opened_tools = door_def.ghost_tools.len(),
+        live = door_state.live_tool_count(),
+        cap = door_state.cap(),
+        evicted = %evicted.join(","),
+        "open_tools ok"
+    );
+
+    // One-line-per-tool listing pulled from the full catalog descriptions.
+    let catalog = registry.tool_defs(None, None, None);
+    let lines: Vec<String> = door_def
+        .ghost_tools
+        .iter()
+        .map(|&t| {
+            let desc = catalog
+                .iter()
+                .find(|c| c.name == t)
+                .map(|c| c.description.as_str())
+                .unwrap_or("");
+            let first = desc.lines().next().unwrap_or("").trim();
+            format!("- {}: {}", t, first)
+        })
+        .collect();
+
+    let open_list = door_state.open_doors().join(", ");
+    let mut out = format!(
+        "Door '{}' opened. Available on your NEXT turn ({} tools):\n{}\n\n\
+         [doors open: {}] [live tools next turn: {}/{}]",
+        door,
+        door_def.ghost_tools.len(),
+        lines.join("\n"),
+        open_list,
+        door_state.live_tool_count(),
+        door_state.cap()
+    );
+    if !evicted.is_empty() {
+        out.push_str(&format!(
+            "\n[evicted: {} — reopen with open_tools if needed]",
+            evicted.join(", ")
+        ));
+    }
+    out
+}
+
+/// Close a door and report the resulting live-tool budget (plan §4.3.2).
+fn close_door_result(
+    door_state: &mut crate::doors::DoorState,
+    input: &serde_json::Value,
+) -> String {
+    let door = input["door"].as_str().unwrap_or("").trim().to_string();
+    if door.is_empty() {
+        return "close_tools requires a 'door' name.".to_string();
+    }
+    let was_open = door_state.is_door_open(&door);
+    door_state.close_door(&door);
+    let open_list = door_state.open_doors().join(", ");
+    let open_disp = if open_list.is_empty() {
+        "none".to_string()
+    } else {
+        open_list
+    };
+    let prefix = if was_open {
+        format!("Door '{}' closed.", door)
+    } else {
+        format!("Door '{}' was not open.", door)
+    };
+    format!(
+        "{} [doors open: {}] [live tools next turn: {}/{}]",
+        prefix,
+        open_disp,
+        door_state.live_tool_count(),
+        door_state.cap()
+    )
 }

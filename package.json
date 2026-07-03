@@ -1,6 +1,6 @@
 {
   "name": "hyperia",
-  "version": "0.15.11",
+  "version": "0.15.15",
   "repository": "deepbluedynamics/hyperia",
   "scripts": {
     "start": "concurrently -n \"Webpack,TypeScript,App\" -c \"cyan.bold,blue.bold,green.bold\" \"webpack -w\" \"tsc --build -v --pretty --watch --preserveWatchOutput\" \"cross-env ELECTRONMON_LOGLEVEL=error electronmon target\" -k",
@@ -144,7 +144,19 @@
       "!dist/**",
       "!sidecar/**",
       "!build/**",
-      "!.github/**"
+      "!.github/**",
+      "!target/renderer/**",
+      "!target/static/**",
+      "!target/assets/**",
+      "!target/keymaps/**",
+      "!target/config/**",
+      "!target/node_modules/**",
+      "!target/**/*.html",
+      "!target/**/*.map",
+      "!target/**/*.tsbuildinfo",
+      "!target/yarn.lock",
+      "!target/package.json",
+      "!target/cli.js"
     ]
   }
 }

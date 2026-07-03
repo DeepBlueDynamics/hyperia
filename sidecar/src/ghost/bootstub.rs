@@ -305,10 +305,9 @@ fn write_token(provider: &str, token: &str) -> BootReply {
 }
 
 fn default_model_for(provider: &str) -> &'static str {
+    // Single source of truth: crate::models.
     match provider {
-        "anthropic" => "claude-sonnet-4-6",
-        "openai" => "gpt-4o",
-        "gemini" => "gemini-2.0-flash",
+        "anthropic" | "openai" | "gemini" => crate::models::default_model(provider),
         _ => "",
     }
 }

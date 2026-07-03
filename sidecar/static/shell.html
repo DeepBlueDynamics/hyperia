@@ -66,6 +66,17 @@
     display: flex;
     gap: 5px;
     align-items: baseline;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 1px 8px;
+    background: var(--bg-soft);
+    transition: border-color 0.5s ease, box-shadow 0.5s ease;
+  }
+  /* Metric badge just updated → subtle yellow flash (throttled in JS so a
+     streaming turn doesn't strobe the whole HUD). */
+  .titlebar .hud .stat.flash {
+    border-color: rgba(232, 194, 104, 0.55);
+    transition: none;
   }
   .titlebar .hud .v {
     color: var(--text-dim);
@@ -74,6 +85,42 @@
   .titlebar .hud .stat.reset:hover {
     background: var(--line) !important;
     color: var(--text-dim) !important;
+  }
+  /* Enabled-model lights — hybrid mode runs more than one; a blinking dot
+     next to each tells you what's live, and the ACTIVE agent model blinks
+     brighter/faster so you can see which one is actually answering. */
+  .titlebar .models {
+    display: flex;
+    gap: 12px;
+    margin-right: 16px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .titlebar .models .m {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-faint);
+    white-space: nowrap;
+  }
+  .titlebar .models .m::before {
+    content: "●";
+    font-size: 9px;
+    color: var(--ok);
+    animation: blink-soft 2.4s ease-in-out infinite;
+  }
+  /* Lights are GREEN only — steady green when enabled, pulsing green when
+     it's the active (answering) model. */
+  .titlebar .models .m::before {
+    animation: none;
+  }
+  .titlebar .models .m.active {
+    color: var(--text-dim);
+  }
+  .titlebar .models .m.active::before {
+    color: var(--ok);
+    animation: blink-soft 1.2s ease-in-out infinite;
   }
   .usage-badge {
     color: var(--text-faint);
@@ -233,7 +280,7 @@
     align-items: baseline;
     min-width: 0;
     cursor: pointer;
-    user-select: none;
+    user-select: text; /* selectable — the click-toggle skips when a selection exists */
     white-space: nowrap;
   }
   .row.tool .label {
@@ -560,13 +607,17 @@
 <body>
 
 <div class="titlebar">
-  <div class="name">hyperia · shell</div>
+  <div class="name">hyperia shell</div>
+  <div class="models" id="hud-models"></div>
   <div class="hud">
+    <div class="stat"><span>TPS max</span><span class="v" id="hud-tps-max">0</span></div>
+    <div class="stat"><span>TPS avg</span><span class="v" id="hud-tps-avg">0</span></div>
     <div class="stat"><span>in</span><span class="v" id="hud-in">0</span></div>
     <div class="stat"><span>out</span><span class="v" id="hud-out">0</span></div>
     <div class="stat"><span>tools</span><span class="v" id="hud-tools">0</span></div>
     <div class="stat"><span>turns</span><span class="v" id="hud-turns">0</span></div>
-    <div class="stat reset" id="hud-reset" title="reset metrics" style="cursor: pointer; padding: 0 4px; border: 1px solid var(--line); border-radius: 3px; background: var(--bg-soft); font-size: 8px; font-weight: bold; margin-left: 4px; align-self: center; display: inline-flex; align-items: center; justify-content: center; height: 14px; text-transform: uppercase;">reset</div>
+    <span id="hud-reset" title="reset" style="cursor: pointer; color: #f85149; font-size: 12px; margin-left: 6px; align-self: center; line-height: 1;">✕</span>
+    <span id="hud-config" title="agent configuration" onclick="location.href='/agent/config'" style="cursor: pointer; font-size: 13px; margin-left: 2px; align-self: center; line-height: 1;">⚙</span>
   </div>
 </div>
 
@@ -603,14 +654,95 @@ const promptline = $('promptline');
 const hint       = $('hint');
 const promptLbl  = $('prompt-label');
 
+// Click anywhere in the transcript → focus the input, so you can just click and
+// type. BUT stay out of the way of real interactions: don't steal focus if the
+// user is selecting text, or clicked a link / button / input / expandable tool
+// row / widget. Guarding on a live selection also handles drag-selects (a drag
+// ends in a click, but leaves a selection, so we skip).
+document.addEventListener('mouseup', (e) => {
+  const sel = window.getSelection();
+  if (sel && sel.toString().length > 0) return;            // selecting text
+  if (e.target.closest('a, button, input, textarea, select, [contenteditable], .summary, .tool, iframe, .widget-mount')) return;
+  // Only within the transcript area, not the status bar / model picker chrome.
+  if (!e.target.closest('#screen')) return;
+  input.focus();
+});
+
 const STATS = { in: 0, out: 0, tools: 0, turns: 0 };
 let turn_in = 0;
 let turn_out = 0;
+// Decode speed: output tokens over generation time for the CURRENT stream.
+let genStartMs = 0;   // set when the agent starts producing this turn
+let genTokens = 0;    // output tokens produced since genStartMs
+let lastDeltaMs = 0;  // when the LAST token delta arrived — avg counts only
+                      // active generation, not tool-wait/idle wall-clock
+let statsLastMs = 0;  // last stats event — usage-delta TPS for cloud tool turns
+let lastTps = 0;      // last computed tok/s (held between turns)
+let maxTps = 0;       // peak decode speed observed (the ceiling)
+let cumTokens = 0;    // completed-turn tokens, for the running average
+let cumSecs = 0;      // completed-turn generation seconds
+const flashPrev = {}; // last rendered value per badge
+const flashLast = {}; // last flash time per badge — throttle so streaming
+                      // (a value change per token) doesn't strobe the HUD
+function setStat(id, text) {
+  const el = $(id);
+  if (!el) return;
+  if (flashPrev[id] !== undefined && flashPrev[id] !== text) {
+    const now = performance.now();
+    if (!flashLast[id] || now - flashLast[id] > 1500) {
+      flashLast[id] = now;
+      const badge = el.parentElement;
+      badge.classList.add('flash');
+      clearTimeout(badge._flashT);
+      badge._flashT = setTimeout(() => badge.classList.remove('flash'), 400);
+    }
+  }
+  flashPrev[id] = text;
+  el.textContent = text;
+}
 function updateHud() {
-  $('hud-in').textContent    = STATS.in.toLocaleString();
-  $('hud-out').textContent   = STATS.out.toLocaleString();
-  $('hud-tools').textContent = STATS.tools;
-  $('hud-turns').textContent = STATS.turns;
+  // Average decode speed = tokens / ACTIVE generation time. The live window
+  // ends at the last delta, not at now() — otherwise the average decays
+  // toward zero while the agent waits on tools or sits idle.
+  let liveTok = 0, liveSecs = 0;
+  if (genStartMs && lastDeltaMs > genStartMs) {
+    liveTok = genTokens;
+    liveSecs = (lastDeltaMs - genStartMs) / 1000;
+  }
+  const totSecs = cumSecs + liveSecs;
+  const avg = totSecs > 0.25 ? (cumTokens + liveTok) / totSecs : 0;
+  setStat('hud-tps-max', maxTps ? maxTps.toFixed(1) : '0');
+  setStat('hud-tps-avg', avg ? avg.toFixed(1) : '0');
+  setStat('hud-in',    STATS.in.toLocaleString());
+  setStat('hud-out',   STATS.out.toLocaleString());
+  setStat('hud-tools', String(STATS.tools));
+  setStat('hud-turns', String(STATS.turns));
+}
+
+// Accrue generated tokens toward the decode-speed meter. Called for BOTH
+// thinking and final-text deltas — they're all tokens the model decoded, so
+// counting only final text made tps read ~0 on thinking-heavy local turns.
+// The clock starts on the first delta of a turn (excludes first-byte latency).
+function accrueDecode(chunk) {
+  const est = Math.max(1, ((chunk || '').length / 4) | 0);
+  const now = performance.now();
+  // A long gap since the last delta = a tool call / new turn boundary — fold
+  // the finished burst into the running average and start a fresh window, so
+  // idle time never counts against the average.
+  if (genStartMs && lastDeltaMs && now - lastDeltaMs > 3000) {
+    const secs = (lastDeltaMs - genStartMs) / 1000;
+    if (secs > 0.05 && genTokens > 0) { cumTokens += genTokens; cumSecs += secs; }
+    genStartMs = 0;
+  }
+  if (!genStartMs) { genStartMs = now; genTokens = 0; }
+  genTokens += est;
+  lastDeltaMs = now;
+  const secs = (now - genStartMs) / 1000;
+  if (secs > 0.25) {
+    lastTps = genTokens / secs;
+    if (lastTps > maxTps) maxTps = lastTps;
+  }
+  updateHud();
 }
 
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({
@@ -706,6 +838,8 @@ function addThinkingRow(id) {
   r.id = 'thinking-' + id;
   r.innerHTML = `<div class="summary"><span class="chev">▸</span><span class="label">💭</span><span class="name">thinking</span><span class="arg"></span><span class="meta"></span></div><div class="output" style="display: block;"></div>`;
   r.querySelector('.summary').addEventListener('click', () => {
+    const sel = window.getSelection();
+    if (sel && sel.toString().length > 0) return;
     r.classList.toggle('expanded');
     const out = r.querySelector('.output');
     out.style.display = r.classList.contains('expanded') ? 'block' : 'none';
@@ -722,6 +856,7 @@ function streamThinkingText(id, text) {
   if (outEl) {
     outEl.innerHTML += escapeHtml(text).replace(/\n/g, '<br>');
   }
+  accrueDecode(text); // thinking tokens count toward decode speed too
   autoscroll();
 }
 
@@ -740,9 +875,15 @@ function addToolRow(name, id) {
   r.className = 'row tool';
   r.id = 'tool-' + id;
   // Summary line is the only click target — the output region below
-  // doesn't toggle when you click into it (so you can select text).
+  // doesn't toggle when you click into it (so you can select text). The
+  // summary itself is selectable too: a click that ends with a live text
+  // selection (i.e. a drag-select) does NOT toggle.
   r.innerHTML = `<div class="summary"><span class="chev">▸</span><span class="label running">${getEmoji(name)}</span><span class="name">${escapeHtml(name)}</span><span class="arg">running…</span><span class="meta"></span></div><div class="output"></div>`;
-  r.querySelector('.summary').addEventListener('click', () => r.classList.toggle('expanded'));
+  r.querySelector('.summary').addEventListener('click', () => {
+    const sel = window.getSelection();
+    if (sel && sel.toString().length > 0) return;
+    r.classList.toggle('expanded');
+  });
   screen.appendChild(r);
   STATS.tools++; updateHud();
   autoscroll();
@@ -765,19 +906,28 @@ function finishToolRow(id, name, input, output) {
     : '<span class="ok">✓</span>';
   const outEl = r.querySelector('.output');
   if (outEl) {
-    let formattedOutput = output || '(no output)';
-    if (output) {
-      const trimmed = output.trim();
-      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-        try {
-          const parsed = JSON.parse(trimmed);
-          formattedOutput = JSON.stringify(parsed, null, 2);
-        } catch (e) {
-          // Fallback to raw output
-        }
+    // Pretty-print helper: parse-and-reindent when the value looks like JSON,
+    // else return the raw string.
+    const pretty = (v) => {
+      if (v == null) return '';
+      if (typeof v === 'object') { try { return JSON.stringify(v, null, 2); } catch (e) { return String(v); } }
+      const t = String(v).trim();
+      if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+        try { return JSON.stringify(JSON.parse(t), null, 2); } catch (e) { /* raw */ }
       }
-    }
-    outEl.textContent = formattedOutput;
+      // Terminal screens of a near-empty pane arrive as dozens of blank
+      // (space-padded) lines — strip trailing spaces per line, collapse 3+
+      // consecutive blank lines, and drop trailing whitespace entirely.
+      return String(v)
+        .replace(/[ \t]+$/gm, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/\s+$/, '');
+    };
+    // Expanded row shows the FULL call: pretty input args, then output.
+    const hasInput = input && (typeof input !== 'object' || Object.keys(input).length > 0);
+    const inBlock = hasInput ? ('Input:\n' + pretty(input) + '\n\n') : '';
+    const outBlock = 'Output:\n' + (pretty(output) || '(no output)');
+    outEl.textContent = inBlock + outBlock;
   }
   console.debug('[tool] finished', id, name, 'output bytes:', (output || '').length);
 }
@@ -788,6 +938,7 @@ function startAgentStream() {
   endAgentStream();
   streamingRow = addRow('agent', 'hyperia~&gt;', '', { streaming: true });
   streamSeenContent = false;
+  genStartMs = 0; // restart the tok/s clock for this turn
 }
 function streamText(chunk) {
   if (!streamingRow) startAgentStream();
@@ -802,13 +953,20 @@ function streamText(chunk) {
   const body = streamingRow.querySelector('.body');
   body.innerHTML += escapeHtml(chunk).replace(/\n/g, '<br>');
   const est = Math.max(1, (chunk.length / 4) | 0);
-  STATS.out += est;
+  STATS.out += est;   // output-content tokens (billing-ish) — text only
   turn_out += est;
-  updateHud();
+  accrueDecode(chunk); // decode-speed meter — text + thinking
   autoscroll();
 }
 function endAgentStream() {
   if (streamingRow) {
+    // Fold this turn's decode into the running average before the clock
+    // stops — measured to the LAST delta, not now() (activity time only).
+    if (genStartMs && lastDeltaMs > genStartMs) {
+      const secs = (lastDeltaMs - genStartMs) / 1000;
+      if (secs > 0.05 && genTokens > 0) { cumTokens += genTokens; cumSecs += secs; }
+      genStartMs = 0;
+    }
     streamingRow.classList.remove('streaming');
     if (turn_in > 0 || turn_out > 0) {
       const usageEl = document.createElement('span');
@@ -1373,6 +1531,21 @@ function handleEvent(ev) {
       if (delta_out > 0) {
         STATS.out += delta_out;
         turn_out = ev.output_tokens;
+        // TPS from API-reported usage. Cloud tool-call turns stream NO
+        // visible text (arguments aren't text_deltas), so the char-count
+        // meter reads 0 for e.g. gpt-5-codex — usage deltas over wall time
+        // between stats events is provider-truth for every model.
+        const now = performance.now();
+        if (statsLastMs && now - statsLastMs < 300000) {
+          const secs = (now - statsLastMs) / 1000;
+          if (secs > 0.25) {
+            const tps = delta_out / secs;
+            if (tps > maxTps) maxTps = tps;
+            cumTokens += delta_out;
+            cumSecs += secs;
+          }
+        }
+        statsLastMs = now;
       }
       STATS.tools  = ev.tool_calls    != null ? ev.tool_calls : STATS.tools;
       STATS.turns  = ev.turns         || STATS.turns;
@@ -1381,6 +1554,11 @@ function handleEvent(ev) {
     }
     case 'done':
       endAgentStream();
+      // Tick the title on each completed turn — the renderer watches
+      // page-title CHANGES on /shell panes and fires the standard tab
+      // bell/flash when this tab is backgrounded.
+      window.__ttick = (window.__ttick || 0) + 1;
+      document.title = '👻 Hyperia · ' + window.__ttick;
       break;
     case 'error':
       addRow('error', 'err!', escapeHtml(ev.message || 'unknown error'));
@@ -1834,6 +2012,7 @@ async function bootCapabilities() {
   }
   // Cache capabilities for the picker click handler.
   window.__caps__ = caps;
+  void renderModelLights(caps);
   // Auto-prompt model picker on first capabilities load if configured model
   // isn't installed and we have alternatives.
   if (!modelInstalled && providerNm === 'ollama' && ollamaModels.length && !window.__model_prompted__) {
@@ -1845,27 +2024,71 @@ async function bootCapabilities() {
     addRow('error', 'err!', 'could not reach sidecar at /api/ghost/capabilities');
     return null;
   }
+  return caps;
+}
 
-  // Boot lines
+// Enabled-model lights in the titlebar. Hybrid mode has more than one brain
+// wired at once (a frontier planner + a local model), and it's otherwise hard
+// to tell which is answering — so paint a blinking dot per enabled model, and
+// mark the ACTIVE agent provider so it's obvious what you're talking to.
+// Local liveness: sailfish from the services probe, ollama from caps. Frontier
+// liveness: keycheck (ok = usable key), the same authoritative signal the
+// config page dots use.
+async function renderModelLights(caps) {
+  const host = $('hud-models');
+  if (!host || !caps) return;
+  const active = (caps.agent && caps.agent.provider) ? caps.agent.provider : '';
+  const chips = [];
+  const ollama = caps.providers && caps.providers.ollama;
+  let sailfishUp = false, keys = {};
+  try { sailfishUp = !!((await (await fetch('/api/agent/services')).json()).services || {}).sailfish_api; } catch (_) {}
+  try { keys = (await (await fetch('/api/agent/keycheck')).json()).providers || {}; } catch (_) {}
+  if (sailfishUp) chips.push('sailfish');
+  if (ollama && ollama.reachable && !ollama.disabled) chips.push('ollama');
+  for (const p of ['anthropic', 'openai', 'gemini', 'grok']) {
+    if (keys[p] === 'ok' || keys[p] === 'payment') chips.push(p);
+  }
+  // The active provider always shows, even if its probe didn't flag it.
+  if (active && !chips.includes(active)) chips.unshift(active);
+  host.innerHTML = chips.map(k =>
+    `<span class="m${k === active ? ' active' : ''}" title="${k === active ? 'active — answering you' : 'enabled'}">${escapeHtml(k)}</span>`
+  ).join('');
+}
+
+// The boot banner (sidecar/providers/level) prints ONCE per shell load — from
+// boot() only. Re-probes (set-model, wipe) refresh the status strip silently
+// instead of re-spamming these rows.
+let bannerPrinted = false;
+async function printBootBanner(caps) {
+  if (!caps || bannerPrinted) return;
+  bannerPrinted = true;
   addRow('system', 'system=&gt;', `hyperia sidecar <code>v${escapeHtml(caps.sidecar)}</code>`);
   const provider = caps.agent && caps.agent.provider ? caps.agent.provider : '(none)';
   const model    = caps.agent && caps.agent.model    ? caps.agent.model    : '(none)';
+
+  // Local-provider status: ollama from caps, sailfish from the services probe.
   const ollama = caps.providers && caps.providers.ollama;
-  if (ollama && ollama.reachable) {
-    addRow('system', 'system=&gt;', `ollama: <em class="ok">reachable</em> at <code>${escapeHtml(ollama.endpoint || '')}</code>`);
-  } else if (ollama && ollama.disabled) {
-    addRow('system', 'system=&gt;', `ollama: <em class="fail">disabled</em>`);
+  let sailfishUp = false;
+  try {
+    const svc = (await (await fetch('/api/agent/services')).json()).services || {};
+    sailfishUp = !!svc.sailfish_api;
+  } catch (_) {}
+
+  // Show the ACTIVE local provider's line first; only show the other if it's up.
+  const line = (name, up, extra) => addRow('system', 'system=&gt;',
+    `${name}: ${up ? '<em class="ok">reachable</em>' : '<em class="fail">unreachable</em>'}${up && extra ? ' at <code>' + escapeHtml(extra) + '</code>' : ''}`);
+  if (provider === 'sailfish') {
+    line('sailfish', sailfishUp, 'localhost:22343');
+    if (ollama && ollama.reachable) line('ollama', true, ollama.endpoint || '');
   } else {
-    addRow('system', 'system=&gt;', `ollama: <em class="fail">unreachable</em>`);
+    if (ollama && ollama.reachable) line('ollama', true, ollama.endpoint || '');
+    else if (ollama && ollama.disabled) addRow('system', 'system=&gt;', 'ollama: <em class="fail">disabled</em>');
+    else line('ollama', false);
+    if (sailfishUp) line('sailfish', true, 'localhost:22343');
   }
-  if (caps.ferricula && caps.ferricula.reachable) {
-    addRow('system', 'system=&gt;', `ferricula: <em class="ok">reachable</em>`);
-  } else {
-    addRow('system', 'system=&gt;', `ferricula: <em class="fail">unreachable</em>`);
-  }
+
   addRow('system', 'system=&gt;', `agent: provider=<code>${escapeHtml(provider)}</code> model=<code>${escapeHtml(model)}</code>`);
   addRow('system', 'system=&gt;', `level: <em class="ok">${escapeHtml(caps.level)}</em>`);
-  return caps;
 }
 
 // Post any uncaught JS error from the shell pane up to the sidecar's
@@ -1909,6 +2132,7 @@ async function maybeAutoResetIfStale() {
 async function boot() {
   await maybeAutoResetIfStale();
   const caps = await bootCapabilities();
+  await printBootBanner(caps);
   await seedHistory();
   await seedAssets();
   const greeting = (() => {
@@ -1919,7 +2143,12 @@ async function boot() {
 
     switch (caps.level) {
       case 'hybrid':
-        return "ready. frontier + local both online. ask anything.";
+        // Truthful hybrid: ONE provider answers (config.agent.provider); local
+        // models are reachable and handle aux jobs (Maximus compression). The
+        // old "frontier + local both online" implied parallel brains.
+        return "ready. hybrid — <code>"
+          + (caps.agent && caps.agent.provider || '?') + "/" + (caps.agent && caps.agent.model || '?')
+          + "</code> is answering; local models are online for compression + aux jobs. ask anything.";
       case 'frontier':
         return ollamaDisabled
           ? "ready on frontier."
@@ -1960,12 +2189,12 @@ function openModelPicker() {
   }
   // For frontier providers we don't have a model list (model_catalog tool
   // owns that), so just offer a default per provider that has a token.
-  const frontierDefaults = {
-    anthropic: 'claude-sonnet-4-6',
-    openai:    'gpt-4o',
-    gemini:    'gemini-2.0-flash',
-  };
+  // Default model ids come from the sidecar's models registry (capabilities
+  // model_defaults) — no model ids hardcoded in the UI. Empty fallback only
+  // if the sidecar predates the registry.
+  const frontierDefaults = (caps.model_defaults) || {};
   for (const p of ['anthropic', 'openai', 'gemini']) {
+    if (!frontierDefaults[p]) continue; // registry didn't supply one — skip
     const pInfo = caps.providers && caps.providers[p];
     const hasToken = !!(pInfo && pInfo.token);
     const suffix = hasToken ? '' : ' (no token)';
@@ -2042,6 +2271,13 @@ $('hud-reset').addEventListener('click', () => {
   STATS.turns = 0;
   turn_in = 0;
   turn_out = 0;
+  maxTps = 0;
+  cumTokens = 0;
+  cumSecs = 0;
+  lastTps = 0;
+  genStartMs = 0;
+  lastDeltaMs = 0;
+  statsLastMs = 0;
   updateHud();
 });
 

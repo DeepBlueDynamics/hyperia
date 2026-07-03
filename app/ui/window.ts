@@ -2,7 +2,7 @@ import {existsSync, readFileSync, writeFileSync} from 'fs';
 import {dirname, isAbsolute, join, normalize, sep} from 'path';
 import {URL, fileURLToPath} from 'url';
 
-import {app, BrowserWindow, shell, Menu, dialog, ipcMain, nativeImage} from 'electron';
+import {app, BrowserWindow, shell, Menu, dialog, nativeImage} from 'electron';
 import type {BrowserWindowConstructorOptions} from 'electron';
 
 import {enable as remoteEnable} from '@electron/remote/main';
@@ -27,6 +27,7 @@ import {
   updateSessionLayout,
   updateSessionActive,
   updateWindowFocus,
+  updateWindowBounds,
   getSessionRootTab,
   forceRemoveSession,
   executeSessionCd
@@ -51,12 +52,12 @@ import contextMenuTemplate from './contextmenu';
 // Tab names are assigned by the renderer and synced via 'session set tab name' RPC.
 // The main process no longer generates names.
 
-// Web panes spoof a Chrome User-Agent (see BROWSER_UA), but the <webview>
-// `useragent` attribute only changes the UA *string* — Chromium still emits
-// `sec-ch-ua` client hints that carry the "Electron" brand. Cloudflare's managed
-// challenge cross-checks the UA against those hints, so a Chrome UA paired with
-// Electron client hints loops on "Just a moment…" forever. Rewrite the outgoing
-// headers so UA AND client hints both say Google Chrome, consistently.
+// Web panes spoof a Chrome User-Agent, but setting the UA *string* alone isn't
+// enough — Chromium still emits `sec-ch-ua` client hints that carry the
+// "Electron" brand. Cloudflare's managed challenge cross-checks the UA against
+// those hints, so a Chrome UA paired with Electron client hints loops on
+// "Just a moment…" forever. Rewrite the outgoing headers so UA AND client hints
+// both say Google Chrome, consistently.
 const configuredWebPaneSessions = new WeakSet<Electron.Session>();
 function chromeHeaderSet() {
   const full = process.versions.chrome || '146.0.0.0';
@@ -91,7 +92,6 @@ function configureWebPaneSession(sess: Electron.Session) {
   // inside the page. The header rewrite below only covers HTTP; without this a
   // WebContentsView page sees the raw Electron UA in JS, and the JS-vs-header
   // mismatch trips login bot detection (LinkedIn boots the session, e.g.).
-  // (The old <webview> got this via its useragent= attribute.)
   try {
     sess.setUserAgent(ua);
   } catch (err) {
@@ -160,8 +160,8 @@ export function newWindow(
   fn?: (win: BrowserWindow) => void,
   profileName: string = getDefaultProfile()
 ): BrowserWindow {
-  // Register the WebContentsView IPC surface once (idempotent guard). Reuses the
-  // exact same session config the legacy <webview> path uses.
+  // Register the WebContentsView IPC surface once (idempotent guard). Hands it
+  // configureWebPaneSession so web-pane sessions fingerprint as Chrome.
   if (!webPaneManagerInited) {
     webPaneManagerInited = true;
     initWebPaneManager({configureSession: configureWebPaneSession});
@@ -193,8 +193,7 @@ export function newWindow(
     webPreferences: {
       nodeIntegration: true,
       navigateOnDragDrop: true,
-      contextIsolation: false,
-      webviewTag: true
+      contextIsolation: false
     },
     ...options_
   };
@@ -615,10 +614,21 @@ export function newWindow(
   // Same deal as above, grabbing the window titlebar when the window
   // is maximized on Windows results in unmaximize, without hitting any
   // app buttons
-  const onGeometryChange = () => rpc.emit('windowGeometry change', {isMaximized: window.isMaximized()});
+  const onGeometryChange = () => {
+    rpc.emit('windowGeometry change', {isMaximized: window.isMaximized()});
+    updateWindowBounds(window);
+  };
   window.on('maximize', onGeometryChange);
   window.on('unmaximize', onGeometryChange);
   window.on('minimize', onGeometryChange);
+  // Report OS pixel size to the sidecar on resize (debounced) + once at ready,
+  // so terminal_status carries the live window dimensions.
+  let _boundsT: ReturnType<typeof setTimeout> | null = null;
+  window.on('resize', () => {
+    if (_boundsT) clearTimeout(_boundsT);
+    _boundsT = setTimeout(() => updateWindowBounds(window), 200);
+  });
+  window.once('ready-to-show', () => updateWindowBounds(window));
   window.on('restore', onGeometryChange);
 
   // Tear down any native web-pane views this window owns — their webContents are
@@ -772,175 +782,9 @@ export function newWindow(
     return {action: 'deny'};
   });
 
-  // When a <webview> is attached (e.g. a web pane), prevent it from opening
-  // popup windows (OAuth flows, target="_blank" links) as new BrowserWindows.
-  // Route them to the system browser instead.
-  window.webContents.on('did-attach-webview', (_event, webviewContents) => {
-    // Make this web pane's outgoing requests fingerprint as Chrome (UA + matching
-    // sec-ch-ua client hints) so Cloudflare's challenge clears instead of looping.
-    try {
-      configureWebPaneSession(webviewContents.session);
-    } catch (err) {
-      console.error('[web-pane] header config failed:', err);
-    }
-    // Let the renderer reach this guest via @electron/remote too (zoom keys etc.).
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      require('@electron/remote/main').enable(webviewContents);
-    } catch (err) {
-      console.error('[ctxmenu] remote.enable(guest) failed:', err);
-    }
-    // Right-click menu for web panes, built in MAIN with the guest webContents
-    // directly. (The renderer tried to reach it via @electron/remote's
-    // webContents.fromId, which silently returned nothing — so there was no
-    // in-page menu at all.) inspectElement docks DevTools at the bottom.
-    webviewContents.on('context-menu', (_e: any, params: Electron.ContextMenuParams) => {
-      const guestWc: Electron.WebContents = webviewContents as any;
-      const items: Electron.MenuItemConstructorOptions[] = [];
-      if (params.misspelledWord) {
-        if (params.dictionarySuggestions && params.dictionarySuggestions.length > 0) {
-          for (const suggestion of params.dictionarySuggestions) {
-            items.push({
-              label: suggestion,
-              click: () => {
-                // Electron 41 dropped WebContents.replaceMisspelledWord. Right-
-                // clicking a misspelled word selects it, so insertText replaces
-                // that selection with the chosen suggestion.
-                void guestWc.insertText(suggestion);
-              }
-            });
-          }
-        } else {
-          items.push({
-            label: 'No spelling suggestions',
-            enabled: false
-          });
-        }
-        items.push(
-          {
-            label: 'Add to Dictionary',
-            click: () => {
-              try {
-                guestWc.session.addWordToSpellCheckerDictionary(params.misspelledWord);
-              } catch (err) {
-                console.error('[web-pane] failed to add word to dictionary:', err);
-              }
-            }
-          },
-          {type: 'separator'}
-        );
-      }
-      items.push(
-        {
-          label: 'Back',
-          enabled: guestWc.canGoBack(),
-          click: () => {
-            guestWc.goBack();
-          }
-        },
-        {
-          label: 'Forward',
-          enabled: guestWc.canGoForward(),
-          click: () => {
-            guestWc.goForward();
-          }
-        },
-        {
-          label: 'Reload',
-          click: () => {
-            guestWc.reload();
-          }
-        },
-        {type: 'separator'}
-      );
-      if (params.linkURL) {
-        items.push(
-          {label: 'Copy Link', click: () => require('electron').clipboard.writeText(params.linkURL)},
-          {label: 'Open Link in Browser', click: () => void shell.openExternal(params.linkURL)},
-          {type: 'separator'}
-        );
-      }
-      items.push(
-        {label: 'Copy', role: 'copy', enabled: !!params.editFlags?.canCopy},
-        {label: 'Paste', role: 'paste', enabled: !!params.editFlags?.canPaste},
-        {label: 'Select All', role: 'selectAll'},
-        {type: 'separator'},
-        {
-          label: 'Find in page',
-          accelerator: 'CmdOrCtrl+F',
-          click: () => {
-            // The guest webContents id matches what the renderer's
-            // <webview>.getWebContentsId() returns, so the right web pane can
-            // open its find bar.
-            try {
-              window.webContents.send('web-pane-find', (webviewContents as any).id);
-            } catch (err) {
-              console.error('web-pane-find send failed:', err);
-            }
-          }
-        },
-        {type: 'separator'},
-        {
-          label: 'Inspect',
-          click: () => {
-            try {
-              // A <webview> guest has no window chrome to dock into, so
-              // {mode:'bottom'} silently no-ops. Detach opens a real DevTools
-              // window for the guest, which works. Open first, then inspect the
-              // clicked element once DevTools is up.
-              if (!guestWc.isDevToolsOpened()) {
-                guestWc.openDevTools({mode: 'detach'});
-                guestWc.once('devtools-opened', () => {
-                  try {
-                    guestWc.inspectElement(params.x, params.y);
-                  } catch (err) {
-                    console.error('inspectElement failed:', err);
-                  }
-                });
-              } else {
-                guestWc.inspectElement(params.x, params.y);
-              }
-            } catch (err) {
-              console.error('Inspect failed:', err);
-            }
-          }
-        },
-        {type: 'separator'},
-        {
-          label: 'New Stickys',
-          click: () => void ipcMain.emit('new-sticky', {})
-        },
-        {
-          label: 'Search Stickys',
-          click: () => void ipcMain.emit('search-stickies')
-        }
-      );
-      Menu.buildFromTemplate(items).popup({window});
-    });
-    webviewContents.setWindowOpenHandler(({url}) => {
-      // OAuth / login popups can't run inside an embedded browser — hand those
-      // to the system browser.
-      const isOAuth =
-        /^https?:\/\/(accounts\.google\.|login\.microsoftonline\.|appleid\.apple\.|github\.com\/login|login\.yahoo\.|(www\.)?facebook\.com\/(login|dialog)|api\.twitter\.com\/oauth)/i.test(
-          url
-        );
-      if (isOAuth) {
-        void shell.openExternal(url);
-        return {action: 'deny'};
-      }
-      // target="_blank" / window.open wants a new "tab" — but Hyperia has split
-      // panes, not browser tabs. So tell the renderer to split DOWN and open the
-      // link in a fresh web pane below the current one. (The guest webContents id
-      // routes it to the right pane.)
-      try {
-        window.webContents.send('web-pane-open-split', (webviewContents as any).id, url);
-      } catch (err) {
-        console.error('web-pane-open-split send failed:', err);
-        void shell.openExternal(url);
-      }
-      return {action: 'deny'};
-    });
-  });
+  // Web panes render via native WebContentsViews (app/web-pane-manager.ts), which
+  // owns their context menu, OAuth punting, target="_blank" splits, and session
+  // config. The legacy <webview> guest wiring (did-attach-webview) is gone.
 
   // expose internals to extension authors
   window.rpc = rpc;
@@ -967,11 +811,19 @@ export function newWindow(
   const updateFocusTime = () => {
     window.focusTime = process.uptime();
     updateWindowFocus(window.id);
+    // Piggyback pixel bounds — focus fires at launch, after the sidecar WS is
+    // up, so terminal_status gets the window size even with no resize/maximize.
+    updateWindowBounds(window);
   };
 
   window.on('focus', () => {
     updateFocusTime();
   });
+
+  // Safety net: a fresh window may be focused before the sidecar WS connects,
+  // so ready-to-show / focus bounds can be dropped. Resend a couple of times.
+  setTimeout(() => updateWindowBounds(window), 1500);
+  setTimeout(() => updateWindowBounds(window), 4000);
 
   // the window can be closed by the browser process itself
   window.clean = () => {

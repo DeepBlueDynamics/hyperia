@@ -26,6 +26,11 @@ impl AnyProvider {
             "anthropic" => AnyProvider::Anthropic(AnthropicProvider::new(config)),
             "ollama" => AnyProvider::Ollama(OllamaProvider::new(config)),
             "openai" => AnyProvider::OpenAI(OpenAIProvider::new(config)),
+            // Sailfish is a local OpenAI-compatible endpoint (llama.cpp CUDA,
+            // http://localhost:22343/v1). It rides OpenAIProvider verbatim — the
+            // only difference is provider_name() reports "sailfish" (via the
+            // provider_label carried on OpenAIProvider from config.provider).
+            "sailfish" => AnyProvider::OpenAI(OpenAIProvider::new(config)),
             "gemini" => AnyProvider::Unsupported("gemini".into()),
             other => AnyProvider::Unsupported(other.to_string()),
         }
@@ -35,7 +40,9 @@ impl AnyProvider {
         match self {
             AnyProvider::Anthropic(_) => "anthropic",
             AnyProvider::Ollama(_) => "ollama",
-            AnyProvider::OpenAI(_) => "openai",
+            // "openai" or "sailfish" — both ride OpenAIProvider; the label is
+            // carried from config.provider so doors/telemetry can tell them apart.
+            AnyProvider::OpenAI(p) => &p.provider_label,
             AnyProvider::Unsupported(name) => name,
         }
     }
@@ -91,7 +98,7 @@ impl AnthropicProvider {
         // model_catalog → show_picker → settings_set flow. If it's empty
         // load_config has already defaulted it.
         let model = if config.model.is_empty() {
-            "claude-sonnet-4-6".to_string()
+            crate::models::default_model("anthropic").to_string()
         } else {
             config.model.clone()
         };
@@ -386,13 +393,16 @@ fn extract_reply_fallback(raw: &str) -> String {
                         break;
                     }
                 }
-                if let Some(e) = end_idx {
-                    let extracted: String = chars[1..e].iter().collect();
-                    return extracted
-                        .replace("\\\"", "\"")
-                        .replace("\\n", "\n")
-                        .replace("\\t", "\t");
-                }
+                // Take up to the closing quote — or, when the generation was
+                // truncated mid-string (token cap) and there IS no closing
+                // quote, take everything to the end. A cut-off sentence beats
+                // showing the user a raw JSON fragment.
+                let e = end_idx.unwrap_or(chars.len());
+                let extracted: String = chars[1..e].iter().collect();
+                return extracted
+                    .replace("\\\"", "\"")
+                    .replace("\\n", "\n")
+                    .replace("\\t", "\t");
             }
         }
     }
@@ -437,6 +447,173 @@ fn clean_and_parse_json(content: &str) -> anyhow::Result<serde_json::Value> {
     // 4. Return standard parse error
     let parsed: serde_json::Value = serde_json::from_str(trimmed)?;
     Ok(parsed)
+}
+
+/// Live-streaming single-shot Ollama generation (temperature 0.1). Streams
+/// native `message.thinking` deltas to the UI AS THE MODEL GENERATES — the
+/// blocking candidate path sits silent for the whole generation (~60s on
+/// ornith) and then fake-streams the finished thought. `message.content`
+/// (the structured JSON) is accumulated and parsed at the end, with the same
+/// validation as run_ollama_candidate. Returns the candidate tuple plus a
+/// flag: was thinking already streamed live (so the caller doesn't replay it).
+async fn run_ollama_streaming(
+    client: reqwest::Client,
+    endpoint: String,
+    api_key: String,
+    model: String,
+    ollama_messages: Vec<serde_json::Value>,
+    format_schema: Option<serde_json::Value>,
+    tools: Vec<ToolDef>,
+    tx: &mpsc::Sender<ProviderEvent>,
+) -> anyhow::Result<(String, Option<serde_json::Value>, String, u64, u64, bool)> {
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": ollama_messages,
+        "stream": true,
+        "options": { "temperature": 0.1 }
+    });
+    if let Some(schema) = format_schema {
+        body["format"] = schema;
+    }
+
+    let mut req = client
+        .post(format!("{}/api/chat", endpoint))
+        .header("content-type", "application/json")
+        .body(body.to_string());
+    if !api_key.is_empty() {
+        req = req.bearer_auth(&api_key);
+    }
+    let resp = req.send().await?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let raw = resp.text().await.unwrap_or_default();
+        return Err(anyhow::Error::new(CandidateError::Http(format!(
+            "Ollama error {}: {}",
+            status, raw
+        ))));
+    }
+
+    // Ollama streams NDJSON — one JSON object per line; message.thinking and
+    // message.content are per-chunk DELTAS. Final line has done:true + usage.
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    let mut content = String::new();
+    let mut native_thinking = String::new();
+    let mut input_tokens = 0u64;
+    let mut output_tokens = 0u64;
+    let mut think_id: Option<String> = None;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(pos) = buf.find('\n') {
+            let line = buf[..pos].trim().to_string();
+            buf = buf[pos + 1..].to_string();
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            if let Some(t) = val["message"]["thinking"].as_str() {
+                if !t.is_empty() {
+                    let first = native_thinking.is_empty();
+                    native_thinking.push_str(t);
+                    let id = think_id
+                        .get_or_insert_with(|| {
+                            format!(
+                                "think_{}",
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_nanos())
+                                    .unwrap_or(0)
+                            )
+                        })
+                        .clone();
+                    if first {
+                        let _ = tx.send(ProviderEvent::ThinkingStart { id: id.clone() }).await;
+                    }
+                    let _ = tx
+                        .send(ProviderEvent::ThinkingDelta { id, text: t.to_string() })
+                        .await;
+                }
+            }
+            if let Some(c) = val["message"]["content"].as_str() {
+                content.push_str(c);
+            }
+            if val["done"].as_bool() == Some(true) {
+                input_tokens = val["prompt_eval_count"].as_u64().unwrap_or(0);
+                output_tokens = val["eval_count"].as_u64().unwrap_or(0);
+            }
+        }
+    }
+    if let Some(id) = think_id.clone() {
+        let _ = tx.send(ProviderEvent::ThinkingEnd { id }).await;
+    }
+    let streamed_thinking = think_id.is_some();
+
+    // Debug dump, mirroring the blocking path's ollama_debug.log.
+    let _ = std::fs::write(
+        "ollama_debug.log",
+        format!(
+            "=== STREAMED REQUEST ===\n{}\n=== CONTENT ===\n{}\n=== NATIVE THINKING ===\n{}\n",
+            body, content, native_thinking
+        ),
+    );
+
+    // Parse + validate exactly like the blocking candidate path.
+    let parsed = clean_and_parse_json(&content).map_err(|e| {
+        anyhow::Error::new(CandidateError::JsonParse {
+            raw_content: content.clone(),
+            native_thinking: native_thinking.clone(),
+            input_tokens,
+            output_tokens,
+            error_msg: e.to_string(),
+        })
+    })?;
+
+    let mut thought = parsed["thought"].as_str().unwrap_or("").to_string();
+    if thought.is_empty() && !native_thinking.is_empty() {
+        thought = native_thinking;
+    }
+    let reply = parsed["reply"].as_str().unwrap_or("").to_string();
+    let tool_call = if let Some(name) = parsed["tool_name"].as_str() {
+        let args = parsed
+            .get("tool_arguments")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+        Some(serde_json::json!({ "name": name, "arguments": args }))
+    } else {
+        parsed.get("tool_call").cloned()
+    };
+    if let Some(ref tc) = tool_call {
+        if !tc.is_null() && tc.is_object() {
+            if let Some(name) = tc["name"].as_str() {
+                if name != "none" {
+                    let arguments = &tc["arguments"];
+                    if let Some(tool_def) = tools.iter().find(|t| t.name == name) {
+                        if !validate_arguments(&tool_def.input_schema, arguments) {
+                            return Err(anyhow::Error::new(CandidateError::Validation(format!(
+                                "Invalid arguments for tool {}. Args: {}",
+                                name, arguments
+                            ))));
+                        }
+                    } else {
+                        return Err(anyhow::Error::new(CandidateError::Validation(format!(
+                            "Model called unknown tool {}",
+                            name
+                        ))));
+                    }
+                }
+            } else {
+                return Err(anyhow::Error::new(CandidateError::Validation(
+                    "Missing tool name in tool_call".to_string(),
+                )));
+            }
+        }
+    }
+
+    Ok((thought, tool_call, reply, input_tokens, output_tokens, streamed_thinking))
 }
 
 async fn run_ollama_candidate(
@@ -753,6 +930,20 @@ impl OllamaProvider {
             for t in tools {
                 tool_names.push(t.name.clone());
             }
+            // Door names are callable too — agent.rs treats a bare door-name
+            // call as open_tools(door=...). The enum IS a structured-output
+            // model's entire tool universe: without door names it literally
+            // cannot reach behind a closed door ("split the pane" dead-ended
+            // in "I don't have terminal_split" because terminal_split wasn't
+            // in the enum and neither was any way to open its door).
+            for d in crate::doors::doors_for(crate::doors::Surface::Ghost) {
+                if !d.ghost_tools.is_empty() {
+                    let n = d.name.to_string();
+                    if !tool_names.contains(&n) {
+                        tool_names.push(n);
+                    }
+                }
+            }
         }
 
         let format_schema = if !tools.is_empty() {
@@ -774,10 +965,13 @@ impl OllamaProvider {
                     },
                     "reply": {
                         "type": "string",
-                        "description": "Your final response to the user. Use this if you are not calling a tool (i.e., tool_name is 'none')."
+                        "description": "REQUIRED. Your final answer to the user's question — shown to them verbatim. MUST be \"\" when tool_name is not 'none'; never narrate tool calls here."
                     }
                 },
-                "required": ["thought", "tool_name", "tool_arguments"]
+                // reply IS required — ornith emitted thought + tool_name:"none"
+                // and legally omitted reply (it wasn't listed), rendering as
+                // thinking followed by pure silence in the shell.
+                "required": ["thought", "tool_name", "tool_arguments", "reply"]
             }))
         } else {
             Some(serde_json::json!({
@@ -803,76 +997,108 @@ impl OllamaProvider {
         let model = self.model.clone();
 
         tokio::spawn(async move {
-            let mut candidates = Vec::new();
-            
-            // Spawn 3 candidate futures in parallel
-            let temp_list = vec![0.1, 0.4, 0.7];
-            for temp in temp_list {
-                let candidate_fut = run_ollama_candidate(
-                    client.clone(),
-                    endpoint.clone(),
-                    api_key.clone(),
-                    model.clone(),
-                    ollama_messages.clone(),
-                    format_schema.clone(),
-                    temp,
-                    active_tools.clone(),
-                );
-                candidates.push(Box::pin(candidate_fut) as std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<(String, Option<serde_json::Value>, String, u64, u64)>> + Send>>);
-            }
+            // Attempt 1: live-streaming single generation (temp 0.1). Thinking
+            // reaches the shell AS IT GENERATES instead of after a ~60s silent
+            // wait, and a single generation avoids the 3× parallel-candidate
+            // VRAM contention that made 12B models flaky on a 12GB card.
+            let streamed = run_ollama_streaming(
+                client.clone(),
+                endpoint.clone(),
+                api_key.clone(),
+                model.clone(),
+                ollama_messages.clone(),
+                format_schema.clone(),
+                active_tools.clone(),
+                &tx,
+            )
+            .await;
 
-            // We await candidates using futures::future::select_all to grab the first one that succeeds.
-            // If one succeeds, we drop all other candidates (canceling their in-flight HTTP requests).
-            let mut matched_candidate = None;
-            let mut last_error: Option<anyhow::Error> = None;
+            let (thought, tool_call, reply, input_tokens, output_tokens, thinking_streamed_live) = match streamed {
+                Ok(v) => v,
+                Err(stream_err) => {
+                    if let Some(CandidateError::JsonParse { raw_content, native_thinking, input_tokens, output_tokens, .. }) = stream_err.downcast_ref::<CandidateError>() {
+                        // The generation itself succeeded but the structured JSON
+                        // didn't parse — use the raw content as the reply directly
+                        // instead of burning three more generations re-asking.
+                        tracing::info!("streamed generation failed JSON parse — using raw content as reply");
+                        let mut reply = extract_reply_fallback(raw_content);
+                        if reply.starts_with("```") {
+                            let lines: Vec<&str> = reply.lines().collect();
+                            if lines.len() >= 2 && lines.first().unwrap().starts_with("```") && lines.last().unwrap().starts_with("```") {
+                                reply = lines[1..lines.len()-1].join("\n").trim().to_string();
+                            }
+                        }
+                        // Any native thinking was already streamed live as it arrived.
+                        (native_thinking.clone(), None, reply, *input_tokens, *output_tokens, true)
+                    } else {
+                        // Transport/validation failure — fall back to the blocking
+                        // parallel candidates (3 temperatures, first success wins).
+                        tracing::warn!("Ollama streaming attempt failed ({}), falling back to parallel candidates", stream_err);
+                        let mut candidates = Vec::new();
+                        let temp_list = vec![0.1, 0.4, 0.7];
+                        for temp in temp_list {
+                            let candidate_fut = run_ollama_candidate(
+                                client.clone(),
+                                endpoint.clone(),
+                                api_key.clone(),
+                                model.clone(),
+                                ollama_messages.clone(),
+                                format_schema.clone(),
+                                temp,
+                                active_tools.clone(),
+                            );
+                            candidates.push(Box::pin(candidate_fut) as std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<(String, Option<serde_json::Value>, String, u64, u64)>> + Send>>);
+                        }
 
-            while !candidates.is_empty() {
-                let (res, _index, remaining) = futures::future::select_all(candidates).await;
-                candidates = remaining;
-
-                match res {
-                    Ok(val) => {
-                        matched_candidate = Some(val);
-                        break;
-                    }
-                    Err(e) => {
-                        tracing::warn!("Ollama candidate generation failed: {}", e);
-                        last_error = Some(e);
-                    }
-                }
-            }
-
-            let (thought, tool_call, reply, input_tokens, output_tokens) = match matched_candidate {
-                Some(val) => val,
-                None => {
-                    // Try to downcast last_error to CandidateError::JsonParse to perform robust fallback.
-                    // This allows local models that get lazy and reply with raw text to still finish successfully.
-                    let mut fallback = None;
-                    if let Some(ref err) = last_error {
-                        if let Some(CandidateError::JsonParse { raw_content, native_thinking, input_tokens, output_tokens, .. }) = err.downcast_ref::<CandidateError>() {
-                            tracing::info!("All candidates failed JSON parsing. Falling back to raw content as reply.");
-                            let mut reply = extract_reply_fallback(raw_content);
-                            if reply.starts_with("```") {
-                                // Strip code fences
-                                let lines: Vec<&str> = reply.lines().collect();
-                                if lines.len() >= 2 && lines.first().unwrap().starts_with("```") && lines.last().unwrap().starts_with("```") {
-                                    reply = lines[1..lines.len()-1].join("\n").trim().to_string();
+                        let mut matched_candidate = None;
+                        let mut last_error: Option<anyhow::Error> = None;
+                        while !candidates.is_empty() {
+                            let (res, _index, remaining) = futures::future::select_all(candidates).await;
+                            candidates = remaining;
+                            match res {
+                                Ok(val) => {
+                                    matched_candidate = Some(val);
+                                    break;
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Ollama candidate generation failed: {}", e);
+                                    last_error = Some(e);
                                 }
                             }
-                            fallback = Some((native_thinking.clone(), None, reply, *input_tokens, *output_tokens));
                         }
-                    }
 
-                    if let Some(val) = fallback {
-                        val
-                    } else {
-                        // All parallel candidates failed. Report the error.
-                        let err_msg = format!(
-                            "All parallel candidate generations failed. Last error: {}",
-                            last_error.map(|e| e.to_string()).unwrap_or_else(|| "Unknown failure".into())
-                        );
-                        let _ = tx.send(ProviderEvent::Error(err_msg)).await;
-                        return;
+                        match matched_candidate {
+                            Some((t, tc, r, i, o)) => (t, tc, r, i, o, false),
+                            None => {
+                                // Lazy-model fallback: raw text as the reply.
+                                let mut fallback = None;
+                                if let Some(ref err) = last_error {
+                                    if let Some(CandidateError::JsonParse { raw_content, native_thinking, input_tokens, output_tokens, .. }) = err.downcast_ref::<CandidateError>() {
+                                        tracing::info!("All candidates failed JSON parsing. Falling back to raw content as reply.");
+                                        let mut reply = extract_reply_fallback(raw_content);
+                                        if reply.starts_with("```") {
+                                            let lines: Vec<&str> = reply.lines().collect();
+                                            if lines.len() >= 2 && lines.first().unwrap().starts_with("```") && lines.last().unwrap().starts_with("```") {
+                                                reply = lines[1..lines.len()-1].join("\n").trim().to_string();
+                                            }
+                                        }
+                                        fallback = Some((native_thinking.clone(), None, reply, *input_tokens, *output_tokens, false));
+                                    }
+                                }
+
+                                if let Some(val) = fallback {
+                                    val
+                                } else {
+                                    // All parallel candidates failed. Report the error.
+                                    let err_msg = format!(
+                                        "All parallel candidate generations failed. Last error: {}",
+                                        last_error.map(|e| e.to_string()).unwrap_or_else(|| "Unknown failure".into())
+                                    );
+                                    let _ = tx.send(ProviderEvent::Error(err_msg)).await;
+                                    return;
+                                }
+                            }
+                        }
                     }
                 }
             };
@@ -883,7 +1109,8 @@ impl OllamaProvider {
             }
 
             // Emit the thinking reasoning block via structured thinking events
-            if !thought.is_empty() {
+            // — unless it already streamed live during generation.
+            if !thinking_streamed_live && !thought.is_empty() {
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_nanos())
@@ -934,9 +1161,20 @@ impl OllamaProvider {
                 }
             }
 
-            // Emit final direct reply
-            if !reply.is_empty() {
-                let _ = tx.send(ProviderEvent::TextDelta(reply)).await;
+            // Emit final direct reply — but ONLY on non-tool turns. Now that
+            // `reply` is required, small models fill it with self-narration on
+            // every tool call ("I'm checking the status…"); emitting that per
+            // turn renders as the agent talking to itself while it polls. On
+            // tool turns the thinking row already shows the reasoning — the
+            // user-visible reply belongs to the turn that ANSWERS.
+            // Belt-and-suspenders: a no-tool turn with an empty reply promotes
+            // the thought instead of saying nothing.
+            if !had_tool_call {
+                if !reply.is_empty() {
+                    let _ = tx.send(ProviderEvent::TextDelta(reply)).await;
+                } else if !thought.is_empty() {
+                    let _ = tx.send(ProviderEvent::TextDelta(thought.clone())).await;
+                }
             }
 
             // Emit completion stop reason
@@ -961,12 +1199,21 @@ pub struct OpenAIProvider {
     api_key: String,
     pub model: String,
     endpoint: String,
+    /// Send `temperature: 0` on tool turns. True only when doors mode is active
+    /// AND the endpoint is an OpenAI-compatible server (NOT api.openai.com) —
+    /// the Sailfish guide asks for temperature 0 on tool calls, and cloud
+    /// OpenAI o-series models reject the `temperature` field outright.
+    send_zero_temp: bool,
+    /// The configured provider id ("openai" or "sailfish"). Reported by
+    /// `AnyProvider::provider_name()` so a Sailfish run is distinguishable from
+    /// a stock OpenAI run even though they share this provider implementation.
+    provider_label: String,
 }
 
 impl OpenAIProvider {
     pub fn new(config: &GhostConfig) -> Self {
         let model = if config.model.is_empty() {
-            "gpt-4o".to_string()
+            crate::models::default_model("openai").to_string()
         } else {
             config.model.clone()
         };
@@ -975,11 +1222,23 @@ impl OpenAIProvider {
         } else {
             config.endpoint.trim_end_matches('/').to_string()
         };
+        let send_zero_temp = config.doors.enabled && !endpoint.contains("api.openai.com");
+        let provider_label = if config.provider.is_empty() {
+            "openai".to_string()
+        } else {
+            config.provider.clone()
+        };
         Self {
+            // No request-level timeout on the client: the Sailfish appliance can
+            // take ~120 s to answer the first call after idle (model/graph warm,
+            // per HYPERIA_INTEGRATION.md). A reqwest timeout here would abort the
+            // warmup; instead we let the stream run and the shell shows progress.
             client: reqwest::Client::new(),
             api_key: config.api_key.clone(),
             model,
             endpoint,
+            send_zero_temp,
+            provider_label,
         }
     }
 
@@ -990,6 +1249,13 @@ impl OpenAIProvider {
         tools: &[ToolDef],
         max_tokens: u32,
     ) -> anyhow::Result<mpsc::Receiver<ProviderEvent>> {
+        // Newer OpenAI models (gpt-5-codex, *-pro, *-deep-research) are only
+        // served by the /v1/responses endpoint and 404 on /v1/chat/completions
+        // ("Use the v1/responses endpoint instead"). Route them there.
+        if needs_responses_api(&self.model) {
+            return self.stream_responses(system, messages, tools, max_tokens).await;
+        }
+
         let (tx, rx) = mpsc::channel(128);
 
         let openai_messages = build_openai_messages(system, messages);
@@ -1004,7 +1270,16 @@ impl OpenAIProvider {
         });
 
         if max_tokens > 0 {
-            body["max_tokens"] = serde_json::json!(max_tokens);
+            // api.openai.com rejects `max_tokens` on reasoning/gpt-5.x models
+            // ("use max_completion_tokens"); it accepts max_completion_tokens on
+            // all current chat models. OpenAI-COMPATIBLE servers (llama.cpp /
+            // Sailfish, vLLM, Ollama) generally only know `max_tokens`, so key
+            // off the endpoint.
+            if crate::models::uses_max_completion_tokens(&self.endpoint) {
+                body["max_completion_tokens"] = serde_json::json!(max_tokens);
+            } else {
+                body["max_tokens"] = serde_json::json!(max_tokens);
+            }
         }
 
         if !tools.is_empty() {
@@ -1022,6 +1297,13 @@ impl OpenAIProvider {
                 })
                 .collect();
             body["tools"] = serde_json::json!(tool_defs);
+
+            // Sailfish/compat guide: deterministic tool selection wants
+            // temperature 0 on tool turns. Guarded to non-api.openai.com
+            // endpoints (cloud o-series rejects `temperature`); see new().
+            if self.send_zero_temp {
+                body["temperature"] = serde_json::json!(0);
+            }
         }
 
         let resp = self
@@ -1039,10 +1321,19 @@ impl OpenAIProvider {
             let api_message = serde_json::from_str::<serde_json::Value>(&raw)
                 .ok()
                 .and_then(|j| j["error"]["message"].as_str().map(|s| s.to_string()));
+            // Name the ACTUAL provider, not "OpenAI" — Sailfish/vLLM/etc. ride
+            // this same code path, and labeling every failure "OpenAI error"
+            // makes a local model look like a cloud one. Include the host so
+            // it's unambiguous which endpoint answered.
+            let host = self
+                .endpoint
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
+            let who = format!("{} ({})", self.provider_label, host);
             let label = if let Some(msg) = api_message {
-                format!("OpenAI error {} — {}\nFull response: {}", status, msg, raw)
+                format!("{} error {} — {}\nFull response: {}", who, status, msg, raw)
             } else {
-                format!("OpenAI error {} — {}", status, raw)
+                format!("{} error {} — {}", who, status, raw)
             };
             let _ = tx.send(ProviderEvent::Error(label)).await;
             return Ok(rx);
@@ -1183,6 +1474,264 @@ impl OpenAIProvider {
 
         Ok(rx)
     }
+
+    /// Stream via OpenAI's /v1/responses endpoint (the newer unified API).
+    /// Required for gpt-5-codex / *-pro / *-deep-research; those 404 on
+    /// chat/completions. Different request shape (flat tools, `instructions`,
+    /// `input` items, `max_output_tokens`) and a typed-event SSE stream.
+    pub async fn stream_responses(
+        &self,
+        system: &str,
+        messages: &[serde_json::Value],
+        tools: &[ToolDef],
+        max_tokens: u32,
+    ) -> anyhow::Result<mpsc::Receiver<ProviderEvent>> {
+        let (tx, rx) = mpsc::channel(128);
+
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "input": build_responses_input(messages),
+            "stream": true,
+        });
+        if !system.is_empty() {
+            body["instructions"] = serde_json::json!(system);
+        }
+        if max_tokens > 0 {
+            body["max_output_tokens"] = serde_json::json!(max_tokens);
+        }
+        if !tools.is_empty() {
+            // Responses tools are FLAT (name/description/parameters at top level),
+            // unlike chat/completions which nests under `function`.
+            let tool_defs: Vec<serde_json::Value> = tools
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "type": "function",
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    })
+                })
+                .collect();
+            body["tools"] = serde_json::json!(tool_defs);
+        }
+
+        let resp = self
+            .client
+            .post(format!("{}/v1/responses", self.endpoint))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let raw = resp.text().await.unwrap_or_default();
+            let api_message = serde_json::from_str::<serde_json::Value>(&raw)
+                .ok()
+                .and_then(|j| j["error"]["message"].as_str().map(|s| s.to_string()));
+            let host = self
+                .endpoint
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
+            let who = format!("{} ({}, responses)", self.provider_label, host);
+            let label = if let Some(msg) = api_message {
+                format!("{} error {} — {}\nFull response: {}", who, status, msg, raw)
+            } else {
+                format!("{} error {} — {}", who, status, raw)
+            };
+            let _ = tx.send(ProviderEvent::Error(label)).await;
+            return Ok(rx);
+        }
+
+        let mut stream = resp.bytes_stream();
+
+        tokio::spawn(async move {
+            let mut buffer = String::new();
+            // item_id → call_id, so streamed argument deltas (keyed by item_id)
+            // resolve to the call_id we must echo back as function_call_output.
+            let mut item_to_call: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            let mut active_calls: Vec<String> = Vec::new();
+            let mut saw_tool_call = false;
+
+            while let Some(chunk) = stream.next().await {
+                let chunk = match chunk {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = tx.send(ProviderEvent::Error(e.to_string())).await;
+                        break;
+                    }
+                };
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                while let Some(pos) = buffer.find("\n\n") {
+                    let block = buffer[..pos].to_string();
+                    buffer = buffer[pos + 2..].to_string();
+                    for line in block.lines() {
+                        let lt = line.trim();
+                        if lt.is_empty() || lt == "data: [DONE]" {
+                            continue;
+                        }
+                        // Responses SSE also emits `event:` lines; ignore them and
+                        // key off the `type` field inside the JSON `data:` payload.
+                        let Some(data) = lt.strip_prefix("data:") else { continue };
+                        let d = data.trim();
+                        if d.is_empty() {
+                            continue;
+                        }
+                        let Ok(val) = serde_json::from_str::<serde_json::Value>(d) else { continue };
+                        match val["type"].as_str().unwrap_or("") {
+                            "response.output_text.delta" => {
+                                if let Some(delta) = val["delta"].as_str() {
+                                    if !delta.is_empty() {
+                                        let _ = tx.send(ProviderEvent::TextDelta(delta.to_string())).await;
+                                    }
+                                }
+                            }
+                            "response.reasoning_summary_text.delta" => {
+                                if let Some(delta) = val["delta"].as_str() {
+                                    if !delta.is_empty() {
+                                        let id = val["item_id"].as_str().unwrap_or("reason").to_string();
+                                        let _ = tx.send(ProviderEvent::ThinkingDelta { id, text: delta.to_string() }).await;
+                                    }
+                                }
+                            }
+                            "response.output_item.added" => {
+                                let item = &val["item"];
+                                if item["type"] == "function_call" {
+                                    let item_id = item["id"].as_str().unwrap_or("").to_string();
+                                    let call_id = item["call_id"].as_str().unwrap_or("").to_string();
+                                    let name = item["name"].as_str().unwrap_or("").to_string();
+                                    if !call_id.is_empty() {
+                                        item_to_call.insert(item_id, call_id.clone());
+                                        active_calls.push(call_id.clone());
+                                        saw_tool_call = true;
+                                        let _ = tx.send(ProviderEvent::ToolCallStart { id: call_id, name }).await;
+                                    }
+                                }
+                            }
+                            "response.function_call_arguments.delta" => {
+                                let item_id = val["item_id"].as_str().unwrap_or("");
+                                if let Some(call_id) = item_to_call.get(item_id) {
+                                    if let Some(delta) = val["delta"].as_str() {
+                                        let _ = tx.send(ProviderEvent::ToolCallDelta {
+                                            id: call_id.clone(),
+                                            json_fragment: delta.to_string(),
+                                        }).await;
+                                    }
+                                }
+                            }
+                            "response.completed" => {
+                                let usage = &val["response"]["usage"];
+                                let it = usage["input_tokens"].as_u64().unwrap_or(0);
+                                let ot = usage["output_tokens"].as_u64().unwrap_or(0);
+                                if it > 0 || ot > 0 {
+                                    let _ = tx.send(ProviderEvent::Usage { input_tokens: it, output_tokens: ot }).await;
+                                }
+                            }
+                            "response.failed" => {
+                                let msg = val["response"]["error"]["message"]
+                                    .as_str()
+                                    .unwrap_or("response failed")
+                                    .to_string();
+                                let _ = tx.send(ProviderEvent::Error(msg)).await;
+                            }
+                            "error" => {
+                                let msg = val["message"].as_str().unwrap_or("stream error").to_string();
+                                let _ = tx.send(ProviderEvent::Error(msg)).await;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            for id in active_calls {
+                let _ = tx.send(ProviderEvent::ToolCallEnd { id }).await;
+            }
+            let stop = if saw_tool_call { "tool_use" } else { "end_turn" };
+            let _ = tx.send(ProviderEvent::MessageStop { stop_reason: stop.to_string() }).await;
+        });
+
+        Ok(rx)
+    }
+}
+
+/// Models served ONLY by /v1/responses (they 404 on /v1/chat/completions):
+/// the codex, -pro, and deep-research variants. Base chat models and the
+/// standard reasoning models (o1/o3/o4-mini) support both, so they stay on
+/// chat/completions.
+fn needs_responses_api(model: &str) -> bool {
+    // Single source of truth: crate::models.
+    crate::models::needs_responses_api(model)
+}
+
+/// Translate internal Anthropic-style message blocks into /v1/responses
+/// `input` items: user/assistant text stay as role messages; `tool_use`
+/// becomes a `function_call` item and `tool_result` a `function_call_output`,
+/// correlated by call_id (the same id we assigned at ToolCallStart).
+fn build_responses_input(messages: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for msg in messages {
+        let role = msg["role"].as_str().unwrap_or("user");
+        if msg["content"].is_string() {
+            out.push(serde_json::json!({ "role": role, "content": msg["content"].as_str().unwrap_or("") }));
+        } else if let Some(arr) = msg["content"].as_array() {
+            if role == "user" {
+                for block in arr {
+                    match block["type"].as_str() {
+                        Some("tool_result") => {
+                            let call_id = block["tool_use_id"].as_str().unwrap_or("");
+                            let content_val = &block["content"];
+                            let output = if content_val.is_string() {
+                                content_val.as_str().unwrap_or("").to_string()
+                            } else {
+                                content_val.to_string()
+                            };
+                            out.push(serde_json::json!({
+                                "type": "function_call_output",
+                                "call_id": call_id,
+                                "output": output,
+                            }));
+                        }
+                        Some("text") => {
+                            out.push(serde_json::json!({ "role": "user", "content": block["text"].as_str().unwrap_or("") }));
+                        }
+                        _ => {}
+                    }
+                }
+            } else if role == "assistant" {
+                let mut text_content = String::new();
+                let mut calls = Vec::new();
+                for block in arr {
+                    match block["type"].as_str() {
+                        Some("text") => {
+                            if let Some(t) = block["text"].as_str() {
+                                text_content.push_str(t);
+                            }
+                        }
+                        Some("tool_use") => {
+                            let id = block["id"].as_str().unwrap_or("");
+                            let name = block["name"].as_str().unwrap_or("");
+                            calls.push(serde_json::json!({
+                                "type": "function_call",
+                                "call_id": id,
+                                "name": name,
+                                "arguments": block["input"].to_string(),
+                            }));
+                        }
+                        _ => {}
+                    }
+                }
+                if !text_content.is_empty() {
+                    out.push(serde_json::json!({ "role": "assistant", "content": text_content }));
+                }
+                out.extend(calls);
+            }
+        }
+    }
+    out
 }
 
 fn build_openai_messages(system: &str, messages: &[serde_json::Value]) -> Vec<serde_json::Value> {

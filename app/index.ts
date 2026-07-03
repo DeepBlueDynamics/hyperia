@@ -469,10 +469,16 @@ async function installDevExtensions(isDev_: boolean) {
   );
 }
 
-// Single instance lock — prevent duplicate tray icons and sidecar spawns
+// Single instance lock — prevent duplicate tray icons and sidecar spawns.
+// HARD exit for the loser: app.quit() is async and the losing instance kept
+// EXECUTING its init — including spawnSidecar's taskkill of the WINNER's
+// sidecar — before actually quitting. That mutual sidecar-squash is what
+// made duplicate launches flash/restart/rotate panes. app.exit() is
+// synchronous and runs nothing further.
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
-  app.quit();
+  app.exit(0);
+  process.exit(0); // belt-and-suspenders: nothing below may run in the loser
 }
 app.on('second-instance', () => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-call

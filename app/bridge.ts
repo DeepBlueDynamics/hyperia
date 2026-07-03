@@ -110,6 +110,14 @@ function connect() {
     for (const [uid, tracked] of trackedSessions) {
       sendSessionRegister(uid, tracked);
     }
+    // Replay window bounds now that the socket is live. The per-window
+    // create/focus/resize sends can fire before the sidecar WS connects
+    // (connect happens last at launch), so send() no-ops silently — this
+    // guarantees the sidecar learns every window's pixel size on connect.
+    try {
+      const winList: BrowserWindow[] = Array.from((app as any).getWindows?.() || []);
+      for (const w of winList) updateWindowBounds(w);
+    } catch { /* best-effort */ }
     startHeartbeat();
   });
 
@@ -398,12 +406,21 @@ function handleCommand(msg: Record<string, unknown>) {
         shell: p.config?.shell as string | undefined,
         isDefault: p.name === (getConfig() as any).defaultProfile
       }));
+      // Per-window OS pixel size so the agent can answer "how big is the window"
+      // and resize relative to it (terminal_set_window_size).
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      const winList: BrowserWindow[] = Array.from((app as any).getWindows?.() || []);
+      const windowSizes = winList.map((w) => {
+        const b = w.getBounds();
+        return {id: w.id, width: b.width, height: b.height, x: b.x, y: b.y, focused: w.isFocused()};
+      });
       sendResult(
         seq,
         JSON.stringify({
           panes,
           platform: process.platform,
-          profiles
+          profiles,
+          windowSizes
         })
       );
       break;
@@ -1157,6 +1174,15 @@ export function updateSessionActive(uid: string, windowId: number) {
 export function updateWindowFocus(windowId: number) {
   focusedWindowId = windowId;
   send({type: 'WindowFocus', windowId});
+}
+
+/** Report a window's OS pixel bounds to the sidecar so terminal_status can
+ *  answer "how big is the window" and resize relative to it. Sent on window
+ *  create + resize/move. */
+export function updateWindowBounds(win: BrowserWindow) {
+  if (!win || win.isDestroyed()) return;
+  const b = win.getBounds();
+  send({type: 'WindowBounds', windowId: win.id, width: b.width, height: b.height, x: b.x, y: b.y});
 }
 
 /** Update the description for a session. */

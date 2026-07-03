@@ -211,6 +211,15 @@ struct BridgeInner {
     perms: crate::perms::PermStore,
     /// Persistent external-agent identities (file-backed, survive restarts).
     identity: crate::identity::IdentityStore,
+    /// OS pixel bounds per window id (from the renderer): {width,height,x,y}.
+    /// Lets terminal_status report real window size + resize relative to it.
+    window_bounds: Mutex<HashMap<u32, serde_json::Value>>,
+    /// Agent TOKENS that bypass consent (Hyperia's OWN built-in agent — the
+    /// ghost). Trust is by token, never by name (names are spoofable). The
+    /// user configured this agent deliberately; prompting them to approve its
+    /// every pane action is asking permission for the thing they just asked
+    /// it to do. Populated at startup with the freshly-minted ghost token.
+    trusted_agent_tokens: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl Bridge {
@@ -231,8 +240,33 @@ impl Bridge {
                 lume: crate::lume_store::LumeStore::new(),
                 perms: crate::perms::PermStore::default(),
                 identity: crate::identity::IdentityStore::new(),
+                window_bounds: Mutex::new(HashMap::new()),
+                trusted_agent_tokens: std::sync::Mutex::new(std::collections::HashSet::new()),
             }),
         }
+    }
+
+    /// Mark an agent TOKEN as consent-exempt (Hyperia's own built-in agent).
+    pub fn trust_agent_token(&self, token: &str) {
+        if token.is_empty() {
+            return;
+        }
+        if let Ok(mut set) = self.inner.trusted_agent_tokens.lock() {
+            set.insert(token.to_string());
+        }
+    }
+
+    /// Is this caller a consent-exempt trusted agent (by token, never by name)?
+    fn is_trusted_agent(&self, id: &crate::identity::CallerIdentity) -> bool {
+        if let crate::identity::CallerIdentity::Agent { token, .. } = id {
+            return self
+                .inner
+                .trusted_agent_tokens
+                .lock()
+                .map(|s| s.contains(token))
+                .unwrap_or(false);
+        }
+        false
     }
 
     /// Access the lume store (per-shell log search, sticky search, persistence).
@@ -327,6 +361,11 @@ impl Bridge {
         if !self.inner.perms.enforced() {
             return AuthDecision::Allow;
         }
+        // Hyperia's own agent (trusted token) drives panes without consent —
+        // the user configured it; its actions ARE the user's ask.
+        if self.is_trusted_agent(id) {
+            return AuthDecision::Allow;
+        }
         match id {
             CallerIdentity::System => AuthDecision::Allow,
             CallerIdentity::Pane { pane, .. } if pane == target_pane => AuthDecision::RefuseHome,
@@ -360,6 +399,9 @@ impl Bridge {
         if !self.inner.perms.enforced() {
             return AuthDecision::Allow;
         }
+        if self.is_trusted_agent(id) {
+            return AuthDecision::Allow;
+        }
         match id {
             CallerIdentity::System => AuthDecision::Allow,
             CallerIdentity::Anonymous => AuthDecision::SoftWall,
@@ -388,6 +430,9 @@ impl Bridge {
         use crate::identity::CallerIdentity;
         use crate::perms::AuthDecision;
         if !self.inner.perms.enforced() {
+            return AuthDecision::Allow;
+        }
+        if self.is_trusted_agent(id) {
             return AuthDecision::Allow;
         }
         match id {
@@ -1177,6 +1222,37 @@ impl Bridge {
         self.resolve_pane_uid(window, tab, None).await
     }
 
+    /// Resolve a target window id (#119). An explicit `window` resolves only if
+    /// it currently hosts sessions; an omitted window resolves to the focused
+    /// window, else the lowest-id window. Returns `None` only when the explicit
+    /// window doesn't exist, or when there are no windows at all.
+    ///
+    /// Used by new-tab/new-window style operations that target a WINDOW rather
+    /// than a specific pane, so they land in the focused window by default
+    /// instead of relying on the renderer's OS focus (which can diverge from the
+    /// sidecar's tracked focus).
+    pub async fn resolve_window_id(&self, window: Option<u32>) -> Option<u32> {
+        let focused_window_id = *self.inner.focused_window_id.lock().await;
+        let sessions = self.inner.sessions.lock().await;
+
+        let mut ids: Vec<u32> = sessions.values().map(|i| i.window_id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+
+        if let Some(w) = window {
+            // Explicit window: honor it only if it actually hosts sessions.
+            return ids.into_iter().find(|id| *id == w);
+        }
+        // Omitted: prefer the focused window when it hosts sessions, else the
+        // lowest-id window (BTreeMap/get_status order).
+        if let Some(focused) = focused_window_id {
+            if ids.contains(&focused) {
+                return Some(focused);
+            }
+        }
+        ids.into_iter().next()
+    }
+
     /// Get status of all registered sessions, grouped by window and tab.
     pub async fn get_status(&self) -> serde_json::Value {
         use sysinfo::{Pid, ProcessesToUpdate, System};
@@ -1185,6 +1261,7 @@ impl Bridge {
         sys.refresh_processes(ProcessesToUpdate::All, true);
 
         let focused_window_id = *self.inner.focused_window_id.lock().await;
+        let win_bounds = self.inner.window_bounds.lock().await.clone();
         let sessions = self.inner.sessions.lock().await;
 
         // Group sessions by window_id
@@ -1318,11 +1395,31 @@ impl Bridge {
             }
 
             let focused = focused_window_id.map(|id| id == *win_id).unwrap_or_else(|| windows.is_empty());
-            windows.push(serde_json::json!({
+            let mut win_obj = serde_json::json!({
                 "id": win_id,
                 "focused": focused,
                 "tabs": tabs,
-            }));
+            });
+            // Real OS pixel size (from the renderer's WindowBounds reports), so
+            // the agent can answer "how big is the window" and resize by it.
+            // Keep the raw fields for resize math, but ALSO ship a pre-rendered
+            // unambiguous `size` string — a small model reading raw width/height/
+            // x/y tends to confuse the y-offset for the height. The string leaves
+            // no room for that: it can just parrot it.
+            if let Some(b) = win_bounds.get(win_id) {
+                let w = b["width"].as_i64().unwrap_or(0);
+                let h = b["height"].as_i64().unwrap_or(0);
+                let x = b["x"].as_i64().unwrap_or(0);
+                let y = b["y"].as_i64().unwrap_or(0);
+                win_obj["width"] = b["width"].clone();
+                win_obj["height"] = b["height"].clone();
+                win_obj["x"] = b["x"].clone();
+                win_obj["y"] = b["y"].clone();
+                win_obj["size"] = serde_json::json!(format!(
+                    "{w} px wide × {h} px tall, positioned at x={x} y={y}"
+                ));
+            }
+            windows.push(win_obj);
         }
 
         serde_json::json!({ "version": env!("CARGO_PKG_VERSION"), "windows": windows })
@@ -1511,6 +1608,19 @@ impl Bridge {
                 }
                 if let Some(info) = sessions.get_mut(uid) {
                     info.pane_active = true;
+                }
+            }
+
+            "WindowBounds" => {
+                let window_id = msg["windowId"].as_u64().unwrap_or(0) as u32;
+                if window_id != 0 {
+                    self.inner.window_bounds.lock().await.insert(
+                        window_id,
+                        serde_json::json!({
+                            "width": msg["width"], "height": msg["height"],
+                            "x": msg["x"], "y": msg["y"],
+                        }),
+                    );
                 }
             }
 
@@ -1767,6 +1877,45 @@ mod tests {
 
             let resolved = bridge.resolve_pane_uid(None, None, None).await;
             assert_eq!(resolved.as_deref(), Some("win0-b"));
+        });
+    }
+
+    #[test]
+    fn resolve_window_id_defaults_to_focused_then_lowest() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let bridge = Bridge::new();
+            {
+                let mut sessions = bridge.inner.sessions.lock().await;
+                sessions.insert("win0-a".into(), session_info(10, "tab-0", "a", true, true));
+                sessions.insert("win1-a".into(), session_info(20, "tab-1", "a", true, true));
+            }
+
+            // No sessions yet, no focus → None (renderer bootstraps first window).
+            // (checked on a fresh bridge below)
+
+            // Focused window hosts sessions → return it.
+            *bridge.inner.focused_window_id.lock().await = Some(20);
+            assert_eq!(bridge.resolve_window_id(None).await, Some(20));
+
+            // Stale focus (window with no sessions) → fall back to lowest id.
+            *bridge.inner.focused_window_id.lock().await = Some(999);
+            assert_eq!(bridge.resolve_window_id(None).await, Some(10));
+
+            // Explicit window that exists → honored.
+            assert_eq!(bridge.resolve_window_id(Some(20)).await, Some(20));
+            // Explicit window that doesn't exist → None (handler turns this into 404).
+            assert_eq!(bridge.resolve_window_id(Some(99)).await, None);
+        });
+    }
+
+    #[test]
+    fn resolve_window_id_none_when_no_sessions() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let bridge = Bridge::new();
+            assert_eq!(bridge.resolve_window_id(None).await, None);
+            assert_eq!(bridge.resolve_window_id(Some(1)).await, None);
         });
     }
 

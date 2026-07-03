@@ -108,6 +108,14 @@ pub struct GhostConfig {
     ///   ollama    → http://localhost:11434
     pub endpoint: String,
     pub max_turns: usize,
+    /// Resolved MCP-tool-doors settings for this run (enabled/cap/small),
+    /// derived once at config load from `config.agent.tool_doors` + provider +
+    /// env so the provider, the loop, and the compressor all agree.
+    pub doors: crate::doors::DoorConfig,
+    /// Hard context-window budget in tokens (`config.agent.context_tokens`,
+    /// 0 = off). When >0 the compressor trims verbatim recent history so
+    /// system + tools + history fits (e.g. 8000 for Sailfish).
+    pub context_tokens: usize,
     /// Maximus model configuration (optional, overrides environment/defaults)
     pub maximus_model: Option<String>,
     /// Maximus Ollama URL configuration (optional, overrides environment/defaults)

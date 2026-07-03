@@ -112,8 +112,7 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
       target.closest('.header_header') ||
       target.closest('.header_bar') ||
       target.closest('.tabs_nav') ||
-      target.closest('.web-pane') ||
-      target.closest('webview')
+      target.closest('.web-pane')
     ) {
       e.preventDefault();
       return;

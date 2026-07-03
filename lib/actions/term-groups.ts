@@ -296,9 +296,9 @@ export function clearWebPane(groupUid: string) {
   };
 }
 
-export function openWebPaneInNewTab(url: string) {
+export function openWebPaneInNewTab(url: string, name?: string) {
   return (dispatch: HyperDispatch) => {
-    dispatch({type: TERM_GROUP_ADD_WEB_TAB, url} as any);
+    dispatch({type: TERM_GROUP_ADD_WEB_TAB, url, name} as any);
   };
 }
 

@@ -41,6 +41,8 @@ interface WebPaneEntry {
   win: BrowserWindow;
   url: string;
   visible: boolean;
+  // Pending delayed teardown (see destroyPane) — cancelled if the pane remounts.
+  destroyTimer?: ReturnType<typeof setTimeout>;
   // Last pixel rect pushed from the renderer — used to re-split when the docked
   // inspector opens/closes without waiting for the next bounds tick.
   lastBounds?: {x: number; y: number; width: number; height: number};
@@ -73,21 +75,34 @@ function navState(wc: WebContents) {
   return {url: wc.getURL(), canGoBack: wc.navigationHistory.canGoBack(), canGoForward: wc.navigationHistory.canGoForward()};
 }
 
-function wireWebContents(uid: string, wc: WebContents) {
-  wc.on('did-start-loading', () => pushState(uid, {loading: true, error: null}));
-  wc.on('did-stop-loading', () => pushState(uid, {loading: false, ...navState(wc)}));
-  wc.on('did-navigate', () => pushState(uid, {...navState(wc)}));
+// Panes get ADOPTED across React remounts (delayed-destroy + create re-keys the
+// map), so a uid captured by wireWebContents closures can go STALE — lookups by
+// it silently no-op (the invisible-context-menu bug). Resolve the CURRENT uid
+// from the webContents every time.
+function liveUidOf(wc: WebContents, fallback: string): string {
+  for (const [id, e] of panes) {
+    if (!e.view.webContents.isDestroyed() && e.view.webContents === wc) return id;
+  }
+  return fallback;
+}
+
+function wireWebContents(initialUid: string, wc: WebContents) {
+  const u = () => liveUidOf(wc, initialUid);
+  wc.on('did-start-loading', () => pushState(u(), {loading: true, error: null}));
+  wc.on('did-stop-loading', () => pushState(u(), {loading: false, ...navState(wc)}));
+  wc.on('did-navigate', () => pushState(u(), {...navState(wc)}));
   wc.on('did-navigate-in-page', (_e, _url, isMainFrame) => {
-    if (isMainFrame) pushState(uid, {...navState(wc)});
+    if (isMainFrame) pushState(u(), {...navState(wc)});
   });
-  wc.on('page-title-updated', (_e, title) => pushState(uid, {title}));
+  wc.on('page-title-updated', (_e, title) => pushState(u(), {title}));
   wc.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
     // -3 = ERR_ABORTED (user/redirect navigation), not a real failure.
     if (isMainFrame && errorCode !== -3) {
-      pushState(uid, {loading: false, error: {code: errorCode, description: errorDescription, url: validatedURL}});
+      pushState(u(), {loading: false, error: {code: errorCode, description: errorDescription, url: validatedURL}});
     }
   });
   wc.on('found-in-page', (_e, result) => {
+    const uid = u();
     entrySend(uid, 'web-pane:found-in-page', {
       uid,
       active: result.activeMatchOrdinal,
@@ -96,10 +111,10 @@ function wireWebContents(uid: string, wc: WebContents) {
   });
   // Let the renderer run its dom-ready work (scrollbar CSS inject, bg-color probe)
   // via web-pane:execute-js — it can't observe the guest's dom-ready directly.
-  wc.on('dom-ready', () => entrySend(uid, 'web-pane:dom-ready', {uid}));
+  wc.on('dom-ready', () => { const uid = u(); entrySend(uid, 'web-pane:dom-ready', {uid}); });
   // Clicking into the page focuses its webContents — tell the renderer so it can
   // activate the pane (and dismiss the URL navigator).
-  wc.on('focus', () => entrySend(uid, 'web-pane:focus', {uid}));
+  wc.on('focus', () => { const uid = u(); entrySend(uid, 'web-pane:focus', {uid}); });
   // Zoom shortcuts pressed while the PAGE has focus never reach the renderer's
   // window (the native view captures them), so intercept Ctrl/Cmd +/-/0 here and
   // route to the renderer's zoom handlers (which own the zoom-factor state).
@@ -112,6 +127,7 @@ function wireWebContents(uid: string, wc: WebContents) {
     else if (k === '0') dir = 'reset';
     if (dir) {
       event.preventDefault();
+      const uid = u();
       entrySend(uid, 'web-pane:zoom-key', {uid, dir});
     }
   });
@@ -119,6 +135,7 @@ function wireWebContents(uid: string, wc: WebContents) {
   // guest handler in window.ts no longer fires). Reload / screenshot / copy /
   // paste / back-forward / copy-link / find / inspect-in-split / stickys.
   wc.on('context-menu', (_e: Electron.Event, params: Electron.ContextMenuParams) => {
+    const uid = u();
     const entry = panes.get(uid);
     if (!entry) return;
     const items: Electron.MenuItemConstructorOptions[] = [];
@@ -170,6 +187,16 @@ function wireWebContents(uid: string, wc: WebContents) {
         ? {label: 'Close Inspector', click: () => closeInspector(uid)}
         : {label: 'Inspect (split)', click: () => openInspector(uid, params.x, params.y)},
       {type: 'separator'},
+      // Not offered when this pane IS the agent shell (renderer dedupes to a
+      // single Hyperia Agent tab anyway — the item would just focus itself).
+      ...(/\/shell\b/.test(wc.getURL()) ? [] : [{
+        label: 'Hyperia Agent',
+        click: () => {
+          const port = process.env.HYPERIA_PORT || '9800';
+          (entry.win as any).rpc?.emit('open web pane req', {url: `http://localhost:${port}/shell`});
+        }
+      } as Electron.MenuItemConstructorOptions]),
+      {type: 'separator'},
       {label: 'New Stickys', click: () => void ipcMain.emit('new-sticky', {})},
       {label: 'Search Stickys', click: () => void ipcMain.emit('search-stickies')}
     );
@@ -192,7 +219,8 @@ function wireWebContents(uid: string, wc: WebContents) {
       void shell.openExternal(url);
       return {action: 'deny'};
     }
-    entrySend(uid, 'web-pane:open-split', {uid, url});
+    const liveUid = u();
+    entrySend(liveUid, 'web-pane:open-split', {uid: liveUid, url});
     return {action: 'deny'};
   });
 }
@@ -214,11 +242,35 @@ function roundRect(b: {x: number; y: number; width: number; height: number}) {
 
 function createPane(win: BrowserWindow, uid: string, url: string) {
   if (panes.has(uid)) {
-    // Re-navigate an existing view instead of leaking a second one.
     const entry = panes.get(uid)!;
-    entry.url = url;
-    if (url) void entry.view.webContents.loadURL(url).catch(() => {});
+    // A React remount (sibling pane closed → BSP reparent, or any layout
+    // reshuffle) fires destroy+create for the SAME pane. Cancel the pending
+    // teardown and REUSE the live view — reloading would wipe page state
+    // (e.g. the agent chat log).
+    if (entry.destroyTimer) {
+      clearTimeout(entry.destroyTimer);
+      entry.destroyTimer = undefined;
+    }
+    const current = entry.view.webContents.getURL();
+    if (url && url !== entry.url && url !== current) {
+      entry.url = url;
+      void entry.view.webContents.loadURL(url).catch(() => {});
+    }
+    entry.view.setVisible(entry.visible);
     return;
+  }
+  // Reparent with a NEW group uid (some layout collapses re-key the group):
+  // adopt a pending-destroy view in the same window with the same URL instead
+  // of building a fresh one — this is what preserves page state (chat logs).
+  for (const [oldUid, entry] of panes) {
+    if (entry.win === win && entry.destroyTimer && entry.url === url) {
+      clearTimeout(entry.destroyTimer);
+      entry.destroyTimer = undefined;
+      panes.delete(oldUid);
+      panes.set(uid, entry);
+      entry.view.setVisible(true);
+      return;
+    }
   }
   const view = new WebContentsView({
     webPreferences: {
@@ -326,9 +378,19 @@ function closeInspector(uid: string) {
   positionViews(entry);
 }
 
-function destroyPane(uid: string) {
+// Renderer-driven destroy is DELAYED: an unmount is often half of a remount
+// (layout reparent). Hide immediately; kill for real only if no create() lands
+// within the grace window. Window teardown uses immediate=true.
+function destroyPane(uid: string, immediate = false) {
   const entry = panes.get(uid);
   if (!entry) return;
+  if (!immediate) {
+    entry.view.setVisible(false);
+    if (entry.destroyTimer) clearTimeout(entry.destroyTimer);
+    entry.destroyTimer = setTimeout(() => destroyPane(uid, true), 400);
+    return;
+  }
+  if (entry.destroyTimer) clearTimeout(entry.destroyTimer);
   panes.delete(uid);
   if (entry.devtools) {
     try {
@@ -358,7 +420,7 @@ function destroyPane(uid: string) {
 // Tear down every pane belonging to a window (call on window close).
 export function destroyPanesForWindow(win: BrowserWindow) {
   for (const [uid, entry] of panes) {
-    if (entry.win === win) destroyPane(uid);
+    if (entry.win === win) destroyPane(uid, true);
   }
 }
 
