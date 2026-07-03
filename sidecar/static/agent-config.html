@@ -68,9 +68,9 @@
 
   <div id="keyBlock">
     <h2>API key <span id="keySet" style="display:none;color:#3fb950;font-size:11px;text-transform:none">[set]</span></h2>
-    <div style="display:flex;align-items:center;background:#17171c;border:1px solid #2c2c34;border-radius:8px;margin-top:6px;padding-left:6px">
-      <button id="keyRemove" title="remove the stored key for this provider" style="display:none;background:#12121c;color:#f85149;border:1px solid #2c2c34;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:10px;cursor:pointer;flex:0 0 auto">remove</button>
-      <input type="password" id="apiKey" placeholder="paste your API key (stored locally)" style="border:none;background:transparent;margin-top:0;flex:1">
+    <div style="display:flex;align-items:center;background:#17171c;border:1px solid #2c2c34;border-radius:8px;margin-top:6px;padding-right:6px">
+      <input type="password" id="apiKey" placeholder="paste your API key (stored locally)" style="border:none;background:transparent;margin-top:0;flex:1;min-width:0">
+      <button id="keyRemove" title="remove the stored key for this provider" style="display:none;background:#12121c;color:#f85149;border:1px solid #2c2c34;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:10px;cursor:pointer;flex:0 0 auto;white-space:nowrap">remove</button>
     </div>
     <div class="note">Stored in the Hyperia config file for now — <b>plaintext until the OS-keystore work (#130) lands</b>. Paste to replace; leave blank to keep the saved key.</div>
   </div>
