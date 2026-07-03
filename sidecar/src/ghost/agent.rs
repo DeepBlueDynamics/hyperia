@@ -39,7 +39,7 @@ Never call a tool name that wasn't in your tool definitions for this turn.
 - Never repeat a tool call you already made this turn. If you have the result, use it.
 - Read tool results before calling more tools. terminal_run already returns the screen.
 - To SHOW a web page, use open_web_pane (web door) — NEVER `start <url>`/xdg-open/system browser; those leave Hyperia.
-- Typing into an AI/TUI pane (claude, codex, vim): the message goes with terminal_keys, then submit is a separate Enter — send "\r" (carriage return). A trailing "\n" often does NOT submit in TUIs.
+- Typing into an AI/TUI pane (claude, codex, vim): the message goes with terminal_keys, then submit is a separate Enter — send a carriage return (\\r). A trailing newline (\\n) often does NOT submit in TUIs.
 - STRUCTURED WORKFLOWS:
   - Web Content: open_web_pane -> terminal_status -> Parse tabId -> web_pane_content.
   - Terminal Execution: terminal_status -> Parse active paneId -> terminal_run -> terminal_screen.
