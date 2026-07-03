@@ -9,6 +9,127 @@ use rmcp::{
 
 use crate::ghost::compressor::{ContextCompressor, FOCUS_MIN_CHARS};
 
+use crate::doors::{self, DoorState, Surface};
+use std::sync::{Mutex, OnceLock};
+
+// ---------------------------------------------------------------------------
+// MCP tool-doors (Phase 4/5) — opt-in progressive disclosure for the EXTERNAL
+// MCP tool surface. See docs/doors.md.
+//
+// STATE MODEL — why the door state is process-GLOBAL, not per-connection:
+// rmcp's stateless streamable-HTTP transport (see `streamable_http_service`,
+// `stateful_mode: false`) builds a FRESH `HyperiaMcp` for every request, so a
+// per-connection door field on `HyperiaMcp` would be wiped between calls. There
+// is no rmcp-provided per-connection scratch space in stateless mode. We
+// therefore keep ONE `DoorState` for the whole MCP surface, guarded by a std
+// `Mutex`. Every external client shares it — acceptable because doors are a
+// token/UX concern, not a security boundary (consent + identity are enforced at
+// the HTTP API layer). The lock is only ever held for short synchronous
+// mutations — NEVER across an `.await`.
+// ---------------------------------------------------------------------------
+
+/// Read `config.agent.mcp_tool_doors` from hyperia.json (sync, best-effort).
+/// Missing / unreadable / unset → `"off"` (full catalog).
+fn mcp_tool_doors_mode() -> String {
+    let path = crate::util::shared_config_path()
+        .unwrap_or_else(|| std::path::PathBuf::from(".").join("hyperia.json"));
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|json| {
+            json["config"]["agent"]["mcp_tool_doors"]
+                .as_str()
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "off".to_string())
+}
+
+/// Resolve the MCP doors config once per process (config file + env). Cached —
+/// the config is read a single time at first use.
+fn mcp_door_config() -> crate::doors::DoorConfig {
+    static CFG: OnceLock<crate::doors::DoorConfig> = OnceLock::new();
+    *CFG.get_or_init(|| crate::doors::resolve_mcp_door_config(&mcp_tool_doors_mode()))
+}
+
+/// Process-global MCP door state (see module note above). Initialised from the
+/// resolved [`mcp_door_config`].
+fn mcp_door_state() -> &'static Mutex<DoorState> {
+    static STATE: OnceLock<Mutex<DoorState>> = OnceLock::new();
+    STATE.get_or_init(|| {
+        let cfg = mcp_door_config();
+        Mutex::new(DoorState::with_cap(Surface::Mcp, cfg.cap).with_enabled(cfg.enabled))
+    })
+}
+
+/// Wrap a JSON value as an rmcp tool input-schema object.
+fn mcp_schema(v: serde_json::Value) -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    std::sync::Arc::new(v.as_object().cloned().unwrap_or_default())
+}
+
+/// Synthetic `open_tools` meta-tool def. These three meta-tools are NOT part of
+/// the `#[tool]` router (they mutate door state, which lives outside the router),
+/// so `list_tools` appends them by hand when doors are on.
+fn mcp_open_tools_tool() -> Tool {
+    let names: Vec<&str> = doors::doors_for(Surface::Mcp).map(|d| d.name).collect();
+    let listing = doors::doors_for(Surface::Mcp)
+        .map(|d| format!("- {}: {}", d.name, d.description))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Tool::new(
+        "open_tools",
+        format!(
+            "Open a door — a named category of tools — so its tools appear in your tool list. Your \
+             list is a small always-on core plus whatever doors you have opened; open a door to \
+             reveal more. A notifications/tools/list_changed fires when the set changes. Available \
+             doors:\n{}",
+            listing
+        ),
+        mcp_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "door": { "type": "string", "enum": names, "description": "Door to open" }
+            },
+            "required": ["door"]
+        })),
+    )
+}
+
+/// Synthetic `close_tools` meta-tool def.
+fn mcp_close_tools_tool() -> Tool {
+    let names: Vec<&str> = doors::doors_for(Surface::Mcp).map(|d| d.name).collect();
+    Tool::new(
+        "close_tools",
+        "Close a door you previously opened, removing its tools from your list to make room for \
+         others. Fires notifications/tools/list_changed.",
+        mcp_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "door": { "type": "string", "enum": names, "description": "Door to close" }
+            },
+            "required": ["door"]
+        })),
+    )
+}
+
+/// Synthetic `search_tools` meta-tool def — the MCP analogue of the ghost's
+/// `tool_search`. Searches the FULL catalog (open or closed) so a model can
+/// discover a tool and then `open_tools` its door.
+fn mcp_search_tools_tool() -> Tool {
+    Tool::new(
+        "search_tools",
+        "Search the FULL tool catalog by keyword (across open AND closed doors). Each hit shows \
+         which door the tool lives behind and whether it is open. Call open_tools(door=\"X\") to \
+         reveal a closed one.",
+        mcp_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Search keywords" }
+            },
+            "required": ["query"]
+        })),
+    )
+}
+
 /// Pull the caller's `Authorization` header off the /mcp request so it can be
 /// forwarded on the internal proxy hop to the gated HTTP endpoints. Without
 /// this, every MCP mutation tool would reach the HTTP API anonymous and get
@@ -243,6 +364,9 @@ pub struct NewTabRequest {
     pub command: Option<String>,
     /// Shell profile to use for the new tab. If omitted, uses default shell.
     pub profile: Option<String>,
+    /// Window ID to open the tab in — the `id` field from terminal_status. Omit
+    /// to open it in the focused window.
+    pub window: Option<u32>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -1329,6 +1453,9 @@ impl HyperiaMcp {
         }
         if let Some(prof) = &req.profile {
             body["profile"] = serde_json::json!(prof);
+        }
+        if let Some(win) = req.window {
+            body["window"] = serde_json::json!(win);
         }
         let resp = self.post_json_as("/api/pane/new", &body, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
@@ -2899,6 +3026,153 @@ impl HyperiaMcp {
 
 }
 
+// -- MCP tool-doors meta-tool handlers (Phase 4) --
+//
+// These run OUTSIDE the `#[tool]` router (they mutate the global door state).
+// `call_tool` intercepts the three meta-tool names and dispatches here. None of
+// them `.await`, so holding the door-state `Mutex` inside is safe.
+impl HyperiaMcp {
+    /// First line of an MCP tool's description, pulled from the live router.
+    fn mcp_tool_oneliner(&self, name: &str) -> String {
+        self.tool_router
+            .get(name)
+            .and_then(|t| {
+                t.description
+                    .as_ref()
+                    .map(|d| d.lines().next().unwrap_or("").trim().to_string())
+            })
+            .unwrap_or_default()
+    }
+
+    /// `open_tools(door)` — open a door on the global MCP `DoorState` and report
+    /// the tools it reveals + the resulting live-tool budget. Auto-eviction (LRU)
+    /// keeps the surface within cap.
+    fn mcp_open_tools(&self, args: Option<&serde_json::Map<String, serde_json::Value>>) -> String {
+        let door = args
+            .and_then(|a| a.get("door"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        // Validate against the MCP surface (a ghost-only door name is invalid here).
+        let valid = doors::door_by_name(&door).map_or(false, |d| !d.mcp_tools.is_empty());
+        if !valid {
+            let names: Vec<&str> = doors::doors_for(Surface::Mcp).map(|d| d.name).collect();
+            return format!("Unknown door '{}'. Available doors: {}", door, names.join(", "));
+        }
+        let door_def = doors::door_by_name(&door).unwrap();
+
+        // Build the per-tool listing from the router BEFORE taking the lock.
+        let lines: Vec<String> = door_def
+            .mcp_tools
+            .iter()
+            .map(|&t| format!("- {}: {}", t, self.mcp_tool_oneliner(t)))
+            .collect();
+
+        let mut ds = mcp_door_state().lock().unwrap();
+        let evicted = ds.open_door(&door);
+        let open_list = ds.open_doors().join(", ");
+        let mut out = format!(
+            "Door '{}' opened ({} tools now callable):\n{}\n\n[doors open: {}] [live tools: {}/{}]",
+            door,
+            door_def.mcp_tools.len(),
+            lines.join("\n"),
+            open_list,
+            ds.live_tool_count(),
+            ds.cap(),
+        );
+        if !evicted.is_empty() {
+            out.push_str(&format!(
+                "\n[evicted (over cap): {} — reopen with open_tools if needed]",
+                evicted.join(", ")
+            ));
+        }
+        out
+    }
+
+    /// `close_tools(door)` — close a door, freeing its slice of the budget.
+    fn mcp_close_tools(&self, args: Option<&serde_json::Map<String, serde_json::Value>>) -> String {
+        let door = args
+            .and_then(|a| a.get("door"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if door.is_empty() {
+            return "close_tools requires a 'door' name.".to_string();
+        }
+        let mut ds = mcp_door_state().lock().unwrap();
+        let was_open = ds.is_door_open(&door);
+        ds.close_door(&door);
+        let open_list = ds.open_doors().join(", ");
+        let open_disp = if open_list.is_empty() { "none".to_string() } else { open_list };
+        let prefix = if was_open {
+            format!("Door '{}' closed.", door)
+        } else {
+            format!("Door '{}' was not open.", door)
+        };
+        format!(
+            "{} [doors open: {}] [live tools: {}/{}]",
+            prefix,
+            open_disp,
+            ds.live_tool_count(),
+            ds.cap(),
+        )
+    }
+
+    /// `search_tools(query)` — keyword search over the full MCP catalog with a
+    /// per-hit `[door: X — open|closed]` hint (mirrors the ghost's tool_search).
+    fn mcp_search_tools(&self, args: Option<&serde_json::Map<String, serde_json::Value>>) -> String {
+        let query = args
+            .and_then(|a| a.get("query"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let all = self.tool_router.list_all();
+        let ds = mcp_door_state().lock().unwrap();
+        let matches: Vec<String> = all
+            .iter()
+            .filter(|t| {
+                let n = t.name.to_lowercase();
+                let d = t
+                    .description
+                    .as_ref()
+                    .map(|c| c.to_lowercase())
+                    .unwrap_or_default();
+                n.contains(&query) || d.contains(&query)
+            })
+            .map(|t| {
+                let hint = match doors::door_of(Surface::Mcp, t.name.as_ref()) {
+                    Some(dn) => {
+                        let state = if ds.is_door_open(dn) { "open" } else { "closed" };
+                        format!(" [door: {} — {}]", dn, state)
+                    }
+                    None => String::new(), // core tool (always live) or untaxonomied
+                };
+                let desc = t
+                    .description
+                    .as_ref()
+                    .map(|c| c.lines().next().unwrap_or("").trim().to_string())
+                    .unwrap_or_default();
+                format!("- {}{}: {}", t.name, hint, desc)
+            })
+            .collect();
+
+        if matches.is_empty() {
+            format!("No tools found matching '{}'", query)
+        } else {
+            format!(
+                "Found {} tool(s):\n{}\n\nTools marked [door: X — closed] are not in your list \
+                 yet. Call open_tools(door=\"X\") to reveal them (a tools/list_changed \
+                 notification fires when they appear).",
+                matches.len(),
+                matches.join("\n")
+            )
+        }
+    }
+}
+
 // -- ServerHandler impl --
 
 // NOTE: the `#[tool_handler]` macro would auto-generate `call_tool`, `list_tools`,
@@ -2911,8 +3185,69 @@ impl ServerHandler for HyperiaMcp {
         request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+        // Doors OFF (default) → byte-identical to the pre-doors path.
+        if !mcp_door_config().enabled {
+            let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+            return self.tool_router.call(tcc).await;
+        }
+
+        let name = request.name.to_string();
+
+        // Meta-tools live outside the router — intercept them here. open/close
+        // mutate door state, so they fire a tools/list_changed (Phase 5).
+        match name.as_str() {
+            "open_tools" => {
+                let text = self.mcp_open_tools(request.arguments.as_ref());
+                let _ = context.peer.notify_tool_list_changed().await;
+                return Ok(CallToolResult::success(vec![Content::text(text)]));
+            }
+            "close_tools" => {
+                let text = self.mcp_close_tools(request.arguments.as_ref());
+                let _ = context.peer.notify_tool_list_changed().await;
+                return Ok(CallToolResult::success(vec![Content::text(text)]));
+            }
+            "search_tools" => {
+                // Read-only — no door change, no notification.
+                let text = self.mcp_search_tools(request.arguments.as_ref());
+                return Ok(CallToolResult::success(vec![Content::text(text)]));
+            }
+            _ => {}
+        }
+
+        // Real catalog tool. If it sits behind a CLOSED door, auto-open that door
+        // (safe by construction — doors are a menu, not a permission boundary;
+        // consent + identity are enforced at the HTTP API layer) and touch it so
+        // it survives the next LRU eviction longest.
+        let auto_opened = {
+            let mut ds = mcp_door_state().lock().unwrap();
+            let door = ds.door_of(&name);
+            let opened = match door {
+                Some(dn) if !ds.is_door_open(dn) => {
+                    ds.open_door(dn);
+                    Some(dn.to_string())
+                }
+                _ => None,
+            };
+            ds.touch(&name);
+            opened
+        };
+        if auto_opened.is_some() {
+            // The live tool set just grew — tell the client to refetch (Phase 5).
+            let _ = context.peer.notify_tool_list_changed().await;
+        }
+
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        self.tool_router.call(tcc).await
+        let result = self.tool_router.call(tcc).await;
+        match auto_opened {
+            Some(dn) => result.map(|mut r| {
+                r.content.insert(
+                    0,
+                    Content::text(format!("[door '{}' auto-opened by this call]", dn)),
+                );
+                r
+            }),
+            None => result,
+        }
     }
 
     async fn list_tools(
@@ -2920,14 +3255,31 @@ impl ServerHandler for HyperiaMcp {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
-        let tools = self.tool_router.list_all();
-        // Phase 0 instrumentation (no behavior change): measure the full MCP
-        // tool surface returned on every tools/list — count + serialized bytes.
+        let mut tools = self.tool_router.list_all();
+        let cfg = mcp_door_config();
+
+        // Doors ON → progressive disclosure: keep only the live (core + open-door)
+        // router tools, then append the three synthetic meta-tools. Doors OFF →
+        // the full catalog, unchanged.
+        if cfg.enabled {
+            let live: Vec<&'static str> = {
+                let ds = mcp_door_state().lock().unwrap();
+                ds.live_tools()
+            };
+            tools.retain(|t| live.iter().any(|n| *n == t.name.as_ref()));
+            tools.push(mcp_open_tools_tool());
+            tools.push(mcp_close_tools_tool());
+            tools.push(mcp_search_tools_tool());
+        }
+
+        // Instrumentation: measure the MCP tool surface returned on every
+        // tools/list — count + serialized bytes + whether doors gated it.
         let schema_bytes = serde_json::to_vec(&tools).map(|v| v.len()).unwrap_or(0);
         tracing::info!(
             target: "doors",
             tool_count = tools.len(),
             schema_bytes,
+            doors_enabled = cfg.enabled,
             "mcp tools/list surface"
         );
         Ok(rmcp::model::ListToolsResult {
@@ -3011,9 +3363,16 @@ impl ServerHandler for HyperiaMcp {
                  \n\nLogs: sidecar_logs."
                     .into(),
             ),
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
+            capabilities: {
+                // Advertise tools/list_changed only when doors are on — that's
+                // the only mode in which the tool set mutates at runtime, so
+                // clients only need to subscribe then.
+                let mut caps = ServerCapabilities::builder().enable_tools();
+                if mcp_door_config().enabled {
+                    caps = caps.enable_tool_list_changed();
+                }
+                caps.build()
+            },
             ..Default::default()
         }
     }

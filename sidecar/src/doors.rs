@@ -442,6 +442,38 @@ fn resolve_door_config_inner(
     DoorConfig { enabled, cap, small }
 }
 
+/// Resolve the **MCP surface's** opt-in doors config from
+/// `config.agent.mcp_tool_doors` ("on" | "off"; default **off**).
+///
+/// Unlike the ghost surface (whose `tool_doors` defaults to `auto` = on), the
+/// external MCP tool catalog stays *fully visible* unless the user explicitly
+/// opts in — external agents built against the full catalog keep every tool by
+/// default. When opted in, doors apply with [`CLOUD_TOOL_CAP`] headroom
+/// (external MCP clients are typically cloud/large models), overridable via
+/// `HYPERIA_TOOL_CAP`.
+///
+/// `HYPERIA_TOOL_DOORS=0|1` overrides the mode entirely; `HYPERIA_TOOL_CAP`
+/// overrides the resolved cap. `small` is always `false` here — the MCP surface
+/// is provider-agnostic (it doesn't know which model is on the other end).
+pub fn resolve_mcp_door_config(mode: &str) -> DoorConfig {
+    resolve_mcp_door_config_inner(mode, env_doors_override(), env_cap_override())
+}
+
+/// Pure core of [`resolve_mcp_door_config`] — env reads hoisted out for tests.
+fn resolve_mcp_door_config_inner(
+    mode: &str,
+    doors_override: Option<bool>,
+    cap_override: Option<usize>,
+) -> DoorConfig {
+    // Opt-in: ONLY an explicit on/true/1 enables. Everything else — "off",
+    // "auto", "", or any unknown value — stays OFF so the full catalog ships by
+    // default (this is the deliberate difference from the ghost's `auto`).
+    let mode_enabled = matches!(mode.trim().to_lowercase().as_str(), "on" | "true" | "1");
+    let enabled = doors_override.unwrap_or(mode_enabled);
+    let cap = cap_override.unwrap_or(CLOUD_TOOL_CAP);
+    DoorConfig { enabled, cap, small: false }
+}
+
 // ---------------------------------------------------------------------------
 // DoorState — per-session (ghost) / per-identity (MCP) open-door bookkeeping.
 // ---------------------------------------------------------------------------
@@ -951,6 +983,38 @@ mod tests {
     fn resolve_cap_override_wins() {
         let dc = resolve_door_config_inner("auto", "ollama", "gemma2:9b", "http://localhost:11434", None, Some(12));
         assert_eq!(dc.cap, 12);
+    }
+
+    // ---- MCP surface: opt-in resolution --------------------------------------
+
+    #[test]
+    fn resolve_mcp_off_by_default() {
+        // "off", "auto", "", and unknown values ALL resolve to disabled — the
+        // MCP surface keeps its full catalog unless explicitly opted in.
+        assert!(!resolve_mcp_door_config_inner("off", None, None).enabled);
+        assert!(!resolve_mcp_door_config_inner("auto", None, None).enabled);
+        assert!(!resolve_mcp_door_config_inner("", None, None).enabled);
+        assert!(!resolve_mcp_door_config_inner("garbage", None, None).enabled);
+    }
+
+    #[test]
+    fn resolve_mcp_on_enables_with_cloud_cap() {
+        for mode in ["on", "true", "1", "ON", " On "] {
+            let dc = resolve_mcp_door_config_inner(mode, None, None);
+            assert!(dc.enabled, "mode {mode:?} should enable");
+            assert_eq!(dc.cap, CLOUD_TOOL_CAP);
+            assert!(!dc.small, "MCP surface never claims small-model");
+        }
+    }
+
+    #[test]
+    fn resolve_mcp_env_overrides_win() {
+        // env=1 forces on even when the mode says off…
+        assert!(resolve_mcp_door_config_inner("off", Some(true), None).enabled);
+        // …and env=0 forces off even when the mode says on.
+        assert!(!resolve_mcp_door_config_inner("on", Some(false), None).enabled);
+        // cap override wins over the CLOUD default.
+        assert_eq!(resolve_mcp_door_config_inner("on", None, Some(15)).cap, 15);
     }
 
     #[test]

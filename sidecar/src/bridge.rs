@@ -1222,6 +1222,37 @@ impl Bridge {
         self.resolve_pane_uid(window, tab, None).await
     }
 
+    /// Resolve a target window id (#119). An explicit `window` resolves only if
+    /// it currently hosts sessions; an omitted window resolves to the focused
+    /// window, else the lowest-id window. Returns `None` only when the explicit
+    /// window doesn't exist, or when there are no windows at all.
+    ///
+    /// Used by new-tab/new-window style operations that target a WINDOW rather
+    /// than a specific pane, so they land in the focused window by default
+    /// instead of relying on the renderer's OS focus (which can diverge from the
+    /// sidecar's tracked focus).
+    pub async fn resolve_window_id(&self, window: Option<u32>) -> Option<u32> {
+        let focused_window_id = *self.inner.focused_window_id.lock().await;
+        let sessions = self.inner.sessions.lock().await;
+
+        let mut ids: Vec<u32> = sessions.values().map(|i| i.window_id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+
+        if let Some(w) = window {
+            // Explicit window: honor it only if it actually hosts sessions.
+            return ids.into_iter().find(|id| *id == w);
+        }
+        // Omitted: prefer the focused window when it hosts sessions, else the
+        // lowest-id window (BTreeMap/get_status order).
+        if let Some(focused) = focused_window_id {
+            if ids.contains(&focused) {
+                return Some(focused);
+            }
+        }
+        ids.into_iter().next()
+    }
+
     /// Get status of all registered sessions, grouped by window and tab.
     pub async fn get_status(&self) -> serde_json::Value {
         use sysinfo::{Pid, ProcessesToUpdate, System};
@@ -1846,6 +1877,45 @@ mod tests {
 
             let resolved = bridge.resolve_pane_uid(None, None, None).await;
             assert_eq!(resolved.as_deref(), Some("win0-b"));
+        });
+    }
+
+    #[test]
+    fn resolve_window_id_defaults_to_focused_then_lowest() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let bridge = Bridge::new();
+            {
+                let mut sessions = bridge.inner.sessions.lock().await;
+                sessions.insert("win0-a".into(), session_info(10, "tab-0", "a", true, true));
+                sessions.insert("win1-a".into(), session_info(20, "tab-1", "a", true, true));
+            }
+
+            // No sessions yet, no focus → None (renderer bootstraps first window).
+            // (checked on a fresh bridge below)
+
+            // Focused window hosts sessions → return it.
+            *bridge.inner.focused_window_id.lock().await = Some(20);
+            assert_eq!(bridge.resolve_window_id(None).await, Some(20));
+
+            // Stale focus (window with no sessions) → fall back to lowest id.
+            *bridge.inner.focused_window_id.lock().await = Some(999);
+            assert_eq!(bridge.resolve_window_id(None).await, Some(10));
+
+            // Explicit window that exists → honored.
+            assert_eq!(bridge.resolve_window_id(Some(20)).await, Some(20));
+            // Explicit window that doesn't exist → None (handler turns this into 404).
+            assert_eq!(bridge.resolve_window_id(Some(99)).await, None);
+        });
+    }
+
+    #[test]
+    fn resolve_window_id_none_when_no_sessions() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let bridge = Bridge::new();
+            assert_eq!(bridge.resolve_window_id(None).await, None);
+            assert_eq!(bridge.resolve_window_id(Some(1)).await, None);
         });
     }
 
