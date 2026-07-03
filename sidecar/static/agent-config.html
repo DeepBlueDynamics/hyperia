@@ -20,6 +20,11 @@
   }
   /* Standard dropdown chevron — the native arrow renders wonky against the
      custom dark background, so draw our own. */
+  /* While the dropdown list is showing, square the select's bottom corners so
+     the box visually connects with the (unstylable, square) native list. */
+  select.open {
+    border-bottom-left-radius:0; border-bottom-right-radius:0;
+  }
   select {
     appearance:none; -webkit-appearance:none;
     background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239a9aa2' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
@@ -404,6 +409,16 @@ $('save').onclick = async () => {
   load();
 };
 load();
+
+// Square the select's bottom corners while its native dropdown list is open
+// (the list itself is unstylable and square — this unifies the two shapes).
+for (const s of document.querySelectorAll('select')) {
+  const close = () => s.classList.remove('open');
+  s.addEventListener('mousedown', () => s.classList.add('open'));
+  s.addEventListener('change', close);
+  s.addEventListener('blur', close);
+  s.addEventListener('keydown', (e) => { if (e.key === 'Escape' || e.key === 'Enter') close(); });
+}
 </script>
 </body>
 </html>
