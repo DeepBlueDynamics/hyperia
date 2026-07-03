@@ -1554,6 +1554,11 @@ function handleEvent(ev) {
     }
     case 'done':
       endAgentStream();
+      // Tick the title on each completed turn — the renderer watches
+      // page-title CHANGES on /shell panes and fires the standard tab
+      // bell/flash when this tab is backgrounded.
+      window.__ttick = (window.__ttick || 0) + 1;
+      document.title = '👻 Hyperia · ' + window.__ttick;
       break;
     case 'error':
       addRow('error', 'err!', escapeHtml(ev.message || 'unknown error'));
