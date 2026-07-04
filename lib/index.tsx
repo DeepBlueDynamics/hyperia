@@ -626,7 +626,13 @@ rpc.on('open web pane req', ({url}: {url?: string}) => {
         (g: any) => !g.parentUid && g.webUrl && isHyperiaShellUrl(g.webUrl)
       );
       if (existing) {
-        store_.dispatch({type: 'TERM_GROUP_ACTIVATE_WEB_TAB', uid: (existing as any).uid} as any);
+        const uid = (existing as any).uid;
+        // Self-heal before focusing: a group restored from a crashed layout
+        // can be a ZOMBIE (webUrl set but pane never rebuilt) — re-setting the
+        // web URL renormalizes it (sessionUid null, active pane) so the tab
+        // draws; for a healthy tab this is an idempotent no-op.
+        store_.dispatch({type: 'TERM_GROUP_SET_WEB_URL', uid, url: full} as any);
+        store_.dispatch({type: 'TERM_GROUP_ACTIVATE_WEB_TAB', uid} as any);
         return;
       }
       store_.dispatch(termGroupActions.openWebPaneInNewTab(full, 'Hyperia Agent') as any);
