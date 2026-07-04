@@ -627,12 +627,19 @@ rpc.on('open web pane req', ({url}: {url?: string}) => {
       );
       if (existing) {
         const uid = (existing as any).uid;
-        // Self-heal before focusing: a group restored from a crashed layout
-        // can be a ZOMBIE (webUrl set but pane never rebuilt) — re-setting the
-        // web URL renormalizes it (sessionUid null, active pane) so the tab
-        // draws; for a healthy tab this is an idempotent no-op.
-        store_.dispatch({type: 'TERM_GROUP_SET_WEB_URL', uid, url: full} as any);
+        // Focus the existing agent tab — and force a REMOUNT to guarantee a
+        // live native view. A group restored from a crash (or whose view was
+        // reaped) is a zombie: webUrl set, tab drawn, but the WebContentsView
+        // gone — blank, un-right-clickable. term-group renders <WebPane> only
+        // when webUrl != null, so clearing then re-setting it unmounts +
+        // remounts the pane, whose componentDidMount re-creates the native
+        // view. A healthy tab just briefly re-mounts (page reloads) — the
+        // dedupe still beats stacking duplicate agent tabs.
         store_.dispatch({type: 'TERM_GROUP_ACTIVATE_WEB_TAB', uid} as any);
+        store_.dispatch({type: 'TERM_GROUP_SET_WEB_URL', uid, url: null} as any);
+        setTimeout(() => {
+          store_.dispatch({type: 'TERM_GROUP_SET_WEB_URL', uid, url: full} as any);
+        }, 0);
         return;
       }
       store_.dispatch(termGroupActions.openWebPaneInNewTab(full, 'Hyperia Agent') as any);

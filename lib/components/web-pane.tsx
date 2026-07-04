@@ -1075,6 +1075,16 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     // its purpose (mirror of SESSION_SET_ACTIVE clearing terminal bells).
     if (!prevProps.isTabActive && this.props.isTabActive) {
       this.clearPendingBell();
+      // Self-heal: re-assert the native view on activation. If it's alive,
+      // createPane is a no-op (cancels any pending teardown); if it was
+      // reaped (window close, delayed-destroy, crash-restore, or dedupe
+      // focusing a re-keyed group), it rebuilds — fixing the blank
+      // Hyperia Agent tab you couldn't even right-click.
+      if (this.isNativeWeb()) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        ipcRenderer.send('web-pane:create', {uid: this.props.groupUid, url: this.props.url});
+        requestAnimationFrame(() => this.reportBounds());
+      }
     }
   }
 
