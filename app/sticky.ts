@@ -829,8 +829,14 @@ function createStickyNote(
       win.setAlwaysOnTop(true, 'floating');
       // macOS: float the note over a native-fullscreen host app at its real size
       // instead of letting it get absorbed into (and fill) the fullscreen Space.
+      // skipTransformProcessType is CRITICAL: without it Electron toggles the
+      // app's process type (Foreground<->UIElement) on this call, which pulls
+      // the main window out of fullscreen and — when it fails to toggle back —
+      // strips Hyperia's menu bar + traffic lights and drops it from Cmd+Tab
+      // (app still running, just invisible to the window server). The collection
+      // behavior alone (visibleOnFullScreen) floats the sticky without it.
       if (process.platform === 'darwin') {
-        win.setVisibleOnAllWorkspaces(true, {visibleOnFullScreen: true});
+        win.setVisibleOnAllWorkspaces(true, {visibleOnFullScreen: true, skipTransformProcessType: true});
       }
       win.focus();
       win.webContents.focus();

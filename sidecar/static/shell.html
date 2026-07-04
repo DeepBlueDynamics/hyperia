@@ -2129,6 +2129,12 @@ async function maybeAutoResetIfStale() {
   } catch (_) {}
 }
 
+// A "Configure" button for boot greetings — opens the agent config page.
+// Preferred over telling the user to paste secret keys into the terminal.
+function configureBtn(label) {
+  return "<button onclick=\"location.href='/agent/config'\" style=\"cursor:pointer;background:var(--accent);color:#0a0a10;border:none;border-radius:5px;padding:3px 12px;font-family:var(--font);font-size:11px;font-weight:600;margin-left:4px\">⚙ " + (label || 'Configure') + "</button>";
+}
+
 async function boot() {
   await maybeAutoResetIfStale();
   const caps = await bootCapabilities();
@@ -2154,15 +2160,12 @@ async function boot() {
           ? "ready on frontier."
           : (ollamaReachable ? "ready on frontier." : "ready on frontier. install ollama for a local compressor.");
       case 'local':
-        return "ready on local model. planning will feel slower than frontier; paste an anthropic / openai / gemini token to upgrade.";
+        return "ready on local model. planning will feel slower than frontier — " + configureBtn("Configure a frontier model") + " to upgrade.";
       case 'none':
       default:
-        if (ollamaDisabled) {
-          return "Ollama is disabled via configuration. To activate the Hyperia agent, please configure an API token from one of the following providers: OpenAI (paste <code>sk-…</code>), Anthropic (paste <code>sk-ant-…</code>), or Gemini (paste <code>AIza…</code>). Typing <code>what's possible</code> walks through options.";
-        } else if (!ollamaReachable) {
-          return "Ollama is unreachable or not running, and no provider tokens are configured. Please start Ollama or configure an API token from OpenAI (paste <code>sk-…</code>), Anthropic (paste <code>sk-ant-…</code>), or Gemini (paste <code>AIza…</code>). Typing <code>what's possible</code> walks through options.";
-        }
-        return "i don't have a brain wired yet. try <code>install ollama</code> for a local model, or <code>paste anthropic token sk-ant-…</code> for a frontier one. typing <code>what's possible</code> walks through options.";
+        // No brain wired. NEVER tell the user to paste secret keys into the
+        // terminal — send them to the config page via a button instead.
+        return "No agent is configured yet. Pick a model and add a key on the configuration page. " + configureBtn("Configure the agent");
     }
   })();
   addRow('agent', 'hyperia~&gt;', greeting);
