@@ -2036,6 +2036,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       <div
         ref={this.webWrapperRef}
         className="web_fit"
+        // Critical layout as INLINE style so it can never be dropped by a
+        // styled-jsx/global-CSS injection failure (which was rendering the
+        // pane at height 0 → blank web panes, no native view). The .web_fit
+        // class still supplies bg/container-query; these four rules are the
+        // load-bearing ones and now cannot fail.
+        style={{position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column'}}
         onKeyDown={this.handleKeyDown}
         onContextMenu={this.handleContextMenu}
         onMouseDown={(e) => {

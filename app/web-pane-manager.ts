@@ -289,6 +289,7 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
   panes.set(uid, entry);
   wireWebContents(uid, view.webContents);
   if (url) void view.webContents.loadURL(url).catch(() => {});
+  console.log(`[wp] createPane BUILT fresh uid=${uid.slice(0,8)} win=${win.id} childViews=${win.contentView.children.length}`);
 }
 
 // Lay out the page view (and, when open, the docked DevTools view below it)
