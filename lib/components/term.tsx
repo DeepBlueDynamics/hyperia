@@ -501,6 +501,15 @@ export default class Term extends React.PureComponent<
     const {props} = this;
     activeTerminals.set(props.uid, this);
 
+    // A picker pane is created by an explicit user action (new tab / split /
+    // switch-shell) and IS the pane the user is looking at — but it has no
+    // xterm to take focus, so it never becomes the active session and its
+    // W/S/A hotkeys stay dead until you click it. Activate it on mount so the
+    // hotkeys work immediately. (Shell panes activate via xterm focus below.)
+    if ((props as any).sessionProfile === 'picker' && !props.isTermActive && props.onActive) {
+      props.onActive();
+    }
+
     rpc.on('picker-zoom-in', this.handlePickerZoomIn);
     rpc.on('picker-zoom-out', this.handlePickerZoomOut);
     rpc.on('picker-zoom-reset', this.handlePickerZoomReset);

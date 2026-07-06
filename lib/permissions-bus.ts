@@ -33,6 +33,30 @@ function emit(paneId: string): void {
   const req = current.get(paneId) || null;
   listeners.get(paneId)?.forEach((cb) => cb(req));
   emitAll();
+  emitOverlay();
+}
+
+// ---------------------------------------------------------------------------
+// "Overlay active" — true whenever ANY permission UI is on screen (a per-pane
+// consent panel OR a window-level create toast). Web panes subscribe to this
+// and hide their native WebContentsView while it's true: a native view paints
+// ABOVE all DOM regardless of z-index, so a consent prompt would otherwise be
+// occluded by an open web pane.
+// ---------------------------------------------------------------------------
+const overlayListeners = new Set<(active: boolean) => void>();
+function overlayActive(): boolean {
+  return toasts.size > 0 || current.size > 0;
+}
+function emitOverlay(): void {
+  const a = overlayActive();
+  overlayListeners.forEach((cb) => cb(a));
+}
+export function subscribePermsOverlay(cb: (active: boolean) => void): () => void {
+  overlayListeners.add(cb);
+  cb(overlayActive());
+  return () => {
+    overlayListeners.delete(cb);
+  };
 }
 
 /** A request arrived for a pane — show its prompt. */
@@ -91,6 +115,7 @@ const toastListeners = new Set<(reqs: ToastRequest[]) => void>();
 function emitToasts(): void {
   const list = Array.from(toasts.values());
   toastListeners.forEach((cb) => cb(list));
+  emitOverlay();
 }
 
 export function setToast(req: ToastRequest): void {

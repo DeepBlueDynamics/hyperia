@@ -6,6 +6,7 @@ import {connect} from 'react-redux';
 import type {HyperDispatch} from '../../typings/hyper';
 import {clearWebPane, userExitTermGroup, splitWebPane, popOutPane} from '../actions/term-groups';
 import {markTabBell, clearTabBell} from '../actions/ui';
+import {subscribePermsOverlay} from '../permissions-bus';
 import rpc from '../rpc';
 import {toNavigableUrl} from '../utils/navigable-url';
 import {countPathHorizontalStacks} from '../utils/term-groups';
@@ -118,6 +119,9 @@ interface WebPaneState {
   // freeze-swap on every header crossing made the pane flash constantly while
   // simply mousing in/out of it.
   headerHover?: boolean;
+  // A permission prompt (consent toast / panel) is on screen anywhere — hide
+  // the native view so the DOM prompt isn't occluded by it.
+  permOverlay?: boolean;
   // Whether this pane is actually in the viewport (IntersectionObserver). An
   // inactive tab is parked off-screen, so its native view must be hidden.
   onScreen?: boolean;
@@ -173,6 +177,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   _domReadyHandler: ((e: any, payload: any) => void) | null = null;
   // Pending header-hover dwell (freeze-swap only fires after the cursor rests).
   _headerHoverTimer: ReturnType<typeof setTimeout> | null = null;
+  _permOverlayUnsub: (() => void) | null = null;
   // ── Background-tab notify for the agent shell pane ───────────────────────
   // Last <title> the shell page reported (null until the first push) and a
   // burst guard so rapid-fire title ticks ring at most once per window.
@@ -288,6 +293,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       pageBgColor: null,
       frozenShot: null,
       headerHover: false,
+      permOverlay: false,
       onScreen: true,
       findOpen: false,
       findText: '',
@@ -321,7 +327,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       // an inactive tab is parked at left:-9999em (still has size), so the rect
       // check alone can't detect it.
       const inViewport = this.state.onScreen !== false;
-      const overlayHidden = this.state.isUrlNavigatorOpen || this.state.findOpen || this.state.headerHover;
+      const overlayHidden = this.state.isUrlNavigatorOpen || this.state.findOpen || this.state.headerHover || this.state.permOverlay;
       const showable = hasSize && inViewport && !this.state.error;
       const visible = showable && !overlayHidden;
       // Freeze (capture a still) ONLY when hiding an on-screen pane for a DOM
@@ -1066,7 +1072,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       prevState.isUrlNavigatorOpen !== this.state.isUrlNavigatorOpen ||
       prevState.findOpen !== this.state.findOpen ||
       prevState.error !== this.state.error ||
-      prevState.headerHover !== this.state.headerHover
+      prevState.headerHover !== this.state.headerHover ||
+      prevState.permOverlay !== this.state.permOverlay
     ) {
       this.reportBounds();
     }
@@ -1126,6 +1133,13 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     // Safety net for reposition-without-resize (a sibling split closes and this
     // pane slides over at the same size).
     this._boundsInterval = setInterval(this.reportBounds, 300);
+
+    // Hide the native view while any permission prompt is on screen (a native
+    // WebContentsView paints above all DOM, so a consent toast/panel would be
+    // occluded by an open web pane). reportBounds handles the freeze-swap.
+    this._permOverlayUnsub = subscribePermsOverlay((active) => {
+      if (active !== !!this.state.permOverlay) this.setState({permOverlay: active});
+    });
 
     // Check if AI is configured
     try {
@@ -1492,6 +1506,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (this._zoomKeyHandler) ipcRenderer.removeListener('web-pane:zoom-key', this._zoomKeyHandler);
 
     this.resizeObserver?.disconnect();
+    this._permOverlayUnsub?.();
     document.removeEventListener('mousedown', this.handleOutsideClick);
     if (this._windowKeydownHandler) {
       window.removeEventListener('keydown', this._windowKeydownHandler);

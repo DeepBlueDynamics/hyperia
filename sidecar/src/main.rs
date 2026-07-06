@@ -1355,9 +1355,19 @@ async fn enforce_note_access(
     }
 
     let caller_label = id.label();
-    
+
+    // Unowned note → no owner to protect, so anyone may edit it. A note created
+    // WITHOUT a presented identity is stamped creator="anonymous" (or nothing);
+    // no token-bearing identity can ever match that, so the very agent that
+    // created the note gets locked out of its own note (the endless consent
+    // loop). Treat anonymous/empty creators as unowned and allow.
+    let owner = creator.as_deref().filter(|c| !c.is_empty() && *c != "anonymous");
+    if owner.is_none() {
+        return Ok(());
+    }
+
     // Check if caller is the owner
-    if creator.is_some() && creator.as_deref() == Some(&caller_label) {
+    if owner == Some(caller_label.as_str()) {
         return Ok(());
     }
 
