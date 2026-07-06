@@ -42,6 +42,28 @@ function shipUnsigned(reason) {
   console.warn(`::warning::Windows build is UNSIGNED — ${reason}`);
 }
 
+// Only Authenticode-signable PE binaries (DOS "MZ" header) can be handed to
+// signtool. Deps like node-pty bundle darwin/linux prebuilds (`.node` = Mach-O /
+// ELF) INSIDE the Windows package; `win.signExts: [".node"]` matches them by
+// extension, but signtool rejects them ("file format cannot be signed"). Those
+// files never execute on Windows, so skip them QUIETLY — otherwise the graceful
+// degrade below would fire a false `::warning::…UNSIGNED`, crying wolf over the
+// real signal that flags a genuinely unsigned Windows binary.
+function isPeFile(f) {
+  try {
+    const fd = fs.openSync(f, 'r');
+    try {
+      const buf = Buffer.alloc(2);
+      fs.readSync(fd, buf, 0, 2, 0);
+      return buf[0] === 0x4d && buf[1] === 0x5a; // 'MZ'
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return true; // unreadable → let signtool decide rather than silently skip
+  }
+}
+
 // Load .signing.env from the repo root if AZURE_CLIENT_SECRET isn't already set
 function loadSigningEnv() {
   const envFile = path.join(__dirname, '..', '..', '.signing.env');
@@ -62,12 +84,18 @@ exports.default = async function (config) {
   // Explicit unsigned build: HYPERIA_SKIP_SIGNING=1 yarn run dist — ships every
   // artifact unsigned even when .signing.env is present (for diagnostics / quick
   // local builds). Returning here leaves the file unsigned.
+  const file = config.path;
   if (process.env.HYPERIA_SKIP_SIGNING) {
-    console.warn(`HYPERIA_SKIP_SIGNING set — shipping ${require('path').basename(config.path)} UNSIGNED`);
+    console.warn(`HYPERIA_SKIP_SIGNING set — shipping ${path.basename(file)} UNSIGNED`);
+    return;
+  }
+  // Non-PE files (darwin/linux `.node` prebuilds shipped inside the win package)
+  // can't be Authenticode-signed and don't run on Windows — skip without alarm.
+  if (!isPeFile(file)) {
+    console.log(`Skip (not a PE binary): ${path.basename(file)}`);
     return;
   }
   loadSigningEnv();
-  const file = config.path;
 
   const clientSecret = process.env.AZURE_CLIENT_SECRET;
   if (!clientSecret) {
