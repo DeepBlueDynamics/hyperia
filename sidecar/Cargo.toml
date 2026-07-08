@@ -1,6 +1,6 @@
 [package]
 name = "hyperia-sidecar"
-version = "0.15.29"
+version = "0.15.30"
 edition = "2021"
 description = "Rust sidecar for Hyperia: agent engine, MCP, signaling"
 
@@ -31,6 +31,13 @@ aegis-edit = { path = "crates/aegis-edit" }
 # HTML → clean reader-mode markdown (grub's converter, pyo3 stripped). Turns a
 # web pane's rendered DOM into markdown for web_pane_content. Vendored under crates/.
 grub-md = { path = "crates/grub-md" }
+
+# ── Local text-to-speech (Kokoro-82M) — backs hyperia_spoken_summary ──────────
+# ort-based Kokoro with a built-in pure-Rust G2P (cross-compile friendly — no
+# espeak/clang/nasm). ONNX model auto-downloads on first synthesis.
+kokoro-tts = "0.3"
+# Play the synthesized WAV on the machine (WASAPI/CoreAudio/ALSA via cpal).
+rodio = "0.22"
 
 # Claude API + HTTP client
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }

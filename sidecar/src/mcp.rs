@@ -727,6 +727,16 @@ pub struct SettingsDeleteProfileRequest {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct FlushRequest {}
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SpokenSummaryRequest {
+    /// The text to speak aloud (required). Keep it short — a sentence or two.
+    pub text: String,
+    /// Voice name: af_heart (default), am_michael, am_puck, bf_emma, bm_george, af_bella, af_nicole. Unknown names fall back to af_heart.
+    pub voice: Option<String>,
+    /// Speaking speed, 0.5–2.0 (default 1.0). Values outside the range are clamped.
+    pub speed: Option<f32>,
+}
+
 // -- MCP Server --
 
 #[derive(Clone)]
@@ -1614,6 +1624,31 @@ impl HyperiaMcp {
             sidecar_version, sidecar_version, app_version
         );
         Ok(CallToolResult::success(vec![Content::text(info)]))
+    }
+
+    #[tool(description = "Speak a short text summary ALOUD on the host machine using a fully-local, offline Kokoro TTS model (no cloud, no telemetry, all in the sidecar). The first call downloads a ~90MB model to ~/.hyperia/kokoro. Args: text (required); voice (optional: af_heart[default], am_michael, am_puck, bf_emma, bm_george, af_bella, af_nicole); speed (optional 0.5-2.0, default 1.0).")]
+    async fn hyperia_spoken_summary(
+        &self,
+        Parameters(req): Parameters<SpokenSummaryRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let text = req.text.trim().to_string();
+        if text.is_empty() {
+            return Err(ErrorData::invalid_params("text must not be empty", None));
+        }
+        let voice = req
+            .voice
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or("af_heart")
+            .to_string();
+        let n = text.chars().count();
+        match crate::tts::speak(&text, Some(&voice), req.speed).await {
+            Ok(secs) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Spoke {n} chars in {secs:.1}s (voice {voice})."
+            ))])),
+            Err(e) => Err(ErrorData::internal_error(format!("TTS failed: {e}"), None)),
+        }
     }
 
     #[tool(description = "Get a persistent Hyperia identity token for an EXTERNAL agent — one NOT running inside a Hyperia pane, so it has no HYPERIA_AGENT_TOKEN in its environment. Call this the moment a state-changing tool returns 'No identity': it mints (or returns) a persistent hyp_agent_… token. Then set your MCP client's Authorization header to 'Bearer <that token>' and reconnect — after which terminal_run / terminal_keys / terminal_split / request_access etc. work. Read-only/monitoring tools never needed it. The token persists in ~/.hyperia/agents.json across restarts; minting the same name again returns the same token.")]

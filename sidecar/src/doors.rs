@@ -305,6 +305,12 @@ pub const DOORS: &[Door] = &[
         ghost_tools: &[],
         mcp_tools: &["apply_text_edits"],
     },
+    Door {
+        name: "media",
+        description: "Local offline audio: speak text aloud via Kokoro TTS",
+        ghost_tools: &[],
+        mcp_tools: &["hyperia_spoken_summary"],
+    },
 ];
 
 /// Look up a door entry by name (surface-agnostic).
@@ -690,9 +696,10 @@ mod tests {
     #[test]
     fn expected_door_counts_per_surface() {
         // Plan §3.1 table: 8 ghost doors (header says "7", table lists 8 —
-        // the table is authoritative). Plan §3.2: 9 MCP doors.
+        // the table is authoritative). Plan §3.2: 9 MCP doors + the local-TTS
+        // `media` door (hyperia_spoken_summary) = 10.
         assert_eq!(doors_for(Surface::Ghost).count(), 8, "ghost door count");
-        assert_eq!(doors_for(Surface::Mcp).count(), 9, "mcp door count");
+        assert_eq!(doors_for(Surface::Mcp).count(), 10, "mcp door count");
         assert_eq!(GHOST_CORE.len(), 11, "ghost core count");
         assert_eq!(MCP_CORE.len(), 12, "mcp core count");
     }

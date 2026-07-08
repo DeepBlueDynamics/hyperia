@@ -18,6 +18,7 @@ mod util;
 mod settings;
 mod snapshot_image;
 mod telemetry;
+mod tts;
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -266,6 +267,29 @@ async fn get_logs(
 struct ClientLogRequest {
     level: Option<String>,
     message: String,
+}
+
+/// `POST /api/tts` — speak a short text aloud on the host via the local Kokoro
+/// model. Body: `{ "text": "...", "voice"?: "af_heart", "speed"?: 1.0 }`.
+#[derive(Deserialize)]
+struct TtsRequest {
+    text: String,
+    #[serde(default)]
+    voice: Option<String>,
+    #[serde(default)]
+    speed: Option<f32>,
+}
+
+async fn post_tts(Json(req): Json<TtsRequest>) -> Json<serde_json::Value> {
+    let voice = req
+        .voice
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    match tts::speak(&req.text, voice, req.speed).await {
+        Ok(secs) => Json(serde_json::json!({ "ok": true, "duration_secs": secs })),
+        Err(e) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+    }
 }
 
 async fn post_client_log(
@@ -2943,6 +2967,7 @@ async fn main() -> anyhow::Result<()> {
         // Read endpoints
         .route("/api/logs", axum::routing::get(get_logs))
         .route("/api/log", axum::routing::post(post_client_log))
+        .route("/api/tts", axum::routing::post(post_tts))
         .route("/api/status", axum::routing::get(get_status))
         .route("/api/screen", axum::routing::get(get_screen))
         .route("/api/fs/dirs", axum::routing::get(get_fs_dirs))
