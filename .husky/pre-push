@@ -1,8 +1,0 @@
-#!/bin/sh
-. "$(dirname "$0")/_/husky.sh"
-
-# Clear AVA's import-from-project cache — on Windows it gets file-locked
-# between runs and causes EPERM rename errors
-rm -rf node_modules/.cache/ava
-
-yarn test
