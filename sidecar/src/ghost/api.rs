@@ -758,7 +758,7 @@ pub async fn agent_config_page() -> impl IntoResponse {
     Html(include_str!("../../static/agent-config.html"))
 }
 
-fn read_shared_config() -> serde_json::Value {
+pub(crate) fn read_shared_config() -> serde_json::Value {
     config_raw_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str(&s).ok())

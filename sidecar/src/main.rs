@@ -280,14 +280,47 @@ struct TtsRequest {
     speed: Option<f32>,
 }
 
-async fn post_tts(Json(req): Json<TtsRequest>) -> Json<serde_json::Value> {
+async fn post_tts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<TtsRequest>,
+) -> Json<serde_json::Value> {
     let voice = req
         .voice
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty());
-    match tts::speak(&req.text, voice, req.speed).await {
-        Ok(secs) => Json(serde_json::json!({ "ok": true, "duration_secs": secs })),
+
+    // Caller's spokenable callsign — resolved from the request identity (mirrors
+    // maybe_attribute): a pane's friendly codename, or an external agent's name.
+    let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    let caller_raw = match &id {
+        identity::CallerIdentity::Pane { pane, .. } => {
+            state.bridge.pane_display_name(pane).await.unwrap_or_default()
+        }
+        identity::CallerIdentity::Agent { name, .. } => name.clone(),
+        _ => String::new(),
+    };
+    let caller = match tts::spokenable_name(&caller_raw) {
+        s if s.is_empty() => "station".to_string(),
+        s => s,
+    };
+
+    // Recipient callsign from config (config.tts.recipient), default "base".
+    let recipient_raw = ghost::api::read_shared_config()["config"]["tts"]["recipient"]
+        .as_str()
+        .unwrap_or("base")
+        .to_string();
+    let recipient = match tts::spokenable_name(&recipient_raw) {
+        s if s.is_empty() => "base".to_string(),
+        s => s,
+    };
+
+    let spoken = tts::radio_wrap(&recipient, &caller, &req.text);
+    match tts::speak(&spoken, voice, req.speed).await {
+        Ok(secs) => Json(serde_json::json!({
+            "ok": true, "duration_secs": secs, "caller": caller, "recipient": recipient
+        })),
         Err(e) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
     }
 }

@@ -1626,28 +1626,47 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(info)]))
     }
 
-    #[tool(description = "Speak a short text summary ALOUD on the host machine using a fully-local, offline Kokoro TTS model (no cloud, no telemetry, all in the sidecar). The first call downloads a ~90MB model to ~/.hyperia/kokoro. Args: text (required); voice (optional: af_heart[default], am_michael, am_puck, bf_emma, bm_george, af_bella, af_nicole); speed (optional 0.5-2.0, default 1.0).")]
+    #[tool(description = "Speak a short text summary ALOUD on the host machine using a fully-local, offline Kokoro TTS model (no cloud, no telemetry, all in the sidecar). Your text is framed as a radio transmission from YOU (your pane/agent callsign) to the configured recipient (config.tts.recipient, default 'base'): \"<recipient>, <recipient>, this is <you> transmitting. <text>. This is <you>. Over and out.\" The first call downloads a ~90MB model to ~/.hyperia/kokoro. Args: text (required); voice (optional: af_heart[default], am_michael, am_puck, bf_emma, bm_george, af_bella, af_nicole); speed (optional 0.5-2.0, default 1.0).")]
     async fn hyperia_spoken_summary(
         &self,
         Parameters(req): Parameters<SpokenSummaryRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let text = req.text.trim().to_string();
         if text.is_empty() {
             return Err(ErrorData::invalid_params("text must not be empty", None));
         }
-        let voice = req
-            .voice
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or("af_heart")
-            .to_string();
-        let n = text.chars().count();
-        match crate::tts::speak(&text, Some(&voice), req.speed).await {
-            Ok(secs) => Ok(CallToolResult::success(vec![Content::text(format!(
-                "Spoke {n} chars in {secs:.1}s (voice {voice})."
-            ))])),
-            Err(e) => Err(ErrorData::internal_error(format!("TTS failed: {e}"), None)),
+        // Forward to /api/tts, which resolves the caller's callsign + the
+        // configured recipient and frames the radio transmission before synth.
+        // A long per-request timeout overrides the 10s client default — the first
+        // call downloads the ~90MB model and synth+playback can run long.
+        let body = serde_json::json!({ "text": text, "voice": req.voice, "speed": req.speed });
+        let mut rb = self
+            .client
+            .post(format!("{}/api/tts", self.base_url))
+            .timeout(std::time::Duration::from_secs(600))
+            .json(&body);
+        if let Some(a) = forwarded_auth(&ctx) {
+            rb = rb.header(reqwest::header::AUTHORIZATION, a);
+        }
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("TTS request failed: {e}"), None))?;
+        let v: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("TTS response error: {e}"), None))?;
+        if v["ok"].as_bool().unwrap_or(false) {
+            let secs = v["duration_secs"].as_f64().unwrap_or(0.0);
+            let caller = v["caller"].as_str().unwrap_or("station");
+            let recipient = v["recipient"].as_str().unwrap_or("base");
+            Ok(CallToolResult::success(vec![Content::text(format!(
+                "Transmitted to {recipient} as {caller} — {secs:.1}s on air."
+            ))]))
+        } else {
+            let err = v["error"].as_str().unwrap_or("unknown error");
+            Err(ErrorData::internal_error(format!("TTS failed: {err}"), None))
         }
     }
 

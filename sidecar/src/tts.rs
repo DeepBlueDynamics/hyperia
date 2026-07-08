@@ -205,6 +205,33 @@ fn resolve_voice(name: Option<&str>, speed: f32) -> Voice {
     }
 }
 
+/// Reduce a pane/agent display name to a short *spokenable* callsign: the part
+/// before any " | <process>" suffix, letters + apostrophes only (drops emoji,
+/// digits, punctuation), whitespace-collapsed.
+/// `"Severe Booby 🥐 | Nemesis8 Danger"` → `"Severe Booby"`;
+/// `"Prior Sloth 🦥"` → `"Prior Sloth"`.
+pub fn spokenable_name(raw: &str) -> String {
+    let head = raw.split('|').next().unwrap_or(raw);
+    let cleaned: String = head
+        .chars()
+        .map(|c| if c.is_alphabetic() || c == '\'' { c } else { ' ' })
+        .collect();
+    cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Wrap `text` in a radio-transmission frame addressed from `caller` to
+/// `recipient`:
+/// `"{recipient}, {recipient}, this is {caller} transmitting. {text}. This is
+/// {caller}. Over and out."`
+pub fn radio_wrap(recipient: &str, caller: &str, text: &str) -> String {
+    // Strip trailing sentence punctuation from the body so the frame reads
+    // cleanly ("… transmitting. <text>. This is …").
+    let body = text.trim().trim_end_matches(['.', ',', '!', '?', ';', ':', ' ']);
+    format!(
+        "{recipient}, {recipient}, this is {caller} transmitting. {body}. This is {caller}. Over and out."
+    )
+}
+
 /// Play a mono `f32` buffer at [`SAMPLE_RATE`] on the default output device.
 /// Blocking — call from `spawn_blocking`.
 fn play_samples(audio: Vec<f32>) -> Result<()> {
