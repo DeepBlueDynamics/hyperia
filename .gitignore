@@ -24,6 +24,7 @@ plugins
 
 # per-machine config
 .mcp.json
+.mcp-logs/
 .signing.env
 check-signing.ps1
 fix-icon-cache.ps1
