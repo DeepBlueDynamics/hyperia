@@ -33,6 +33,38 @@ fix-icon-cache.ps1
 .nemesis8.toml
 .serpapi.env
 
+# ── Secrets & credentials (blanket rules — defense in depth) ──────────────
+# Any real env file; keep the *.example templates tracked.
+*.env
+!*.env.example
+# Private keys, certs, keystores
+*.pem
+*.key
+*.p12
+*.pfx
+*.pkcs12
+*.keystore
+*.jks
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.asc
+*.gpg
+# Cloud / service-account credentials
+*service-account*.json
+*serviceaccount*.json
+gcp-*.json
+*-credentials.json
+credentials.json
+# Package-registry auth
+.npmrc
+.pypirc
+# Terraform vars + misc secret files
+*.tfvars
+*.secret
+secrets.*
+
 # TypeScript build info
 *.tsbuildinfo
 .release-notes-*.md
