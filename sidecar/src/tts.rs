@@ -15,12 +15,18 @@ use anyhow::{anyhow, Context, Result};
 use kokoro_tts::{KokoroTts, Voice};
 use tokio::sync::OnceCell;
 
-/// Kokoro V1.0 model assets (GitHub release from the crate's upstream). CPU
-/// inference only; ~90 MB total across the two files.
-const ONNX_URL: &str =
-    "https://github.com/mzdk100/kokoro/releases/download/V1.0/kokoro-v1.0.int8.onnx";
-const VOICES_URL: &str =
-    "https://github.com/mzdk100/kokoro/releases/download/V1.0/voices.bin";
+/// Kokoro V1.0 model assets. CPU inference only; ~120 MB total across the two
+/// files. Each is fetched from OUR CDN first (hyperia.nuts.services, served off
+/// our own Cloud Run site) and only falls back to the crate's upstream GitHub
+/// release if that fails — first URL that succeeds wins.
+const ONNX_URLS: &[&str] = &[
+    "https://hyperia.nuts.services/models/kokoro-v1.0.int8.onnx",
+    "https://github.com/mzdk100/kokoro/releases/download/V1.0/kokoro-v1.0.int8.onnx",
+];
+const VOICES_URLS: &[&str] = &[
+    "https://hyperia.nuts.services/models/voices.bin",
+    "https://github.com/mzdk100/kokoro/releases/download/V1.0/voices.bin",
+];
 
 const ONNX_FILE: &str = "kokoro-v1.0.int8.onnx";
 const VOICES_FILE: &str = "voices.bin";
@@ -96,16 +102,16 @@ pub async fn ensure_model() -> Result<(PathBuf, PathBuf)> {
 
     let onnx = dir.join(ONNX_FILE);
     let voices = dir.join(VOICES_FILE);
-    download_if_missing(&onnx, ONNX_URL).await?;
-    download_if_missing(&voices, VOICES_URL).await?;
+    download_if_missing(&onnx, ONNX_URLS).await?;
+    download_if_missing(&voices, VOICES_URLS).await?;
     Ok((onnx, voices))
 }
 
-/// Stream-download `url` to `path` unless a non-empty file is already there.
-///
-/// Writes to a `.part` sibling and renames on completion, so an interrupted
-/// download never leaves a truncated file that the "non-empty" check accepts.
-async fn download_if_missing(path: &Path, url: &str) -> Result<()> {
+/// Ensure `path` exists and is non-empty, downloading from the first working URL
+/// in `urls` (our CDN first, upstream GitHub fallback). A file already present
+/// is left untouched. Each candidate is tried in order; the first success wins,
+/// and only the last error surfaces if every URL fails.
+async fn download_if_missing(path: &Path, urls: &[&str]) -> Result<()> {
     if let Ok(meta) = tokio::fs::metadata(path).await {
         if meta.len() > 0 {
             tracing::debug!(
@@ -118,6 +124,23 @@ async fn download_if_missing(path: &Path, url: &str) -> Result<()> {
         }
     }
 
+    let mut last_err: Option<anyhow::Error> = None;
+    for url in urls {
+        match fetch_url(path, url).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                tracing::warn!(target: "tts", "download from {url} failed, trying next: {e:#}");
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow!("no download URLs configured for {}", path.display())))
+}
+
+/// Stream one `url` to `path`. Writes to a `.part` sibling and renames on
+/// completion, so an interrupted download never leaves a truncated file that the
+/// "non-empty" check would later accept.
+async fn fetch_url(path: &Path, url: &str) -> Result<()> {
     tracing::info!(target: "tts", "downloading kokoro asset {} -> {}", url, path.display());
 
     // Uses rustls (reqwest is built with rustls-tls, default-features off).
