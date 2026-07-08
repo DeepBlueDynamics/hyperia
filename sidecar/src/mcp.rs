@@ -2736,8 +2736,10 @@ struct ShellStateInfo {
     actionable: Option<String>,
 }
 
-/// Coarse screen-state kind (idle/running/dialog/empty/unknown) for the idle
-/// monitor. Thin wrapper so callers outside this module needn't see ShellStateInfo.
+/// Coarse screen-state kind (idle/running/dialog/empty/unknown). Formerly used by
+/// the pulse idle-gate; that now keys off PTY-output staleness (see
+/// `idle_monitor_tick`), but this is kept for shell-state classification callers.
+#[allow(dead_code)]
 pub(crate) fn classify_screen_kind(screen: &str) -> String {
     detect_shell_state(screen).kind
 }

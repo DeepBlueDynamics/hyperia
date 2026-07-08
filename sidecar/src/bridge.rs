@@ -50,6 +50,12 @@ pub struct SessionInfo {
     pub bsp_h: f32,
     pub cwd: String,
     pub last_user_activity: Option<std::time::Instant>,
+    /// When this pane last emitted PTY output. A truly-idle prompt (agent waiting
+    /// for input, shell at a prompt) emits nothing — xterm's cursor blink is
+    /// client-side — so this goes stale; a thinking/streaming agent keeps emitting
+    /// bytes and stays fresh. The pulse idle-gate keys off staleness here instead
+    /// of screen-scraping, which false-flagged a working agent as idle.
+    pub last_output_at: Option<std::time::Instant>,
     pub title: String,
     pub shell_state: String,
     pub shell_app: Option<ShellAppInfo>,
@@ -794,19 +800,32 @@ impl Bridge {
             return;
         }
 
-        // Classify each pane. 'human' if the human was active there recently —
-        // never poke over them; treat dialog/empty/unknown as "not safely idle".
+        // Classify each pane by whether it's safe to re-poke:
+        //   running — self-reported busy, OR the view emitted PTY output recently
+        //             (a thinking/streaming agent keeps producing bytes). Not idle.
+        //   human   — the human was active in this pane recently. NEVER poke.
+        //   idle    — no self-busy, no human, and the view has been SILENT for
+        //             >= IDLE_STALE_SECS. A parked agent/shell prompt emits nothing
+        //             (xterm's cursor blink is client-side), so it goes stale.
+        // This replaces the old screen-text heuristic (classify_screen_kind), which
+        // mis-read a working agent as "idle" and made the pulse false-fire.
+        const IDLE_STALE_SECS: u64 = 10;
         let mut kinds: HashMap<String, String> = HashMap::new();
         for pane in &panes {
             let kind = if self.pane_self_busy(pane).await {
-                // Agent (or its in-container monitor) says it's working — overrides
-                // the screen heuristic (covers "thinking"/streaming that looks idle).
                 "running".to_string()
             } else if self.user_active_recently(pane).await {
                 "human".to_string()
             } else {
-                let text = self.get_screen_text_by_uid(pane).await;
-                crate::mcp::classify_screen_kind(&text)
+                let stale = {
+                    let sessions = self.inner.sessions.lock().await;
+                    sessions
+                        .get(pane)
+                        .and_then(|s| s.last_output_at)
+                        .map(|t| t.elapsed().as_secs() >= IDLE_STALE_SECS)
+                        .unwrap_or(false) // never seen output → don't assume idle
+                };
+                if stale { "idle".to_string() } else { "running".to_string() }
             };
             kinds.insert(pane.clone(), kind);
         }
@@ -850,9 +869,12 @@ impl Bridge {
                 }
                 let kind = kinds.get(&p.pane).map(|s| s.as_str()).unwrap_or("unknown");
                 let ok = if p.idle_only {
+                    // idle-gated: only re-poke a stalled pane (silent >= 10s).
                     kind == "idle"
                 } else {
-                    kind != "human" && kind != "dialog" && kind != "running"
+                    // fixed-interval: fire every interval regardless of staleness,
+                    // but still NEVER over the human (focus-never-steal hard rule).
+                    kind != "human"
                 };
                 if ok {
                     to_fire.push((p.pane.clone(), p.keys.clone(), Some(p.creator.clone()), p.submit));
@@ -897,11 +919,14 @@ impl Bridge {
                 _ => keys,
             };
             if is_agent || is_ink_tui {
-                // Ink/agent TUI submits on LF. A long/multiline payload needs
-                // bracketed paste (atomic ingest) so it isn't garbled — then Enter
-                // separately. A SHORT one is typed + LF in ONE write: that's how
-                // terminal_run reliably submits claude-code (a separate Enter after
-                // a bracketed paste often types a newline but does NOT submit).
+                // Submit == a real Enter keypress, which xterm delivers to the PTY
+                // as CR (`\r`, 0x0D) — NOT LF. Ink TUIs (claude-code, codex, …)
+                // treat a bare LF as a newline INSIDE the input box and silently
+                // ignore it as a submit, so `\n` types the prompt but never sends it
+                // (the exact "poker won't hit Enter" bug). `\r` is what a human Enter
+                // sends, so it submits. A long/multiline payload still needs
+                // bracketed paste (atomic ingest) so it isn't garbled, then CR as a
+                // separate write once the paste has settled.
                 let large = payload.chars().count() > 120 || payload.contains('\n');
                 if large {
                     let wrapped = format!("\u{1b}[200~{payload}\u{1b}[201~");
@@ -914,12 +939,12 @@ impl Bridge {
                         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
                         let _ = self
                             .send_command(serde_json::json!({
-                                "type": "Keys", "uid": pane, "keys": "\n", "interrupt": false
+                                "type": "Keys", "uid": pane, "keys": "\r", "interrupt": false
                             }))
                             .await;
                     }
                 } else {
-                    let body = if submit { format!("{payload}\n") } else { payload };
+                    let body = if submit { format!("{payload}\r") } else { payload };
                     let _ = self
                         .send_command(serde_json::json!({
                             "type": "Keys", "uid": pane, "keys": body, "interrupt": false
@@ -1488,6 +1513,7 @@ impl Bridge {
                         bsp_h: 100.0,
                         cwd: String::new(),
                         last_user_activity: None,
+                        last_output_at: None,
                         title,
                         shell_state: "idle".to_string(),
                         shell_app: None,
@@ -1646,6 +1672,10 @@ impl Bridge {
                         let mut sessions = self.inner.sessions.lock().await;
                         if let Some(info) = sessions.get_mut(uid) {
                             info.screen.process(&bytes);
+                            // Freshness stamp for the pulse idle-gate: any PTY output
+                            // means the view isn't parked. A streaming/thinking agent
+                            // keeps this current; a silent prompt lets it go stale.
+                            info.last_output_at = Some(std::time::Instant::now());
                         }
                         drop(sessions);
                         // Append ANSI-stripped text to the lume per-shell log
@@ -1854,6 +1884,7 @@ mod tests {
             bsp_h: 100.0,
             cwd: String::new(),
             last_user_activity: None,
+            last_output_at: None,
             title: String::new(),
             shell_state: "idle".to_string(),
             shell_app: None,

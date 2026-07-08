@@ -735,7 +735,13 @@ export default class Term extends React.PureComponent<
 
     this.fitAddon.fit();
 
-    if (this.props.isTermActive) {
+    // A picker pane has no real terminal to type into. Focusing its (hidden)
+    // xterm <textarea> would make document.activeElement a TEXTAREA, which the
+    // picker's W/S/A window-hotkey handler reads as "the user is typing in a
+    // field" and ignores — that's the bug where the shortcut letters do nothing
+    // until you click the pane. Let the picker own focus itself (NewPanePicker
+    // focuses its own root on mount).
+    if (this.props.isTermActive && (this.props as any).sessionProfile !== 'picker') {
       this.term.focus();
     }
 

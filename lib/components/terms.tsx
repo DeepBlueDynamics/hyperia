@@ -132,9 +132,16 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
     e.preventDefault();
     e.stopPropagation();
 
-    // If quickEdit is enabled, right-click on selection already copied and cleared selection in mouseup.
-    // So we don't open context menu.
-    if (this.props.quickEdit && hasSelection) {
+    // With quickEdit, a right-click IS the copy/paste gesture — term.tsx's
+    // onMouseUp already copied the selection, or pasted the clipboard when there
+    // was none. Popping the context menu on top of that paste is the redundancy
+    // the user hit. Suppress the menu whenever the right-click had something to
+    // act on: a live selection (copy), OR text in the clipboard (paste). Note the
+    // selection was already cleared by the mouseup copy, so we also check the
+    // clipboard — which now holds whatever was just copied or is about to paste.
+    // Only fall through to the menu when there was nothing to copy AND nothing to
+    // paste, so quickEdit users can still reach it.
+    if (this.props.quickEdit && (hasSelection || clipboard.readText().length > 0)) {
       return;
     }
 

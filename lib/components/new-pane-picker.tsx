@@ -609,6 +609,13 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     lastUsedAgent: readStoredDefault(LS_DEFAULT_AGENT)
   };
 
+  // The picker's own focusable root. We pull keyboard focus here on mount so the
+  // W/S/A hotkeys fire immediately — otherwise focus sits on the previous pane's
+  // (or this pane's hidden) xterm <textarea>, and handleHotkey's typing-guard
+  // swallows the letters until you click the pane.
+  private rootRef = React.createRef<HTMLDivElement>();
+  private focusTimer: ReturnType<typeof setTimeout> | undefined;
+
   componentDidMount() {
     // Is the Hyperia agent configured? (provider+model+key in config.agent.*)
     const port = process.env.HYPERIA_PORT || '9800';
@@ -642,14 +649,25 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
       })
       .catch(() => {});
 
-    // W/S/A quick-launch hotkeys — window-level because the picker has no
-    // focusable surface of its own; gated on this pane being the active
-    // session (hotkeysEnabled) and on focus not being in a text field.
+    // W/S/A quick-launch hotkeys — window-level; gated on this pane being the
+    // active session (hotkeysEnabled) and on focus not being in a text field.
     window.addEventListener('keydown', this.handleHotkey);
+
+    // Take focus onto the picker root so the hotkeys work without a click first.
+    // Deferred so it lands after Term's mount-time focus pass; skipped if the
+    // user is already typing in one of the picker's own inputs (URL / combo box).
+    this.focusTimer = setTimeout(() => {
+      const el = this.rootRef.current;
+      if (!el) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active !== el && el.contains(active)) return; // user is in a field
+      el.focus({preventScroll: true});
+    }, 70);
   }
 
   componentWillUnmount() {
     window.removeEventListener('keydown', this.handleHotkey);
+    if (this.focusTimer) clearTimeout(this.focusTimer);
   }
 
   // W/S/A quick paths. Only in the main view (the hints live on its section
@@ -1052,10 +1070,14 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
 
     return (
       <div
+        ref={this.rootRef}
+        // Focusable (but not tab-stop) so the picker can hold keyboard focus for
+        // its W/S/A hotkeys without a visible focus ring.
+        tabIndex={-1}
         className="term_pickerContainer"
         // Content pinned to the TOP (no vertical centering) and the whole pane
         // scrolls when it's too short to show everything.
-        style={{zoom: pickerZoom, overflowY: 'auto'}}
+        style={{zoom: pickerZoom, overflowY: 'auto', outline: 'none'}}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
