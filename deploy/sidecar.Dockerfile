@@ -1,18 +1,15 @@
 # syntax=docker/dockerfile:1.7
 # hyperia-sidecar container (deploy spec: hyperia-docker-deployment-spec.md).
-# BUILD CONTEXT MUST BE THE REPO ROOT — sidecar/Cargo.toml references sibling
-# crates via `../lume`, `../aegis-edit`, `../grub-md` path deps.
+# BUILD CONTEXT MUST BE THE REPO ROOT — this copies sidecar/, which now vendors
+# its path-dep crates under sidecar/crates/ (lume, aegis-edit, grub-md).
 #
 #   docker build -f deploy/sidecar.Dockerfile -t deepbluedynamics/hyperia-sidecar:0.11.0 .
 
 # ---- builder ----
 FROM rust:1-bookworm AS build
 WORKDIR /build
-# Sibling crates the sidecar depends on via path deps. Layout must match
-# the `../lume`, `../aegis-edit`, `../grub-md` references in sidecar/Cargo.toml.
-COPY lume        ./lume
-COPY aegis-edit  ./aegis-edit
-COPY grub-md     ./grub-md
+# The sidecar vendors its path-dep crates under sidecar/crates/, so copying
+# sidecar/ brings them along (crates/{lume,aegis-edit,grub-md} in Cargo.toml).
 COPY sidecar     ./sidecar
 WORKDIR /build/sidecar
 # --locked uses the committed Cargo.lock for reproducible builds.

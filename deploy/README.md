@@ -11,7 +11,8 @@ This README is the operator quickstart.
 - Docker (Desktop on Win/macOS, or engine + compose on Linux)
 - `../ferricula` checked out as a sibling of this repo (Compose builds it)
 - Run everything **from the repo root** — the sidecar build context is the repo
-  root (its crate has `../lume`, `../aegis-edit`, `../grub-md` path deps)
+  root (the Dockerfile copies `sidecar/`, which vendors its path-dep crates under
+  `sidecar/crates/`)
 
 ## Pick a topology (spec §3)
 

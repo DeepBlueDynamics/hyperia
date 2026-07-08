@@ -4,7 +4,7 @@ Hyperia has two distinct memory layers. Know which is which.
 
 ## lume — built-in local memory (default, zero-config)
 
-**lume** is the memory that ships and works out of the box. It lives in the sidecar (`sidecar/src/lume_store.rs`, the `lume` crate at `../lume`) and maintains a **local BM25 index** over:
+**lume** is the memory that ships and works out of the box. It lives in the sidecar (`sidecar/src/lume_store.rs`, the `lume` crate at `sidecar/crates/lume`) and maintains a **local BM25 index** over:
 
 - **Per-shell terminal logs** — output captured from each pane, keyed by shell uid.
 - **Sticky notes** — note content, read fresh from storage.

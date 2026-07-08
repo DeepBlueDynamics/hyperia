@@ -58,7 +58,7 @@ Pick one. The spec defaults to **A** because it is a true drop-in.
 - Pure Rust, edition 2021, crate `hyperia-sidecar` v0.11.0. Release profile already optimized (`lto`, `opt-level="z"`, `strip`).
 - TLS is **rustls** (`reqwest` with `rustls-tls`, `default-features=false`) — **no OpenSSL/system SSL needed**. Runtime still needs `ca-certificates` for outbound HTTPS to the model API.
 - `build.rs` only does work under `cfg(windows)` (PE VERSIONINFO). On Linux it is a no-op.
-- **Path dependencies** to sibling crates: `lume`, `aegis-edit`, `grub-md` (all `../<name>` relative to `sidecar/`). The Docker **build context must be the repo root** so these resolve. `grub-md` has pyo3 stripped — no Python toolchain required.
+- **Path dependencies** to vendored crates under `sidecar/crates/`: `lume`, `aegis-edit`, `grub-md` (`path = "crates/<name>"`, excluded from the workspace). They live inside `sidecar/`, so copying `sidecar/` brings them along. `grub-md` has pyo3 stripped — no Python toolchain required.
 - `[workspace]` in `sidecar/Cargo.toml` makes the sidecar its own workspace; build output lands at `sidecar/target/release/hyperia-sidecar`.
 
 ### 4.2 Runtime contract
@@ -96,11 +96,8 @@ Place at repo root as `deploy/sidecar.Dockerfile`. Build context = repo root.
 # ---- builder ----
 FROM rust:1-bookworm AS build
 WORKDIR /build
-# Sibling crates the sidecar depends on via path deps. Layout must match
-# the `../lume`, `../aegis-edit`, `../grub-md` references in sidecar/Cargo.toml.
-COPY lume        ./lume
-COPY aegis-edit  ./aegis-edit
-COPY grub-md     ./grub-md
+# The sidecar vendors its path-dep crates under sidecar/crates/, so copying
+# sidecar/ brings them along (crates/{lume,aegis-edit,grub-md} in Cargo.toml).
 COPY sidecar     ./sidecar
 WORKDIR /build/sidecar
 # --locked uses the committed Cargo.lock for reproducible builds.
@@ -283,4 +280,4 @@ docker push deepbluedynamics/hyperia-sidecar:0.11.0
 - **Stalled approvals (B).** Headless means no renderer to answer `/api/perms/*`; gated mutating calls hang at `202 Pending`. §2/§7.
 - **Exposed port with no proxy.** The sidecar does **not** self-authenticate by bind address — binding `0.0.0.0` only logs a warning. Publishing 9800 to a routable interface without an external TLS+auth proxy exposes `/dashboard`, `/ws`, and `/api/*`. §7.
 - **Skeleton-key leak.** Setting `HYPERIA_SYSTEM_TOKEN` in the container or sharing it with external agents grants full consent bypass — the opposite of protection. Leave it unset. §4.3/§6.
-- **Build context mistake.** Building with `sidecar/` as context breaks the `../lume` path deps. Context must be repo root. §4.1.
+- **Build context mistake.** The Dockerfile does `COPY sidecar ./sidecar`, so the context must be the repo root, not `sidecar/`. (The path-dep crates now live under `sidecar/crates/` and travel with it.) §4.1.

@@ -1,10 +1,15 @@
 [package]
 name = "hyperia-sidecar"
-version = "0.15.25"
+version = "0.15.26"
 edition = "2021"
 description = "Rust sidecar for Hyperia: agent engine, MCP, signaling"
 
 [workspace]
+# The vendored crates under crates/ are path DEPENDENCIES, not workspace members.
+# Excluding them keeps them out of the workspace so their (build-only, vestigial)
+# [profile] sections don't emit "profile ignored" warnings — behaviour is
+# identical to when they lived at ../ outside the workspace.
+exclude = ["crates/lume", "crates/aegis-edit", "crates/grub-md"]
 
 [profile.release]
 strip = true
@@ -18,14 +23,14 @@ axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 # Local BM25 search engine (lib-only slice) — backs per-shell log search and
-# sticky-note search. Path dep on the sibling crate; no network, no CLI.
-lume = { path = "../lume" }
+# sticky-note search. Vendored crate under crates/; no network, no CLI.
+lume = { path = "crates/lume" }
 # Grapheme-safe line-oriented piece-table editor (LOPT + BFTP). Backs
-# multi-agent / locked-block sticky editing. Sibling crate, lib-only.
-aegis-edit = { path = "../aegis-edit" }
+# multi-agent / locked-block sticky editing. Vendored crate under crates/, lib-only.
+aegis-edit = { path = "crates/aegis-edit" }
 # HTML → clean reader-mode markdown (grub's converter, pyo3 stripped). Turns a
-# web pane's rendered DOM into markdown for web_pane_content. Sibling crate.
-grub-md = { path = "../grub-md" }
+# web pane's rendered DOM into markdown for web_pane_content. Vendored under crates/.
+grub-md = { path = "crates/grub-md" }
 
 # Claude API + HTTP client
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }

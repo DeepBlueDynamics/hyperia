@@ -6,7 +6,7 @@ The docs are mostly April-vintage and have drifted hard from the code. A full au
 
 Two wrong stories are repeated across many docs. Settle them and propagate verbatim.
 
-**Memory.** The built-in, default, works-out-of-the-box memory is **lume** (`sidecar/src/lume_store.rs`, `lume = { path = "../lume" }`): local BM25 over per-shell logs + sticky notes, persisted to `~/.hyperia/lume/`. **Ferricula** (`sidecar/src/ghost/ferricula.rs`) is an **optional external HTTP service** (Docker/remote, `FERRICULA_URL`, default `http://localhost:8765`) that **degrades to a no-op when unreachable** — there is **no ferricula crate dependency** (`sidecar/Cargo.toml:67-69`). Every doc that calls Ferricula "embedded / path-linked / SQLite / the default memory" is wrong.
+**Memory.** The built-in, default, works-out-of-the-box memory is **lume** (`sidecar/src/lume_store.rs`, `lume = { path = "crates/lume" }`): local BM25 over per-shell logs + sticky notes, persisted to `~/.hyperia/lume/`. **Ferricula** (`sidecar/src/ghost/ferricula.rs`) is an **optional external HTTP service** (Docker/remote, `FERRICULA_URL`, default `http://localhost:8765`) that **degrades to a no-op when unreachable** — there is **no ferricula crate dependency** (`sidecar/Cargo.toml:67-69`). Every doc that calls Ferricula "embedded / path-linked / SQLite / the default memory" is wrong.
 
 **MCP transport.** Streamable **HTTP** at `http://localhost:9800/mcp` (`main.rs:1611`). There is **no `--mcp` stdio flag**. Tool count = the number of `#[tool(` in `mcp.rs` (currently ~55 — recount at write time; README/docs say 30+/50+).
 
