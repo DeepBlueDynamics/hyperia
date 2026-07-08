@@ -17,6 +17,12 @@ lto = true
 codegen-units = 1
 opt-level = "z"
 
+[features]
+# Voice (Kokoro TTS). Default ON everywhere except x86_64-apple-darwin, where
+# ort has no prebuilt ONNX Runtime — Intel-mac CI builds --no-default-features.
+default = ["tts"]
+tts = ["dep:kokoro-tts", "dep:rodio"]
+
 [dependencies]
 # HTTP server + WebSocket bridge
 axum = { version = "0.8", features = ["ws"] }
@@ -34,10 +40,13 @@ grub-md = { path = "crates/grub-md" }
 
 # ── Local text-to-speech (Kokoro-82M) — backs hyperia_spoken_summary ──────────
 # ort-based Kokoro with a built-in pure-Rust G2P (cross-compile friendly — no
-# espeak/clang/nasm). ONNX model auto-downloads on first synthesis.
-kokoro-tts = { version = "0.3", features = ["use-cmudict"] }
+# espeak/clang/nasm). ONNX model auto-downloads on first synthesis. OPTIONAL:
+# gated behind the default-on `tts` feature because ort ships no prebuilt ONNX
+# Runtime for x86_64-apple-darwin — Intel-mac builds pass --no-default-features
+# and get a sidecar without voice (the /api/tts route reports unavailable).
+kokoro-tts = { version = "0.3", features = ["use-cmudict"], optional = true }
 # Play the synthesized WAV on the machine (WASAPI/CoreAudio/ALSA via cpal).
-rodio = "0.22"
+rodio = { version = "0.22", optional = true }
 
 # Claude API + HTTP client
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }

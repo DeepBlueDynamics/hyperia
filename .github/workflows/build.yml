@@ -67,9 +67,12 @@ jobs:
         if: matrix.os != 'macos-latest'
         run: cargo build --release --manifest-path sidecar/Cargo.toml
 
+      # Intel mac: --no-default-features drops the `tts` feature — ort provides
+      # no prebuilt ONNX Runtime for x86_64-apple-darwin, so this leg ships
+      # without voice (the /api/tts route reports unavailable).
       - name: Build sidecar x86_64 (macOS)
         if: matrix.os == 'macos-latest'
-        run: cargo build --release --manifest-path sidecar/Cargo.toml --target x86_64-apple-darwin
+        run: cargo build --release --manifest-path sidecar/Cargo.toml --target x86_64-apple-darwin --no-default-features
 
       - name: Build sidecar ARM64 (macOS)
         if: matrix.os == 'macos-latest'

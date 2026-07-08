@@ -18,6 +18,7 @@ mod util;
 mod settings;
 mod snapshot_image;
 mod telemetry;
+#[cfg(feature = "tts")]
 mod tts;
 
 use axum::extract::{Path, Query, State};
@@ -272,6 +273,7 @@ struct ClientLogRequest {
 /// `POST /api/tts` — speak a short text aloud on the host via the local Kokoro
 /// model. Body: `{ "text": "...", "voice"?: "af_heart", "speed"?: 1.0 }`.
 #[derive(Deserialize)]
+#[cfg_attr(not(feature = "tts"), allow(dead_code))]
 struct TtsRequest {
     text: String,
     #[serde(default)]
@@ -284,6 +286,17 @@ struct TtsRequest {
     frame: Option<bool>,
 }
 
+/// TTS-less builds (Intel macOS — ort ships no prebuilt ONNX Runtime there):
+/// the route exists but reports the capability as unavailable.
+#[cfg(not(feature = "tts"))]
+async fn post_tts(Json(_req): Json<TtsRequest>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "ok": false,
+        "error": "TTS is not built into this binary (unavailable on Intel macOS)"
+    }))
+}
+
+#[cfg(feature = "tts")]
 async fn post_tts(
     State(state): State<AppState>,
     headers: HeaderMap,
