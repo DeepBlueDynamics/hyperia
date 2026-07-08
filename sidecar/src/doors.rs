@@ -1,5 +1,5 @@
 //! Door taxonomy + `DoorState` — the shared, pure data layer for the
-//! MCP-tool-doors progressive-disclosure model (plan/mcp-tool-doors.md §3–§4).
+//! MCP-tool-doors progressive-disclosure model (plan/epics/mcp-tool-doors.md §3–§4).
 //!
 //! A **door** is a named category of tools. A small always-on **core** plus a
 //! bounded set of *open* doors is all a model ever sees at once, so a 4B local

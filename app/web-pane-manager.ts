@@ -1,5 +1,5 @@
 // WebPaneManager — owns the native WebContentsView instances that replace the
-// legacy <webview> tag (see plan/webcontentsview-migration.md).
+// legacy <webview> tag (see plan/epics/webcontentsview-migration.md).
 //
 // Each Hyperia web pane maps to one WebContentsView attached to its BrowserWindow
 // via win.contentView.addChildView(). The RENDERER stays the source of truth for
