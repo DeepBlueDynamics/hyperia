@@ -278,6 +278,10 @@ struct TtsRequest {
     voice: Option<String>,
     #[serde(default)]
     speed: Option<f32>,
+    /// Radio-transmission framing. Default true; set false to speak the raw text
+    /// with no callsign preamble/sign-off.
+    #[serde(default)]
+    frame: Option<bool>,
 }
 
 async fn post_tts(
@@ -316,7 +320,11 @@ async fn post_tts(
         s => s,
     };
 
-    let spoken = tts::radio_wrap(&recipient, &caller, &req.text);
+    let spoken = if req.frame == Some(false) {
+        req.text.trim().to_string()
+    } else {
+        tts::radio_wrap(&recipient, &caller, &req.text)
+    };
     match tts::speak(&spoken, voice, req.speed).await {
         Ok(secs) => Json(serde_json::json!({
             "ok": true, "duration_secs": secs, "caller": caller, "recipient": recipient

@@ -52,9 +52,16 @@ pub async fn speak(text: &str, voice: Option<&str>, speed: Option<f32>) -> Resul
     let speed = speed.unwrap_or(1.0).clamp(0.5, 2.0);
     let voice = resolve_voice(voice, speed);
 
+    // Lowercase for synthesis: kokoro-tts's cmudict lookup is case-sensitive
+    // (`.get(word)` with no fold — their espeak path lowercases, the dict path
+    // forgot), so "The" misses the dictionary and gets SPELLED letter-by-letter.
+    // Case carries no pronunciation info; unknown tokens (acronyms) still fall
+    // back to letter-spelling exactly as before.
+    let spoken = text.to_lowercase();
+
     let tts = engine().await?;
     let (audio, took) = tts
-        .synth(text, voice)
+        .synth(&spoken, voice)
         .await
         .map_err(|e| anyhow!("Kokoro synth failed: {e}"))?;
     let secs = audio.len() as f64 / SAMPLE_RATE as f64;
@@ -67,6 +74,14 @@ pub async fn speak(text: &str, voice: Option<&str>, speed: Option<f32>) -> Resul
         audio.len(),
         SAMPLE_RATE
     );
+
+    // Debug dump: write the raw synthesized audio to ~/.hyperia/kokoro/last.wav
+    // so it can be inspected / played directly — isolating synth from playback.
+    let dump = crate::fsnav::home_dir().join(".hyperia").join("kokoro").join("last.wav");
+    match write_wav_16(&dump, &audio) {
+        Ok(()) => tracing::info!(target: "tts", "dumped {} samples -> {}", audio.len(), dump.display()),
+        Err(e) => tracing::warn!(target: "tts", "wav dump failed: {e}"),
+    }
 
     // Playback is blocking: rodio drives a cpal stream on its own thread and we
     // sleep until the buffer drains. Keep it off the async runtime's workers.
@@ -230,6 +245,37 @@ pub fn radio_wrap(recipient: &str, caller: &str, text: &str) -> String {
     format!(
         "{recipient}, {recipient}, this is {caller} transmitting. {body}. This is {caller}. Over and out."
     )
+}
+
+/// Write mono `f32` samples as a 16-bit PCM WAV at [`SAMPLE_RATE`] (no deps —
+/// hand-rolled 44-byte header + LE i16 samples). Used to dump synthesized audio
+/// for inspection / direct playback.
+fn write_wav_16(path: &Path, samples: &[f32]) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let data_len = (samples.len() as u32) * 2; // 16-bit mono
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+    f.write_all(b"RIFF")?;
+    f.write_all(&(36 + data_len).to_le_bytes())?;
+    f.write_all(b"WAVE")?;
+    f.write_all(b"fmt ")?;
+    f.write_all(&16u32.to_le_bytes())?; // PCM fmt chunk size
+    f.write_all(&1u16.to_le_bytes())?; // audio format = PCM
+    f.write_all(&1u16.to_le_bytes())?; // channels = mono
+    f.write_all(&SAMPLE_RATE.to_le_bytes())?; // sample rate
+    f.write_all(&(SAMPLE_RATE * 2).to_le_bytes())?; // byte rate = rate * blockalign
+    f.write_all(&2u16.to_le_bytes())?; // block align = channels * (bits/8)
+    f.write_all(&16u16.to_le_bytes())?; // bits per sample
+    f.write_all(b"data")?;
+    f.write_all(&data_len.to_le_bytes())?;
+    for &s in samples {
+        let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+        f.write_all(&v.to_le_bytes())?;
+    }
+    f.flush()?;
+    Ok(())
 }
 
 /// Play a mono `f32` buffer at [`SAMPLE_RATE`] on the default output device.

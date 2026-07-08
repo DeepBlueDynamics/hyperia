@@ -735,6 +735,9 @@ pub struct SpokenSummaryRequest {
     pub voice: Option<String>,
     /// Speaking speed, 0.5–2.0 (default 1.0). Values outside the range are clamped.
     pub speed: Option<f32>,
+    /// Radio-transmission framing. Default true; set false to speak the raw text
+    /// with no callsign preamble/sign-off.
+    pub frame: Option<bool>,
 }
 
 // -- MCP Server --
@@ -1640,7 +1643,7 @@ impl HyperiaMcp {
         // configured recipient and frames the radio transmission before synth.
         // A long per-request timeout overrides the 10s client default — the first
         // call downloads the ~90MB model and synth+playback can run long.
-        let body = serde_json::json!({ "text": text, "voice": req.voice, "speed": req.speed });
+        let body = serde_json::json!({ "text": text, "voice": req.voice, "speed": req.speed, "frame": req.frame });
         let mut rb = self
             .client
             .post(format!("{}/api/tts", self.base_url))
