@@ -2264,12 +2264,13 @@ impl HyperiaMcp {
     async fn sticky_note_search(
         &self,
         Parameters(req): Parameters<StickySearchRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let mut path = format!("/api/search/sticky?q={}", urlencoding::encode(&req.query));
         if let Some(l) = req.limit {
             path.push_str(&format!("&limit={}", l));
         }
-        let resp = self.get(&path).await?;
+        let resp = self.get_as(&path, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -2296,6 +2297,7 @@ impl HyperiaMcp {
     async fn sticky_note_schedule(
         &self,
         Parameters(req): Parameters<StickyScheduleRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let body = if req.unschedule.unwrap_or(false) {
             serde_json::json!({"schedule": serde_json::Value::Null})
@@ -2310,7 +2312,9 @@ impl HyperiaMcp {
                 "dir": req.dir,
             })
         };
-        let resp = self.post_json(&format!("/api/notes/{}/schedule", req.id), &body).await?;
+        let resp = self
+            .post_json_as(&format!("/api/notes/{}/schedule", req.id), &body, forwarded_auth(&ctx).as_deref())
+            .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -2336,8 +2340,8 @@ impl HyperiaMcp {
     }
 
     #[tool(description = "List the sticky notes you can see: ones you created, plus any the user has granted you access to. Returns {notes:[{id,name,text,color,position}], count}. If other notes exist that you're not allowed to see, the result ALSO includes withheld (a count) and hint (how to get access) — an empty/short list does NOT mean there are no stickys. To act on a note you don't own, call sticky_note_read / sticky_note_open with its id: Hyperia prompts the USER to approve, and the call completes on approval. If you're anonymous, first present your HYPERIA_AGENT_TOKEN (Authorization: Bearer <token>) so the user can grant you access.")]
-    async fn sticky_note_list(&self) -> Result<CallToolResult, ErrorData> {
-        let resp = self.get("/api/notes").await?;
+    async fn sticky_note_list(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let resp = self.get_as("/api/notes", forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -2356,9 +2360,10 @@ impl HyperiaMcp {
     async fn sticky_note_close(
         &self,
         Parameters(req): Parameters<NoteCloseRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let body = serde_json::json!({"id": req.id});
-        let resp = self.post_json("/api/notes/close", &body).await?;
+        let resp = self.post_json_as("/api/notes/close", &body, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -2366,9 +2371,10 @@ impl HyperiaMcp {
     async fn sticky_note_open(
         &self,
         Parameters(req): Parameters<NoteOpenRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let body = serde_json::json!({"id": req.id});
-        let resp = self.post_json("/api/notes/open", &body).await?;
+        let resp = self.post_json_as("/api/notes/open", &body, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -2398,9 +2404,12 @@ impl HyperiaMcp {
     async fn sticky_note_update(
         &self,
         Parameters(req): Parameters<StickyNoteUpdateRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let body = serde_json::json!({"text": req.text});
-        let resp = self.patch_json(&format!("/api/notes/{}", req.id), &body).await?;
+        let resp = self
+            .patch_json_as(&format!("/api/notes/{}", req.id), &body, forwarded_auth(&ctx).as_deref())
+            .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -2408,8 +2417,11 @@ impl HyperiaMcp {
     async fn sticky_note_delete(
         &self,
         Parameters(req): Parameters<StickyNoteDeleteRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let resp = self.delete(&format!("/api/notes/{}", req.id)).await?;
+        let resp = self
+            .delete_as(&format!("/api/notes/{}", req.id), forwarded_auth(&ctx).as_deref())
+            .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -2417,8 +2429,11 @@ impl HyperiaMcp {
     async fn sticky_note_read(
         &self,
         Parameters(req): Parameters<StickyNoteReadRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let resp = self.get(&format!("/api/notes/{}", req.id)).await?;
+        let resp = self
+            .get_as(&format!("/api/notes/{}", req.id), forwarded_auth(&ctx).as_deref())
+            .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -3073,6 +3088,28 @@ impl HyperiaMcp {
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
     }
 
+    /// PATCH that forwards the caller's Authorization header so identity-gated
+    /// endpoints (sticky ownership/capabilities) see the real caller, not
+    /// anonymous. Mirrors post_json_as.
+    async fn patch_json_as(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+        auth: Option<&str>,
+    ) -> Result<String, ErrorData> {
+        let mut rb = self.client.patch(format!("{}{}", self.base_url, path)).json(body);
+        if let Some(a) = auth {
+            rb = rb.header(reqwest::header::AUTHORIZATION, a);
+        }
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+        resp.text()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
+    }
+
     async fn delete(&self, path: &str) -> Result<String, ErrorData> {
         let resp = self.client
             .delete(format!("{}{}", self.base_url, path))
@@ -3080,6 +3117,21 @@ impl HyperiaMcp {
             .await
             .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
         resp.text().await
+            .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
+    }
+
+    /// DELETE that forwards the caller's Authorization header. Mirrors get_as.
+    async fn delete_as(&self, path: &str, auth: Option<&str>) -> Result<String, ErrorData> {
+        let mut rb = self.client.delete(format!("{}{}", self.base_url, path));
+        if let Some(a) = auth {
+            rb = rb.header(reqwest::header::AUTHORIZATION, a);
+        }
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+        resp.text()
+            .await
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
     }
 
