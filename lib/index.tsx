@@ -31,6 +31,7 @@ import * as config from './utils/config';
 import {getBase64FileData} from './utils/file';
 import {toNavigableUrl} from './utils/navigable-url';
 import * as plugins from './utils/plugins';
+import {syncWebUrls} from './utils/web-url-sync';
 
 // On Linux, the default zoom was somehow changed with Electron 3 (or maybe 2).
 // Setting zoom factor to 1.2 brings back the normal default size
@@ -39,6 +40,10 @@ if (process.platform === 'linux') {
 }
 
 const store_ = configureStore();
+
+// Mirror web-pane URLs to the main process for layout capture (#84) — the
+// sync dedupes on content, so this is a no-op for unrelated state changes.
+store_.subscribe(() => syncWebUrls(store_.getState()));
 
 Object.defineProperty(window, 'store', {get: () => store_});
 Object.defineProperty(window, 'rpc', {get: () => rpc});

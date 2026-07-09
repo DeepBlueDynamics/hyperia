@@ -30,7 +30,9 @@ import {
   updateWindowBounds,
   getSessionRootTab,
   forceRemoveSession,
-  executeSessionCd
+  executeSessionCd,
+  updateWindowWebUrls,
+  clearWindowWebUrls
 } from '../bridge';
 import {execCommand} from '../commands';
 import {getDefaultProfile} from '../config';
@@ -542,6 +544,12 @@ export function newWindow(
   rpc.on('session set tab name', ({uid, tabName}: {uid: string; tabName: string}) => {
     updateSessionTabName(uid, tabName, true);
   });
+  // Web-pane URL snapshot from the renderer's web-url middleware (#84) —
+  // {termGroupUid → url} for this window, kept bridge-side so layout save
+  // (#82) reads URLs without a close-time renderer roundtrip.
+  rpc.on('session web url', ({urls}: {urls: Record<string, string>}) => {
+    updateWindowWebUrls(window.id, urls || {});
+  });
   rpc.on(
     'session layout sync',
     (
@@ -633,7 +641,10 @@ export function newWindow(
 
   // Tear down any native web-pane views this window owns — their webContents are
   // NOT auto-destroyed, so skipping this leaks renderer processes.
-  window.on('closed', () => destroyPanesForWindow(window));
+  window.on('closed', () => {
+    destroyPanesForWindow(window);
+    clearWindowWebUrls(window.id);
+  });
 
   window.on('move', () => {
     const position = window.getPosition();

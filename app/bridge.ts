@@ -56,8 +56,18 @@ interface TrackedSession {
   bspW: number;
   bspH: number;
   manualTitle?: boolean;
+  /** Current web-pane URL, when this session's pane is (or carries) a web pane.
+   *  Kept for layout capture (#82/#84) so save needs no renderer roundtrip. */
+  webUrl?: string | null;
 }
 const trackedSessions = new Map<string, TrackedSession>();
+
+// Web-pane URLs per window, keyed by TERM GROUP uid (#84). Modern web panes
+// have NO session (TERM_GROUP_SET_WEB_URL nulls sessionUid), so they can't live
+// in trackedSessions — the renderer's web-url middleware pushes a full snapshot
+// {groupUid → url} whenever any group's webUrl changes, and layout save (#82)
+// reads it via getWebPaneUrls(windowId) without an IPC roundtrip.
+const windowWebUrls = new Map<number, Record<string, string>>();
 let focusedWindowId: number | null = null;
 
 // Agent input queue: per-session deferral when user is active
@@ -1157,6 +1167,35 @@ export function updateSessionTabName(uid: string, tabName: string, manual = fals
       send({type: 'SessionTabName', uid: sessionUid, tabName});
     }
   }
+}
+
+/** Record a web-pane URL on a session-backed pane (#84). No-op for unknown
+ *  uids — modern web panes are session-less and live in windowWebUrls instead. */
+export function updateSessionWebUrl(uid: string, url: string | null) {
+  const tracked = trackedSessions.get(uid);
+  if (tracked) tracked.webUrl = url;
+}
+
+/** Replace a window's {termGroupUid → url} web-pane snapshot (#84). Pushed by
+ *  the renderer's web-url middleware on every webUrl change (open / convert /
+ *  split / in-page navigation / clear). Also mirrors onto any session-backed
+ *  pane that shares the uid (legacy groups that kept a session). */
+export function updateWindowWebUrls(windowId: number, urls: Record<string, string>) {
+  windowWebUrls.set(windowId, urls || {});
+  for (const [uid, url] of Object.entries(urls || {})) {
+    updateSessionWebUrl(uid, url);
+  }
+}
+
+/** Web-pane URLs for a window, keyed by term-group uid — layout save (#82)
+ *  reads this directly, no renderer roundtrip. */
+export function getWebPaneUrls(windowId: number): Record<string, string> {
+  return windowWebUrls.get(windowId) || {};
+}
+
+/** Drop a closed window's web-url snapshot. */
+export function clearWindowWebUrls(windowId: number) {
+  windowWebUrls.delete(windowId);
 }
 
 export function updateSessionActive(uid: string, windowId: number) {

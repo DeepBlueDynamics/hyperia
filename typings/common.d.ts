@@ -69,6 +69,8 @@ export type MainEvents = {
   'session set active': {uid: string};
   'session set description': {uid: string; description: string};
   'session set tab name': {uid: string; tabName: string};
+  /** Web-pane URL snapshot {termGroupUid → url} for this window (#84). */
+  'session web url': {urls: Record<string, string>};
   'session layout sync': Array<{
     rootGroupUid: string;
     order: number;
