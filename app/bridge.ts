@@ -517,6 +517,9 @@ function handleCommand(msg: Record<string, unknown>) {
       const payload = {
         id: msg.id as string,
         requester: (msg.requester as string) || 'Unknown agent',
+        // Friendly display name (pane codename) — the `requester` label stays
+        // the grant-ledger key; this one is what the human sees.
+        requesterName: (msg.requesterName as string) || '',
         requesterPane: (msg.requesterPane as string) || '',
         targetPane: msg.targetPane as string,
         purpose: (msg.purpose as string) || ''
@@ -556,6 +559,7 @@ function handleCommand(msg: Record<string, unknown>) {
       const payload = {
         id: msg.id as string,
         requester: (msg.requester as string) || 'Unknown agent',
+        requesterName: (msg.requesterName as string) || '',
         action: (msg.action as string) || 'create'
       };
       for (const w of (app as any).getWindows?.() || []) {

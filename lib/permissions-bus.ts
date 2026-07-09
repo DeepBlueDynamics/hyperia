@@ -9,6 +9,8 @@
 export type PermRequest = {
   id: string;
   requester: string;
+  /** Friendly display name (pane codename, e.g. "Severe Booby 🥐") — prefer over `requester` in UI. */
+  requesterName?: string;
   requesterPane: string;
   targetPane: string;
   /** Caller-supplied rationale (from request_access purpose=); shown on the prompt. */
@@ -106,6 +108,8 @@ export function subscribe(paneId: string, cb: Listener): () => void {
 export type ToastRequest = {
   id: string;
   requester: string;
+  /** Friendly display name (pane codename) — prefer over `requester` in UI. */
+  requesterName?: string;
   action: string; // create_pane | create_tab | create_window | create_web | create_sticky
 };
 

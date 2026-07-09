@@ -109,7 +109,7 @@ export default function AgentToast(): React.ReactElement | null {
           >
             <span style={{fontSize: '15px'}}>🤖</span>
             <span>
-              <b>{r.requester}</b>
+              <b>{r.requesterName || r.requester}</b>
               <span style={{color: 'var(--text-secondary, #9a9aa2)'}}> wants to {actionPhrase(r.action)}.</span>
             </span>
           </div>

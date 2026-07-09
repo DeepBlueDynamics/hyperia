@@ -969,6 +969,22 @@ async fn post_request_access(
 // (future) enforcement layer. Grants are revoked when the pane closes.
 // ---------------------------------------------------------------------------
 
+/// Friendly display name for a consent prompt's requester: a pane caller's
+/// codename (e.g. "Severe Booby 🥐") instead of the ledger label
+/// ("pane 372a9448"). DISPLAY-ONLY — the grant ledger stays keyed by
+/// `id.label()`, so this must never feed back into perms matching.
+async fn requester_display_name(
+    state: &AppState,
+    id: &identity::CallerIdentity,
+) -> Option<String> {
+    match id {
+        identity::CallerIdentity::Pane { pane, .. } => {
+            state.bridge.pane_display_name(pane).await
+        }
+        _ => None,
+    }
+}
+
 /// Extract a bearer token from an `Authorization` header (case-insensitive
 /// scheme, tolerant of a bare token without the "Bearer " prefix).
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
@@ -1186,12 +1202,16 @@ async fn enforce_drive_with_purpose(
                     .perms()
                     .create_request(&label, &requester_pane, target_uid, "drive", purpose)
                     .await;
+                let requester_name = requester_display_name(&state, &id)
+                    .await
+                    .unwrap_or_else(|| req.requester.clone());
                 let _ = state
                     .bridge
                     .notify(serde_json::json!({
                         "type": "PermissionRequest",
                         "id": req.id,
                         "requester": req.requester,
+                        "requesterName": requester_name,
                         "requesterPane": req.requester_pane,
                         "targetPane": req.target_pane,
                         "purpose": req.purpose,
@@ -1283,12 +1303,16 @@ async fn enforce_create(
                     .perms()
                     .create_request(&label, &requester_pane, &focus, action, "")
                     .await;
+                let requester_name = requester_display_name(&state, &id)
+                    .await
+                    .unwrap_or_else(|| req.requester.clone());
                 let _ = state
                     .bridge
                     .notify(serde_json::json!({
                         "type": "AgentToast",
                         "id": req.id,
                         "requester": req.requester,
+                        "requesterName": requester_name,
                         "action": req.action,
                     }))
                     .await;
@@ -1369,10 +1393,14 @@ async fn enforce_capability(
                     .perms()
                     .create_request(&label, &requester_pane, &focus, &format!("cap:{cap}"), "")
                     .await;
+                let requester_name = requester_display_name(&state, &id)
+                    .await
+                    .unwrap_or_else(|| req.requester.clone());
                 let _ = state
                     .bridge
                     .notify(serde_json::json!({
-                        "type": "AgentToast", "id": req.id, "requester": req.requester, "action": req.action,
+                        "type": "AgentToast", "id": req.id, "requester": req.requester,
+                        "requesterName": requester_name, "action": req.action,
                     }))
                     .await;
             }
@@ -1487,12 +1515,16 @@ async fn post_perm_request(
         .perms()
         .create_request(&requester, &requester_pane, &target, "drive", purpose)
         .await;
+    let requester_name = requester_display_name(&state, &id)
+        .await
+        .unwrap_or_else(|| req.requester.clone());
     let _ = state
         .bridge
         .notify(serde_json::json!({
             "type": "PermissionRequest",
             "id": req.id,
             "requester": req.requester,
+            "requesterName": requester_name,
             "requesterPane": req.requester_pane,
             "targetPane": req.target_pane,
             "purpose": req.purpose,

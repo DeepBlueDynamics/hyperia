@@ -120,7 +120,7 @@ export default function ConsentModal(): React.ReactElement | null {
         <div style={{display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '16px'}}>
           <span style={{fontSize: '20px', lineHeight: 1}}>🛂</span>
           <div style={{fontSize: '13.5px', lineHeight: 1.4}}>
-            <b>{req.requester}</b>
+            <b>{req.requesterName || req.requester}</b>
             <span style={{color: 'var(--text-secondary, #9a9aa2)'}}> wants to control </span>
             <b>{paneName}</b>
             <span style={{color: 'var(--text-secondary, #9a9aa2)'}}>
