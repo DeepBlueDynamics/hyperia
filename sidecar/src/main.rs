@@ -339,8 +339,12 @@ async fn post_tts(
         tts::radio_wrap(&recipient, &caller, &req.text)
     };
     match tts::speak(&spoken, voice, req.speed).await {
+        // `spoken` echoes the EXACT transcript delivered to the user (frame
+        // included) so callers can see the wrapper already carries the
+        // callsigns + "Over and out" and don't add their own radio phrases.
         Ok(secs) => Json(serde_json::json!({
-            "ok": true, "duration_secs": secs, "caller": caller, "recipient": recipient
+            "ok": true, "duration_secs": secs, "caller": caller, "recipient": recipient,
+            "spoken": spoken
         })),
         Err(e) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
     }

@@ -1604,7 +1604,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(info)]))
     }
 
-    #[tool(description = "Speak a short text summary ALOUD on the host machine using a fully-local, offline Kokoro TTS model (no cloud, no telemetry, all in the sidecar). Your text is framed as a radio transmission from YOU (your pane/agent callsign) to the configured recipient (config.tts.recipient, default 'base'): \"<recipient>, <recipient>, this is <you> transmitting. <text>. This is <you>. Over and out.\" The first call downloads a ~90MB model to ~/.hyperia/kokoro. Args: text (required); voice (optional: af_heart[default], am_michael, am_puck, bf_emma, bm_george, af_bella, af_nicole); speed (optional 0.5-2.0, default 1.0).")]
+    #[tool(description = "Speak a short text summary ALOUD on the host machine using a fully-local, offline Kokoro TTS model (no cloud, no telemetry, all in the sidecar). Your text is framed as a radio transmission from YOU (your pane/agent callsign) to the configured recipient (config.tts.recipient, default 'base'): \"<recipient>, <recipient>, this is <you> transmitting. <text>. This is <you>. Over and out.\" The frame ALREADY says who you are and signs off — do NOT include callsigns, 'over', or 'over and out' in your text (the result echoes the exact spoken transcript so you can see what was said). Pass frame=false to speak the raw text with no wrapper. The first call downloads a ~90MB model to ~/.hyperia/kokoro. Args: text (required); voice (optional: af_heart[default], am_michael, am_puck, bf_emma, bm_george, af_bella, af_nicole); speed (optional 0.5-2.0, default 1.0); frame (optional bool, default true).")]
     async fn hyperia_spoken_summary(
         &self,
         Parameters(req): Parameters<SpokenSummaryRequest>,
@@ -1639,8 +1639,13 @@ impl HyperiaMcp {
             let secs = v["duration_secs"].as_f64().unwrap_or(0.0);
             let caller = v["caller"].as_str().unwrap_or("station");
             let recipient = v["recipient"].as_str().unwrap_or("base");
+            let spoken = v["spoken"].as_str().unwrap_or("");
+            // Echo the exact transcript so the caller sees the frame already
+            // carries the callsigns + sign-off — no redundant "over"s.
             Ok(CallToolResult::success(vec![Content::text(format!(
-                "Transmitted to {recipient} as {caller} — {secs:.1}s on air."
+                "Transmitted to {recipient} as {caller} — {secs:.1}s on air.\n\
+                 Spoken verbatim (the frame already includes callsigns and the \"Over and out\" sign-off — never append your own radio phrases):\n\
+                 {spoken}"
             ))]))
         } else {
             let err = v["error"].as_str().unwrap_or("unknown error");
