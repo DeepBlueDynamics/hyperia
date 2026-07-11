@@ -237,13 +237,20 @@ pub fn spokenable_name(raw: &str) -> String {
 /// Wrap `text` in a radio-transmission frame addressed from `caller` to
 /// `recipient`:
 /// `"{recipient}, {recipient}, this is {caller} transmitting. {text}. This is
-/// {caller}. Over and out."`
+/// {caller}. Oh ver and out."`
+///
+/// The sign-off is deliberately spelled "oh ver": the int8 af_heart voice clips
+/// "over"'s UNSTRESSED final syllable (OW1 V ER0 → "ove"). "oh" (OW1) and
+/// "ver" (V ER1) are both real cmudict entries, and ver's STRESSED ER1 forces
+/// the full syllable — so it sounds like "over" instead of "ove". Don't
+/// respell it as one made-up word (e.g. "ovear"): a dictionary miss falls back
+/// to letter-spelling ("O-V-E-A-R").
 pub fn radio_wrap(recipient: &str, caller: &str, text: &str) -> String {
     // Strip trailing sentence punctuation from the body so the frame reads
     // cleanly ("… transmitting. <text>. This is …").
     let body = text.trim().trim_end_matches(['.', ',', '!', '?', ';', ':', ' ']);
     format!(
-        "{recipient}, {recipient}, this is {caller} transmitting. {body}. This is {caller}. Over and out."
+        "{recipient}, {recipient}, this is {caller} transmitting. {body}. This is {caller}. Oh ver and out."
     )
 }
 
