@@ -702,6 +702,16 @@ tab's current active pane, no matter how many times the pane inside it has resta
             win, tab, pane, keys.len(), interrupt, crate::util::safe_prefix(&keys, 120)
         );
     }
+    // Deterministic submit (Bridge::deliver_keys): text ending in Enter is
+    // delivered as body-then-isolated-CR so an Ink TUI can't eat the terminator
+    // inside a paste burst (the "sometimes it just sits there" race). Control
+    // sequences, bare terminators, and interrupt take-overs pass through
+    // unchanged on the legacy path.
+    let body_text = keys.trim_end_matches(['\r', '\n']);
+    if !interrupt && body_text.len() < keys.len() && !body_text.is_empty() {
+        let notice = state.bridge.deliver_keys(&uid, body_text, true).await;
+        return (StatusCode::OK, notice);
+    }
     let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys, "interrupt": interrupt});
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),

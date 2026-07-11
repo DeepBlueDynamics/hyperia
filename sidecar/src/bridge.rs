@@ -894,73 +894,34 @@ impl Bridge {
             self.persist_pulses().await;
         }
 
-        // Fire outside the locks. interrupt=false (never steals focus; renderer
-        // queues if the human is active). Bracketed-paste + a separate Enter so a
-        // long prompt isn't garbled. Pulses get a "From: <creator>:" header into
-        // agent panes; self-callbacks don't (you're poking yourself).
+        // Fire outside the locks — through the ONE shared delivery routine
+        // (deliver_keys: bracketed paste for TUIs, isolated Enter, verify +
+        // one nudge, honest queue notices). Pulses get a "From: <creator>:"
+        // header into agent panes; self-callbacks don't (you're poking
+        // yourself).
         for (pane, keys, from_creator, submit) in to_fire {
             let is_agent = self.is_agent_pane(&pane).await;
-            let shell_pid = {
-                let sessions = self.inner.sessions.lock().await;
-                sessions.get(&pane).map(|s| s.pid).unwrap_or(0)
-            };
-            let is_ink_tui = if shell_pid > 0 {
-                let proc_name = crate::process::foreground_process(shell_pid);
-                let n = proc_name.to_lowercase();
-                ["node", "claude", "claude-code", "codex", "aider", "gemini", "ollama"]
-                    .iter()
-                    .any(|needle| n.contains(needle))
-            } else {
-                false
-            };
-
             let payload = match &from_creator {
                 Some(creator) if is_agent => format!("From: {creator}: {keys}"),
                 _ => keys,
             };
-            if is_agent || is_ink_tui {
-                // Submit == a real Enter keypress, which xterm delivers to the PTY
-                // as CR (`\r`, 0x0D) — NOT LF. Ink TUIs (claude-code, codex, …)
-                // treat a bare LF as a newline INSIDE the input box and silently
-                // ignore it as a submit, so `\n` types the prompt but never sends it
-                // (the exact "poker won't hit Enter" bug). `\r` is what a human Enter
-                // sends, so it submits. A long/multiline payload still needs
-                // bracketed paste (atomic ingest) so it isn't garbled, then CR as a
-                // separate write once the paste has settled.
-                let large = payload.chars().count() > 120 || payload.contains('\n');
-                if large {
-                    let wrapped = format!("\u{1b}[200~{payload}\u{1b}[201~");
-                    let _ = self
-                        .send_command(serde_json::json!({
-                            "type": "Keys", "uid": pane, "keys": wrapped, "interrupt": false
-                        }))
-                        .await;
-                    if submit {
-                        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                        let _ = self
-                            .send_command(serde_json::json!({
-                                "type": "Keys", "uid": pane, "keys": "\r", "interrupt": false
-                            }))
-                            .await;
-                    }
-                } else {
-                    let body = if submit { format!("{payload}\r") } else { payload };
-                    let _ = self
-                        .send_command(serde_json::json!({
-                            "type": "Keys", "uid": pane, "keys": body, "interrupt": false
-                        }))
-                        .await;
-                }
-            } else {
-                // Shell (pwsh/bash/cmd): CR submits on Windows; LF submits on Unix.
-                // No bracketed paste — shells don't enable it.
-                let enter_char = if cfg!(target_os = "windows") { "\r" } else { "\n" };
-                let body = if submit { format!("{payload}{enter_char}") } else { payload };
-                let _ = self
-                    .send_command(serde_json::json!({
-                        "type": "Keys", "uid": pane, "keys": body, "interrupt": false
-                    }))
-                    .await;
+            // Anti-stack: if the PREVIOUS poke is still sitting unsubmitted in
+            // the target's composer, don't pile another copy on top — submit
+            // what's already there and try again next interval.
+            if submit
+                && self.pane_is_tui(&pane).await
+                && self.screen_tail_holds(&pane, &payload).await
+            {
+                tracing::info!(
+                    target: "pulse",
+                    "previous poke still unsubmitted in {pane}; submitting it instead of stacking"
+                );
+                let _ = self.deliver_keys(&pane, "", true).await;
+                continue;
+            }
+            let notice = self.deliver_keys(&pane, &payload, submit).await;
+            if notice.starts_with("warning") {
+                tracing::warn!(target: "pulse", "fire into {pane}: {notice}");
             }
         }
     }
@@ -1069,8 +1030,29 @@ impl Bridge {
             subs.entry(uid.to_string()).or_default().push(tx);
         }
 
-        let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys});
-        let _ = self.send_command(cmd).await;
+        // Two-phase delivery for submit-terminated text (see deliver_keys): a
+        // terminator glued into the same write as the body is a paste-race in
+        // Ink TUIs and randomly fails to submit. Body first (bracketed paste
+        // for TUI targets), settle, then Enter as its own isolated write.
+        let body_text = keys.trim_end_matches(['\r', '\n']);
+        let wants_submit = body_text.len() < keys.len() && !body_text.is_empty();
+        if wants_submit && self.pane_is_tui(uid).await {
+            let wrapped = if body_text.chars().count() > 1 {
+                format!("\u{1b}[200~{body_text}\u{1b}[201~")
+            } else {
+                body_text.to_string()
+            };
+            let _ = self
+                .send_command(serde_json::json!({"type": "Keys", "uid": uid, "keys": wrapped}))
+                .await;
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let _ = self
+                .send_command(serde_json::json!({"type": "Keys", "uid": uid, "keys": "\r"}))
+                .await;
+        } else {
+            let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys});
+            let _ = self.send_command(cmd).await;
+        }
 
         // Collect output until quiet_ms of silence, cap at 8s total
         let mut collected: Vec<u8> = Vec::new();
@@ -1093,12 +1075,172 @@ impl Bridge {
             }
         }
 
+        // Verify-then-nudge: nothing came back AND our text is still sitting
+        // unsubmitted in the target's input box AND the human hasn't taken the
+        // pane → one bare Enter, then a short second collection window. (Even
+        // an isolated CR can occasionally land while an Ink TUI is mid-layout.)
+        if wants_submit
+            && collected.is_empty()
+            && !self.user_active_recently(uid).await
+            && self.screen_tail_holds(uid, body_text).await
+        {
+            tracing::info!("type_and_collect: input unsubmitted in {uid}; nudging Enter");
+            let _ = self
+                .send_command(serde_json::json!({"type": "Keys", "uid": uid, "keys": "\r"}))
+                .await;
+            let deadline2 = tokio::time::Instant::now() + Duration::from_secs(3);
+            loop {
+                let remaining = deadline2.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                match tokio::time::timeout(Duration::from_millis(quiet_ms), rx.recv()).await {
+                    Ok(Some(chunk)) => collected.extend_from_slice(&chunk),
+                    Ok(None) => break,
+                    Err(_) => break,
+                }
+            }
+        }
+
         if collected.is_empty() {
             // Nothing came back — return screen snapshot
             self.get_screen_text_by_uid(uid).await
         } else {
             String::from_utf8_lossy(&collected).into_owned()
         }
+    }
+
+    /// Is this pane's foreground a TUI-style stdin consumer (agent CLI / Ink app)
+    /// rather than a cooked-mode shell? TUIs classify rapid input bursts as
+    /// "paste" and treat an Enter byte INSIDE the burst as a composer newline —
+    /// so submits must be delivered as their own isolated write (see
+    /// [`Self::deliver_keys`]).
+    pub async fn pane_is_tui(&self, pane: &str) -> bool {
+        if self.is_agent_pane(pane).await {
+            return true;
+        }
+        let pid = {
+            let sessions = self.inner.sessions.lock().await;
+            sessions.get(pane).map(|s| s.pid).unwrap_or(0)
+        };
+        if pid == 0 {
+            return false;
+        }
+        let n = crate::process::foreground_process(pid).to_lowercase();
+        ["node", "claude", "claude-code", "codex", "aider", "gemini", "ollama", "agy", "opencode", "grok"]
+            .iter()
+            .any(|needle| n.contains(needle))
+    }
+
+    /// Does the pane's visible tail still contain `payload` — i.e. is our text
+    /// sitting UNSUBMITTED in the target's input box? Compares a distinctive
+    /// payload snippet against the last screen lines, whitespace-normalized
+    /// (TUI composers re-wrap long text across lines).
+    pub async fn screen_tail_holds(&self, pane: &str, payload: &str) -> bool {
+        let norm = |s: &str| {
+            s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+        };
+        let p = norm(payload);
+        if p.chars().count() < 8 {
+            // Too short to be a distinctive marker — treat as submitted.
+            return false;
+        }
+        let text = self.get_screen_text_by_uid(pane).await;
+        let tail_src: Vec<&str> = text.lines().rev().take(14).collect();
+        let tail = norm(&tail_src.into_iter().rev().collect::<Vec<_>>().join(" "));
+        let snippet: String = {
+            let chars: Vec<char> = p.chars().collect();
+            let start = chars.len().saturating_sub(48);
+            chars[start..].iter().collect()
+        };
+        tail.contains(&snippet)
+    }
+
+    /// Deliver text + submit to a pane the way a HUMAN would — the ONE routine
+    /// every sender (pulse, /api/type, terminal_run) should go through.
+    ///
+    /// Why: Ink TUIs (claude-code, codex, agy, …) classify a multi-byte burst
+    /// as a "paste" and treat an Enter byte INSIDE the burst as a composer
+    /// newline, NOT a submit — so a glued `text+\r` submitting or not is a
+    /// ConPTY chunk-boundary race (the "pokes sometimes never send" bug).
+    /// Deterministic recipe: body first (bracketed paste so it ingests
+    /// atomically), settle, then ONE isolated CR — mechanically identical to a
+    /// human finger. Shells keep the glued single write (cooked line
+    /// discipline is deterministic).
+    ///
+    /// After submitting into a TUI, verifies the composer actually cleared and
+    /// nudges ONCE with a bare CR if our text still sits there — unless the
+    /// human has become active in the pane (never type under the human's
+    /// cursor). Returns an honest, agent-facing summary string.
+    pub async fn deliver_keys(&self, pane: &str, payload: &str, submit: bool) -> String {
+        let send = |keys: String| {
+            let this = self.clone();
+            let pane = pane.to_string();
+            async move {
+                this.send_command(serde_json::json!({
+                    "type": "Keys", "uid": pane, "keys": keys, "interrupt": false
+                }))
+                .await
+                .unwrap_or_else(|e| e)
+            }
+        };
+
+        if !self.pane_is_tui(pane).await {
+            // Shell: glued terminator is deterministic under cooked line discipline.
+            let enter_char = if cfg!(target_os = "windows") { "\r" } else { "\n" };
+            let body =
+                if submit { format!("{payload}{enter_char}") } else { payload.to_string() };
+            return send(body).await;
+        }
+
+        // TUI target — paste the body atomically (skip for empty/one-char).
+        let mut first_notice = String::new();
+        if !payload.is_empty() {
+            let wrapped = if payload.chars().count() > 1 {
+                format!("\u{1b}[200~{payload}\u{1b}[201~")
+            } else {
+                payload.to_string()
+            };
+            first_notice = send(wrapped).await;
+        }
+        if !submit {
+            return if first_notice.is_empty() { "ok".into() } else { first_notice };
+        }
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let enter_notice = send("\r".to_string()).await;
+
+        // If the renderer queued the writes (human active), they'll drain in
+        // order later — verification is meaningless now, so report the queue
+        // notice honestly and stop.
+        if first_notice.to_lowercase().contains("queued")
+            || enter_notice.to_lowercase().contains("queued")
+        {
+            return if first_notice.to_lowercase().contains("queued") {
+                first_notice
+            } else {
+                enter_notice
+            };
+        }
+        if payload.trim().is_empty() {
+            return "ok".into();
+        }
+
+        // Verify-then-nudge, once.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        if self.user_active_recently(pane).await {
+            return "ok (submit unverified: the human became active in the pane)".into();
+        }
+        if self.screen_tail_holds(pane, payload).await {
+            tracing::info!(target: "deliver", "input unsubmitted in {pane}; nudging with bare CR");
+            let _ = send("\r".to_string()).await;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            if !self.user_active_recently(pane).await && self.screen_tail_holds(pane, payload).await {
+                return "warning: the text was typed but appears to still be sitting UNSUBMITTED in the target's input box after two Enter presses — the target may be blocking input (dialog/confirm) or need a different key.".into();
+            }
+            return "ok (input needed a second Enter to submit; sent)".into();
+        }
+        "ok".into()
     }
 
     /// Set description for a pane by uid.

@@ -998,24 +998,16 @@ impl HyperiaMcp {
             }
         }
 
-        // Resolve the foreground process up front so we can pick the correct
-        // submit byte per target. Shells (pwsh, bash, cmd) take CR (`\r`) as
-        // Enter and treat a trailing LF as a continuation line (PowerShell
-        // shows a phantom `>>`). Node/Ink TUI agents (claude-code, codex,
-        // aider, gemini-cli) take LF (`\n`) and silently absorb a bare CR.
-        // There is no single byte that satisfies both — so we choose.
+        // Foreground process — used for the diagnostics envelope and the
+        // submit=false staging path below. The SUBMIT mechanics themselves now
+        // live server-side in Bridge::deliver_keys / type_and_collect: body
+        // delivered first (bracketed paste for TUI targets), then Enter as its
+        // own isolated write, verified + nudged once. A trailing `\r` on the
+        // POSTed body is the submit signal; no per-target byte-picking here.
         let target_process = self
             .pane_process_name(req.window, req.tab.as_deref(), req.pane.as_deref())
             .await;
         let is_ink = Self::is_likely_ink_tui(&target_process);
-        let submit_seq = if is_ink { "\n" } else { "\r" };
-        // Large / multi-line text typed into an Ink/Node TUI as one bulk PTY write
-        // gets garbled: the app's input parser keeps only the TAIL and the trailing
-        // newline submits that fragment ("only the last few lines landed"). Wrap
-        // such payloads in bracketed paste (ESC[200~ … ESC[201~) so the app ingests
-        // them atomically, then send Enter as a SEPARATE write. Shells are left
-        // alone (they may not have bracketed paste on); short single-line input
-        // works fine on the plain path.
         let needs_paste = is_ink && (cmd.chars().count() > 120 || cmd.contains('\n'));
 
         if submit {
@@ -1031,31 +1023,14 @@ impl HyperiaMcp {
             // Give the HTTP client headroom over the server's quiet window so it doesn't
             // time out before /api/type-and-collect finishes draining PTY output.
             let req_timeout = std::time::Duration::from_millis(wait + 15_000);
-            let raw_output = if needs_paste {
-                // 1) Paste the body atomically (bracketed paste, no submit).
-                let type_base = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
-                let tsep = if type_base.contains('?') { '&' } else { '?' };
-                let type_path = format!("{}{tsep}raw=true", type_base);
-                self.post_text_as(
-                    &type_path,
-                    &format!("\u{1b}[200~{}\u{1b}[201~", cmd),
+            let raw_output = self
+                .post_text_as(
+                    &collect_path,
+                    &format!("{cmd}\r"),
                     Some(req_timeout),
                     forwarded_auth(&ctx).as_deref(),
                 )
                 .await?;
-                // 2) Let the paste settle, then submit Enter on its own.
-                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                self.post_text_as(&collect_path, submit_seq, Some(req_timeout), forwarded_auth(&ctx).as_deref())
-                    .await?
-            } else {
-                self.post_text_as(
-                    &collect_path,
-                    &format!("{}{}", cmd, submit_seq),
-                    Some(req_timeout),
-                    forwarded_auth(&ctx).as_deref(),
-                )
-                .await?
-            };
             let max_chars = req.max_output_chars.unwrap_or(12_000);
             let text = clean_terminal_output(&raw_output, max_chars);
             let mut out = self.maximus_filter(&text, req.focus.as_deref(), req.raw.unwrap_or(false)).await;
