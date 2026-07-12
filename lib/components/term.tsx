@@ -277,7 +277,14 @@ export default class Term extends React.PureComponent<
   // reach this DOM handler. When eligible we preventDefault to suppress the
   // path-paste and copy instead.
   private canAcceptFileDrop(): boolean {
-    return this.props.shellState?.state === 'idle' && !!this.props.sessionCwd;
+    // Eligible = a terminal shell pane that isn't running a foreground program or
+    // agent. shellState (idle/running from shell integration) is often absent
+    // early on — treat "unknown" as eligible rather than blocking, since the main
+    // process resolves the pane's real cwd from the shell PID anyway; only a KNOWN
+    // running/busy state is excluded. Never the picker.
+    if ((this.props as any).sessionProfile === 'picker') return false;
+    const st = this.props.shellState?.state as string | undefined;
+    return st !== 'running' && st !== 'busy';
   }
 
   private isFileDrag(e: React.DragEvent): boolean {
@@ -316,7 +323,7 @@ export default class Term extends React.PureComponent<
       .map((f) => webUtils.getPathForFile(f))
       .filter(Boolean);
     if (!paths.length) return;
-    rpc.emit('pane copy files', {uid: this.props.uid, cwd: this.props.sessionCwd!, paths});
+    rpc.emit('pane copy files', {uid: this.props.uid, cwd: this.props.sessionCwd || '', paths});
   };
 
   handleOutsideClick = (e: MouseEvent) => {

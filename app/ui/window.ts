@@ -740,9 +740,22 @@ export function newWindow(
   // clash gets a " (n)" suffix) and report back for a toast. Files and folders
   // (recursive) both work.
   rpc.on('pane copy files', ({uid, cwd, paths}) => {
+    const isDir = (p?: string | null): p is string => !!p && existsSync(p) && statSync(p).isDirectory();
     try {
-      if (!cwd || !existsSync(cwd) || !statSync(cwd).isDirectory()) {
-        rpc.emit('pane copy files done', {uid, ok: false, dir: cwd, count: 0, error: 'target directory unavailable'});
+      // Resolve the pane's directory authoritatively so the feature works even
+      // without shell integration: renderer hint → the session's tracked cwd →
+      // the LIVE cwd of the shell process (native-process-working-directory).
+      let dir = isDir(cwd) ? cwd : '';
+      if (!dir) {
+        const session = sessions.get(uid);
+        if (isDir(session?.cwd)) dir = session!.cwd;
+        else if (session?.pty?.pid) {
+          const live = getWorkingDirectoryFromPID(session.pty.pid);
+          if (isDir(live)) dir = live;
+        }
+      }
+      if (!dir) {
+        rpc.emit('pane copy files done', {uid, ok: false, dir: cwd || '', count: 0, error: "couldn't determine the pane's directory"});
         return;
       }
       const names: string[] = [];
@@ -750,13 +763,13 @@ export function newWindow(
         try {
           if (!src || !existsSync(src)) continue;
           const srcBase = basename(src);
-          let dest = join(cwd, srcBase);
+          let dest = join(dir, srcBase);
           if (existsSync(dest)) {
             const ext = extname(srcBase);
             const stem = ext ? srcBase.slice(0, -ext.length) : srcBase;
             let n = 1;
             do {
-              dest = join(cwd, `${stem} (${n})${ext}`);
+              dest = join(dir, `${stem} (${n})${ext}`);
               n += 1;
             } while (existsSync(dest) && n < 1000);
           }
@@ -766,9 +779,9 @@ export function newWindow(
           console.warn('pane copy files: failed to copy', src, err);
         }
       }
-      rpc.emit('pane copy files done', {uid, ok: names.length > 0, dir: cwd, count: names.length, names});
+      rpc.emit('pane copy files done', {uid, ok: names.length > 0, dir, count: names.length, names});
     } catch (err) {
-      rpc.emit('pane copy files done', {uid, ok: false, dir: cwd, count: 0, error: (err as Error)?.message || String(err)});
+      rpc.emit('pane copy files done', {uid, ok: false, dir: cwd || '', count: 0, error: (err as Error)?.message || String(err)});
     }
   });
   // pass on the full screen events from the window to react
