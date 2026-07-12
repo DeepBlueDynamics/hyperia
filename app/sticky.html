@@ -1537,8 +1537,21 @@ if (isSearchMode) {
 
   let allNotes = readNotes().filter(n => n.id !== 'sticky-search-window' && n.text && n.text.trim().length > 0);
 
-  // Recency = when the note was last open/touched (close time, else save time).
-  const recencyKey = (n) => Date.parse(n.last_closed_at || '') || Date.parse(n.saved_at || '') || 0;
+  // Recency = when the note was last open/touched (close time, else save time,
+  // else CREATION — agent/API-created notes have neither of the first two and
+  // used to sort to the bottom with recency 0).
+  const recencyKey = (n) =>
+    Date.parse(n.last_closed_at || '') || Date.parse(n.saved_at || '') || Date.parse(n.created_at || '') || 0;
+
+  // Short "Jul 12 14:32" stamp (no seconds) for list rows.
+  const shortStamp = (n) => {
+    const t = recencyKey(n);
+    if (!t) return '';
+    const d = new Date(t);
+    const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
+    const pad = (x) => String(x).padStart(2, '0');
+    return `${mon} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
 
   // Build a clickable result row for a note.
   function makeResultItem(note) {
@@ -1552,6 +1565,10 @@ if (isSearchMode) {
     title.className = 'result-item-title';
     title.textContent = note.name || 'Untitled Note';
     header.appendChild(title);
+    const stamp = document.createElement('span');
+    stamp.textContent = shortStamp(note);
+    stamp.style.cssText = 'margin-left:auto;font-size:10px;opacity:0.55;white-space:nowrap;padding-right:6px;';
+    header.appendChild(stamp);
     const colorDot = document.createElement('span');
     colorDot.className = 'result-item-color';
     colorDot.style.backgroundColor = note.color && note.color.startsWith('#') ? note.color : '#fff9c4';
@@ -1643,9 +1660,11 @@ if (isSearchMode) {
     resultsList.style.display = '';
     resultsList.innerHTML = '';
     const q = query.toLowerCase();
-    const filtered = allNotes.filter(n =>
-      (n.name && n.name.toLowerCase().includes(q)) || (n.text && n.text.toLowerCase().includes(q))
-    );
+    const filtered = allNotes
+      .filter(n =>
+        (n.name && n.name.toLowerCase().includes(q)) || (n.text && n.text.toLowerCase().includes(q))
+      )
+      .sort((a, b) => recencyKey(b) - recencyKey(a)); // newest first
     currentMatchIds = filtered.map(n => n.id);
     if (filtered.length === 0) {
       resultsList.innerHTML = `<div class="no-results">No stickys found</div>`;
@@ -1684,6 +1703,14 @@ if (isSearchMode) {
       renderResults(searchInput.value);
     });
   }
+
+  // Live refresh: main pushes 'stickys-changed' on every note create/edit/
+  // delete (writeAllNotes), so the list updates in real time — the ⟳ button
+  // stays as a manual fallback.
+  ipcRenderer.on('stickys-changed', () => {
+    allNotes = readNotes().filter(n => n.id !== 'sticky-search-window' && n.text && n.text.trim().length > 0);
+    renderResults(searchInput.value);
+  });
 
   searchInput.addEventListener('input', () => renderResults(searchInput.value));
   searchInput.addEventListener('keydown', (e) => {

@@ -473,6 +473,13 @@ function writeAllNotes(notes: NoteData[]) {
   } catch (e) {
     console.error('Failed to write notes.json:', e);
   }
+  // Every note mutation funnels through here — nudge the open Search Stickys
+  // window (if any) to re-read + re-render, so created/edited/deleted notes
+  // appear live instead of only on the manual ⟳ button.
+  const searchWin = stickyWindows.get('sticky-search-window');
+  if (searchWin && !searchWin.isDestroyed()) {
+    searchWin.webContents.send('stickys-changed');
+  }
 }
 
 function getNote(id: string): NoteData | undefined {
