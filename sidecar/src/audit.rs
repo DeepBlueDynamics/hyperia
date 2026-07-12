@@ -33,6 +33,7 @@ fn log_dir() -> std::path::PathBuf {
 pub fn search(
     identity: Option<&str>,
     path_q: Option<&str>,
+    any_q: Option<&str>,
     status: Option<u16>,
     since_ms: Option<u64>,
     limit: usize,
@@ -54,6 +55,7 @@ pub fn search(
 
     let id_lc = identity.map(|s| s.to_lowercase());
     let path_lc = path_q.map(|s| s.to_lowercase());
+    let any_lc = any_q.map(|s| s.to_lowercase());
     let mut out = Vec::new();
     for f in files {
         if out.len() >= limit {
@@ -77,6 +79,11 @@ pub fn search(
             }
             if let Some(q) = &path_lc {
                 if !v["path"].as_str().unwrap_or("").to_lowercase().contains(q) {
+                    continue;
+                }
+            }
+            if let Some(q) = &any_lc {
+                if !line.to_lowercase().contains(q.as_str()) {
                     continue;
                 }
             }

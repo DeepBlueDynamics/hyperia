@@ -2,6 +2,7 @@
 
 mod audit;
 mod bridge;
+mod consent_log;
 mod dashboard;
 mod doors;
 mod identity;
@@ -999,6 +1000,30 @@ async fn requester_display_name(
     }
 }
 
+/// Received-facts description of WHY a request resolved to Anonymous. Errors
+/// must report what the server RECEIVED, never diagnose the caller — "you have
+/// no identity" sent two agents theory-building (token tiers, config quests)
+/// when the actual fact was "the header never arrived" (#135).
+fn anon_reason(headers: &HeaderMap) -> String {
+    match bearer_token(headers) {
+        None => "FACT: this request arrived with NO Authorization header — the server received no \
+                 credentials at all. If you believe your client is configured with a token, your \
+                 transport is not sending it on THIS call."
+            .to_string(),
+        Some(t) => {
+            let prefix: String = t.chars().take(10).collect();
+            format!(
+                "FACT: an Authorization token WAS received ({prefix}…, {} chars) but it is not \
+                 recognized by this sidecar. Pane tokens (hyp_pane_…) are deleted when their pane \
+                 closes and wiped on sidecar restart; agent tokens (hyp_agent_…) persist in \
+                 ~/.hyperia/agents.json. Your token is most likely stale — re-read \
+                 HYPERIA_AGENT_TOKEN from a live pane or re-mint with request_token.",
+                t.chars().count()
+            )
+        }
+    }
+}
+
 /// Extract a bearer token from an `Authorization` header (case-insensitive
 /// scheme, tolerant of a bare token without the "Bearer " prefix).
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
@@ -1174,14 +1199,14 @@ async fn enforce_drive_with_purpose(
         )),
         AuthDecision::SoftWall => Err((
             StatusCode::UNAUTHORIZED,
-            "No identity on this request — your MCP connection sent an empty or missing Authorization \
-             token, so the server can't tell who you are. Reads (terminal_status, terminal_screen, \
+            format!("{} \
+             Reads (terminal_status, terminal_screen, \
              hyperia_version) work without identity; writes (terminal_run/keys/cd/split, etc.) do not. \
              IMPORTANT: do NOT call request_access to fix this — request_access ALSO requires identity \
              and will return this exact error. Identity comes first, access second. Recovery:\n\
              INSIDE a Hyperia pane (you have a HYPERIA_AGENT_TOKEN env var):\n\
              1. Your MCP client's hyperia entry must send header Authorization = \"Bearer \
-             ${HYPERIA_AGENT_TOKEN}\". Check the config block your session ACTUALLY loads: a project-local \
+             ${{HYPERIA_AGENT_TOKEN}}\". Check the config block your session ACTUALLY loads: a project-local \
              .mcp.json, or the ~/.claude.json entry for THIS working directory. If neither defines hyperia \
              it falls back to the GLOBAL mcpServers entry — which may have a literal empty \"Bearer\" (the \
              usual culprit). Fix that header.\n\
@@ -1194,8 +1219,9 @@ async fn enforce_drive_with_purpose(
              approval prompt).\n\
              EXTERNAL agent (no HYPERIA_AGENT_TOKEN env var): call request_token to mint a persistent \
              hyp_agent_… token, set your client's Authorization header to 'Bearer <token>', restart/reconnect \
-             the client, then retry."
-                .to_string(),
+             the client, then retry.",
+                anon_reason(&headers)
+            ),
         )),
         AuthDecision::Denied => Err((
             StatusCode::FORBIDDEN,
@@ -1219,6 +1245,10 @@ async fn enforce_drive_with_purpose(
                 let requester_name = requester_display_name(&state, &id)
                     .await
                     .unwrap_or_else(|| req.requester.clone());
+                consent_log::record_request(
+                    &req.id, &req.requester, &requester_name, id.kind(),
+                    &req.action, &req.target_pane, &req.purpose,
+                );
                 let _ = state
                     .bridge
                     .notify(serde_json::json!({
@@ -1290,12 +1320,15 @@ async fn enforce_create(
         AuthDecision::RefuseHome => Ok(()), // n/a to create
         AuthDecision::SoftWall => Err((
             StatusCode::UNAUTHORIZED,
-            "No identity on this request, so creating panes/tabs is blocked. INSIDE a pane: send the \
-             HYPERIA_AGENT_TOKEN env var as 'Authorization: Bearer <token>' (MCP client: \
-             headers.Authorization = \"Bearer ${HYPERIA_AGENT_TOKEN}\"). EXTERNAL agent (no env var): \
-             call the request_token tool (or POST /api/identity/agent {\"name\":\"<you>\"}) to mint a \
-             persistent hyp_agent_… token, wire it as your MCP Authorization header, and reconnect."
-                .to_string(),
+            format!(
+                "{} Creating panes/tabs requires identity. INSIDE a pane: send the \
+                 HYPERIA_AGENT_TOKEN env var as 'Authorization: Bearer <token>' (MCP client: \
+                 headers.Authorization = \"Bearer ${{HYPERIA_AGENT_TOKEN}}\"). EXTERNAL agent (no env \
+                 var): call the request_token tool (or POST /api/identity/agent {{\"name\":\"<you>\"}}) \
+                 to mint a persistent hyp_agent_… token, wire it as your MCP Authorization header, and \
+                 reconnect.",
+                anon_reason(headers)
+            ),
         )),
         AuthDecision::Denied => Err((
             StatusCode::FORBIDDEN,
@@ -1320,6 +1353,10 @@ async fn enforce_create(
                 let requester_name = requester_display_name(&state, &id)
                     .await
                     .unwrap_or_else(|| req.requester.clone());
+                consent_log::record_request(
+                    &req.id, &req.requester, &requester_name, id.kind(),
+                    &req.action, &req.target_pane, &req.purpose,
+                );
                 let _ = state
                     .bridge
                     .notify(serde_json::json!({
@@ -1386,7 +1423,13 @@ async fn enforce_capability(
         AuthDecision::Allow | AuthDecision::RefuseHome => Ok(()),
         AuthDecision::SoftWall => Err((
             StatusCode::UNAUTHORIZED,
-            format!("No identity. To use the '{cap}' capability, send an Authorization token (Bearer <token>). External agents with no token: call the request_token tool to mint a persistent hyp_agent_… token, then send it as your Authorization header."),
+            format!(
+                "{} The '{cap}' capability therefore can't be authorized. In-pane agents: send \
+                 'Authorization: Bearer ${{HYPERIA_AGENT_TOKEN}}' and fully restart the agent \
+                 process (headers load at startup only). External agents: request_token mints a \
+                 persistent hyp_agent_… token.",
+                anon_reason(headers)
+            ),
         )),
         AuthDecision::Denied => Err((
             StatusCode::FORBIDDEN,
@@ -1410,6 +1453,10 @@ async fn enforce_capability(
                 let requester_name = requester_display_name(&state, &id)
                     .await
                     .unwrap_or_else(|| req.requester.clone());
+                consent_log::record_request(
+                    &req.id, &req.requester, &requester_name, id.kind(),
+                    &req.action, &req.target_pane, &req.purpose,
+                );
                 let _ = state
                     .bridge
                     .notify(serde_json::json!({
@@ -1532,6 +1579,10 @@ async fn post_perm_request(
     let requester_name = requester_display_name(&state, &id)
         .await
         .unwrap_or_else(|| req.requester.clone());
+    consent_log::record_request(
+        &req.id, &req.requester, &requester_name, id.kind(),
+        &req.action, &req.target_pane, &req.purpose,
+    );
     let _ = state
         .bridge
         .notify(serde_json::json!({
@@ -1555,6 +1606,14 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
     let duration_secs = p["durationSecs"].as_u64();
     match state.bridge.perms().respond(id, allow, scope, duration_secs).await {
         Some(req) => {
+            consent_log::record_decision(
+                &req.id,
+                if allow { "allow" } else { "deny" },
+                scope,
+                &req.requester,
+                &req.action,
+                &req.target_pane,
+            );
             // Flush or drop any keystrokes the agent had held pending this decision.
             if allow {
                 if let Some(mut keys) = state.bridge.take_action(&req.target_pane).await {
@@ -1788,6 +1847,10 @@ async fn get_audit_search(
     enforce_identified(&state, &headers).await?;
     let identity = params.get("identity").map(|s| s.as_str());
     let path_q = params.get("path").map(|s| s.as_str());
+    // Generic substring filter over the whole entry — previously `q` was
+    // silently IGNORED (unknown params dropped), returning unfiltered rows and
+    // looking like a working search that "found" unrelated results (#135).
+    let any_q = params.get("q").map(|s| s.as_str());
     let status = params.get("status").and_then(|s| s.parse::<u16>().ok());
     let since = params.get("since_ms").and_then(|s| s.parse::<u64>().ok());
     let limit = params
@@ -1795,7 +1858,26 @@ async fn get_audit_search(
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(100)
         .min(2000);
-    let results = audit::search(identity, path_q, status, since, limit);
+    let results = audit::search(identity, path_q, any_q, status, since, limit);
+    Ok(Json(serde_json::json!({ "count": results.len(), "results": results })))
+}
+
+/// GET /api/consent/log — the first-class consent ledger (#135): who asked,
+/// for what, on which target, and what was decided. `q` substring-filters the
+/// whole entry; identified callers only (same gate as the audit trail).
+async fn get_consent_log(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    enforce_identified(&state, &headers).await?;
+    let q = params.get("q").map(|s| s.as_str());
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(100)
+        .min(2000);
+    let results = consent_log::search(q, limit);
     Ok(Json(serde_json::json!({ "count": results.len(), "results": results })))
 }
 
@@ -3092,6 +3174,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/perms/respond", axum::routing::post(post_perm_respond))
         .route("/api/perms/state", axum::routing::get(get_perm_state))
         .route("/api/audit/search", axum::routing::get(get_audit_search))
+        .route("/api/consent/log", axum::routing::get(get_consent_log))
         .route("/api/perms/check", axum::routing::post(post_perm_check))
         .route("/api/perms/token", axum::routing::get(get_perm_token))
         .route("/api/perms/enforce", axum::routing::post(post_perm_enforce))

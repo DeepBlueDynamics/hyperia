@@ -152,8 +152,19 @@ pub struct AuditSearchRequest {
     pub identity: Option<String>,
     /// Filter by request path substring, e.g. "/api/pane" or "/api/notes".
     pub path: Option<String>,
+    /// Generic case-insensitive substring filter over the WHOLE entry.
+    pub q: Option<String>,
     /// Filter by exact HTTP status (200 allow, 202 consent, 401 soft-wall, 403 denied).
     pub status: Option<u16>,
+    /// Max rows to return (newest first, default 100).
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ConsentLogRequest {
+    /// Case-insensitive substring filter over the whole entry (requester,
+    /// action, target, id — e.g. "sticky:access" or "Severe Booby").
+    pub q: Option<String>,
     /// Max rows to return (newest first, default 100).
     pub limit: Option<usize>,
 }
@@ -1570,6 +1581,9 @@ impl HyperiaMcp {
         if let Some(p) = &req.path {
             q.push(format!("path={}", urlencoding::encode(p)));
         }
+        if let Some(g) = &req.q {
+            q.push(format!("q={}", urlencoding::encode(g)));
+        }
         if let Some(s) = req.status {
             q.push(format!("status={s}"));
         }
@@ -1580,6 +1594,28 @@ impl HyperiaMcp {
             "/api/audit/search".to_string()
         } else {
             format!("/api/audit/search?{}", q.join("&"))
+        };
+        let resp = self.get_as(&path, forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Query the consent ledger: every consent prompt ever raised (who asked, their friendly name, identity kind, capability/action, target, purpose) and every decision the user made (allow/deny + scope). Newest first. Use q for a substring filter (e.g. 'sticky:access', a pane codename, or a request id). This is the authoritative answer to 'why did I get this toast' / 'did agent X ever ask'. Identified callers only.")]
+    async fn consent_log(
+        &self,
+        Parameters(req): Parameters<ConsentLogRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(g) = &req.q {
+            parts.push(format!("q={}", urlencoding::encode(g)));
+        }
+        if let Some(l) = req.limit {
+            parts.push(format!("limit={l}"));
+        }
+        let path = if parts.is_empty() {
+            "/api/consent/log".to_string()
+        } else {
+            format!("/api/consent/log?{}", parts.join("&"))
         };
         let resp = self.get_as(&path, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))

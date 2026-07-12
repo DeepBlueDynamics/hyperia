@@ -296,6 +296,7 @@ pub const DOORS: &[Door] = &[
             "telemetry_reset",
             "sidecar_logs",
             "audit_search",
+            "consent_log",
             "agent_status",
         ],
     },
