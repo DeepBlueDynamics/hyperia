@@ -15,17 +15,34 @@ import rpc from '../rpc';
 
 let lastSnapshot = '';
 
+// rpc.emit() THROWS 'Not ready' until the ipc channel id is assigned (async, on
+// the 'init' event). This runs from a store.subscribe listener that fires on the
+// very first boot dispatch — a throw here escapes into the dispatch chain and
+// aborts renderer init (black screen after splash, no picker). So: (1) never emit
+// before rpc is ready, and (2) swallow any error so a store listener can NEVER
+// crash the app. Web URLs only appear after a web pane is opened — long after
+// 'ready' — so gating on readiness loses no real update.
+let rpcReady = false;
+rpc.once('ready', () => {
+  rpcReady = true;
+});
+
 export function syncWebUrls(state: HyperState): void {
-  const groups = state.termGroups.termGroups;
-  const urls: Record<string, string> = {};
-  for (const uid of Object.keys(groups)) {
-    const url = (groups[uid] as any).webUrl;
-    if (url) urls[uid] = url;
-  }
-  // Only cross the IPC boundary when the snapshot actually changed.
-  const json = JSON.stringify(urls);
-  if (json !== lastSnapshot) {
-    lastSnapshot = json;
-    rpc.emit('session web url', {urls});
+  if (!rpcReady) return;
+  try {
+    const groups = state.termGroups.termGroups;
+    const urls: Record<string, string> = {};
+    for (const uid of Object.keys(groups)) {
+      const url = (groups[uid] as any).webUrl;
+      if (url) urls[uid] = url;
+    }
+    // Only cross the IPC boundary when the snapshot actually changed.
+    const json = JSON.stringify(urls);
+    if (json !== lastSnapshot) {
+      lastSnapshot = json;
+      rpc.emit('session web url', {urls});
+    }
+  } catch {
+    /* never let a store-subscribe side effect crash the renderer */
   }
 }
