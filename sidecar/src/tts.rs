@@ -39,6 +39,66 @@ const SAMPLE_RATE: u32 = 24_000;
 /// empty so the next call retries (a transient download/load error is not fatal).
 static ENGINE: OnceCell<Arc<KokoroTts>> = OnceCell::const_new();
 
+/// Kokoro's v10 synth path indexes the voice style-pack by phoneme count
+/// (`pack[phonemes.len() - 1]`) and PANICS out-of-bounds once a single synth
+/// exceeds the pack size (~510 phonemes). That reset the /api/tts connection on
+/// any long summary — the "TTS is down" reports were really this crash. Phoneme
+/// count is roughly bounded by character count in English, so we cap each chunk
+/// well under the ceiling in characters. 250 leaves generous margin.
+const MAX_SYNTH_CHARS: usize = 250;
+
+/// Split `text` into synth-sized chunks, breaking on word boundaries and
+/// preferring to end a chunk right after sentence punctuation. A single word
+/// longer than `max_chars` (e.g. a pasted URL) is hard-split by characters so no
+/// chunk can ever exceed the ceiling.
+fn chunk_for_synth(text: &str, max_chars: usize) -> Vec<String> {
+    let text = text.trim();
+    if text.chars().count() <= max_chars {
+        return vec![text.to_string()];
+    }
+    let is_sentence_end = |c: char| matches!(c, '.' | '!' | '?' | ';' | ':');
+    let mut chunks: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for word in text.split_whitespace() {
+        // Hard-split a pathologically long single "word" (URL, base64, etc.).
+        if word.chars().count() > max_chars {
+            let t = cur.trim();
+            if !t.is_empty() {
+                chunks.push(t.to_string());
+            }
+            cur.clear();
+            let mut buf = String::new();
+            for ch in word.chars() {
+                if buf.chars().count() >= max_chars {
+                    chunks.push(std::mem::take(&mut buf));
+                }
+                buf.push(ch);
+            }
+            cur = buf;
+            continue;
+        }
+        if !cur.is_empty() && cur.chars().count() + 1 + word.chars().count() > max_chars {
+            chunks.push(std::mem::take(&mut cur));
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+        }
+        cur.push_str(word);
+        // Break on a natural boundary once the chunk is reasonably full.
+        if cur.chars().count() >= max_chars * 3 / 5 && word.ends_with(is_sentence_end) {
+            chunks.push(std::mem::take(&mut cur));
+        }
+    }
+    let t = cur.trim();
+    if !t.is_empty() {
+        chunks.push(t.to_string());
+    }
+    if chunks.is_empty() {
+        chunks.push(text.to_string());
+    }
+    chunks
+}
+
 /// Speak `text` aloud on the host machine, blocking until playback finishes.
 ///
 /// `voice` selects a Kokoro voice by name (see [`resolve_voice`]); `None` →
@@ -60,15 +120,27 @@ pub async fn speak(text: &str, voice: Option<&str>, speed: Option<f32>) -> Resul
     let spoken = text.to_lowercase();
 
     let tts = engine().await?;
-    let (audio, took) = tts
-        .synth(&spoken, voice)
-        .await
-        .map_err(|e| anyhow!("Kokoro synth failed: {e}"))?;
+
+    // Chunk so no single synth call exceeds Kokoro's phoneme ceiling (see
+    // MAX_SYNTH_CHARS) — long text used to panic the v10 synth path and reset the
+    // request. Concatenate the per-chunk audio for one continuous playback.
+    let chunks = chunk_for_synth(&spoken, MAX_SYNTH_CHARS);
+    let mut audio: Vec<f32> = Vec::new();
+    let mut took = std::time::Duration::ZERO;
+    for chunk in &chunks {
+        let (a, dt) = tts
+            .synth(chunk.as_str(), voice)
+            .await
+            .map_err(|e| anyhow!("Kokoro synth failed: {e}"))?;
+        took += dt;
+        audio.extend_from_slice(&a);
+    }
     let secs = audio.len() as f64 / SAMPLE_RATE as f64;
     tracing::info!(
         target: "tts",
-        "synth {} chars in {:?} -> {:.1}s audio ({} samples @ {} Hz)",
+        "synth {} chars in {} chunk(s), {:?} -> {:.1}s audio ({} samples @ {} Hz)",
         text.len(),
+        chunks.len(),
         took,
         secs,
         audio.len(),
