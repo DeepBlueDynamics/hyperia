@@ -1,6 +1,8 @@
 import React from 'react';
 import {ipcRenderer} from 'electron';
 
+import {subscribePulseStatus, refreshPulseStatus} from '../pulse-status-bus';
+
 // Pulse picker pills + action buttons (re-poke watchdog editor in the band).
 const pulseSeg = (active: boolean): React.CSSProperties => ({
   padding: '3px 9px',
@@ -151,29 +153,17 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
     const [pLifetime, setPLifetime] = React.useState(3600);
     const [pBusy, setPBusy] = React.useState(false);
 
-    // Reflect whether this pane already has an active pulse (on open + mount).
+    // Reflect whether this pane already has an active pulse. ONE shared poller
+    // (pulse-status-bus) serves every band — the old per-band 5s setInterval
+    // multiplied a global query by the number of panes and flooded the sidecar
+    // (~3-4 req/s with a busy layout).
     React.useEffect(() => {
       if (!paneId) return;
-      let alive = true;
-      const check = () => {
-        void ipcRenderer.invoke('pulse:status').then((txt: string) => {
-          if (!alive) return;
-          try {
-            const list = (JSON.parse(txt)?.pulses || []) as Array<{pane: string; paused: boolean}>;
-            setPulseActive(list.some((p) => p.pane === paneId && !p.paused));
-          } catch {
-            /* ignore */
-          }
-        });
-      };
-      check();
-      // Poll so the running indicator stays accurate (a pulse can expire or be
-      // cleared from elsewhere) — this drives the pulsing icon.
-      const t = setInterval(check, 5000);
-      return () => {
-        alive = false;
-        clearInterval(t);
-      };
+      const unsub = subscribePulseStatus((active) => setPulseActive(active.has(paneId)));
+      // Opening the pulse editor refreshes immediately so the indicator is
+      // current while the user is looking at it.
+      if (pulseOpen) refreshPulseStatus();
+      return unsub;
     }, [paneId, pulseOpen]);
 
     const submitPulse = React.useCallback(() => {
