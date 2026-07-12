@@ -140,6 +140,20 @@ rpc.on('session shellstate', ({uid, shellState}: {uid: string; shellState: { sta
   store_.dispatch(sessionActions.setSessionShellState(uid, shellState));
 });
 
+// Drag-and-drop file copy result (main copied the dropped file(s) into the
+// pane's cwd) — surface a toast so the copy is visible without an `ls`.
+rpc.on(
+  'pane copy files done',
+  (r: {uid: string; ok: boolean; dir: string; count: number; names?: string[]; error?: string}) => {
+    if (r.ok) {
+      const what = r.names && r.names.length ? r.names.join(', ') : `${r.count} item(s)`;
+      store_.dispatch(addNotificationMessage(`Copied ${what} → ${r.dir}`));
+    } else {
+      store_.dispatch(addNotificationMessage(`Couldn't copy to ${r.dir}${r.error ? `: ${r.error}` : ''}`));
+    }
+  }
+);
+
 // Agent / Stream-Deck focus. The sidecar's /api/pane/focus (terminal_focus)
 // resolves a pane and has the bridge emit `session set active`. The renderer had
 // no listener for it, so a focus command reached the window and did nothing —

@@ -1,4 +1,4 @@
-import {clipboard, shell, ipcRenderer} from 'electron';
+import {clipboard, shell, ipcRenderer, webUtils} from 'electron';
 import React from 'react';
 
 import Color from 'color';
@@ -267,6 +267,57 @@ export default class Term extends React.PureComponent<
   navigatorSearchInputRef = React.createRef<HTMLInputElement>();
   findInputRef = React.createRef<HTMLInputElement>();
   termOuterRef = React.createRef<HTMLDivElement>();
+
+  // ── Drag-and-drop file copy ──────────────────────────────────────────────
+  // Drop a file (or folder) from Explorer / Finder onto an IDLE shell pane and
+  // Hyperia copies it into that pane's cwd. Gated to terminal panes sitting at a
+  // prompt: a pane running an agent or any foreground program reads as shellState
+  // 'busy' and is left alone (the existing "drop pastes the path" behavior via
+  // will-navigate still applies there); web panes are native views and never
+  // reach this DOM handler. When eligible we preventDefault to suppress the
+  // path-paste and copy instead.
+  private canAcceptFileDrop(): boolean {
+    return this.props.shellState?.state === 'idle' && !!this.props.sessionCwd;
+  }
+
+  private isFileDrag(e: React.DragEvent): boolean {
+    return !!e.dataTransfer && e.dataTransfer.types.includes('Files');
+  }
+
+  private setDropAffordance(on: boolean) {
+    const el = this.termOuterRef.current;
+    if (!el) return;
+    el.style.outline = on ? '2px dashed var(--accent, #58a6ff)' : '';
+    el.style.outlineOffset = on ? '-4px' : '';
+  }
+
+  onFileDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    // Only intercept when this pane is an idle shell with a known cwd. On a busy
+    // pane we do NOT preventDefault, so the drop falls through to the existing
+    // will-navigate path-paste (e.g. hand a running agent a file path).
+    if (!this.isFileDrag(e) || !this.canAcceptFileDrop()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    this.setDropAffordance(true);
+  };
+
+  onFileDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!this.isFileDrag(e)) return;
+    this.setDropAffordance(false);
+  };
+
+  onFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!this.isFileDrag(e) || !this.canAcceptFileDrop()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.setDropAffordance(false);
+    const paths = Array.from(e.dataTransfer.files || [])
+      .map((f) => webUtils.getPathForFile(f))
+      .filter(Boolean);
+    if (!paths.length) return;
+    rpc.emit('pane copy files', {uid: this.props.uid, cwd: this.props.sessionCwd!, paths});
+  };
 
   handleOutsideClick = (e: MouseEvent) => {
     if (
@@ -2507,6 +2558,9 @@ export default class Term extends React.PureComponent<
         ref={this.termOuterRef}
         className={`term_fit ${this.props.isTermActive ? 'term_active' : ''}`}
         onMouseUp={this.onMouseUp}
+        onDragOver={this.onFileDragOver}
+        onDragLeave={this.onFileDragLeave}
+        onDrop={this.onFileDrop}
         style={{position: 'relative'}}
       >
         {this.state.showCopied && (

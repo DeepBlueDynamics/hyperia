@@ -109,10 +109,14 @@ export type MainEvents = {
   'picker-zoom-out': {uid: string};
   'picker-zoom-reset': {uid: string};
   'session-cd': {uid: string; path: string};
+  /** Copy OS-dragged files into an idle terminal pane's cwd (drag-and-drop). */
+  'pane copy files': {uid: string; cwd: string; paths: string[]};
 };
 
 export type RendererEvents = {
   'session-cd-reply': {uid: string; applied?: boolean; queued?: boolean; refused?: boolean; reason?: string};
+  /** Result of a drag-and-drop file copy into a pane's cwd. */
+  'pane copy files done': {uid: string; ok: boolean; dir: string; count: number; names?: string[]; error?: string};
   ready: never;
   'session rename': {uid: string; name: string};
   'session set active': {uid: string};
