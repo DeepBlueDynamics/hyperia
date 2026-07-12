@@ -171,14 +171,50 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
       )}
 
       <div className="tabs_newTabPair">
-        <button
-          className="tabs_newTabBtn"
-          onClick={() => props.openNewTab('picker')}
-          aria-label="New tab"
-          title="New Tab"
-        >
-          +
-        </button>
+        {/* New-tab "+" with its quick-layout hover menu (#140). The menu was
+            dropped when 6a93c13e redesigned this cluster into the +/window/sticky
+            trio — it deleted the JSX but left the CSS (.tabs_newTab_tooltip /
+            .tabs_layout_grid …) orphaned. Restored here: hovering + reveals the
+            layout presets; each opens a new grouped tab pre-split via the same
+            rpc('new', {layoutPattern}) path (sessions.ts → openLayout), still wired. */}
+        <div className="tabs_newTab_tooltip_trigger" style={{position: 'relative', display: 'inline-flex'}}>
+          <button
+            className="tabs_newTabBtn"
+            onClick={() => props.openNewTab('picker')}
+            aria-label="New tab"
+            title="New Tab"
+          >
+            +
+          </button>
+          <div className="tabs_newTab_tooltip" style={{minWidth: '200px'}}>
+            <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 600, marginBottom: '8px', textAlign: 'center'}}>
+              New Tab Layouts
+            </div>
+            <div className="tabs_layout_grid">
+              <div
+                className="tabs_layout_item"
+                onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: '3cols'} as any)}
+                title="3 Columns"
+              >
+                <div className="layout-preview-box l-3cols"><div /><div /><div /></div>
+              </div>
+              <div
+                className="tabs_layout_item"
+                onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: '3rows'} as any)}
+                title="3 Rows"
+              >
+                <div className="layout-preview-box l-3rows"><div /><div /><div /></div>
+              </div>
+              <div
+                className="tabs_layout_item"
+                onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'grid2x2'} as any)}
+                title="Grid 2x2"
+              >
+                <div className="layout-preview-box l-grid2x2"><div /><div /><div /><div /></div>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <button
           className="tabs_newTabBtn"
