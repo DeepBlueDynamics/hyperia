@@ -28,7 +28,11 @@ else
 	fi
 fi
 
-ELECTRON="$HYPER_PATH/hyper"
+# Resolve the Electron binary robustly: the packaged binary is "hyperia"
+# (electron-builder executableName), but older builds shipped it as the legacy
+# "hyper" name. Try the new name first, fall back to the old. (#137)
+ELECTRON="$HYPER_PATH/hyperia"
+[ -x "$ELECTRON" ] || ELECTRON="$HYPER_PATH/hyper"
 CLI="$HYPER_PATH/resources/bin/cli.js"
 ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$CLI" "$@"
 exit $?

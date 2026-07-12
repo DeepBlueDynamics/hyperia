@@ -15,9 +15,18 @@ if [ -f '/opt/${productFilename}/chrome-sandbox' ]; then
   chmod 4755 '/opt/${productFilename}/chrome-sandbox' || true
 fi
 
-# CLI launcher symlink — point /usr/local/bin/<executable> at the real
-# binary in /opt. The previous template pointed at resources/bin/<exe>
-# which doesn't exist in our packaging; `which hyperia` returned nothing
-# on Ubuntu.
+# CLI launcher symlink (#137). Prefer the MCP CLI wrapper (build/${os}/hyperia,
+# packaged into resources/bin/) so `hyperia status|run|call|doctor|...` drives
+# the running sidecar and bare `hyperia` still launches the GUI. Pointing the
+# symlink at the raw GUI binary — as this template previously did — made
+# `hyperia <anything>` hit the app's "does not accept command line arguments"
+# guard, shadowing the whole CLI. Fall back to the GUI binary if the wrapper
+# isn't present, so behavior is never worse than before.
 mkdir -p /usr/local/bin
-ln -sf '/opt/${productFilename}/${executable}' '/usr/local/bin/${executable}'
+HYPERIA_CLI_WRAPPER='/opt/${productFilename}/resources/bin/hyperia'
+if [ -f "$HYPERIA_CLI_WRAPPER" ]; then
+  chmod +x "$HYPERIA_CLI_WRAPPER" || true
+  ln -sf "$HYPERIA_CLI_WRAPPER" '/usr/local/bin/${executable}'
+else
+  ln -sf '/opt/${productFilename}/${executable}' '/usr/local/bin/${executable}'
+fi
