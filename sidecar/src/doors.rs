@@ -298,6 +298,8 @@ pub const DOORS: &[Door] = &[
             "audit_search",
             "consent_log",
             "agent_status",
+            "report_bug",
+            "bug_log",
         ],
     },
     Door {

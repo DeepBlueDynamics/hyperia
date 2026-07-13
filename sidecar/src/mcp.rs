@@ -170,6 +170,29 @@ pub struct ConsentLogRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct BugReportRequest {
+    /// One-line summary of what went wrong (required).
+    pub title: String,
+    /// What you were doing, what you expected, and what actually happened.
+    pub details: Option<String>,
+    /// The Hyperia tool that failed, if any (e.g. "hyperia_spoken_summary").
+    pub tool: Option<String>,
+    /// The exact error text you received, if any.
+    pub error: Option<String>,
+    /// Anything that helps reproduce it (pane, command, inputs).
+    pub context: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct BugLogRequest {
+    /// Case-insensitive substring filter over the whole entry (title, error,
+    /// tool, reporter).
+    pub q: Option<String>,
+    /// Max rows to return (newest first, default 100).
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct KeysRequest {
     /// Keystrokes to type into the terminal. Use \n for Enter, \t for Tab, \x03 for Ctrl-C (interrupt).
     pub keys: String,
@@ -1621,6 +1644,68 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
+    #[tool(description = "File a Hyperia bug report. Call this when a Hyperia tool or the app itself fails in a way that looks like a Hyperia DEFECT — an internal error, a crash, a connection reset, a wrong result — rather than your own mistake. Do this INSTEAD of guessing at the cause, silently giving up, or telling the user 'it's down': file the report so the human can triage it into a fix. Args: title (required, one line); details (what you did, expected, and got); tool (the failing tool name); error (the exact error text you saw); context (pane, command, inputs that help reproduce). Returns a bug id. No identity required — anyone can file.")]
+    async fn report_bug(
+        &self,
+        Parameters(req): Parameters<BugReportRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let title = req.title.trim().to_string();
+        if title.is_empty() {
+            return Err(ErrorData::invalid_params("title must not be empty", None));
+        }
+        let body = serde_json::json!({
+            "title": title,
+            "details": req.details.unwrap_or_default(),
+            "tool": req.tool.unwrap_or_default(),
+            "error": req.error.unwrap_or_default(),
+            "context": req.context.unwrap_or_default(),
+        });
+        let mut rb = self.client.post(format!("{}/api/bug", self.base_url)).json(&body);
+        if let Some(a) = forwarded_auth(&ctx) {
+            rb = rb.header(reqwest::header::AUTHORIZATION, a);
+        }
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("bug report failed: {e}"), None))?;
+        let v: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("bug report response error: {e}"), None))?;
+        if v["ok"].as_bool().unwrap_or(false) {
+            let id = v["id"].as_str().unwrap_or("");
+            Ok(CallToolResult::success(vec![Content::text(format!(
+                "Bug filed as {id}. Thanks — it's logged for the human to triage into a fix. Don't retry the failed action unless you have a workaround."
+            ))]))
+        } else {
+            let err = v["error"].as_str().unwrap_or("unknown error");
+            Err(ErrorData::internal_error(format!("bug report rejected: {err}"), None))
+        }
+    }
+
+    #[tool(description = "List Hyperia bug reports agents have filed via report_bug, newest first. Use q for a substring filter (a tool name, error text, or reporter codename). For triaging what's been reported.")]
+    async fn bug_log(
+        &self,
+        Parameters(req): Parameters<BugLogRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(g) = &req.q {
+            parts.push(format!("q={}", urlencoding::encode(g)));
+        }
+        if let Some(l) = req.limit {
+            parts.push(format!("limit={l}"));
+        }
+        let path = if parts.is_empty() {
+            "/api/bug/log".to_string()
+        } else {
+            format!("/api/bug/log?{}", parts.join("&"))
+        };
+        let resp = self.get_as(&path, forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
     #[tool(description = "Get the current Hyperia version. Returns the sidecar version and the Electron app version.")]
     async fn hyperia_version(&self) -> Result<CallToolResult, ErrorData> {
         let sidecar_version = env!("CARGO_PKG_VERSION");
@@ -1666,7 +1751,7 @@ impl HyperiaMcp {
         let resp = rb
             .send()
             .await
-            .map_err(|e| ErrorData::internal_error(format!("TTS request failed: {e}"), None))?;
+            .map_err(|e| ErrorData::internal_error(format!("TTS request failed: {e}. If this looks like a Hyperia bug (e.g. a connection reset mid-synthesis — often long text), file it: call report_bug with tool=\"hyperia_spoken_summary\", this error, and the text length. Do NOT tell the user \"TTS is down\" — short text still works."), None))?;
         let v: serde_json::Value = resp
             .json()
             .await

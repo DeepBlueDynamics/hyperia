@@ -2,6 +2,7 @@
 
 mod audit;
 mod bridge;
+mod bugs;
 mod consent_log;
 mod dashboard;
 mod doors;
@@ -1881,6 +1882,78 @@ async fn get_consent_log(
     Ok(Json(serde_json::json!({ "count": results.len(), "results": results })))
 }
 
+#[derive(serde::Deserialize)]
+struct BugReportBody {
+    title: String,
+    #[serde(default)]
+    details: String,
+    #[serde(default)]
+    tool: String,
+    #[serde(default)]
+    error: String,
+    #[serde(default)]
+    context: String,
+}
+
+/// POST /api/bug — file an agent bug report (#141). Deliberately OPEN to any
+/// caller (we *want* reports, including from anonymous ones); the reporter's
+/// identity is recorded when present. The human triages these into fixes.
+async fn post_bug(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<BugReportBody>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let title = req.title.trim();
+    if title.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "error": "title is required" })),
+        );
+    }
+    let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    let (reporter, kind) = match &id {
+        identity::CallerIdentity::Pane { pane, .. } => (
+            state.bridge.pane_display_name(pane).await.unwrap_or_else(|| "a pane".into()),
+            "pane",
+        ),
+        identity::CallerIdentity::Agent { name, .. } => (name.clone(), "agent"),
+        _ => ("anonymous".to_string(), "anonymous"),
+    };
+    let bug_id = bugs::record(
+        &reporter,
+        kind,
+        title,
+        &req.details,
+        &req.tool,
+        &req.error,
+        &req.context,
+        env!("CARGO_PKG_VERSION"),
+    );
+    tracing::info!(
+        target: "bugs",
+        "bug filed {} by {} ({}): {}",
+        bug_id, reporter, kind, crate::util::safe_prefix(title, 100)
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "id": bug_id, "reporter": reporter })),
+    )
+}
+
+/// GET /api/bug/log — list filed bug reports, newest first. `q` substring-filters.
+async fn get_bug_log(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let q = params.get("q").map(|s| s.as_str());
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(100)
+        .min(2000);
+    let results = bugs::search(q, limit);
+    Json(serde_json::json!({ "count": results.len(), "results": results }))
+}
+
 /// Mint/return the access token for a pane. The pane menu copies this and the
 /// human hands it to an external agent (→ MCP Authorization header).
 async fn get_perm_token(
@@ -3175,6 +3248,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/perms/state", axum::routing::get(get_perm_state))
         .route("/api/audit/search", axum::routing::get(get_audit_search))
         .route("/api/consent/log", axum::routing::get(get_consent_log))
+        .route("/api/bug", axum::routing::post(post_bug))
+        .route("/api/bug/log", axum::routing::get(get_bug_log))
         .route("/api/perms/check", axum::routing::post(post_perm_check))
         .route("/api/perms/token", axum::routing::get(get_perm_token))
         .route("/api/perms/enforce", axum::routing::post(post_perm_enforce))
