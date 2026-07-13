@@ -40,14 +40,20 @@ struct Args {
     #[arg(long, default_value = "9800")]
     port: u16,
 
-    /// IP to bind the HTTP listener to. Default 127.0.0.1 (loopback only —
-    /// only the local Electron renderer and local MCP clients can reach
-    /// the sidecar). Set to 0.0.0.0 to expose to all interfaces (LAN
-    /// access from other machines, useful for SSH-less remote MCP). Other
-    /// valid forms: a specific IP like 192.168.1.10 for a single
-    /// interface. Honors the HYPERIA_BIND environment variable.
-    #[arg(long, env = "HYPERIA_BIND", default_value = "127.0.0.1")]
-    bind: std::net::IpAddr,
+    /// IP to bind the HTTP listener to. Default: 0.0.0.0 on Linux, 127.0.0.1 on
+    /// Windows/macOS.
+    ///
+    /// On native Linux Docker a loopback-only sidecar is INVISIBLE to nemesis8
+    /// containers: they reach the host via the docker gateway
+    /// (host.docker.internal → 172.17.0.1) and nothing listens there. So on Linux
+    /// we bind all interfaces by default, so containers connect with zero setup.
+    /// Windows/macOS keep loopback — Docker Desktop's VM forwards
+    /// host.docker.internal to the host loopback, so containers reach it anyway.
+    /// Override with HYPERIA_BIND: 127.0.0.1 to restrict to this host, 172.17.0.1
+    /// for the docker gateway only (containers yes, wider LAN no), or 0.0.0.0
+    /// everywhere.
+    #[arg(long, env = "HYPERIA_BIND")]
+    bind: Option<std::net::IpAddr>,
 
     /// Run as MCP stdio server
     #[arg(long)]
@@ -3366,7 +3372,17 @@ async fn main() -> anyhow::Result<()> {
         // (incl. /mcp) — attribution now, enforcement next (#59).
         .layer(axum::middleware::from_fn_with_state(bridge_for_mw, identity_mw));
 
-    let addr = std::net::SocketAddr::new(args.bind, args.port);
+    // Default bind: all interfaces on Linux (so nemesis8 containers reach the
+    // sidecar via host.docker.internal — a loopback-only bind is invisible to
+    // them on native Docker), loopback elsewhere (Docker Desktop bridges it).
+    let bind = args.bind.unwrap_or_else(|| {
+        if cfg!(target_os = "linux") {
+            std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+        } else {
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        }
+    });
+    let addr = std::net::SocketAddr::new(bind, args.port);
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,
         Err(e) => {
@@ -3374,15 +3390,16 @@ async fn main() -> anyhow::Result<()> {
             std::process::exit(0); // Exit cleanly so auto-restart doesn't loop
         }
     };
-    if !args.bind.is_loopback() {
+    if !bind.is_loopback() {
         tracing::warn!(
-            "Sidecar bound to {} — reachable from outside this machine. \
-            All Hyperia MCP tools (terminal_run, file_read, file_write, etc.) \
-            are now accessible to anyone who can reach this address. Use behind \
-            a firewall you trust.",
-            args.bind
+            "Sidecar bound to {} — reachable from outside this machine (this is the \
+            default on Linux so nemesis8 containers can connect via \
+            host.docker.internal). State-changing MCP tools still require the human's \
+            consent, but reads are open — keep this host behind a firewall you trust, \
+            or set HYPERIA_BIND=127.0.0.1 to restrict / 172.17.0.1 for docker-only.",
+            bind
         );
-        eprintln!("[sidecar] WARNING: bound to {} (non-loopback) — exposed to network", args.bind);
+        eprintln!("[sidecar] bound to {} (non-loopback) — reachable by containers/LAN", bind);
     }
     tracing::info!(%addr, "Sidecar HTTP listening");
     eprintln!("[sidecar] HTTP ready on :{}", args.port);
