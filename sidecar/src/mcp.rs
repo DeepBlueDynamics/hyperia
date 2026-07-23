@@ -1774,7 +1774,7 @@ impl HyperiaMcp {
         }
     }
 
-    #[tool(description = "Get a persistent Hyperia identity token for an EXTERNAL agent — one NOT running inside a Hyperia pane, so it has no HYPERIA_AGENT_TOKEN in its environment. Call this the moment a state-changing tool returns 'No identity': it mints (or returns) a persistent hyp_agent_… token. Then set your MCP client's Authorization header to 'Bearer <that token>' and reconnect — after which terminal_run / terminal_keys / terminal_split / request_access etc. work. Read-only/monitoring tools never needed it. The token persists in ~/.hyperia/agents.json across restarts; minting the same name again returns the same token.")]
+    #[tool(description = "Get a persistent Hyperia identity token for an EXTERNAL agent — one NOT running inside a Hyperia pane, so it has no HYPERIA_AGENT_TOKEN in its environment. Call this the moment a state-changing tool returns 'No identity': it mints (or returns) a persistent hyp_agent_… token. Then set your MCP client's Authorization header to 'Bearer <that token>' and reconnect — after which terminal_run / terminal_keys / terminal_split / request_access etc. work. Read-only/monitoring tools never needed it. The token persists in ~/.hyperia/agents.json across restarts; minting the same name again returns the same token. DOES NOT HELP in-pane agents (you cannot inject a token into your own running connection — fix your MCP config's Authorization header and restart) or containerized agents (the container is ephemeral — fix the host orchestrator's config instead); the 'No identity' refusal text spells out both.")]
     async fn request_token(
         &self,
         Parameters(req): Parameters<RequestTokenRequest>,
@@ -1787,15 +1787,9 @@ impl HyperiaMcp {
             .ok()
             .and_then(|v| v["token"].as_str().map(String::from))
             .unwrap_or_default();
-        let msg = format!(
-            "Minted a persistent Hyperia agent token for \"{name}\":\n\n  {token}\n\n\
-             Wire it into your MCP client and reconnect:\n  \
-             claude mcp add --transport http --scope user hyperia {base}/mcp --header \"Authorization: Bearer {token}\"\n\
-             (or set headers.Authorization = \"Bearer {token}\" on the hyperia server in your MCP config — for Claude Code that's the `hyperia` block in ~/.claude.json — then restart the session).\n\n\
-             After reconnect, state-changing tools work. This token persists in ~/.hyperia/agents.json; calling request_token again with the same name returns it.",
-            name = name,
-            token = token,
-            base = self.base_url
+        let msg = crate::messages::render(
+            crate::messages::Msg::RequestTokenMinted,
+            &[("name", &name), ("token", &token), ("base", &self.base_url)],
         );
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
@@ -2029,14 +2023,20 @@ impl HyperiaMcp {
         }
         let mut cfg = self.read_config().await?;
         let old = walk_path(&cfg, &req.path);
-        match set_path(&mut cfg, &req.path, req.value.clone()) {
+        // Guard against an MCP client that serialized a structured value to a
+        // JSON string (a common footgun for untyped params): storing e.g.
+        // config.profiles as the string "[{...}]" instead of an array crashes
+        // the app's config loader. Unwrap a stringified array/object to the real
+        // structure before writing.
+        let value = coerce_json_string(req.value.clone());
+        match set_path(&mut cfg, &req.path, value.clone()) {
             Ok(()) => {
                 self.write_config(&cfg).await?;
                 let summary = serde_json::json!({
                     "ok": true,
                     "path": req.path,
                     "old_value": old,
-                    "new_value": req.value,
+                    "new_value": value,
                 });
                 Ok(CallToolResult::success(vec![Content::text(
                     serde_json::to_string_pretty(&summary).unwrap_or_default(),
@@ -2864,6 +2864,26 @@ fn walk_path(value: &serde_json::Value, path: &str) -> serde_json::Value {
     cur.clone()
 }
 
+/// If `v` is a string whose contents parse as a JSON array or object, return the
+/// parsed value; otherwise return `v` unchanged. Guards `settings_set` against an
+/// MCP client that serialized a structured value to a string — which would store
+/// e.g. `config.profiles` as a string and crash the app's config loader. Only
+/// arrays/objects are unwrapped: a plain string that happens to be valid JSON
+/// (a shell path, a number-like or boolean-like string) is left untouched.
+fn coerce_json_string(v: serde_json::Value) -> serde_json::Value {
+    if let serde_json::Value::String(s) = &v {
+        let trimmed = s.trim_start();
+        if trimmed.starts_with('[') || trimmed.starts_with('{') {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s) {
+                if parsed.is_array() || parsed.is_object() {
+                    return parsed;
+                }
+            }
+        }
+    }
+    v
+}
+
 /// Set a value at a dot-separated path, creating intermediate objects as
 /// needed. Passing Null as the new value removes the leaf key.
 fn set_path(
@@ -3509,6 +3529,12 @@ impl ServerHandler for HyperiaMcp {
         ServerInfo {
             instructions: Some(
                 "Hyperia MCP server — controls a running Hyperia terminal emulator. \
+                 \n\nIF HYPERIA ITSELF MISBEHAVES — a tool errors, a pane stops responding, output \
+                 looks wrong — STOP and tell the human what you saw and what you were attempting. \
+                 Do NOT keep calling the failing tool, retry it with variations, or theorise about \
+                 causes: two failed attempts is the ceiling. A wrong guess costs the human far more \
+                 than a pause does, and repeated calls can make the breakage worse. Use report_bug \
+                 to file it. \
                  \n\nCRITICAL — UI-FIRST PRINCIPLE: Hyperia gives you unlimited terminal panes and \
                  tabs. NEVER use shell-level backgrounding to run servers, watchers, REPLs, or any \
                  long-running task. That includes: PowerShell `Start-Process`, `nohup`, `tmux`, \
@@ -3536,8 +3562,14 @@ impl ServerHandler for HyperiaMcp {
                  requires the human's consent, which they approve in the Hyperia UI; a denied or \
                  ungranted action returns 202 (awaiting approval) or 403 (denied), not a silent pass. \
                  You CANNOT drive the pane you're running in — you're already there; split or open a \
-                 new pane for a worker shell. If a call returns a 'No identity' message, wire the \
-                 Authorization header as above and retry. \
+                 new pane for a worker shell. \
+                 \n\nIF A CALL RETURNS 'No identity': reads still work, writes don't, and the refusal \
+                 text carries the full fix — follow it instead of guessing. Two things in it that \
+                 agents reliably get wrong: on the HOST the cause is usually config PRECEDENCE (a \
+                 project-scoped MCP entry silently shadows the global one), and INSIDE A CONTAINER \
+                 (docker or podman) you must NOT fix config locally — it is ephemeral, so route the \
+                 change through the host orchestrator (nemesis8: mcp-servers/hyperia.toml + \
+                 HYPERIA_URL) and restart the container. \
                  \n\nIDENTITY vs ACCESS — these are DIFFERENT, don't confuse them: your token says WHO \
                  you are (identity); ACCESS is the human's consent to act on a specific pane. If you're \
                  blocked on a pane (soft-walled / awaiting), DO NOT hunt for a 'tab token' in files, \

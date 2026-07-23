@@ -113,6 +113,23 @@ function psVersion(exe: string): string {
   return /^\d+\.\d+/.test(v) ? v : '';
 }
 
+// First path in the list that exists on disk, or '' if none. Lets detection try
+// several known install locations for one tool instead of hardcoding one.
+function firstExisting(paths: (string | null | undefined)[]): string {
+  for (const p of paths) {
+    if (p && existsSync(p)) return p;
+  }
+  return '';
+}
+
+// Resolve a bare executable name to its first absolute path via `where` (Windows).
+// Returns '' if not found. Catches installs that live only on PATH — winget and
+// Microsoft Store pwsh, portable unzips — which no hardcoded folder would find.
+function resolveOnPath(bin: string): string {
+  const found = safeExec(`where ${bin}`).trim().split(/\r?\n/)[0].trim();
+  return found && existsSync(found) ? found : '';
+}
+
 function detectWslDistros(): string[] {
   const wslExe = 'C:\\Windows\\System32\\wsl.exe';
   if (!existsSync(wslExe)) return [];
@@ -154,8 +171,18 @@ function detectWindows(): DetectedProfile[] {
   const profiles: DetectedProfile[] = [];
 
   // PowerShell 7 (pwsh) — labeled with its real version, e.g. "PowerShell 7.5.5".
-  const ps7 = 'C:\\Program Files\\PowerShell\\7\\pwsh.exe';
-  if (existsSync(ps7)) {
+  // The install location varies: the 64-bit MSI lands in "Program Files", the
+  // 32-bit MSI in "Program Files (x86)", and winget/Store installs are only on
+  // PATH. Hardcoding just the 64-bit path meant an x86 install was missed
+  // entirely — the "PowerShell" profile then pointed at a nonexistent exe and
+  // every pane opened with it silently fell back to Windows PowerShell 5.1.
+  // Probe the known folders, then PATH, and take the first that actually exists.
+  const ps7 = firstExisting([
+    'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+    'C:\\Program Files (x86)\\PowerShell\\7\\pwsh.exe',
+    resolveOnPath('pwsh')
+  ]);
+  if (ps7) {
     const v = psVersion(ps7);
     profiles.push({name: v ? `PowerShell ${v}` : 'PowerShell', config: {shell: ps7, shellArgs: []}});
   }
