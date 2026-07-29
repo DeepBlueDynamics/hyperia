@@ -1,6 +1,8 @@
 import {clipboard} from 'electron';
 import React from 'react';
 
+import rpc from '../rpc';
+
 import type {TermsProps, HyperDispatch} from '../../typings/hyper';
 import {registerCommandHandlers} from '../command-registry';
 import {ObjectTypedKeys} from '../utils/object';
@@ -101,6 +103,16 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
   onContextMenu = (e: MouseEvent) => {
     const target = e.target as HTMLElement;
     if (!target) return;
+
+    // A right-click inside a real text field (custom-shell modal inputs, the URL
+    // bar, etc.) must be the standard editing menu — Cut/Copy/Paste/Select All —
+    // NOT the terminal context menu. Hand off to the main-process edit menu.
+    if (target.closest('input, textarea, [contenteditable="true"], [contenteditable=""]')) {
+      e.preventDefault();
+      e.stopPropagation();
+      rpc.emit('open edit context menu' as any, {} as any);
+      return;
+    }
 
     // Do NOT trigger the default terminal context menu for UI elements, labels, and web panes.
     // Prevent default to ensure no context menu shows up at all in these areas.

@@ -61,6 +61,7 @@ export type MainEvents = {
   minimize: never;
   new: sessionExtraOptions;
   'open context menu': string;
+  'open edit context menu': Record<string, never>;
   'open external': {url: string};
   'open hamburger menu': {x: number; y: number};
   'quit and install': never;

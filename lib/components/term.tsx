@@ -196,6 +196,11 @@ export default class Term extends React.PureComponent<
     // profile (undefined when creating a new one). Drives the title, the Delete
     // button, and rename handling on save.
     editingOriginalName?: string;
+    // Base-shell authoring: run `command` inside `baseShell` (a real detected
+    // shell path). Empty baseShell = "Direct" (spawn shellPath/shellArgs as-is).
+    // This is how a custom shell runs e.g. `ssh …` reliably.
+    baseShell: string;
+    command: string;
   }
 > {
   termRef: HTMLElement | null;
@@ -262,7 +267,9 @@ export default class Term extends React.PureComponent<
     shellPath: '',
     shellArgs: '',
     envVars: [] as {key: string; val: string}[],
-    editingOriginalName: undefined as string | undefined
+    editingOriginalName: undefined as string | undefined,
+    baseShell: '',
+    command: ''
   };
 
   labelRef = React.createRef<HTMLDivElement>();
@@ -1493,40 +1500,92 @@ export default class Term extends React.PureComponent<
     ipcRenderer.send('set-config-env', currentEnv);
   };
 
+  // Detected shells (real absolute paths) offered as a base shell to run a
+  // command inside. Excludes the profile currently being edited (no self-ref).
+  baseShellOptions = (): Array<{name: string; shell: string}> => {
+    const seen = new Set<string>();
+    return ((this.props as any).profiles || [])
+      .filter(
+        (p: any) =>
+          p?.config?.shell &&
+          p.name !== this.state.editingOriginalName &&
+          !seen.has(p.config.shell) &&
+          seen.add(p.config.shell)
+      )
+      .map((p: any) => ({name: p.name, shell: p.config.shell as string}));
+  };
+
+  // Sensible default base shell for a NEW custom shell: prefer PowerShell 7
+  // (pwsh), then any PowerShell, else the first detected shell.
+  defaultBaseShellPath = (): string => {
+    const opts = this.baseShellOptions();
+    const pick =
+      opts.find((o) => /pwsh/i.test(o.shell)) || opts.find((o) => /powershell/i.test(o.shell)) || opts[0];
+    return pick?.shell || '';
+  };
+
+  // Save is allowed with a name + either a base shell (base-shell mode) or a
+  // raw shell path (direct mode).
+  canSaveProfile = (): boolean => {
+    if (!this.state.profileName.trim()) return false;
+    if (this.state.customKind === 'shell' && this.state.baseShell) return true;
+    return !!this.state.shellPath.trim();
+  };
+
   saveCustomProfile = () => {
     const pName = this.state.profileName.trim();
-    const sPath = this.state.shellPath.trim();
-    if (pName && sPath) {
-      const args = this.state.shellArgs
-        .split(',')
-        .map((a) => a.trim())
-        .filter(Boolean);
-      const envObj: Record<string, string> = {};
-      this.state.envVars.forEach((ev) => {
-        envObj[ev.key] = ev.val;
-      });
-      ipcRenderer.send('add-profile', {
-        name: pName,
-        shell: sPath,
-        shellArgs: args,
-        env: envObj,
-        kind: this.state.customKind,
-        // When editing, the original name lets the main process replace-in-place
-        // (and carry the default-profile pointer) even if the name changed.
-        originalName: this.state.editingOriginalName
-      });
-      this.setState({
-        isCustomModalOpen: false,
-        customKind: 'shell',
-        profileName: '',
-        shellPath: '',
-        shellArgs: '',
-        envVars: [],
-        newEnvKey: '',
-        newEnvVal: '',
-        editingOriginalName: undefined
-      });
+    // Base-shell mode (shells only): spawn the base shell + wrapped command.
+    // Direct mode: spawn the raw shell path + comma-split args.
+    const usingBase = this.state.customKind === 'shell' && !!this.state.baseShell;
+    const sPath = usingBase ? this.state.baseShell : this.state.shellPath.trim();
+    if (!pName || !sPath) return;
+    const args = usingBase
+      ? [] // base-shell mode: the main process turns `command` into the correct
+           // per-shell startup so it composes with shell integration.
+      : this.state.shellArgs
+          .split(',')
+          .map((a) => a.trim())
+          .filter(Boolean);
+    const envObj: Record<string, string> = {};
+    this.state.envVars.forEach((ev) => {
+      envObj[ev.key] = ev.val;
+    });
+    ipcRenderer.send('add-profile', {
+      name: pName,
+      shell: sPath,
+      shellArgs: args,
+      env: envObj,
+      kind: this.state.customKind,
+      // When editing, the original name lets the main process replace-in-place
+      // (and carry the default-profile pointer) even if the name changed.
+      originalName: this.state.editingOriginalName,
+      // Round-trip the base-shell authoring choice so Edit re-opens cleanly.
+      baseShell: usingBase ? this.state.baseShell : '',
+      command: usingBase ? this.state.command : ''
+    });
+    // Make the just-saved profile the picker default so the S (shell) / A (agent)
+    // quick-key launches it. launchShell writes the same localStorage key on a
+    // manual pick; the picker re-seeds from it when the reloaded profiles arrive.
+    try {
+      const lsKey =
+        this.state.customKind === 'agent' ? 'hyperia.picker.defaultAgent' : 'hyperia.picker.defaultShell';
+      window.localStorage.setItem(lsKey, pName);
+    } catch {
+      /* storage unavailable */
     }
+    this.setState({
+      isCustomModalOpen: false,
+      customKind: 'shell',
+      profileName: '',
+      shellPath: '',
+      shellArgs: '',
+      baseShell: '',
+      command: '',
+      envVars: [],
+      newEnvKey: '',
+      newEnvVal: '',
+      editingOriginalName: undefined
+    });
   };
 
   // Open the custom-profile modal pre-filled to EDIT an existing profile.
@@ -1537,6 +1596,8 @@ export default class Term extends React.PureComponent<
       customKind: kind,
       editingOriginalName: p.name,
       profileName: p.name,
+      baseShell: cfg.baseShell || '',
+      command: cfg.command || '',
       shellPath: cfg.shell || '',
       shellArgs: (cfg.shellArgs || []).join(', '),
       envVars: Object.entries(cfg.env || {}).map(([key, val]) => ({key, val: String(val)})),
@@ -2998,6 +3059,10 @@ export default class Term extends React.PureComponent<
                 profileName: '',
                 shellPath: '',
                 shellArgs: '',
+                // New shells default to base-shell mode (PowerShell) — the natural
+                // way to run a command like ssh. Agents stay direct.
+                baseShell: kind === 'shell' ? this.defaultBaseShellPath() : '',
+                command: '',
                 envVars: [],
                 newEnvKey: '',
                 newEnvVal: ''
@@ -3120,6 +3185,64 @@ export default class Term extends React.PureComponent<
                 />
               </div>
 
+              {/* Base Shell — run a command inside a real detected shell. This is
+                  how a custom shell runs e.g. `ssh …` reliably (shells only). */}
+              {this.state.customKind === 'shell' && (
+                <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                  <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>
+                    Base Shell
+                  </label>
+                  <select
+                    value={this.state.baseShell}
+                    onChange={(e) => this.setState({baseShell: e.target.value})}
+                    style={{
+                      background: 'var(--bg-primary)',
+                      border: '0.5px solid var(--border-neutral)',
+                      color: 'var(--text-primary)',
+                      borderRadius: '4px',
+                      padding: '8px 10px',
+                      fontSize: '12px'
+                    }}
+                  >
+                    <option value="">Direct — run an executable path (advanced)</option>
+                    {this.baseShellOptions().map((o) => (
+                      <option key={o.shell} value={o.shell}>{`${o.name} — ${o.shell}`}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Command to run inside the base shell */}
+              {this.state.customKind === 'shell' && this.state.baseShell !== '' && (
+                <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                  <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>
+                    Command to run in it
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. ssh -i C:\Users\you\.ssh\id_key user@host   (blank = just open the shell)"
+                    value={this.state.command}
+                    onChange={(e) => this.setState({command: e.target.value})}
+                    style={{
+                      background: 'var(--bg-primary)',
+                      border: '0.5px solid var(--border-neutral)',
+                      color: 'var(--text-primary)',
+                      borderRadius: '4px',
+                      padding: '8px 10px',
+                      fontSize: '12px',
+                      fontFamily: 'var(--font-mono)'
+                    }}
+                  />
+                  <span style={{fontSize: '10.5px', color: 'var(--text-tertiary)'}}>
+                    Runs in the base shell and stays open afterward. Leave blank to just launch the shell.
+                  </span>
+                </div>
+              )}
+
+              {/* Direct mode — raw executable path + args. Hidden when a base
+                  shell is chosen (the common case). */}
+              {this.state.baseShell === '' && (
+                <>
               {/* Shell Executable Path — pick from detected shells, or type/browse a custom one */}
               <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
                 <label
@@ -3224,6 +3347,8 @@ export default class Term extends React.PureComponent<
                   }}
                 />
               </div>
+                </>
+              )}
 
               {/* Environment Variables */}
               <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
@@ -3427,20 +3552,17 @@ export default class Term extends React.PureComponent<
                   </button>
                   <button
                     type="button"
-                    disabled={!this.state.profileName.trim() || !this.state.shellPath.trim()}
+                    disabled={!this.canSaveProfile()}
                     onClick={this.saveCustomProfile}
                     style={{
-                      background:
-                        this.state.profileName.trim() && this.state.shellPath.trim()
-                          ? 'var(--info-text)'
-                          : 'var(--border-neutral)',
+                      background: this.canSaveProfile() ? 'var(--info-text)' : 'var(--border-neutral)',
                       color: 'var(--bg-primary)',
                       border: 'none',
                       borderRadius: '4px',
                       padding: '8px 14px',
                       fontSize: '12px',
-                      cursor: this.state.profileName.trim() && this.state.shellPath.trim() ? 'pointer' : 'default',
-                      opacity: this.state.profileName.trim() && this.state.shellPath.trim() ? 1 : 0.6
+                      cursor: this.canSaveProfile() ? 'pointer' : 'default',
+                      opacity: this.canSaveProfile() ? 1 : 0.6
                     }}
                   >
                     {this.state.editingOriginalName ? 'Save Changes' : 'Save Profile'}

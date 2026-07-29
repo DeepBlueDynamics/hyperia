@@ -690,6 +690,21 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     }, 70);
   }
 
+  componentDidUpdate(prevProps: NewPanePickerProps) {
+    // Saving a custom profile reloads the config, which pushes a new `profiles`
+    // list here. saveCustomProfile has already written the remembered-default
+    // localStorage key, so re-seed lastUsedShell/Agent from it — that makes the
+    // just-saved profile what the S / A quick-key launches.
+    if (prevProps.profiles !== this.props.profiles) {
+      const shell = readStoredDefault(LS_DEFAULT_SHELL);
+      const agent = readStoredDefault(LS_DEFAULT_AGENT);
+      this.setState((s) => ({
+        lastUsedShell: shell || s.lastUsedShell,
+        lastUsedAgent: agent || s.lastUsedAgent
+      }));
+    }
+  }
+
   componentWillUnmount() {
     window.removeEventListener('keydown', this.handleHotkey);
     if (this.focusTimer) clearTimeout(this.focusTimer);
