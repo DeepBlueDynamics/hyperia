@@ -1,4 +1,3 @@
-import {ipcRenderer} from 'electron';
 import React from 'react';
 
 import rpc from '../rpc';
@@ -166,8 +165,9 @@ interface ComboItem {
   iconClass?: string;
   iconStyle?: React.CSSProperties;
   onSelect: () => void;
-  // Custom (user-saved) profiles get a right-click-to-delete affordance.
-  onDelete?: () => void;
+  // Custom (user-saved) profiles get a gear that opens the edit modal (which
+  // itself holds Delete). Replaces the old right-click-to-delete affordance.
+  onEdit?: () => void;
   // Rows with a config surface (Hyperia) get a gear button on the right.
   onConfigure?: () => void;
 }
@@ -497,21 +497,20 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                   return (
                     <div
                       key={it.key}
+                      // Left-click only launches. A right/middle click must never
+                      // fire the row (that was the "right-click just opens a
+                      // terminal" bug); edit/delete now live on the gear.
                       onMouseDown={(ev) => {
+                        if (ev.button !== 0) return;
                         ev.preventDefault();
                         this.commitRow(row);
                       }}
                       onMouseEnter={() => this.setState({focusedIndex: i})}
-                      onContextMenu={
-                        it.onDelete
-                          ? (ev) => {
-                              ev.preventDefault();
-                              ev.stopPropagation();
-                              it.onDelete!();
-                            }
-                          : undefined
-                      }
-                      title={it.onDelete ? `${it.label} — right-click to delete` : undefined}
+                      onContextMenu={(ev) => {
+                        // Swallow the OS menu; no right-click actions on rows.
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                      }}
                       style={comboRowStyle(isFocused)}
                     >
                       <i
@@ -533,11 +532,28 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                       >
                         {it.label}
                       </span>
+                      {it.onEdit && (
+                        <i
+                          className="ti ti-settings"
+                          title="Edit"
+                          onMouseDown={(ev) => {
+                            if (ev.button !== 0) return;
+                            // Open the edit modal, not the row's launch.
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            this.close();
+                            it.onEdit!();
+                          }}
+                          style={{fontSize: '13px', color: 'var(--text-tertiary)', flexShrink: 0, cursor: 'pointer'}}
+                          aria-hidden="true"
+                        />
+                      )}
                       {it.onConfigure && (
                         <i
                           className="ti ti-settings"
                           title="Configure"
                           onMouseDown={(ev) => {
+                            if (ev.button !== 0) return;
                             // Fire the config action, not the row's launch.
                             ev.preventDefault();
                             ev.stopPropagation();
@@ -586,6 +602,8 @@ export interface NewPanePickerProps {
   onSubmitUrl: (url?: string) => void;
   onTriggerGlimmer: () => void;
   onOpenCustomModal: (kind: 'shell' | 'agent') => void;
+  // Open the custom-profile modal pre-filled to EDIT an existing profile.
+  onEditProfile: (kind: 'shell' | 'agent', profile: any) => void;
 }
 
 interface NewPanePickerState {
@@ -772,13 +790,6 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     writeStoredDefault(LS_DEFAULT_AGENT, 'Hyperia');
     rpc.emitter.emit('open web pane req', {url: shellUrl});
     rpc.emit('exit', {uid});
-  };
-
-  private confirmDelete = (type: 'shell' | 'agent', name: string, displayName: string) => {
-    void (async () => {
-      const confirmed = await ipcRenderer.invoke('confirm-remove-profile', {type, displayName});
-      if (confirmed) ipcRenderer.send('remove-profile', name);
-    })();
   };
 
   // "Open in shell" from the install view: open the default shell in this pane
@@ -977,7 +988,8 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         label: displayName,
         iconClass: shellIconClass(p.name),
         onSelect: () => this.launchShell(p.name),
-        onDelete: p.kind ? () => this.confirmDelete('shell', p.name, displayName) : undefined
+        // Custom shells get a gear → edit modal (Delete lives inside it).
+        onEdit: p.kind ? () => this.props.onEditProfile('shell', p) : undefined
       };
     });
   }
@@ -1045,7 +1057,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         label: p.name,
         iconClass: 'ti ti-robot',
         onSelect: () => this.launchAgent(p.name),
-        onDelete: () => this.confirmDelete('agent', p.name, p.name)
+        onEdit: () => this.props.onEditProfile('agent', p)
       });
     }
     return agentItems;

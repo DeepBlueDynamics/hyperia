@@ -171,6 +171,9 @@ export function initSettings() {
         shellArgs?: string[];
         env?: Record<string, string>;
         kind?: string;
+        // Set when EDITING: the profile's name before the edit. Lets a rename
+        // replace-in-place instead of leaving a stale duplicate under the old name.
+        originalName?: string;
       }
     ) => {
       try {
@@ -178,8 +181,17 @@ export function initSettings() {
         if (!cfg.config) cfg.config = {};
         if (!cfg.config.profiles) cfg.config.profiles = [];
 
-        // Remove duplicate if it exists
-        cfg.config.profiles = cfg.config.profiles.filter((p: any) => p.name !== profile.name);
+        // Upsert: drop any profile with the new name, and — when editing and the
+        // name changed — the original name too, so an edit-rename replaces in
+        // place rather than duplicating.
+        const orig = profile.originalName;
+        cfg.config.profiles = cfg.config.profiles.filter(
+          (p: any) => p.name !== profile.name && (!orig || p.name !== orig)
+        );
+        // Carry the default-profile pointer across a rename.
+        if (orig && orig !== profile.name && cfg.config.defaultProfile === orig) {
+          cfg.config.defaultProfile = profile.name;
+        }
 
         cfg.config.profiles.push({
           name: profile.name,
