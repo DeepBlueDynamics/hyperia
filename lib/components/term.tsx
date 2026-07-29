@@ -1500,17 +1500,14 @@ export default class Term extends React.PureComponent<
     ipcRenderer.send('set-config-env', currentEnv);
   };
 
-  // Detected shells (real absolute paths) offered as a base shell to run a
-  // command inside. Excludes the profile currently being edited (no self-ref).
+  // System-detected shells (real absolute paths) offered as a base shell to run
+  // a command inside. ONLY system shells — never other custom profiles (`kind`),
+  // which aren't base interpreters.
   baseShellOptions = (): Array<{name: string; shell: string}> => {
     const seen = new Set<string>();
     return ((this.props as any).profiles || [])
       .filter(
-        (p: any) =>
-          p?.config?.shell &&
-          p.name !== this.state.editingOriginalName &&
-          !seen.has(p.config.shell) &&
-          seen.add(p.config.shell)
+        (p: any) => p?.config?.shell && !p.kind && !seen.has(p.config.shell) && seen.add(p.config.shell)
       )
       .map((p: any) => ({name: p.name, shell: p.config.shell as string}));
   };
@@ -1591,13 +1588,21 @@ export default class Term extends React.PureComponent<
   // Open the custom-profile modal pre-filled to EDIT an existing profile.
   openEditProfile = (kind: 'shell' | 'agent', p: any) => {
     const cfg = (p && p.config) || {};
+    const shell: string = cfg.shell || '';
+    const base = (shell.replace(/\\/g, '/').split('/').pop() || shell).toLowerCase();
+    const isKnownBaseShell = /^(pwsh|powershell|cmd|bash|zsh|fish|sh|wsl)(\.exe)?$/.test(base);
+    // Migrate a LEGACY direct-mode command profile — a known base shell whose
+    // args were the command (e.g. shell=pwsh, args=[ssh, -i, key, host]) — into
+    // base-shell mode so it actually runs. New profiles already store `command`.
+    const useBase = kind === 'shell' && (!!cfg.baseShell || (!cfg.command && isKnownBaseShell));
+    const command = cfg.command || (useBase ? (cfg.shellArgs || []).join(' ') : '');
     this.setState({
       isCustomModalOpen: true,
       customKind: kind,
       editingOriginalName: p.name,
       profileName: p.name,
-      baseShell: cfg.baseShell || '',
-      command: cfg.command || '',
+      baseShell: useBase ? cfg.baseShell || shell : '',
+      command,
       shellPath: cfg.shell || '',
       shellArgs: (cfg.shellArgs || []).join(', '),
       envVars: Object.entries(cfg.env || {}).map(([key, val]) => ({key, val: String(val)})),
