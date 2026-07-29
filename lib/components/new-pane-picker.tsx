@@ -13,8 +13,15 @@ const isWindows = ['Windows', 'Win16', 'Win32', 'WinCE'].includes(navigator.plat
 const profileFitsPlatform = (p: any): boolean => {
   const shell = String(p?.config?.shell || '');
   if (!shell) return true;
+  // Hide a profile ONLY when its shell path clearly belongs to the OTHER platform
+  // (e.g. a config synced from Windows onto macOS carries `C:\...\pwsh.exe`). A
+  // bare command like `ssh`, `wsl`, or `docker` — no extension, no absolute path —
+  // is valid on any platform and MUST stay visible. The old check required a
+  // Windows-looking path to show on Windows, which silently dropped every
+  // user-created `ssh` shell from the list.
   const looksWindows = /\.exe$|\\|^[A-Za-z]:/.test(shell);
-  return isWindows ? looksWindows : !looksWindows;
+  const looksUnix = /^\//.test(shell);
+  return isWindows ? !looksUnix : !looksWindows;
 };
 
 // Built-in agent names that live under "New Agent", not the shell list. These
