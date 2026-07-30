@@ -266,8 +266,20 @@ ${startupCmd ? startupCmd + '\n' : ''}`);
         shellArgs = ['--init-command', `source "${process.platform === 'win32' ? fishScript.replace(/\\/g, '/') : fishScript}"${startupCmd ? '; ' + startupCmd : ''}`].concat(_shellArgs || []);
         if (startupCmd) startupInjected = true;
       } else if (isPwsh) {
-        shellArgs = ['-NoExit', '-Command', `. "${join(integrationDir, 'hyperia.ps1')}"${startupCmd ? '; ' + startupCmd : ''}`].concat(_shellArgs || []);
-        if (startupCmd) startupInjected = true;
+        const ps1 = join(integrationDir, 'hyperia.ps1');
+        if (startupCmd) {
+          // Pass integration + the user command as a base64 -EncodedCommand.
+          // The payload is inert base64 (no quotes/spaces/backslashes/dashes), so
+          // ConPTY command-line quoting can't corrupt it — a plain -Command was
+          // mangling the ssh args into garbage (`ssh: unknown option -- -`).
+          // -NoExit keeps the pane after the command exits.
+          const script = `. "${ps1}"; ${startupCmd}`;
+          const encoded = Buffer.from(script, 'utf16le').toString('base64');
+          shellArgs = ['-NoExit', '-EncodedCommand', encoded].concat(_shellArgs || []);
+          startupInjected = true;
+        } else {
+          shellArgs = ['-NoExit', '-Command', `. "${ps1}"`].concat(_shellArgs || []);
+        }
       } else if (isWsl) {
         // Write the bashrc file on the Windows side
         const bashrcPath = join(ctlDir, 'bashrc');
