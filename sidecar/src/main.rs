@@ -11,6 +11,8 @@ mod fsnav;
 mod ghost;
 mod logs;
 mod mcp;
+/// Agent-facing prose, keyed and per-locale — see `messages/mod.rs`.
+mod messages;
 mod models;
 mod perms;
 mod process;
@@ -1013,22 +1015,66 @@ async fn requester_display_name(
 /// when the actual fact was "the header never arrived" (#135).
 fn anon_reason(headers: &HeaderMap) -> String {
     match bearer_token(headers) {
-        None => "FACT: this request arrived with NO Authorization header — the server received no \
-                 credentials at all. If you believe your client is configured with a token, your \
-                 transport is not sending it on THIS call."
-            .to_string(),
+        None => messages::text(messages::Msg::AnonNoAuthHeader).to_string(),
         Some(t) => {
             let prefix: String = t.chars().take(10).collect();
-            format!(
-                "FACT: an Authorization token WAS received ({prefix}…, {} chars) but it is not \
-                 recognized by this sidecar. Pane tokens (hyp_pane_…) are deleted when their pane \
-                 closes and wiped on sidecar restart; agent tokens (hyp_agent_…) persist in \
-                 ~/.hyperia/agents.json. Your token is most likely stale — re-read \
-                 HYPERIA_AGENT_TOKEN from a live pane or re-mint with request_token.",
-                t.chars().count()
+            let len = t.chars().count().to_string();
+            messages::render(
+                messages::Msg::AnonUnknownToken,
+                &[("prefix", &prefix), ("len", &len)],
             )
         }
     }
+}
+
+/// Does this request look like it came from inside a container? Containers reach
+/// the sidecar through their runtime's host gateway, so the Host header they send
+/// is that gateway's name or IP — never loopback. Used only to steer recovery
+/// advice, never to grant or deny: a containerized agent that hand-edits its own
+/// MCP config loses the edit on the next container reset (#135).
+fn caller_via_container(headers: &HeaderMap) -> bool {
+    let raw = headers
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    // Strip the :port, and the brackets around a v6 literal.
+    let host = raw
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(raw)
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    if host.is_empty() || host == "localhost" || host == "127.0.0.1" || host == "::1" {
+        return false;
+    }
+    host.contains("host.docker.internal")
+        || host.contains("host.containers.internal")
+        || host.starts_with("172.")
+        || host.starts_with("10.")
+        || host.starts_with("192.168.")
+}
+
+/// Recovery instructions appended to every "you're anonymous" refusal. Branches
+/// on WHERE the caller runs, because the correct fix is completely different and
+/// the wrong one is actively harmful:
+///
+/// - In a container, editing MCP config in-place is wasted work — the filesystem
+///   is ephemeral, so the fix vanishes on the next reset and the following agent
+///   re-debugs it from scratch. The durable fix lives in the orchestrator on the
+///   host (for nemesis8: mcp-servers/hyperia.toml + the HYPERIA_URL it injects).
+/// - On the host, the fix is real but the failure is almost always config
+///   PRECEDENCE, not a missing token — a project-scoped entry silently shadows a
+///   perfectly good global one. Saying "check your config" without saying that
+///   sends agents to audit the wrong block (#135).
+fn identity_recovery(headers: &HeaderMap) -> String {
+    let key = if caller_via_container(headers) {
+        messages::Msg::RecoveryContainer
+    } else {
+        messages::Msg::RecoveryHost
+    };
+    messages::text(key).to_string()
 }
 
 /// Extract a bearer token from an `Authorization` header (case-insensitive
@@ -1200,34 +1246,16 @@ async fn enforce_drive_with_purpose(
         AuthDecision::Allow => Ok(()),
         AuthDecision::RefuseHome => Err((
             StatusCode::FORBIDDEN,
-            "That's the pane you're running in — you can't drive your own terminal. \
-             Split it or open a new pane for a worker shell."
-                .to_string(),
+            messages::text(messages::Msg::DriveRefuseHome).to_string(),
         )),
         AuthDecision::SoftWall => Err((
             StatusCode::UNAUTHORIZED,
-            format!("{} \
-             Reads (terminal_status, terminal_screen, \
-             hyperia_version) work without identity; writes (terminal_run/keys/cd/split, etc.) do not. \
-             IMPORTANT: do NOT call request_access to fix this — request_access ALSO requires identity \
-             and will return this exact error. Identity comes first, access second. Recovery:\n\
-             INSIDE a Hyperia pane (you have a HYPERIA_AGENT_TOKEN env var):\n\
-             1. Your MCP client's hyperia entry must send header Authorization = \"Bearer \
-             ${{HYPERIA_AGENT_TOKEN}}\". Check the config block your session ACTUALLY loads: a project-local \
-             .mcp.json, or the ~/.claude.json entry for THIS working directory. If neither defines hyperia \
-             it falls back to the GLOBAL mcpServers entry — which may have a literal empty \"Bearer\" (the \
-             usual culprit). Fix that header.\n\
-             2. You MUST FULLY RESTART this pane afterward (close the agent, relaunch e.g. with --continue). \
-             MCP Authorization headers are read ONLY at process startup — editing config mid-session, or a \
-             '/mcp' reconnect, does NOT reload them. This restart is the step that is almost always missed; \
-             without it every write keeps failing no matter what you change.\n\
-             3. After restart, verify with hyperia_version (a read), then retry your write. THEN, if you \
-             need to drive a pane you don't own, request_access will work (it can finally raise the user's \
-             approval prompt).\n\
-             EXTERNAL agent (no HYPERIA_AGENT_TOKEN env var): call request_token to mint a persistent \
-             hyp_agent_… token, set your client's Authorization header to 'Bearer <token>', restart/reconnect \
-             the client, then retry.",
-                anon_reason(&headers)
+            messages::render(
+                messages::Msg::DriveSoftWall,
+                &[
+                    ("facts", &anon_reason(&headers)),
+                    ("recovery", &identity_recovery(&headers)),
+                ],
             ),
         )),
         AuthDecision::Denied => Err((
@@ -1327,14 +1355,12 @@ async fn enforce_create(
         AuthDecision::RefuseHome => Ok(()), // n/a to create
         AuthDecision::SoftWall => Err((
             StatusCode::UNAUTHORIZED,
-            format!(
-                "{} Creating panes/tabs requires identity. INSIDE a pane: send the \
-                 HYPERIA_AGENT_TOKEN env var as 'Authorization: Bearer <token>' (MCP client: \
-                 headers.Authorization = \"Bearer ${{HYPERIA_AGENT_TOKEN}}\"). EXTERNAL agent (no env \
-                 var): call the request_token tool (or POST /api/identity/agent {{\"name\":\"<you>\"}}) \
-                 to mint a persistent hyp_agent_… token, wire it as your MCP Authorization header, and \
-                 reconnect.",
-                anon_reason(headers)
+            messages::render(
+                messages::Msg::CreateSoftWall,
+                &[
+                    ("facts", &anon_reason(headers)),
+                    ("recovery", &identity_recovery(headers)),
+                ],
             ),
         )),
         AuthDecision::Denied => Err((
@@ -1430,12 +1456,13 @@ async fn enforce_capability(
         AuthDecision::Allow | AuthDecision::RefuseHome => Ok(()),
         AuthDecision::SoftWall => Err((
             StatusCode::UNAUTHORIZED,
-            format!(
-                "{} The '{cap}' capability therefore can't be authorized. In-pane agents: send \
-                 'Authorization: Bearer ${{HYPERIA_AGENT_TOKEN}}' and fully restart the agent \
-                 process (headers load at startup only). External agents: request_token mints a \
-                 persistent hyp_agent_… token.",
-                anon_reason(headers)
+            messages::render(
+                messages::Msg::CapabilitySoftWall,
+                &[
+                    ("facts", &anon_reason(headers)),
+                    ("cap", cap),
+                    ("recovery", &identity_recovery(headers)),
+                ],
             ),
         )),
         AuthDecision::Denied => Err((
@@ -3144,6 +3171,12 @@ async fn main() -> anyhow::Result<()> {
     }));
 
     let args = Args::parse();
+
+    // Pick the message locale before anything can emit agent-facing prose.
+    // Unset or unknown tags fall back to English (see messages/mod.rs).
+    if let Ok(tag) = std::env::var("HYPERIA_LOCALE") {
+        messages::set_locale(&tag);
+    }
 
     // MCP mode: stdio proxy
     if args.mcp {
