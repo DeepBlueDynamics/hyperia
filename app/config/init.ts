@@ -103,7 +103,26 @@ const _init = (userCfg: rawConfig, defaultCfg: rawConfig): parsedConfig => {
       if (userCfg?.config) {
         const conf = userCfg.config;
         conf.defaultProfile = conf.defaultProfile || 'default';
-        conf.profiles = conf.profiles || [];
+        // Coerce profiles to a real array before anything calls .map on it. A
+        // config write can land a malformed value here — e.g. settings_set given
+        // a JSON-encoded STRING stores "[{...}]" as a string, and `.map` then
+        // throws an UNCAUGHT exception that crashes the whole main process at
+        // launch (an unrecoverable state: the app won't start to let you fix it).
+        // Parse a stringified array, and fall back to [] for anything that still
+        // isn't an array, so a bad value degrades to defaults instead of a crash.
+        // `profiles` is typed as an array, so read through `unknown` to make the
+        // runtime string/array checks legal (a malformed config violates the type).
+        const rawProfiles: unknown = conf.profiles;
+        if (typeof rawProfiles === 'string') {
+          try {
+            conf.profiles = JSON.parse(rawProfiles);
+          } catch {
+            conf.profiles = [];
+          }
+        }
+        if (!Array.isArray(conf.profiles)) {
+          conf.profiles = [];
+        }
         conf.profiles = conf.profiles.length > 0 ? conf.profiles : [{name: 'default', config: {}}];
         conf.profiles = conf.profiles.map((p, i) => ({
           ...p,
