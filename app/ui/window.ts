@@ -591,6 +591,17 @@ export function newWindow(
       window
     });
   });
+  rpc.on('open edit context menu', () => {
+    // Standard editing menu for real text inputs (custom-shell modal fields, URL
+    // bar). The roles act on the focused input in this window's webContents.
+    Menu.buildFromTemplate([
+      {role: 'cut'},
+      {role: 'copy'},
+      {role: 'paste'},
+      {type: 'separator'},
+      {role: 'selectAll'}
+    ]).popup({window});
+  });
   rpc.on('open hamburger menu', ({x, y}) => {
     Menu.getApplicationMenu()!.popup({x: Math.ceil(x), y: Math.ceil(y)});
   });

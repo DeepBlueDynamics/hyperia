@@ -171,6 +171,13 @@ export function initSettings() {
         shellArgs?: string[];
         env?: Record<string, string>;
         kind?: string;
+        // Set when EDITING: the profile's name before the edit. Lets a rename
+        // replace-in-place instead of leaving a stale duplicate under the old name.
+        originalName?: string;
+        // Base-shell authoring metadata (round-trips for the editor; the spawn
+        // itself only uses shell/shellArgs).
+        baseShell?: string;
+        command?: string;
       }
     ) => {
       try {
@@ -178,20 +185,42 @@ export function initSettings() {
         if (!cfg.config) cfg.config = {};
         if (!cfg.config.profiles) cfg.config.profiles = [];
 
-        // Remove duplicate if it exists
-        cfg.config.profiles = cfg.config.profiles.filter((p: any) => p.name !== profile.name);
+        // Upsert: drop any profile with the new name, and — when editing and the
+        // name changed — the original name too, so an edit-rename replaces in
+        // place rather than duplicating.
+        const orig = profile.originalName;
+        cfg.config.profiles = cfg.config.profiles.filter(
+          (p: any) => p.name !== profile.name && (!orig || p.name !== orig)
+        );
+        // Carry the default-profile pointer across a rename.
+        if (orig && orig !== profile.name && cfg.config.defaultProfile === orig) {
+          cfg.config.defaultProfile = profile.name;
+        }
 
+        const isAgent = profile.kind === 'agent';
         cfg.config.profiles.push({
           name: profile.name,
           // 'agent' custom profiles surface under "pick an agent"; everything else
           // (default) shows with the shell buttons.
-          kind: profile.kind === 'agent' ? 'agent' : 'shell',
+          kind: isAgent ? 'agent' : 'shell',
           config: {
             shell: profile.shell,
             shellArgs: profile.shellArgs || [],
-            env: profile.env || {}
+            // Profile env is merged into the spawned process environment BEFORE
+            // the shell runs its command, so the command can reference these as
+            // $env:NAME (PowerShell) / $NAME (bash) / %NAME% (cmd).
+            env: profile.env || {},
+            // Base-shell authoring metadata — ignored by the spawn (which uses
+            // shell/shellArgs), read back by the editor to re-open the form.
+            baseShell: profile.baseShell || '',
+            command: profile.command || ''
           }
         });
+
+        // Saving a custom SHELL makes it the default so the S quick-key launches
+        // it. (Agents keep their own last-used; a non-shell default would break
+        // shell resolution in getDefaultProfile.)
+        if (!isAgent) cfg.config.defaultProfile = profile.name;
 
         writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
         event.sender.send('add-profile-done', {ok: true});

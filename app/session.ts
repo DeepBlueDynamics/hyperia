@@ -145,7 +145,13 @@ export default class Session extends EventEmitter {
     }
     this.shellState = { state: 'idle' };
 
-    const envFromConfig = config.getProfileConfig(profile).env || {};
+    const profileCfg = config.getProfileConfig(profile);
+    const envFromConfig = profileCfg.env || {};
+    // Base-shell "run a command" profiles carry a `command` string; we weave it
+    // into the correct per-shell startup below so it composes with integration
+    // instead of being clobbered by the shellArgs rewrite.
+    const startupCmd: string =
+      typeof (profileCfg as any).command === 'string' ? (profileCfg as any).command.trim() : '';
     const defaultShellArgs = ['--login'];
 
     let shell = _shell || defaultShell;
@@ -180,6 +186,10 @@ export default class Session extends EventEmitter {
     const ctlDir = join(app.getPath('userData'), 'panes', uid);
 
     mkdirSync(ctlDir, { recursive: true });
+
+    // Flipped true once a base-shell `command` is woven into a shell's startup,
+    // so the non-integrated fallback below doesn't also run it.
+    let startupInjected = false;
 
     if (shellIntegrationEnabled) {
       try {
@@ -234,7 +244,8 @@ fi
 if [ -f "$HYPERIA_INTEGRATION_DIR/hyperia.zsh" ]; then
   source "$HYPERIA_INTEGRATION_DIR/hyperia.zsh"
 fi
-`);
+${startupCmd ? startupCmd + '\n' : ''}`);
+        if (startupCmd) startupInjected = true;
       } else if (isBash) {
         const bashrcPath = join(ctlDir, 'bashrc');
         writeFileSync(bashrcPath, `
@@ -247,13 +258,28 @@ fi
 if [ -f "$HYPERIA_INTEGRATION_DIR/hyperia.bash" ]; then
   source "$HYPERIA_INTEGRATION_DIR/hyperia.bash"
 fi
-`);
+${startupCmd ? startupCmd + '\n' : ''}`);
+        if (startupCmd) startupInjected = true;
         shellArgs = ['--rcfile', process.platform === 'win32' ? bashrcPath.replace(/\\/g, '/') : bashrcPath];
       } else if (isFish) {
         const fishScript = join(integrationDir, 'hyperia.fish');
-        shellArgs = ['--init-command', `source "${process.platform === 'win32' ? fishScript.replace(/\\/g, '/') : fishScript}"`].concat(_shellArgs || []);
+        shellArgs = ['--init-command', `source "${process.platform === 'win32' ? fishScript.replace(/\\/g, '/') : fishScript}"${startupCmd ? '; ' + startupCmd : ''}`].concat(_shellArgs || []);
+        if (startupCmd) startupInjected = true;
       } else if (isPwsh) {
-        shellArgs = ['-NoExit', '-Command', `. "${join(integrationDir, 'hyperia.ps1')}"`].concat(_shellArgs || []);
+        const ps1 = join(integrationDir, 'hyperia.ps1');
+        if (startupCmd) {
+          // Pass integration + the user command as a base64 -EncodedCommand.
+          // The payload is inert base64 (no quotes/spaces/backslashes/dashes), so
+          // ConPTY command-line quoting can't corrupt it — a plain -Command was
+          // mangling the ssh args into garbage (`ssh: unknown option -- -`).
+          // -NoExit keeps the pane after the command exits.
+          const script = `. "${ps1}"; ${startupCmd}`;
+          const encoded = Buffer.from(script, 'utf16le').toString('base64');
+          shellArgs = ['-NoExit', '-EncodedCommand', encoded].concat(_shellArgs || []);
+          startupInjected = true;
+        } else {
+          shellArgs = ['-NoExit', '-Command', `. "${ps1}"`].concat(_shellArgs || []);
+        }
       } else if (isWsl) {
         // Write the bashrc file on the Windows side
         const bashrcPath = join(ctlDir, 'bashrc');
@@ -275,6 +301,19 @@ fi
 
         const distroArgs = _shellArgs ? [..._shellArgs] : [];
         shellArgs = distroArgs.concat(['--', 'bash', '-c', 'exec bash --rcfile "$HYPERIA_CTL_DIR/bashrc" -i']);
+      }
+    }
+
+    // Base-shell command that integration didn't wrap (cmd.exe, or integration
+    // disabled): run it directly and keep the pane interactive afterward.
+    if (startupCmd && !startupInjected) {
+      const sl = shell.toLowerCase();
+      if (sl.endsWith('cmd.exe') || sl.endsWith('cmd')) {
+        shellArgs = ['/k', startupCmd];
+      } else if (sl.endsWith('pwsh.exe') || sl.endsWith('pwsh') || sl.endsWith('powershell.exe')) {
+        shellArgs = ['-NoExit', '-Command', startupCmd];
+      } else {
+        shellArgs = ['-i', '-c', `${startupCmd}; exec "${shell}" -i`];
       }
     }
 
