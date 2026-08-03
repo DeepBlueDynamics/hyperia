@@ -15,7 +15,7 @@ if [ -f '/opt/${productFilename}/chrome-sandbox' ]; then
   chmod 4755 '/opt/${productFilename}/chrome-sandbox' || true
 fi
 
-# CLI launcher symlink (#137). Prefer the MCP CLI wrapper (build/${os}/hyperia,
+# CLI launcher symlink (#137). Prefer the MCP CLI wrapper (build/<os>/hyperia,
 # packaged into resources/bin/) so `hyperia status|run|call|doctor|...` drives
 # the running sidecar and bare `hyperia` still launches the GUI. Pointing the
 # symlink at the raw GUI binary — as this template previously did — made
