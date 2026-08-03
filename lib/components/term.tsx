@@ -177,6 +177,7 @@ export default class Term extends React.PureComponent<
     // Pixel offset (within term_fit) to anchor the "Copied!" toast under the
     // clear-buffer button. Undefined until measured on first copy.
     copiedPos?: {left: number; top: number};
+    copiedMsg?: string;
     isNarrow: boolean;
     paneWidth: number;
     pickerZoom: number;
@@ -252,6 +253,7 @@ export default class Term extends React.PureComponent<
     isGlimmerActive: false,
     showCopied: false,
     copiedPos: undefined as {left: number; top: number} | undefined,
+    copiedMsg: undefined as string | undefined,
     isNarrow: false,
     paneWidth: 999,
     findText: '',
@@ -646,7 +648,11 @@ export default class Term extends React.PureComponent<
       this.term.loadAddon(this.searchAddon);
       this.term.loadAddon(
         new WebLinksAddon((event, uri) => {
-          if (shallActivateWebLink(event)) openUrl(uri);
+          // Plain click copies + toasts; Ctrl/Cmd+click opens (mirrors stickies).
+          // Right-click keeps the terminal menu. This intentionally overrides the
+          // webLinksActivationKey gate — click is now "copy", not "open".
+          if (event && (event.ctrlKey || event.metaKey)) openUrl(uri);
+          else this.copyLinkToast(uri);
         })
       );
       // Custom link provider for URLs that wrap across multiple rows
@@ -1049,6 +1055,15 @@ export default class Term extends React.PureComponent<
     this.setState({showCopied: true, copiedPos});
     if (this._copiedTimer) clearTimeout(this._copiedTimer);
     this._copiedTimer = setTimeout(() => this.setState({showCopied: false}), 1100);
+  };
+
+  // A URL was left-clicked in the terminal: copy it + a toast pointing at the
+  // right-click menu. (Ctrl/Cmd+click opens instead — handled at the call site.)
+  copyLinkToast = (uri: string) => {
+    clipboard.writeText(uri);
+    this.setState({showCopied: true, copiedMsg: 'Link copied · right-click for options', copiedPos: undefined});
+    if (this._copiedTimer) clearTimeout(this._copiedTimer);
+    this._copiedTimer = setTimeout(() => this.setState({showCopied: false, copiedMsg: undefined}), 1700);
   };
 
   onMouseUp = (e: React.MouseEvent) => {
@@ -2714,7 +2729,7 @@ export default class Term extends React.PureComponent<
               boxShadow: '0 2px 8px rgba(0,0,0,0.35)'
             }}
           >
-            Copied!
+            {this.state.copiedMsg || 'Copied!'}
           </div>
         )}
         {this.props.customChildrenBefore}
