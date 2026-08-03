@@ -61,15 +61,34 @@ export function subscribePermsOverlay(cb: (active: boolean) => void): () => void
   };
 }
 
+// Safety net (#156): a prompt whose "resolved" event is missed — server-side
+// timeout, answered out-of-band, or requester/target pane torn down without a
+// clear — must NOT leave `overlayActive()` stuck true, which hides EVERY web
+// pane's native view indefinitely (the "google + maps both frozen" wedge).
+// Every set schedules an auto-clear that a matching clear cancels.
+const OVERLAY_TTL_MS = 45000;
+const reqTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
 /** A request arrived for a pane — show its prompt. */
 export function setRequest(req: PermRequest): void {
   if (!req.targetPane) return;
   current.set(req.targetPane, req);
+  const prev = reqTimers.get(req.targetPane);
+  if (prev) clearTimeout(prev);
+  reqTimers.set(
+    req.targetPane,
+    setTimeout(() => clearRequest(req.targetPane), OVERLAY_TTL_MS)
+  );
   emit(req.targetPane);
 }
 
 /** The request for a pane was answered (or the pane closed) — dismiss it. */
 export function clearRequest(paneId: string): void {
+  const t = reqTimers.get(paneId);
+  if (t) {
+    clearTimeout(t);
+    reqTimers.delete(paneId);
+  }
   if (current.delete(paneId)) emit(paneId);
 }
 
@@ -122,13 +141,22 @@ function emitToasts(): void {
   emitOverlay();
 }
 
+const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
 export function setToast(req: ToastRequest): void {
   if (!req.id) return;
   toasts.set(req.id, req);
+  const prev = toastTimers.get(req.id);
+  if (prev) clearTimeout(prev);
+  toastTimers.set(req.id, setTimeout(() => clearToast(req.id), OVERLAY_TTL_MS));
   emitToasts();
 }
 
 export function clearToast(id: string): void {
+  const t = toastTimers.get(id);
+  if (t) {
+    clearTimeout(t);
+    toastTimers.delete(id);
+  }
   if (toasts.delete(id)) emitToasts();
 }
 
