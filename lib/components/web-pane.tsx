@@ -177,6 +177,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   _domReadyHandler: ((e: any, payload: any) => void) | null = null;
   // Pending header-hover dwell (freeze-swap only fires after the cursor rests).
   _headerHoverTimer: ReturnType<typeof setTimeout> | null = null;
+  // Debounce for off-screen transitions — a transient IntersectionObserver blip
+  // during heavy page reflow (e.g. Google Maps) must not hide the live native
+  // view and drop input (#156). Show immediately; hide only after a short dwell.
+  _onScreenTimer: ReturnType<typeof setTimeout> | null = null;
   _permOverlayUnsub: (() => void) | null = null;
   // ── Background-tab notify for the agent shell pane ───────────────────────
   // Last <title> the shell page reported (null until the first push) and a
@@ -1122,8 +1126,25 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         (entries) => {
           const e = entries[0];
           const vis = !!e && e.isIntersecting && e.intersectionRatio > 0;
-          if (vis !== this.state.onScreen) this.setState({onScreen: vis});
-          this.reportBounds();
+          if (vis) {
+            // Becoming visible → show at once and cancel any pending hide.
+            if (this._onScreenTimer) {
+              clearTimeout(this._onScreenTimer);
+              this._onScreenTimer = null;
+            }
+            if (this.state.onScreen !== true) this.setState({onScreen: true});
+            this.reportBounds();
+          } else if (this._onScreenTimer == null && this.state.onScreen !== false) {
+            // Becoming off-screen → DEBOUNCE. A sub-200ms not-intersecting blip
+            // during page reflow must not hide the live view (that's the Maps
+            // freeze/flash + dead input in #156). A real tab switch stays
+            // off-screen and still hides after the short delay.
+            this._onScreenTimer = setTimeout(() => {
+              this._onScreenTimer = null;
+              this.setState({onScreen: false});
+              this.reportBounds();
+            }, 200);
+          }
         },
         {threshold: 0}
       );
@@ -1506,6 +1527,11 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (this._zoomKeyHandler) ipcRenderer.removeListener('web-pane:zoom-key', this._zoomKeyHandler);
 
     this.resizeObserver?.disconnect();
+    this._io?.disconnect();
+    if (this._onScreenTimer) {
+      clearTimeout(this._onScreenTimer);
+      this._onScreenTimer = null;
+    }
     this._permOverlayUnsub?.();
     document.removeEventListener('mousedown', this.handleOutsideClick);
     if (this._windowKeydownHandler) {
