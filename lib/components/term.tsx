@@ -1869,8 +1869,24 @@ export default class Term extends React.PureComponent<
   goToNavigatorDir = () => {
     if (this.isTerminalBusy()) return;
     const target = this.state.navigatorCurrentPath;
-    if (!target || !this.props.onData) return;
+    if (!target) return;
 
+    // A picker pane has no shell to cd into, so a session-cd just queues forever
+    // ("Will change directory when program exits") — there is no program. Launch
+    // the DEFAULT shell IN the chosen directory instead (the main process fills
+    // in the default profile when none is given), replacing the picker in place.
+    if ((this.props as any).sessionProfile === 'picker') {
+      this.setState({isDirNavigatorOpen: false, navigatorStatus: null});
+      rpc.emit('new', {
+        isNewGroup: false,
+        cwd: target,
+        activeUid: this.props.uid,
+        groupUid: (this.props as any).groupUid
+      } as any);
+      return;
+    }
+
+    if (!this.props.onData) return;
     this.pendingCdPath = target;
     this.setState({navigatorStatus: 'Requesting directory change...'});
     rpc.emit('session-cd', {uid: this.props.uid, path: target});
