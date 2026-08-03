@@ -22,6 +22,12 @@ import type {Session, WebContents} from 'electron';
 const PARTITION = 'persist:hyperia-web';
 // DevTools docks into the bottom of the pane, taking this fraction of its height.
 const DEVTOOLS_FRACTION = 0.4;
+// Freeze-swap bridge: how long the frozen still and the native view overlap
+// during a visibility flip, so neither a hide-before-paint nor a
+// clear-before-recomposite leaves a one-frame hole that reads as a flash.
+// ~3 frames at 60Hz — long enough to bridge the cross-process gap, short enough
+// to stay imperceptible.
+const SWAP_BRIDGE_MS = 50;
 
 // OAuth / login popups can't run inside an embedded browser — hand them to the
 // system browser (parity with the old <webview> guest handler).
@@ -48,6 +54,10 @@ interface WebPaneEntry {
   lastBounds?: {x: number; y: number; width: number; height: number};
   // Docked DevTools view (Inspect → split inside the pane).
   devtools?: WebContentsView;
+  // Monotonic token bumped on every freeze/unfreeze so a delayed swap step
+  // (hide-after-still / clear-still-after-show) can tell whether a newer
+  // transition superseded it and bail instead of racing.
+  swapToken?: number;
 }
 
 // Keyed by pane uid (unique across windows).
@@ -453,25 +463,47 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
       const wantVisible = visible !== false;
       if (entry.visible && !wantVisible) {
         entry.visible = false;
+        const token = entry.swapToken = (entry.swapToken ?? 0) + 1;
         if (freeze) {
           // Freeze-swap: capture the LIVE view and hand the still to the renderer
           // BEFORE hiding, so a DOM overlay (URL navigator / find bar / header
           // tooltip) paints over a frozen frame of the page instead of white.
+          let shot: string | null = null;
           try {
-            const img = await entry.view.webContents.capturePage();
-            entrySend(uid, 'web-pane:frozen', {uid, shot: img.toDataURL()});
+            shot = (await entry.view.webContents.capturePage()).toDataURL();
           } catch {
-            entrySend(uid, 'web-pane:frozen', {uid, shot: null});
+            /* keep null */
           }
+          entrySend(uid, 'web-pane:frozen', {uid, shot});
+          // Hide the native view only AFTER giving the renderer a couple frames
+          // to paint the still. Hiding it in the same tick as sending the still
+          // left a one-frame hole (pane bg showed through before the <img>
+          // painted) that flashed when mousing page → header. Bail if a newer
+          // transition (re-show) superseded this one.
+          setTimeout(() => {
+            if (panes.get(uid) === entry && entry.swapToken === token && !entry.visible
+                && !entry.view.webContents.isDestroyed()) {
+              entry.view.setVisible(false);
+            }
+          }, SWAP_BRIDGE_MS);
         } else {
-          // Off-screen (tab switched away) — no still needed; just hide.
+          // Off-screen (tab switched away) — no still needed; just hide now.
           entrySend(uid, 'web-pane:frozen', {uid, shot: null});
+          if (panes.get(uid) === entry && !entry.view.webContents.isDestroyed()) entry.view.setVisible(false);
         }
-        if (panes.get(uid) === entry && !entry.view.webContents.isDestroyed()) entry.view.setVisible(false);
       } else if (!entry.visible && wantVisible) {
         entry.visible = true;
+        const token = entry.swapToken = (entry.swapToken ?? 0) + 1;
         entry.view.setVisible(true);
-        entrySend(uid, 'web-pane:frozen', {uid, shot: null});
+        // Keep the still up a couple frames while the native view re-composites,
+        // THEN clear it. Clearing in the same tick as showing removed the <img>
+        // a frame before the view painted, so the pane bg flashed through when
+        // mousing header → page. Bail if a newer transition superseded this one.
+        setTimeout(() => {
+          if (panes.get(uid) === entry && entry.swapToken === token && entry.visible) {
+            entrySend(uid, 'web-pane:frozen', {uid, shot: null});
+          }
+        }, SWAP_BRIDGE_MS);
       } else {
         entry.view.setVisible(wantVisible);
       }
