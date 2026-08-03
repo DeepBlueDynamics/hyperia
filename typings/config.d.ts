@@ -139,6 +139,13 @@ type profileConfigOptions = {
    */
   quickEdit: boolean;
   /**
+   * Where a web pane opens a link that requests a new tab/window
+   * (`target="_blank"` / `window.open`): `"tab"` (default) opens a new Hyperia
+   * tab, `"split-right"` splits a web pane to the right, `"split-down"` splits
+   * one below. OAuth pop-ups always go to the system browser regardless.
+   */
+  webPaneLinkTarget?: 'tab' | 'split-right' | 'split-down';
+  /**
    * set to true to enable screen reading apps (like NVDA) to read the contents of the terminal
    */
   screenReaderMode: boolean;

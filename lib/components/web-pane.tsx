@@ -159,7 +159,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   resizeObserver: any = null;
   _windowKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
   _findHandler: ((e: any, payload: {uid: string}) => void) | null = null;
-  _openSplitHandler: ((e: any, payload: {uid: string; url: string}) => void) | null = null;
+  _openSplitHandler:
+    | ((e: any, payload: {uid: string; url: string; direction?: 'HORIZONTAL' | 'VERTICAL'}) => void)
+    | null = null;
   _focusHandler: ((e: any, payload: {uid: string}) => void) | null = null;
   _frozenHandler: ((e: any, payload: {uid: string; shot: string | null}) => void) | null = null;
   _zoomKeyHandler: ((e: any, payload: {uid: string; dir: 'in' | 'out' | 'reset'}) => void) | null = null;
@@ -1375,9 +1377,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     // target="_blank" / window.open in the page → the manager routes it here
     // (keyed by pane uid) so we split a new web pane BELOW this one.
-    this._openSplitHandler = (_e: any, payload: {uid: string; url: string}) => {
+    this._openSplitHandler = (
+      _e: any,
+      payload: {uid: string; url: string; direction?: 'HORIZONTAL' | 'VERTICAL'}
+    ) => {
       if (payload?.uid !== this.props.groupUid || !payload.url) return;
-      this.props.onSplitWebPane?.(payload.url, 'HORIZONTAL');
+      this.props.onSplitWebPane?.(payload.url, payload.direction === 'VERTICAL' ? 'VERTICAL' : 'HORIZONTAL');
     };
     ipcRenderer.on('web-pane:open-split', this._openSplitHandler);
 

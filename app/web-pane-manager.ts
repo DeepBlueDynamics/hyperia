@@ -18,6 +18,7 @@ import {join} from 'path';
 
 import {BrowserWindow, WebContentsView, ipcMain, session, shell, Menu, clipboard} from 'electron';
 import type {Session, WebContents} from 'electron';
+import {getConfig} from './config';
 
 const PARTITION = 'persist:hyperia-web';
 // DevTools docks into the bottom of the pane, taking this fraction of its height.
@@ -222,15 +223,29 @@ function wireWebContents(initialUid: string, wc: WebContents) {
   };
   wc.on('will-navigate', oauthBail);
   wc.on('will-redirect', oauthBail);
-  // Popups / target=_blank / window.open. OAuth → system browser; everything
-  // else → split a new web pane below this one (renderer owns the layout).
+  // Popups / target=_blank / window.open. OAuth always → system browser.
+  // Everything else is routed per `config.webPaneLinkTarget` (default "tab"):
+  //   "tab"         → a new Hyperia tab (web pane)  ← default
+  //   "split-right" → split a web pane to the right (VERTICAL)
+  //   "split-down"  → split a web pane below (HORIZONTAL)
   wc.setWindowOpenHandler(({url}) => {
     if (isOAuthUrl(url)) {
       void shell.openExternal(url);
       return {action: 'deny'};
     }
     const liveUid = u();
-    entrySend(liveUid, 'web-pane:open-split', {uid: liveUid, url});
+    const target = ((getConfig() as unknown as {webPaneLinkTarget?: string}).webPaneLinkTarget) || 'tab';
+    if (target === 'split-right' || target === 'split-down') {
+      entrySend(liveUid, 'web-pane:open-split', {
+        uid: liveUid,
+        url,
+        direction: target === 'split-right' ? 'VERTICAL' : 'HORIZONTAL'
+      });
+    } else {
+      // Default: open the link in a new Hyperia tab.
+      const entry = panes.get(liveUid);
+      (entry?.win as unknown as {rpc?: {emit: (ch: string, p: unknown) => void}})?.rpc?.emit('open web pane req', {url});
+    }
     return {action: 'deny'};
   });
 }

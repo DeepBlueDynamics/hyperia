@@ -61,6 +61,7 @@
     "disableAutoUpdates": false,
     "autoUpdatePlugins": true,
     "preserveCWD": true,
+    "webPaneLinkTarget": "tab",
     "screenReaderMode": false,
     "sessionLogging": false,
     "imageSupport": true,
