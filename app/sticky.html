@@ -1121,6 +1121,26 @@ function showToast(msg) {
 }
 ipcRenderer.on('sticky-toast', (_e, msg) => showToast(String(msg || '')));
 
+// Right-click → "Edit Link": since a plain click copies, this is how you get an
+// editing caret onto a URL — focus the note and SELECT the link so it's ready
+// to edit or replace. (The right-click already placed the caret in the URL.)
+function linkRangeAt(text, pos) {
+  URL_RE.lastIndex = 0;
+  let m;
+  while ((m = URL_RE.exec(text)) !== null) {
+    const s = m.index, e = s + m[0].length;
+    if (pos >= s && pos <= e) return [s, e];
+  }
+  return null;
+}
+ipcRenderer.on('sticky-edit-link', () => {
+  const ta = document.getElementById('noteText');
+  if (!ta) return;
+  const r = linkRangeAt(ta.value, ta.selectionStart);
+  ta.focus();
+  if (r) ta.setSelectionRange(r[0], r[1]);
+});
+
 ipcRenderer.on('sticky-set-highlight', (_e, mode) => {
   highlightMode = mode;
   const codeEl = document.getElementById('codeBlock')?.querySelector('code');

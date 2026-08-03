@@ -1060,6 +1060,7 @@ export function initSticky() {
       // Link actions — shown at the top when the right-click landed on a URL.
       const linkItems: Electron.MenuItemConstructorOptions[] = link
         ? [
+            {label: 'Edit Link', click: () => event.sender.send('sticky-edit-link')},
             {label: 'Open Link in Browser', click: () => void shell.openExternal(link)},
             {label: 'Open Link in Web Pane', click: () => openUrlInWebPane(win, link)},
             {
