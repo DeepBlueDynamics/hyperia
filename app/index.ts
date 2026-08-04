@@ -28,7 +28,7 @@ import type {ChildProcess} from 'child_process';
 import {resolve} from 'path';
 
 // Packages
-import {app, BrowserWindow, Menu, screen, ipcMain} from 'electron';
+import {app, BrowserWindow, Menu, screen, ipcMain, dialog} from 'electron';
 
 // Windows app identity — set FIRST (before app.name/setName, the userData pin, or
 // any window/tray), but ONLY in a packaged build. Critical: in dev, `yarn start`
@@ -712,7 +712,45 @@ app.on('ready', () => {
         }
       });
 
-      app.on('before-quit', () => {
+      app.on('before-quit', (e) => {
+        // Already confirmed / mid-teardown — let it proceed.
+        if ((app as {isQuitting?: boolean}).isQuitting) {
+          return;
+        }
+        // #148: don't silently kill panes running a foreground command on quit
+        // (tray → Quit, ⌘Q, menu Quit all land here). Aggregate active panes
+        // across every window and confirm before tearing everything down.
+        const running: string[] = [];
+        for (const w of BrowserWindow.getAllWindows()) {
+          const getActive = (w as any).getActiveShellSessions as undefined | (() => Array<{name: string}>);
+          if (typeof getActive === 'function') {
+            try {
+              running.push(...getActive().map((a) => a.name));
+            } catch {
+              /* window tearing down — ignore */
+            }
+          }
+        }
+        if (running.length > 0) {
+          const parent = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+          const opts = {
+            type: 'question' as const,
+            buttons: ['Quit', 'Cancel'],
+            defaultId: 1,
+            cancelId: 1,
+            title: 'Active processes running',
+            message:
+              running.length === 1
+                ? `A pane is still running “${running[0]}”.`
+                : `${running.length} panes are still running (${running.join(', ')}).`,
+            detail: 'Quitting Hyperia will stop ' + (running.length === 1 ? 'it.' : 'them.') + ' Quit anyway?'
+          };
+          const choice = parent ? dialog.showMessageBoxSync(parent, opts) : dialog.showMessageBoxSync(opts);
+          if (choice !== 0) {
+            e.preventDefault();
+            return;
+          }
+        }
         // Mark quitting BEFORE windows receive 'close' so the window close
         // handler stops preventing close (otherwise Electron aborts the quit and
         // the app + helpers + stickies linger — the "still running" bug).

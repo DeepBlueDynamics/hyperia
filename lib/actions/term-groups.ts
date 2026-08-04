@@ -238,11 +238,18 @@ export function userExitTermGroup(uid: string) {
         const group = termGroups.termGroups[uid];
         if (!group) return;
         if (Object.keys(termGroups.termGroups).length <= 1) {
-          // Last group — exit the session if there is one, and close the window immediately
+          // Last group — exit the session if there is one, and close the window
+          // immediately. Route through main so it doesn't re-prompt about active
+          // processes: the user already closed this pane deliberately (#148).
           if (group.sessionUid) {
             dispatch(userExitSession(group.sessionUid));
           }
-          window.close();
+          const rpc = (window as any).rpc;
+          if (rpc && typeof rpc.emit === 'function') {
+            rpc.emit('close-no-confirm');
+          } else {
+            window.close();
+          }
           return;
         }
 

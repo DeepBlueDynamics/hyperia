@@ -52,6 +52,8 @@ export type sessionExtraOptions = {
 
 export type MainEvents = {
   close: never;
+  /** Close this window without re-prompting about active processes (#148). */
+  'close-no-confirm': never;
   command: string;
   data: {uid: string | null; data: string; escaped?: boolean};
   exit: {uid: string};

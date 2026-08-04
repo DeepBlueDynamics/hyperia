@@ -251,6 +251,18 @@ export function newWindow(
   const rpc = createRPC(window);
   const sessions = new Map<string, Session>();
 
+  // #148: panes whose shell is running a foreground command (OSC 133 "running").
+  // Used to warn before a whole-window close / app quit silently kills active
+  // work — the same signal that drives the per-pane close guard.
+  const getActiveShellSessions = (): Array<{name: string}> =>
+    [...sessions.values()]
+      .filter((s) => !s.ended && s.shellState?.state === 'running')
+      .map((s) => ({name: s.shellState?.app?.name || s.profile || 'a shell'}));
+  (window as any).getActiveShellSessions = getActiveShellSessions;
+  // Set when the renderer closes this window because the user exited its LAST
+  // pane (which already passed the per-pane guard) — main must not re-prompt.
+  let skipNextCloseConfirm = false;
+
   const updateBackgroundColor = () => {
     const cfg_ = app.plugins.getDecoratedConfig(profileName);
     window.setBackgroundColor(toElectronBackgroundColor(cfg_.backgroundColor || '#000'));
@@ -673,30 +685,59 @@ export function newWindow(
     if (isClosingAndWaitingForSave) {
       return;
     }
-    const tabCount = (window as any).tabCount || 1;
-    const paneCount = (window as any).paneCount || 1;
-    if (tabCount > 1 || paneCount > 1) {
-      const message =
-        tabCount > 1
-          ? `Are you sure you want to close all ${tabCount} tabs?`
-          : `Are you sure you want to close this tab with all ${paneCount} split panes?`;
-      const detail =
-        tabCount > 1
-          ? 'This will close the entire window and terminate all active sessions.'
-          : 'This will close the entire window and terminate all active sessions inside this tab.';
+    if (skipNextCloseConfirm) {
+      // Renderer already confirmed at the pane level (last-pane exit).
+      skipNextCloseConfirm = false;
+    } else {
+      const active = getActiveShellSessions();
+      const tabCount = (window as any).tabCount || 1;
+      const paneCount = (window as any).paneCount || 1;
+      if (active.length > 0) {
+        // #148: a pane is still running something — name it so the human knows
+        // what's about to be killed. Takes priority over the plain count prompt.
+        const names = active.map((a) => a.name);
+        const choice = dialog.showMessageBoxSync(window, {
+          type: 'question',
+          buttons: ['Close window', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          title: 'Active processes running',
+          message:
+            active.length === 1
+              ? `A pane is still running “${names[0]}”.`
+              : `${active.length} panes are still running (${names.join(', ')}).`,
+          detail:
+            'Closing this window will stop ' +
+            (active.length === 1 ? 'it.' : 'them.') +
+            ' Close anyway?'
+        });
+        if (choice !== 0) {
+          e.preventDefault();
+          return;
+        }
+      } else if (tabCount > 1 || paneCount > 1) {
+        const message =
+          tabCount > 1
+            ? `Are you sure you want to close all ${tabCount} tabs?`
+            : `Are you sure you want to close this tab with all ${paneCount} split panes?`;
+        const detail =
+          tabCount > 1
+            ? 'This will close the entire window and terminate all active sessions.'
+            : 'This will close the entire window and terminate all active sessions inside this tab.';
 
-      const choice = dialog.showMessageBoxSync(window, {
-        type: 'question',
-        buttons: ['Yes', 'No'],
-        defaultId: 1,
-        title: 'Confirm Close',
-        message,
-        detail,
-        cancelId: 1
-      });
-      if (choice !== 0) {
-        e.preventDefault();
-        return;
+        const choice = dialog.showMessageBoxSync(window, {
+          type: 'question',
+          buttons: ['Yes', 'No'],
+          defaultId: 1,
+          title: 'Confirm Close',
+          message,
+          detail,
+          cancelId: 1
+        });
+        if (choice !== 0) {
+          e.preventDefault();
+          return;
+        }
       }
     }
     e.preventDefault();
@@ -735,6 +776,12 @@ export function newWindow(
   });
 
   rpc.on('close', () => {
+    window.close();
+  });
+  // The renderer exited the window's LAST pane (already past the per-pane guard);
+  // close without re-prompting about active processes. (#148)
+  rpc.on('close-no-confirm', () => {
+    skipNextCloseConfirm = true;
     window.close();
   });
   rpc.on('command', (command) => {
