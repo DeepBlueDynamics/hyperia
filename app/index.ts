@@ -181,6 +181,19 @@ function _showSplash(
 
     void splash.loadFile(resolve(isDev ? __dirname : app.getAppPath(), 'splash.html'));
 
+    // If the user clicks away to another app while the splash is up, stop
+    // floating over their window: drop always-on-top so the splash falls behind
+    // the app they focused, and remember NOT to steal focus back on reveal.
+    let userSwitchedAway = false;
+    splash.on('blur', () => {
+      userSwitchedAway = true;
+      try {
+        if (!splash.isDestroyed()) splash.setAlwaysOnTop(false);
+      } catch {
+        /* already gone */
+      }
+    });
+
     // Signal splash as soon as main window content loads
     mainWin.webContents.once('did-finish-load', () => {
       if (!splash.isDestroyed()) {
@@ -201,9 +214,12 @@ function _showSplash(
             if (!splash.isDestroyed()) {
               splash.destroy();
             }
-            // Show main window after splash is gone
+            // Show main window after splash is gone. If the user switched to
+            // another app during the splash, reveal it WITHOUT stealing focus
+            // (never pop over the app they're now using).
             if (!mainWin.isDestroyed() && !mainWin.isVisible()) {
-              mainWin.show();
+              if (userSwitchedAway) mainWin.showInactive();
+              else mainWin.show();
             }
           } else {
             try {

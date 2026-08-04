@@ -10,6 +10,16 @@ import {BrowserWindow, ipcMain, Menu, screen, app, nativeImage, shell, dialog, N
 
 import isDev from 'electron-is-dev';
 
+// Open a URL as a web pane in the main Hyperia window. A sticky window has no
+// rpc of its own, so route through a terminal window's shared 'open web pane
+// req' (same path the toolbar / link handlers use).
+function openUrlInWebPane(fromWin: BrowserWindow | null, url: string): void {
+  const target = BrowserWindow.getAllWindows().find(
+    (w) => w !== fromWin && !w.isDestroyed() && (w as unknown as {rpc?: unknown}).rpc
+  );
+  (target as unknown as {rpc?: {emit: (ch: string, p: unknown) => void}})?.rpc?.emit('open web pane req', {url});
+}
+
 import {SYSTEM_TOKEN} from './system-token';
 
 function translateContainerPath(filePath: string): string {
@@ -1007,7 +1017,14 @@ export function initSticky() {
   // Native context menu — can extend beyond window bounds
   ipcMain.on(
     'sticky-context-menu',
-    (event, noteId: string, hasSelection: boolean, _currentColor: string, isFileBound?: boolean) => {
+    (
+      event,
+      noteId: string,
+      hasSelection: boolean,
+      _currentColor: string,
+      isFileBound?: boolean,
+      link?: string | null
+    ) => {
       const win = BrowserWindow.fromWebContents(event.sender);
       if (!win) return;
 
@@ -1040,7 +1057,25 @@ export function initSticky() {
         }
       ];
 
+      // Link actions — shown at the top when the right-click landed on a URL.
+      const linkItems: Electron.MenuItemConstructorOptions[] = link
+        ? [
+            {label: 'Edit Link', click: () => event.sender.send('sticky-edit-link')},
+            {label: 'Open Link in Browser', click: () => void shell.openExternal(link)},
+            {label: 'Open Link in Web Pane', click: () => openUrlInWebPane(win, link)},
+            {
+              label: 'Copy Link',
+              click: () => {
+                clipboard.writeText(link);
+                event.sender.send('sticky-toast', 'Link copied');
+              }
+            },
+            {type: 'separator'}
+          ]
+        : [];
+
       const template: Electron.MenuItemConstructorOptions[] = [
+        ...linkItems,
         {
           label: 'Color',
           submenu: [

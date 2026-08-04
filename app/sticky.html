@@ -1099,6 +1099,48 @@ function followLinkInTextarea(textarea) {
   return true;
 }
 
+// Lightweight transient toast (self-contained — no HTML/CSS needed).
+let _toastTimer = null;
+function showToast(msg) {
+  let el = document.getElementById('stickyToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'stickyToast';
+    el.style.cssText =
+      'position:fixed;left:50%;bottom:14px;transform:translateX(-50%);' +
+      'background:rgba(18,18,22,.94);color:#e8e8ea;font:12px/1.4 -apple-system,system-ui,sans-serif;' +
+      'padding:7px 12px;border-radius:7px;box-shadow:0 4px 16px rgba(0,0,0,.45);' +
+      'z-index:99999;pointer-events:none;opacity:0;transition:opacity .14s ease;max-width:90vw;' +
+      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { el.style.opacity = '0'; }, 1700);
+}
+ipcRenderer.on('sticky-toast', (_e, msg) => showToast(String(msg || '')));
+
+// Right-click → "Edit Link": since a plain click copies, this is how you get an
+// editing caret onto a URL — focus the note and SELECT the link so it's ready
+// to edit or replace. (The right-click already placed the caret in the URL.)
+function linkRangeAt(text, pos) {
+  URL_RE.lastIndex = 0;
+  let m;
+  while ((m = URL_RE.exec(text)) !== null) {
+    const s = m.index, e = s + m[0].length;
+    if (pos >= s && pos <= e) return [s, e];
+  }
+  return null;
+}
+ipcRenderer.on('sticky-edit-link', () => {
+  const ta = document.getElementById('noteText');
+  if (!ta) return;
+  const r = linkRangeAt(ta.value, ta.selectionStart);
+  ta.focus();
+  if (r) ta.setSelectionRange(r[0], r[1]);
+});
+
 ipcRenderer.on('sticky-set-highlight', (_e, mode) => {
   highlightMode = mode;
   const codeEl = document.getElementById('codeBlock')?.querySelector('code');
@@ -1240,7 +1282,11 @@ document.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   const textarea = document.getElementById('noteText');
   const hasSelection = textarea && textarea.selectionStart !== textarea.selectionEnd;
-  ipcRenderer.send('sticky-context-menu', noteId, hasSelection, bgColor, !!boundFilePath);
+  // Right-click ON a URL → offer link actions. Right-click first places the
+  // caret at the click point, so linkTokenAt(selectionStart) resolves the link.
+  const tok = textarea ? linkTokenAt(textarea.value, textarea.selectionStart) : null;
+  const link = tok && tok.kind === 'url' ? tok.value : null;
+  ipcRenderer.send('sticky-context-menu', noteId, hasSelection, bgColor, !!boundFilePath, link);
 });
 
 // File linking — main read the file and is handing us its content.
@@ -1805,8 +1851,17 @@ if (isSearchMode) {
   // places the cursor (normal editing) — the sticky is an editable text area,
   // so a plain click must not steal the action.
   textarea.addEventListener('click', (e) => {
-    if (!(e.ctrlKey || e.metaKey)) return;
-    if (followLinkInTextarea(textarea)) {
+    // Ctrl/Cmd+click still *follows* the link (opens it in the browser).
+    if (e.ctrlKey || e.metaKey) {
+      if (followLinkInTextarea(textarea)) e.preventDefault();
+      return;
+    }
+    // Plain click on a URL → copy it + toast. (Right-click gives the full menu;
+    // to edit inside a URL, click just outside it.)
+    const tok = linkTokenAt(textarea.value, textarea.selectionStart);
+    if (tok && tok.kind === 'url') {
+      clipboard.writeText(tok.value);
+      showToast('Link copied · right-click for options');
       e.preventDefault();
     }
   });
