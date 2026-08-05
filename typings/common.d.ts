@@ -89,8 +89,12 @@ export type MainEvents = {
       shellName: string;
       url?: string;
       active: boolean;
+      /** Pane is running a foreground program (#148) — used by close guards. */
+      busy: boolean;
     }>;
   }>;
+  /** Renderer asks main to confirm closing a tab that has active panes (#148). */
+  'confirm-close-tab': {uid: string; names: string[]};
   'permission request': {id: string; requester: string; requesterPane: string; targetPane: string; purpose?: string};
   'permission resolved': {targetPane: string; decision: string; id?: string};
   'agent toast': {id: string; requester: string; action: string};
@@ -182,6 +186,8 @@ export type RendererEvents = {
   'session data send': {uid: string | null; data: string; escaped?: boolean};
   'agent status': {sessionUid?: string; connected: boolean; working?: boolean; label?: string; humanPercent?: number};
   'open web pane req': {url?: string};
+  /** Main tells the renderer the user confirmed closing this tab (#148). */
+  'close-tab-confirmed': {uid: string};
   'get-layout-state-req': never;
   'restore-layout-state': any;
   'web-pane-zoom-in': {uid: string};

@@ -14,6 +14,7 @@ export const SESSION_SET_CWD = 'SESSION_SET_CWD';
 export const SESSION_SEARCH = 'SESSION_SEARCH';
 export const SESSION_SET_DESCRIPTION = 'SESSION_SET_DESCRIPTION';
 export const SESSION_SET_SHELL_STATE = 'SESSION_SET_SHELL_STATE';
+export const SESSION_SET_BUSY = 'SESSION_SET_BUSY';
 
 export interface SessionAddAction {
   type: typeof SESSION_ADD;
@@ -104,6 +105,12 @@ export interface SessionSetShellStateAction {
   shellState: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
 }
 
+export interface SessionSetBusyAction {
+  type: typeof SESSION_SET_BUSY;
+  uid: string;
+  busy: boolean;
+}
+
 export type SessionActions =
   | SessionAddAction
   | SessionResizeAction
@@ -120,4 +127,5 @@ export type SessionActions =
   | SessionSetCwdAction
   | SessionSearchAction
   | SessionSetDescriptionAction
-  | SessionSetShellStateAction;
+  | SessionSetShellStateAction
+  | SessionSetBusyAction;

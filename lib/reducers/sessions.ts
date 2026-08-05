@@ -14,7 +14,8 @@ import {
   SESSION_SET_CWD,
   SESSION_SEARCH,
   SESSION_SET_DESCRIPTION,
-  SESSION_SET_SHELL_STATE
+  SESSION_SET_SHELL_STATE,
+  SESSION_SET_BUSY
 } from '../../typings/constants/sessions';
 import {RESTORE_LAYOUT_STATE} from '../../typings/constants/term-groups';
 import type {sessionState, session, Mutable, ISessionReducer} from '../../typings/hyper';
@@ -241,7 +242,8 @@ function Session(obj: Immutable.DeepPartial<session>) {
     profile: '',
     shellName: '',
     manualTitle: false,
-    shellState: undefined
+    shellState: undefined,
+    busy: false
   };
   return Immutable(x).merge(obj);
 }
@@ -415,6 +417,12 @@ const reducer: ISessionReducer = (state = initialState, action) => {
     case SESSION_SET_SHELL_STATE:
       if (action.uid && state.sessions[action.uid]) {
         return state.setIn(['sessions', action.uid, 'shellState'], action.shellState);
+      }
+      return state;
+
+    case SESSION_SET_BUSY:
+      if (action.uid && state.sessions[action.uid]) {
+        return state.setIn(['sessions', action.uid, 'busy'], action.busy);
       }
       return state;
 

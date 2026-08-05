@@ -14,6 +14,7 @@ import type {configOptions} from '../typings/config';
 import {loadConfig, reloadConfig} from './actions/config';
 import init from './actions/index';
 import {addNotificationMessage} from './actions/notifications';
+import {closeTab} from './actions/header';
 import * as sessionActions from './actions/sessions';
 import * as termGroupActions from './actions/term-groups';
 import * as uiActions from './actions/ui';
@@ -138,6 +139,12 @@ rpc.on('session cwd', ({uid, cwd}: {uid: string; cwd: string}) => {
 
 rpc.on('session shellstate', ({uid, shellState}: {uid: string; shellState: { state: 'idle' | 'busy'; lastExit?: number; command?: string }}) => {
   store_.dispatch(sessionActions.setSessionShellState(uid, shellState));
+});
+
+// #148: the user confirmed (native dialog in main) closing a tab with active
+// panes — re-enter closeTab with confirmed=true to skip the guard and close.
+rpc.on('close-tab-confirmed', ({uid}: {uid: string}) => {
+  store_.dispatch(closeTab(uid, {confirmed: true}) as any);
 });
 
 // Drag-and-drop file copy result (main copied the dropped file(s) into the
@@ -444,6 +451,7 @@ function collectPaneLayout(
   shellName: string;
   url?: string;
   active: boolean;
+  busy: boolean;
 }> {
   const state = store_.getState() as any;
   const totalLeaves = countLeaves(group, termGroups);
@@ -456,7 +464,7 @@ function collectPaneLayout(
     const customTitle = session ? session.title : '';
     const title = shellName ? shellName : (customTitle || shellType);
     const active = group.sessionUid === state.sessions.activeUid;
-    return [{uid: group.sessionUid, splitLabel: '', isWeb: false, isAi: false, title, shellName, active}];
+    return [{uid: group.sessionUid, splitLabel: '', isWeb: false, isAi: false, title, shellName, active, busy: !!(session as any)?.busy}];
   }
   if (group?.webUrl !== undefined && group?.webUrl !== null) {
     const isAi = group.webUrl.startsWith('ai://');
@@ -476,13 +484,13 @@ function collectPaneLayout(
       title = isAi ? 'ask' : 'Browser';
     }
     const active = group.uid === state.termGroups.activeTermGroup;
-    return [{uid: group.uid, splitLabel: '', isWeb: true, isAi, title, shellName: '', url: group.webUrl, active}];
+    return [{uid: group.uid, splitLabel: '', isWeb: true, isAi, title, shellName: '', url: group.webUrl, active, busy: false}];
   }
 
   const panes: any[] = [];
 
   // Collect all leaf uids first (in order), then assign unique sequential labels
-  function collectLeaves(g: Record<string, any>): Array<{uid: string; isWeb: boolean; isAi: boolean; title: string; shellName: string; url?: string; active: boolean}> {
+  function collectLeaves(g: Record<string, any>): Array<{uid: string; isWeb: boolean; isAi: boolean; title: string; shellName: string; url?: string; active: boolean; busy: boolean}> {
     if (!g) return [];
     if (g.sessionUid) {
       const session = state.sessions.sessions[g.sessionUid];
@@ -491,7 +499,7 @@ function collectPaneLayout(
       const customTitle = session ? session.title : '';
       const title = shellName ? shellName : (customTitle || shellType);
       const active = g.sessionUid === state.sessions.activeUid;
-      return [{uid: g.sessionUid as string, isWeb: false, isAi: false, title, shellName, active}];
+      return [{uid: g.sessionUid as string, isWeb: false, isAi: false, title, shellName, active, busy: !!(session as any)?.busy}];
     }
     if (g.webUrl !== undefined && g.webUrl !== null) {
       const isAi = g.webUrl.startsWith('ai://');
@@ -511,7 +519,7 @@ function collectPaneLayout(
         title = isAi ? 'ask' : 'Browser';
       }
       const active = g.uid === state.termGroups.activeTermGroup;
-      return [{uid: g.uid as string, isWeb: true, isAi, title, shellName: '', url: g.webUrl, active}];
+      return [{uid: g.uid as string, isWeb: true, isAi, title, shellName: '', url: g.webUrl, active, busy: false}];
     }
     const children: string[] = (g.children as string[]) || [];
     return children.flatMap((cUid: string) => collectLeaves(termGroups[cUid] as Record<string, any>));

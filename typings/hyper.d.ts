@@ -144,6 +144,8 @@ export type session = {
   lastCommand?: string;
   manualTitle?: boolean;
   shellState?: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
+  /** Reliable "running a foreground program" flag, published by Term (#148). */
+  busy?: boolean;
 };
 
 export type sessionState = Immutable<{

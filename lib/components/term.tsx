@@ -1420,6 +1420,19 @@ export default class Term extends React.PureComponent<
     });
   };
 
+  // Publish the reliable busy state to the store so the close paths (tab / window
+  // / quit) can warn before killing a running program. Deduped — dispatches only
+  // on an actual transition.
+  _lastPublishedBusy: boolean | null = null;
+  publishBusy = () => {
+    const busy = this.isTerminalBusy();
+    if (busy !== this._lastPublishedBusy) {
+      this._lastPublishedBusy = busy;
+      // uid is already bound by term-group (mirrors onCwd/onResize).
+      (this.props as any).onBusy?.(busy);
+    }
+  };
+
   isTerminalBusy = () => {
     // OSC shell integration is authoritative when it reports a running command.
     if (this.props.shellState && this.props.shellState.state !== 'idle') return true;
@@ -2448,6 +2461,9 @@ export default class Term extends React.PureComponent<
   }
 
   componentDidUpdate(prevProps: TermProps, prevState: any) {
+    // Keep the store's busy flag in sync (shellState prop or activeProgram state
+    // may have just changed). Deduped inside publishBusy.
+    this.publishBusy();
     const sessionCwd = (this.props as any).sessionCwd;
     const prevSessionCwd = (prevProps as any).sessionCwd;
     if (sessionCwd && sessionCwd !== prevSessionCwd) {

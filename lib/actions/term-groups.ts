@@ -153,7 +153,7 @@ export function setActiveGroup(uid: string) {
 }
 
 // Helper to find all leaf groups (panes) under a group recursively
-const findLeaves = (state: ITermState, group: ITermGroup): ITermGroup[] => {
+export const findLeaves = (state: ITermState, group: ITermGroup): ITermGroup[] => {
   if (!group.children || group.children.length === 0) {
     return [group];
   }

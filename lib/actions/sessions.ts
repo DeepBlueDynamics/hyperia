@@ -15,7 +15,8 @@ import {
   SESSION_SEARCH,
   SESSION_SET_DESCRIPTION,
   SESSION_SET_CWD,
-  SESSION_SET_SHELL_STATE
+  SESSION_SET_SHELL_STATE,
+  SESSION_SET_BUSY
 } from '../../typings/constants/sessions';
 import {TERM_GROUP_SET_TAB_NAME} from '../../typings/constants/term-groups';
 import type {HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
@@ -349,5 +350,16 @@ export function setSessionShellState(uid: string, shellState: { state: 'idle' | 
     type: SESSION_SET_SHELL_STATE,
     uid,
     shellState
+  };
+}
+
+// Reliable "running a foreground program" flag, published by the Term component
+// (isTerminalBusy: OSC running OR a detected foreground program / alt-screen).
+// Read by the close paths (tab/window/quit) so they warn before killing work.
+export function setSessionBusy(uid: string, busy: boolean): HyperActions {
+  return {
+    type: SESSION_SET_BUSY,
+    uid,
+    busy
   };
 }

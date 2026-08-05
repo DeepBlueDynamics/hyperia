@@ -6,7 +6,8 @@ import {
   setActiveSession,
   openSearch,
   closeSearch,
-  setSessionCwd
+  setSessionCwd,
+  setSessionBusy
 } from '../actions/sessions';
 import {userExitTermGroup, popOutPane} from '../actions/term-groups';
 import {markTabBell, openContextMenu} from '../actions/ui';
@@ -107,6 +108,10 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
 
     onCwd(uid: string, cwd: string) {
       dispatch(setSessionCwd(uid, cwd));
+    },
+
+    onBusy(uid: string, busy: boolean) {
+      dispatch(setSessionBusy(uid, busy));
     },
 
     onBell(uid: string) {

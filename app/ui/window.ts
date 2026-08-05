@@ -251,13 +251,13 @@ export function newWindow(
   const rpc = createRPC(window);
   const sessions = new Map<string, Session>();
 
-  // #148: panes whose shell is running a foreground command (OSC 133 "running").
-  // Used to warn before a whole-window close / app quit silently kills active
-  // work — the same signal that drives the per-pane close guard.
-  const getActiveShellSessions = (): Array<{name: string}> =>
-    [...sessions.values()]
-      .filter((s) => !s.ended && s.shellState?.state === 'running')
-      .map((s) => ({name: s.shellState?.app?.name || s.profile || 'a shell'}));
+  // #148: panes running a foreground program, as reported by the renderer via
+  // 'session layout sync'. This is the RELIABLE signal (isTerminalBusy = OSC
+  // "running" OR a detected foreground program / alt-screen TUI) — OSC-only
+  // shellState misses ssh/agent panes whose local shell looks idle. Used to warn
+  // before a whole-window close / app quit silently kills active work.
+  let busyPanes: Array<{name: string}> = [];
+  const getActiveShellSessions = (): Array<{name: string}> => busyPanes;
   (window as any).getActiveShellSessions = getActiveShellSessions;
   // Set when the renderer closes this window because the user exited its LAST
   // pane (which already passed the per-pane guard) — main must not re-prompt.
@@ -578,15 +578,21 @@ export function newWindow(
           shellName: string;
           url?: string;
           active: boolean;
+          busy: boolean;
         }>;
       }>
     ) => {
       (window as any).tabCount = payload.length;
       let totalPanes = 0;
+      const busy: Array<{name: string}> = [];
       payload.forEach((tab) => {
         totalPanes += tab.panes ? tab.panes.length : 0;
+        tab.panes?.forEach((p) => {
+          if (p.busy) busy.push({name: p.shellName || p.title || 'a shell'});
+        });
       });
       (window as any).paneCount = totalPanes;
+      busyPanes = busy;
       updateSessionLayout(payload);
     }
   );
@@ -794,6 +800,27 @@ export function newWindow(
   rpc.on('close-no-confirm', () => {
     skipNextCloseConfirm = true;
     window.close();
+  });
+  // #148: the renderer wants to close a TAB whose panes are running foreground
+  // programs — show the native confirm here (naming what's running) and echo back
+  // 'close-tab-confirmed' if the user proceeds.
+  rpc.on('confirm-close-tab', ({uid, names}) => {
+    const list = names && names.length ? names : ['a shell'];
+    const choice = dialog.showMessageBoxSync(window, {
+      type: 'question',
+      buttons: ['Close tab', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'Active processes running',
+      message:
+        list.length === 1
+          ? `A pane is still running “${list[0]}”.`
+          : `${list.length} panes are still running (${list.join(', ')}).`,
+      detail: 'Closing this tab will stop ' + (list.length === 1 ? 'it.' : 'them.') + ' Close anyway?'
+    });
+    if (choice === 0) {
+      rpc.emit('close-tab-confirmed', {uid});
+    }
   });
   rpc.on('command', (command) => {
     const focusedWindow = BrowserWindow.getFocusedWindow();

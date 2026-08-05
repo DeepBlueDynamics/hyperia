@@ -9,16 +9,42 @@ import {
 import type {HyperDispatch, HyperState} from '../../typings/hyper';
 import rpc from '../rpc';
 
-import {userExitTermGroup, clearWebPane, setActiveGroup} from './term-groups';
+import {userExitTermGroup, clearWebPane, setActiveGroup, findLeaves} from './term-groups';
 
-export function closeTab(uid: string) {
+// #148: names of the tab's panes that are running a foreground program (busy),
+// so the confirm dialog can say what's about to be killed.
+function busyPaneNames(termGroups: any, sessions: any, rootUid: string): string[] {
+  const group = termGroups.termGroups[rootUid];
+  if (!group) return [];
+  const leaves = findLeaves(termGroups, group);
+  const names: string[] = [];
+  for (const leaf of leaves) {
+    const sess = leaf.sessionUid ? sessions.sessions[leaf.sessionUid] : null;
+    if (sess && (sess as any).busy) {
+      names.push((sess as any).shellName || (sess as any).title || (sess as any).profile || 'a shell');
+    }
+  }
+  return names;
+}
+
+export function closeTab(uid: string, opts?: {confirmed?: boolean}) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
-    const {termGroups} = getState();
+    const {termGroups, sessions} = getState();
     const group = termGroups.termGroups[uid];
     // If a web pane is overlaying a real terminal, just clear the URL — don't kill the session
     if (group && (group as any).webUrl && group.sessionUid) {
       dispatch(clearWebPane(uid) as any);
       return;
+    }
+    // #148: warn before closing a tab whose panes are running foreground
+    // programs. Main shows the native dialog and echoes back 'close-tab-confirmed'
+    // (handled in lib/index.tsx), which re-enters here with confirmed=true.
+    if (!opts?.confirmed) {
+      const names = busyPaneNames(termGroups, sessions, uid);
+      if (names.length > 0) {
+        rpc.emit('confirm-close-tab', {uid, names});
+        return;
+      }
     }
     dispatch({
       type: CLOSE_TAB,

@@ -237,6 +237,7 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
             modifierKeys: this.props.modifierKeys,
             onActive: this.props.onActive,
             onCwd: (this.props as any).onCwd,
+            onBusy: (this.props as any).onBusy,
             onBell: this.props.onBell,
             onResize: this.props.onResize,
             onTitle: this.props.onTitle,
