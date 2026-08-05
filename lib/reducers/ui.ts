@@ -42,7 +42,7 @@ const allowedWindowControlsValues = new Set([true, false, 'left']);
 const initial: uiState = Immutable<Mutable<uiState>>({
   cols: null,
   rows: null,
-  scrollback: 1000,
+  scrollback: 10000,
   activeUid: null,
   cursorColor: '#F81CE5',
   cursorAccentColor: '#000',
