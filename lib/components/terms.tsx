@@ -133,6 +133,17 @@ export default class Terms extends React.Component<React.PropsWithChildren<Terms
     const {clickedTerm, clickedUid} = this.findClickedTerm(target);
     if (!clickedTerm) return;
 
+    // Right-clicking a URL shows link-specific actions ONLY (not the terminal
+    // menu). The link providers track what's hovered; if the pointer is on a
+    // link, hand off to the main-process link menu.
+    const hoveredLink = clickedTerm.getHoveredLink();
+    if (hoveredLink) {
+      e.preventDefault();
+      e.stopPropagation();
+      rpc.emit('open link context menu', {link: hoveredLink});
+      return;
+    }
+
     const hasSelection = clickedTerm.term.hasSelection();
 
     // If xterm.js or something else prevented the default context menu:

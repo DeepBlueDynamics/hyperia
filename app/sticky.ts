@@ -1057,8 +1057,9 @@ export function initSticky() {
         }
       ];
 
-      // Link actions — shown at the top when the right-click landed on a URL.
-      const linkItems: Electron.MenuItemConstructorOptions[] = link
+      // When the right-click lands on a URL, show ONLY the link actions — not
+      // the full note menu prepended with them (#15).
+      const linkMenu: Electron.MenuItemConstructorOptions[] = link
         ? [
             {label: 'Edit Link', click: () => event.sender.send('sticky-edit-link')},
             {label: 'Open Link in Browser', click: () => void shell.openExternal(link)},
@@ -1069,13 +1070,11 @@ export function initSticky() {
                 clipboard.writeText(link);
                 event.sender.send('sticky-toast', 'Link copied');
               }
-            },
-            {type: 'separator'}
+            }
           ]
         : [];
 
       const template: Electron.MenuItemConstructorOptions[] = [
-        ...linkItems,
         {
           label: 'Color',
           submenu: [
@@ -1216,7 +1215,7 @@ export function initSticky() {
         }
       ];
 
-      const menu = Menu.buildFromTemplate(template);
+      const menu = Menu.buildFromTemplate(link ? linkMenu : template);
       menu.popup({window: win});
     }
   );

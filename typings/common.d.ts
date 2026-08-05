@@ -65,6 +65,8 @@ export type MainEvents = {
   'open context menu': string;
   'open edit context menu': Record<string, never>;
   'open external': {url: string};
+  /** Right-clicked a URL in a terminal — show link-only actions (#15). */
+  'open link context menu': {link: string};
   'open hamburger menu': {x: number; y: number};
   'quit and install': never;
   resize: {uid: string; cols: number; rows: number};

@@ -2,7 +2,7 @@ import {existsSync, readFileSync, writeFileSync, cpSync, statSync} from 'fs';
 import {dirname, isAbsolute, join, normalize, sep, basename, extname} from 'path';
 import {URL, fileURLToPath} from 'url';
 
-import {app, BrowserWindow, shell, Menu, dialog, nativeImage} from 'electron';
+import {app, BrowserWindow, shell, Menu, dialog, nativeImage, clipboard} from 'electron';
 import type {BrowserWindowConstructorOptions} from 'electron';
 
 import {enable as remoteEnable} from '@electron/remote/main';
@@ -602,6 +602,17 @@ export function newWindow(
     Menu.buildFromTemplate(contextMenuTemplate(createWindow, selection, window)).popup({
       window
     });
+  });
+  // Right-clicking a URL in a terminal shows link actions ONLY (#15) — no
+  // terminal menu. Terminal output isn't editable, so there's no "Edit Link"
+  // (unlike stickies).
+  rpc.on('open link context menu', ({link}) => {
+    if (!link) return;
+    Menu.buildFromTemplate([
+      {label: 'Open Link in Browser', click: () => void shell.openExternal(link)},
+      {label: 'Open Link in Web Pane', click: () => rpc.emit('open web pane req', {url: link})},
+      {label: 'Copy Link', click: () => clipboard.writeText(link)}
+    ]).popup({window});
   });
   rpc.on('open edit context menu', () => {
     // Standard editing menu for real text inputs (custom-shell modal fields, URL

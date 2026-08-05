@@ -647,13 +647,24 @@ export default class Term extends React.PureComponent<
       this.term.loadAddon(this.fitAddon);
       this.term.loadAddon(this.searchAddon);
       this.term.loadAddon(
-        new WebLinksAddon((event, uri) => {
-          // Plain click copies + toasts; Ctrl/Cmd+click opens (mirrors stickies).
-          // Right-click keeps the terminal menu. This intentionally overrides the
-          // webLinksActivationKey gate — click is now "copy", not "open".
-          if (event && (event.ctrlKey || event.metaKey)) openUrl(uri);
-          else this.copyLinkToast(uri);
-        })
+        new WebLinksAddon(
+          (event, uri) => {
+            // Plain click copies + toasts; Ctrl/Cmd+click opens (mirrors stickies).
+            // Right-click shows link actions (see terms.tsx). This intentionally
+            // overrides the webLinksActivationKey gate — click is now "copy".
+            if (event && (event.ctrlKey || event.metaKey)) openUrl(uri);
+            else this.copyLinkToast(uri);
+          },
+          {
+            // Track the hovered URL so a right-click can offer link actions.
+            hover: (_e: MouseEvent, uri: string) => {
+              this._hoveredLink = uri;
+            },
+            leave: () => {
+              this._hoveredLink = null;
+            }
+          }
+        )
       );
       // Custom link provider for URLs that wrap across multiple rows
       this.term.registerLinkProvider({
@@ -767,6 +778,13 @@ export default class Term extends React.PureComponent<
               text: url,
               activate: (_event: MouseEvent, text: string) => {
                 if (shallActivateWebLink(_event)) openUrl(text);
+              },
+              // Track the hovered URL so a right-click can offer link actions.
+              hover: () => {
+                this._hoveredLink = url;
+              },
+              leave: () => {
+                this._hoveredLink = null;
               }
             });
           }
@@ -1059,6 +1077,12 @@ export default class Term extends React.PureComponent<
 
   // A URL was left-clicked in the terminal: copy it + a toast pointing at the
   // right-click menu. (Ctrl/Cmd+click opens instead — handled at the call site.)
+  // Currently-hovered web link, maintained by the link providers' hover/leave
+  // callbacks below. Read on right-click (terms.tsx) so the context menu can
+  // offer link actions instead of the standard terminal menu.
+  _hoveredLink: string | null = null;
+  getHoveredLink = (): string | null => this._hoveredLink;
+
   copyLinkToast = (uri: string) => {
     clipboard.writeText(uri);
     this.setState({showCopied: true, copiedMsg: 'Link copied · right-click for options', copiedPos: undefined});
@@ -1068,6 +1092,8 @@ export default class Term extends React.PureComponent<
 
   onMouseUp = (e: React.MouseEvent) => {
     if (this.props.quickEdit && e.button === 2) {
+      // Right-clicking a link opens the link menu (terms.tsx) — don't paste.
+      if (this._hoveredLink) return;
       if (this.term.hasSelection()) {
         clipboard.writeText(this.term.getSelection());
         this.term.clearSelection();
