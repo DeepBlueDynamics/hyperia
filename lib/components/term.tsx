@@ -1421,9 +1421,14 @@ export default class Term extends React.PureComponent<
   };
 
   isTerminalBusy = () => {
-    if (this.props.shellState) {
-      return this.props.shellState.state !== 'idle';
-    }
+    // OSC shell integration is authoritative when it reports a running command.
+    if (this.props.shellState && this.props.shellState.state !== 'idle') return true;
+    // Otherwise fall back to the screen heuristic. This is the case that matters
+    // for an ssh profile: the LOCAL shell integration went idle before ssh took
+    // over, so shellState says "idle" even though the pane is running a program
+    // on the remote host. It's about the shell running SOMETHING, not about being
+    // remote — so honor activeProgram even when shellState exists. Keeps the path
+    // bar / dir picker locked while a foreground program (ssh TUI, vim, …) is up.
     return !!this.state.activeProgram;
   };
 
