@@ -246,10 +246,12 @@ async fn pane_raw_loop(socket: WebSocket, bridge: Bridge, pane: String) {
                     uid.clone(),
                     json!({"t":"meta","paneId":uid,"title":title,"cols":s.cols,"rows":s.rows,"state":s.shell_state,"cwd":s.cwd}).to_string(),
                     s.screen.contents_formatted(),
+                    s.cols,
+                    s.rows,
                 )
             })
     };
-    let (uid, meta, seed) = match resolved {
+    let (uid, meta, seed, mut last_cols, mut last_rows) = match resolved {
         Some(v) => v,
         None => {
             let _ = send_text(&mut tx, json!({"t":"error","code":"no-such-pane","message":pane}).to_string()).await;
@@ -273,12 +275,30 @@ async fn pane_raw_loop(socket: WebSocket, bridge: Bridge, pane: String) {
     let mut out = bridge.subscribe_output(&uid).await;
     let mut hb = tokio::time::interval(HEARTBEAT);
     hb.tick().await;
+    // Resize is OUT-OF-BAND (not encoded in the PTY byte stream), so the viewer
+    // can't infer it — poll the pane's dims and emit an explicit {t:"resize"}
+    // control frame when they change so the client can reflow its VT/monitor.
+    let mut dims_ticker = tokio::time::interval(Duration::from_millis(200));
+    dims_ticker.tick().await;
     loop {
         tokio::select! {
             chunk = out.recv() => {
                 match chunk {
                     Some(bytes) => { if tx.send(Message::Binary(bytes.into())).await.is_err() { break; } }
                     None => break, // pane gone
+                }
+            }
+            _ = dims_ticker.tick() => {
+                let dims = {
+                    let sessions = bridge.sessions().await;
+                    sessions.get(&uid).map(|s| (s.cols, s.rows))
+                };
+                if let Some((cols, rows)) = dims {
+                    if cols != last_cols || rows != last_rows {
+                        last_cols = cols;
+                        last_rows = rows;
+                        let _ = send_text(&mut tx, json!({"t":"resize","paneId":uid,"cols":cols,"rows":rows}).to_string()).await;
+                    }
                 }
             }
             _ = hb.tick() => {
