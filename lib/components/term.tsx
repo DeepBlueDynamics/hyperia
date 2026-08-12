@@ -791,6 +791,35 @@ export default class Term extends React.PureComponent<
           callback(links.length > 0 ? links : undefined);
         }
       });
+      // OSC 52 clipboard: programs like grok, tmux, and vim/neovim copy to the
+      // system clipboard via ESC ] 52 ; c ; <base64> BEL. xterm.js does NOT handle
+      // OSC 52 by default, so these copies silently no-op in Hyperia even though
+      // Windows Terminal / PowerShell honor them. Register a WRITE-only handler:
+      // decode + write the clipboard + flash the same "Copied!" toast. Purely
+      // additive — selection copy, link copy, and paste are untouched. The query
+      // form (payload "?") is ignored so a program can never READ the clipboard.
+      this.term.parser.registerOscHandler(52, (data: string) => {
+        try {
+          const semi = data.indexOf(';');
+          if (semi === -1) return false;
+          const payload = data.slice(semi + 1);
+          if (!payload || payload === '?') return false;
+          let text = '';
+          try {
+            text = Buffer.from(payload, 'base64').toString('utf8');
+          } catch {
+            return false;
+          }
+          if (!text) return false;
+          clipboard.writeText(text);
+          this.setState({showCopied: true, copiedMsg: undefined, copiedPos: undefined});
+          if (this._copiedTimer) clearTimeout(this._copiedTimer);
+          this._copiedTimer = setTimeout(() => this.setState({showCopied: false, copiedMsg: undefined}), 1700);
+          return true;
+        } catch {
+          return false;
+        }
+      });
       this.term.open(this.termRef);
 
       if (useWebGL) {
@@ -1446,7 +1475,21 @@ export default class Term extends React.PureComponent<
   };
 
   toggleDirNavigator = () => {
-    if (this.isTerminalBusy()) return;
+    if (this.isTerminalBusy()) {
+      // Browsing is locked while a program runs (the picker would fail mid-cd).
+      // The path bar truncates with an ellipsis and the picker can't open, so
+      // surface the FULL current path in the toast — the user can at least read
+      // off exactly where the pane is even while locked.
+      const cwd = (this.props as any).sessionCwd || '';
+      this.setState({
+        showCopied: true,
+        copiedMsg: cwd ? `Directory browsing locked · ${cwd}` : 'Directory browsing locked while a program is running',
+        copiedPos: undefined
+      });
+      if (this._copiedTimer) clearTimeout(this._copiedTimer);
+      this._copiedTimer = setTimeout(() => this.setState({showCopied: false, copiedMsg: undefined}), 2500);
+      return;
+    }
     const {isDirNavigatorOpen} = this.state;
     const sessionCwd = (this.props as any).sessionCwd;
     // Always open on the pane's CURRENT directory (sessionCwd), not a stale
@@ -1936,11 +1979,17 @@ export default class Term extends React.PureComponent<
     // in the default profile when none is given), replacing the picker in place.
     if ((this.props as any).sessionProfile === 'picker') {
       this.setState({isDirNavigatorOpen: false, navigatorStatus: null});
+      // Launch the configured DEFAULT profile (config.defaultProfile) in the
+      // chosen dir — NOT the last-used picker shell. Using a shell once doesn't
+      // make it the default. Passing it explicitly pins "Go" to the same default
+      // the config declares (rather than main's getDefaultProfile fallback).
+      const defaultProfile = (this.props as any).defaultProfile || undefined;
       rpc.emit('new', {
         isNewGroup: false,
         cwd: target,
         activeUid: this.props.uid,
-        groupUid: (this.props as any).groupUid
+        groupUid: (this.props as any).groupUid,
+        ...(defaultProfile ? {profile: defaultProfile} : {})
       } as any);
       return;
     }

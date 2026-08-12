@@ -68,7 +68,6 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
   const {borderColor} = props;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const {hambMenu, winCtrls} = getWindowHeaderConfig();
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const maxButtonHref = props.maximized
     ? './renderer/assets/icons.svg#restore-window'
     : './renderer/assets/icons.svg#maximize-window';
@@ -98,6 +97,29 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
             onMoveTab: props.onMoveTab
           })}
         />
+        {/* Linux is frameless (app/ui/window.ts) and gets NEITHER the native
+            Windows titleBarOverlay NOR macOS traffic lights — so without these
+            in-app buttons it has no min/max/close at all. Gated to Linux ONLY so
+            Windows' native overlay and macOS's traffic lights are untouched. */}
+        {process.platform === 'linux' && (
+          <div className="header_windowControls">
+            <div className="header_winBtn" onClick={handleMinimizeClick} title="Minimize">
+              <svg className="header_shape">
+                <use xlinkHref="./renderer/assets/icons.svg#minimize-window" />
+              </svg>
+            </div>
+            <div className="header_winBtn" onClick={handleMaximizeClick} title={props.maximized ? 'Restore' : 'Maximize'}>
+              <svg className="header_shape">
+                <use xlinkHref={maxButtonHref} />
+              </svg>
+            </div>
+            <div className="header_winBtn header_closeWindow" onClick={handleCloseClick} title="Close">
+              <svg className="header_shape">
+                <use xlinkHref="./renderer/assets/icons.svg#close-window" />
+              </svg>
+            </div>
+          </div>
+        )}
       </div>
 
       {props.customChildrenBefore}
