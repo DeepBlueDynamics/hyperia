@@ -306,8 +306,21 @@ async fn pane_raw_loop(socket: WebSocket, bridge: Bridge, pane: String) {
             }
             msg = rx.next() => {
                 match msg {
+                    // INPUT: the human typing in the 3D viewer. Keystrokes arrive as
+                    // BINARY frames (UTF-8 of xterm's onData) and go straight to the
+                    // pane's PTY. Direct write (no agent-consent gate) — this is the
+                    // human at the keyboard, not an agent.
+                    Some(Ok(Message::Binary(keys))) => {
+                        if let Ok(s) = String::from_utf8(keys.to_vec()) {
+                            if !s.is_empty() {
+                                let _ = bridge
+                                    .send_command(json!({"type": "Keys", "uid": uid, "keys": s}))
+                                    .await;
+                            }
+                        }
+                    }
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                    _ => {}
+                    _ => {} // Text frames reserved for future control (pong, etc.)
                 }
             }
         }

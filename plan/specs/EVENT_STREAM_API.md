@@ -132,7 +132,14 @@ Server → client:
 
 The client runs its own VT (xterm.js / vte / alacritty_terminal) → pixel-exact colors, cursor, animations, sixel/iTerm images, TUIs. This is the full-fidelity path.
 
-Focused mode is **read-only in v1** (no input injection — use MCP `terminal_keys`).
+**Input (interactive typing):** the client sends keystrokes back over the SAME
+socket as **BINARY** frames — the UTF-8 bytes of xterm's `onData`
+(`term.onData(d => ws.send(new TextEncoder().encode(d)))`). The sidecar writes
+them straight to the pane's PTY as **human input** (a direct write, NOT the
+agent-consent path). So on the wire: server→client BINARY = PTY output + TEXT =
+control; client→server BINARY = keystrokes. (Trust: `/ws/pane` input trusts
+whoever holds the socket — fine on localhost / your own containers; gate behind
+a token via `config.stream.requireToken` if exposing more widely.)
 
 ---
 
@@ -180,7 +187,7 @@ Focused mode is **read-only in v1** (no input injection — use MCP `terminal_ke
 
 ## Out of scope (v1) / future
 
-- Input injection over the stream (use MCP `terminal_keys`).
+- (Done in a later build: focused-stream input — see the Focused section.)
 - Bell/audio events; explicit sixel/iTerm image events (raw PTY already carries them in focused mode).
 - Multi-host aggregation (#138 / #139) — a `/ws/wall` that federates remote sidecars.
 - Per-pane ACL beyond the global token gate.
