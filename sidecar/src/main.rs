@@ -18,6 +18,7 @@ mod perms;
 mod process;
 mod lume_store;
 mod screen;
+mod stream;
 mod util;
 mod settings;
 mod snapshot_image;
@@ -3258,6 +3259,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", axum::routing::get(|| async { "ok" }))
         .route("/api/mcp/hyperia.py", axum::routing::get(get_mcp_python))
         .route("/ws", axum::routing::get(bridge::ws_handler))
+        // Event Stream API — WebSocket fan-out to external apps (see
+        // plan/specs/EVENT_STREAM_API.md). Foundation: connect → hello → snapshot.
+        .route("/ws/wall", axum::routing::get(stream::wall_handler))
+        .route("/ws/pane/{id}", axum::routing::get(stream::pane_handler))
         // Read endpoints
         .route("/api/logs", axum::routing::get(get_logs))
         .route("/api/log", axum::routing::post(post_client_log))
