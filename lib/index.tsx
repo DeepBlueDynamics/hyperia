@@ -21,6 +21,7 @@ import * as uiActions from './actions/ui';
 import * as updaterActions from './actions/updater';
 import AgentToast from './components/agent-toast';
 import ConsentModal from './components/consent-modal';
+import CloseConfirmModal, {showCloseConfirm} from './components/close-confirm-modal';
 import {activeTerminals} from './components/term';
 import WebPaneDialog, {showWebPaneDialog} from './components/web-pane-dialog';
 import HyperContainer from './containers/hyper';
@@ -611,8 +612,17 @@ root.render(
     <WebPaneDialog />
     <AgentToast />
     <ConsentModal />
+    <CloseConfirmModal />
   </Provider>
 );
+
+// #148: main asks us to confirm a window/tab/quit close in-app. ACK immediately
+// (so main cancels its native-dialog fallback), show the styled modal, then
+// reply with the user's choice.
+rpc.on('close-confirm', (req: {id: number; scope: 'window' | 'quit' | 'tab'; names: string[]; tabCount?: number; paneCount?: number}) => {
+  rpc.emit('close-confirm-ack', {id: req.id});
+  showCloseConfirm({...req, answer: (ok: boolean) => rpc.emit('close-confirm-reply', {id: req.id, ok})});
+});
 
 rpc.on('reload', () => {
   plugins.reload();

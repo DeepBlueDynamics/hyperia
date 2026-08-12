@@ -95,6 +95,10 @@ export type MainEvents = {
   }>;
   /** Renderer asks main to confirm closing a tab that has active panes (#148). */
   'confirm-close-tab': {uid: string; names: string[]};
+  /** Renderer confirms the in-app close modal is on screen (cancels native fallback) (#148). */
+  'close-confirm-ack': {id: number};
+  /** Renderer's answer to the in-app close modal (#148). */
+  'close-confirm-reply': {id: number; ok: boolean};
   'permission request': {id: string; requester: string; requesterPane: string; targetPane: string; purpose?: string};
   'permission resolved': {targetPane: string; decision: string; id?: string};
   'agent toast': {id: string; requester: string; action: string};
@@ -188,6 +192,8 @@ export type RendererEvents = {
   'open web pane req': {url?: string};
   /** Main tells the renderer the user confirmed closing this tab (#148). */
   'close-tab-confirmed': {uid: string};
+  /** Main asks the renderer to show the in-app close-confirm modal (#148). */
+  'close-confirm': {id: number; scope: 'window' | 'quit' | 'tab'; names: string[]; tabCount?: number; paneCount?: number};
   'get-layout-state-req': never;
   'restore-layout-state': any;
   'web-pane-zoom-in': {uid: string};

@@ -251,17 +251,124 @@ export function newWindow(
   const rpc = createRPC(window);
   const sessions = new Map<string, Session>();
 
-  // #148: panes running a foreground program, as reported by the renderer via
-  // 'session layout sync'. This is the RELIABLE signal (isTerminalBusy = OSC
-  // "running" OR a detected foreground program / alt-screen TUI) — OSC-only
-  // shellState misses ssh/agent panes whose local shell looks idle. Used to warn
-  // before a whole-window close / app quit silently kills active work.
+  // #148: panes running a foreground program. TWO signals, UNIONED, because
+  // neither alone is complete:
+  //  (1) renderer 'session layout sync' → busyPanes (isTerminalBusy = OSC
+  //      "running" OR an alt-screen TUI). MISSES an ssh pane running an INLINE
+  //      remote agent (antigravity/codex/claude over ssh): the local shell looks
+  //      idle and the agent isn't alt-screen, so the renderer sees nothing.
+  //  (2) the sidecar's AUTHORITATIVE per-pane state (foreground process != shell,
+  //      via OS process inspection) — this DOES see `ssh` running. Polled below.
   let busyPanes: Array<{name: string}> = [];
-  const getActiveShellSessions = (): Array<{name: string}> => busyPanes;
+  let sidecarBusy: Array<{name: string}> = [];
+  const getActiveShellSessions = (): Array<{name: string}> => {
+    const seen = new Set<string>();
+    const out: Array<{name: string}> = [];
+    for (const p of [...busyPanes, ...sidecarBusy]) {
+      if (p.name && !seen.has(p.name)) {
+        seen.add(p.name);
+        out.push(p);
+      }
+    }
+    return out;
+  };
   (window as any).getActiveShellSessions = getActiveShellSessions;
+
+  // Poll the sidecar for THIS window's running panes — the signal the renderer
+  // heuristic can't see (ssh→remote agent). Cheap anonymous GET; every 2s.
+  const pollSidecarBusy = async () => {
+    try {
+      const port = process.env.HYPERIA_PORT || '9800';
+      const res = await fetch(`http://localhost:${port}/api/status`);
+      const data: any = await res.json();
+      const localUids = new Set(sessions.keys());
+      const found: Array<{name: string}> = [];
+      for (const w of data?.windows || []) {
+        for (const t of w?.tabs || []) {
+          for (const p of t?.panes || []) {
+            if (p?.state === 'running' && localUids.has(p.paneId)) {
+              found.push({name: p.name || p.title || p.process || 'a shell'});
+            }
+          }
+        }
+      }
+      sidecarBusy = found;
+    } catch {
+      /* sidecar unreachable → fall back to the renderer signal only */
+    }
+  };
+  const sidecarBusyTimer = setInterval(() => void pollSidecarBusy(), 2000);
+  window.on('closed', () => clearInterval(sidecarBusyTimer));
+
   // Set when the renderer closes this window because the user exited its LAST
   // pane (which already passed the per-pane guard) — main must not re-prompt.
   let skipNextCloseConfirm = false;
+
+  // #148: ask the user to confirm a close via the in-app (styled) modal instead
+  // of a native OS dialog. rpc round-trip: emit 'close-confirm', the renderer
+  // ACKs immediately (so we know the modal is up) then replies with the choice.
+  // FAILSAFE: if no ACK within 1s the modal isn't reachable → native dialog, so
+  // the confirm ALWAYS happens and the close never gets stuck.
+  let closeConfirmSeq = 0;
+  const pendingClose = new Map<number, {finish: (ok: boolean) => void; ackTimer: ReturnType<typeof setTimeout>}>();
+  const confirmCloseModal = (payload: {
+    scope: 'window' | 'quit' | 'tab';
+    names: string[];
+    tabCount?: number;
+    paneCount?: number;
+  }): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if (window.isDestroyed()) {
+        resolve(true);
+        return;
+      }
+      const id = ++closeConfirmSeq;
+      let settled = false;
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        const e = pendingClose.get(id);
+        if (e) clearTimeout(e.ackTimer);
+        pendingClose.delete(id);
+        resolve(ok);
+      };
+      const n = payload.names;
+      const nativeFallback = () => {
+        if (settled || window.isDestroyed()) {
+          finish(true);
+          return;
+        }
+        const verb = payload.scope === 'quit' ? 'Quit' : 'Close';
+        const choice = dialog.showMessageBoxSync(window, {
+          type: 'question',
+          buttons: [payload.scope === 'quit' ? 'Quit' : 'Close window', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          title: 'Active processes running',
+          message:
+            n.length === 0
+              ? 'Close anyway?'
+              : n.length === 1
+                ? `A pane is still running “${n[0]}”.`
+                : `${n.length} panes are still running (${n.join(', ')}).`,
+          detail: `This will stop ${n.length === 1 ? 'it' : 'them'}. ${verb} anyway?`
+        });
+        finish(choice === 0);
+      };
+      const ackTimer = setTimeout(nativeFallback, 1000);
+      pendingClose.set(id, {finish, ackTimer});
+      rpc.emit('close-confirm', {id, scope: payload.scope, names: n, tabCount: payload.tabCount, paneCount: payload.paneCount});
+    });
+  };
+  (window as any).confirmCloseModal = confirmCloseModal;
+  rpc.on('close-confirm-ack', ({id}) => {
+    // Modal is on screen → cancel the native fallback, wait for the user's reply.
+    const e = pendingClose.get(id);
+    if (e) clearTimeout(e.ackTimer);
+  });
+  rpc.on('close-confirm-reply', ({id, ok}) => {
+    pendingClose.get(id)?.finish(ok);
+  });
 
   const updateBackgroundColor = () => {
     const cfg_ = app.plugins.getDecoratedConfig(profileName);
@@ -706,56 +813,29 @@ export function newWindow(
       // Renderer already confirmed at the pane level (last-pane exit).
       skipNextCloseConfirm = false;
     } else {
-      const active = getActiveShellSessions();
-      const tabCount = (window as any).tabCount || 1;
-      const paneCount = (window as any).paneCount || 1;
-      if (active.length > 0) {
-        // #148: a pane is still running something — name it so the human knows
-        // what's about to be killed. Takes priority over the plain count prompt.
-        const names = active.map((a) => a.name);
-        const choice = dialog.showMessageBoxSync(window, {
-          type: 'question',
-          buttons: ['Close window', 'Cancel'],
-          defaultId: 1,
-          cancelId: 1,
-          title: 'Active processes running',
-          message:
-            active.length === 1
-              ? `A pane is still running “${names[0]}”.`
-              : `${active.length} panes are still running (${names.join(', ')}).`,
-          detail:
-            'Closing this window will stop ' +
-            (active.length === 1 ? 'it.' : 'them.') +
-            ' Close anyway?'
-        });
-        if (choice !== 0) {
-          e.preventDefault();
-          return;
+      // Not confirmed yet — decide asynchronously via the in-app modal (which
+      // falls back to a native dialog if the renderer can't answer), then
+      // re-enter (skipNextCloseConfirm) to save layout + destroy.
+      e.preventDefault();
+      void (async () => {
+        const active = getActiveShellSessions();
+        const tabCount = (window as any).tabCount || 1;
+        const paneCount = (window as any).paneCount || 1;
+        let ok = true;
+        if (active.length > 0 || tabCount > 1 || paneCount > 1) {
+          ok = await confirmCloseModal({
+            scope: 'window',
+            names: active.map((a) => a.name),
+            tabCount,
+            paneCount
+          });
         }
-      } else if (tabCount > 1 || paneCount > 1) {
-        const message =
-          tabCount > 1
-            ? `Are you sure you want to close all ${tabCount} tabs?`
-            : `Are you sure you want to close this tab with all ${paneCount} split panes?`;
-        const detail =
-          tabCount > 1
-            ? 'This will close the entire window and terminate all active sessions.'
-            : 'This will close the entire window and terminate all active sessions inside this tab.';
-
-        const choice = dialog.showMessageBoxSync(window, {
-          type: 'question',
-          buttons: ['Yes', 'No'],
-          defaultId: 1,
-          title: 'Confirm Close',
-          message,
-          detail,
-          cancelId: 1
-        });
-        if (choice !== 0) {
-          e.preventDefault();
-          return;
+        if (ok && !window.isDestroyed()) {
+          skipNextCloseConfirm = true;
+          window.close();
         }
-      }
+      })();
+      return;
     }
     e.preventDefault();
     isClosingAndWaitingForSave = true;
@@ -802,25 +882,15 @@ export function newWindow(
     window.close();
   });
   // #148: the renderer wants to close a TAB whose panes are running foreground
-  // programs — show the native confirm here (naming what's running) and echo back
+  // programs — confirm via the in-app modal (native fallback) and echo back
   // 'close-tab-confirmed' if the user proceeds.
   rpc.on('confirm-close-tab', ({uid, names}) => {
-    const list = names && names.length ? names : ['a shell'];
-    const choice = dialog.showMessageBoxSync(window, {
-      type: 'question',
-      buttons: ['Close tab', 'Cancel'],
-      defaultId: 1,
-      cancelId: 1,
-      title: 'Active processes running',
-      message:
-        list.length === 1
-          ? `A pane is still running “${list[0]}”.`
-          : `${list.length} panes are still running (${list.join(', ')}).`,
-      detail: 'Closing this tab will stop ' + (list.length === 1 ? 'it.' : 'them.') + ' Close anyway?'
-    });
-    if (choice === 0) {
-      rpc.emit('close-tab-confirmed', {uid});
-    }
+    void (async () => {
+      const ok = await confirmCloseModal({scope: 'tab', names: names && names.length ? names : []});
+      if (ok) {
+        rpc.emit('close-tab-confirmed', {uid});
+      }
+    })();
   });
   rpc.on('command', (command) => {
     const focusedWindow = BrowserWindow.getFocusedWindow();

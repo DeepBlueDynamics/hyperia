@@ -28,7 +28,7 @@ import type {ChildProcess} from 'child_process';
 import {resolve} from 'path';
 
 // Packages
-import {app, BrowserWindow, Menu, screen, ipcMain, dialog} from 'electron';
+import {app, BrowserWindow, Menu, screen, ipcMain} from 'electron';
 
 // Windows app identity — set FIRST (before app.name/setName, the userData pin, or
 // any window/tray), but ONLY in a packaged build. Critical: in dev, `yarn start`
@@ -731,42 +731,43 @@ app.on('ready', () => {
             }
           }
         }
-        if (running.length > 0) {
-          const parent = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
-          const opts = {
-            type: 'question' as const,
-            buttons: ['Quit', 'Cancel'],
-            defaultId: 1,
-            cancelId: 1,
-            title: 'Active processes running',
-            message:
-              running.length === 1
-                ? `A pane is still running “${running[0]}”.`
-                : `${running.length} panes are still running (${running.join(', ')}).`,
-            detail: 'Quitting Hyperia will stop ' + (running.length === 1 ? 'it.' : 'them.') + ' Quit anyway?'
-          };
-          const choice = parent ? dialog.showMessageBoxSync(parent, opts) : dialog.showMessageBoxSync(opts);
-          if (choice !== 0) {
-            e.preventDefault();
-            return;
+        // Mark quitting BEFORE windows receive 'close' so their close handler
+        // stops preventing close, kill helpers, and force-close windows so the
+        // process actually exits (the "still running" bug otherwise).
+        const teardown = () => {
+          (app as {isQuitting?: boolean}).isQuitting = true;
+          destroyTray();
+          stopBridge();
+          killSidecar();
+          for (const w of BrowserWindow.getAllWindows()) {
+            try {
+              w.destroy();
+            } catch {
+              /* already gone */
+            }
           }
+        };
+        if (running.length === 0) {
+          teardown();
+          return;
         }
-        // Mark quitting BEFORE windows receive 'close' so the window close
-        // handler stops preventing close (otherwise Electron aborts the quit and
-        // the app + helpers + stickies linger — the "still running" bug).
-        (app as {isQuitting?: boolean}).isQuitting = true;
-        destroyTray();
-        stopBridge();
-        killSidecar();
-        // Failsafe: force-close any remaining windows (incl. sticky-note windows)
-        // so the process actually exits and the installer's running-check passes.
-        for (const w of BrowserWindow.getAllWindows()) {
-          try {
-            w.destroy();
-          } catch {
-            /* already gone */
+        // Busy → confirm via the focused window's in-app modal (the native-dialog
+        // fallback lives inside confirmCloseModal). Hold the quit until answered.
+        e.preventDefault();
+        const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+        const confirmFn = (win as any)?.confirmCloseModal as undefined | ((p: {scope: string; names: string[]}) => Promise<boolean>);
+        if (!win || typeof confirmFn !== 'function') {
+          teardown();
+          app.quit();
+          return;
+        }
+        void confirmFn({scope: 'quit', names: running}).then((ok) => {
+          if (ok) {
+            teardown();
+            app.quit();
           }
-        }
+          // else: user cancelled — stay open (isQuitting stays false).
+        });
       });
 
       const makeMenu = () => {
