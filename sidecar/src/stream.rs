@@ -1,81 +1,41 @@
 //! Event Stream API — WebSocket fan-out of terminal state to external apps.
 //!
 //! Two modes (full contract: `plan/specs/EVENT_STREAM_API.md`):
-//!   - `/ws/wall`       — every pane at once (overview / 3D monitor wall).
-//!   - `/ws/pane/{id}`  — one pane, full fidelity (walk-up deep view).
+//!   - `/ws/wall`       — every pane at once. Sidecar-rendered, COLORIZED cell
+//!     grid: a `frame` keyframe then row `delta`s (JSON), poll-coalesced to fps.
+//!     Cheap overview for the 3D monitor wall; the client just draws cells.
+//!   - `/ws/pane/{id}`  — one pane, FULL FIDELITY. Raw PTY bytes as BINARY frames,
+//!     seeded with the current screen. Feed straight into xterm.js (or any vt100)
+//!     for pixel-exact colors/TUIs/cursor/animation.
 //!
-//! This is the FOUNDATION (spec build-order task 1): the [`StreamHub`] fan-out
-//! types + connectable handlers that send `hello` and a live snapshot. The live
-//! delta / raw-byte bodies (tasks 2–6: ingest hooks, grid diffs, raw-ring replay)
-//! are layered on per the spec — deliberately kept OUT of the already-large
-//! `bridge.rs`.
+//! Wall is poll-based and lives entirely here (bridge.rs hot path untouched): a
+//! per-connection timer dumps only panes that emitted output since the last tick
+//! (gated on `SessionInfo.last_output_at`) and diffs against the connection's OWN
+//! cache, so multiple viewers stay correct. Focused rides the existing per-pane
+//! raw-byte fan-out (`Bridge::subscribe_output`).
 
-use std::time::Duration;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{Path, State, WebSocketUpgrade};
+use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use futures::{SinkExt, StreamExt};
-use tokio::sync::broadcast;
+use serde_json::json;
 
 use crate::bridge::Bridge;
+use crate::screen::{CellAttr, ScreenDump, ScreenLine};
 
-/// Wire protocol version advertised in `hello`. Bump on breaking changes.
 const PROTO_VERSION: u32 = 1;
 const HEARTBEAT: Duration = Duration::from_secs(15);
-
-/// One terminal event, fanned out to every connected stream client. Published by
-/// the bridge ingest path and consumed by the per-connection tasks below.
-#[allow(dead_code)] // publishers/consumers wired per EVENT_STREAM_API.md build order
-#[derive(Clone, Debug)]
-pub enum StreamEvent {
-    PaneRegistered { uid: String },
-    PaneData { uid: String, bytes: Vec<u8> },
-    PaneResized { uid: String, cols: u16, rows: u16 },
-    PaneRemoved { uid: String },
-    PaneState { uid: String, state: String, app: Option<String>, cwd: String },
-    TopologyChanged,
-}
-
-/// Broadcast fan-out. One per sidecar (held on the bridge); each stream
-/// connection `subscribe()`s. A slow client lags its own receiver without
-/// stalling ingest or other clients.
-#[allow(dead_code)] // held on Bridge + published-to per EVENT_STREAM_API.md
-#[derive(Clone)]
-pub struct StreamHub {
-    tx: broadcast::Sender<StreamEvent>,
-}
-
-#[allow(dead_code)]
-impl StreamHub {
-    pub fn new() -> Self {
-        let (tx, _rx) = broadcast::channel(1024);
-        Self { tx }
-    }
-    pub fn subscribe(&self) -> broadcast::Receiver<StreamEvent> {
-        self.tx.subscribe()
-    }
-    /// Non-blocking publish; ignores the "no receivers" case.
-    pub fn publish(&self, ev: StreamEvent) {
-        let _ = self.tx.send(ev);
-    }
-}
-
-impl Default for StreamHub {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+const DEFAULT_FPS: u64 = 30;
 
 // --- helpers ---------------------------------------------------------------
 
 fn hello(mode: &str) -> String {
-    serde_json::json!({
-        "t": "hello",
-        "v": PROTO_VERSION,
-        "mode": mode,
-        "serverVersion": env!("CARGO_PKG_VERSION"),
-        "heartbeatMs": HEARTBEAT.as_millis() as u64,
+    json!({
+        "t": "hello", "v": PROTO_VERSION, "mode": mode,
+        "serverVersion": env!("CARGO_PKG_VERSION"), "heartbeatMs": HEARTBEAT.as_millis() as u64,
     })
     .to_string()
 }
@@ -84,57 +44,176 @@ async fn send_text(tx: &mut futures::stream::SplitSink<WebSocket, Message>, s: S
     tx.send(Message::Text(s.into())).await.is_ok()
 }
 
-/// Flat snapshot of every pane. The wall handler ships this on connect; dev
-/// agents replace it with the full `topology` tree (reuse terminal_status's
-/// builder) + live deltas per the spec.
+/// Map a vt100 Debug-formatted color ("Default" | "Idx(4)" | "Rgb(255, 0, 0)")
+/// to the stable wire form ("default" | "idx:4" | "#ff0000").
+fn normalize_color(dbg: &str) -> String {
+    if dbg == "Default" {
+        return "default".into();
+    }
+    if let Some(rest) = dbg.strip_prefix("Idx(").and_then(|s| s.strip_suffix(')')) {
+        return format!("idx:{}", rest.trim());
+    }
+    if let Some(rest) = dbg.strip_prefix("Rgb(").and_then(|s| s.strip_suffix(')')) {
+        let parts: Vec<u8> = rest.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+        if parts.len() == 3 {
+            return format!("#{:02x}{:02x}{:02x}", parts[0], parts[1], parts[2]);
+        }
+    }
+    "default".into()
+}
+
+fn attr_bits(a: &CellAttr) -> u32 {
+    (a.bold as u32) | ((a.italic as u32) << 1) | ((a.underline as u32) << 2)
+}
+
+/// One row → `{y, cells:[[char, fg, bg, attrs], ...]}`, trailing blanks trimmed
+/// (ScreenLine.text is already trimmed by screen_dump).
+fn row_json(line: &ScreenLine) -> serde_json::Value {
+    let cells: Vec<_> = line
+        .text
+        .chars()
+        .enumerate()
+        .map(|(i, ch)| {
+            let a = line.attrs.get(i).cloned().unwrap_or_default();
+            json!([ch.to_string(), normalize_color(&a.fg), normalize_color(&a.bg), attr_bits(&a)])
+        })
+        .collect();
+    json!({ "y": line.row, "cells": cells })
+}
+
+fn cursor_json(d: &ScreenDump) -> serde_json::Value {
+    json!({ "x": d.cursor.col, "y": d.cursor.row, "visible": true })
+}
+
+fn frame_json(uid: &str, d: &ScreenDump) -> String {
+    let rows: Vec<_> = d.lines.iter().map(row_json).collect();
+    json!({
+        "t": "frame", "paneId": uid, "cols": d.cols, "rows": d.rows,
+        "cursor": cursor_json(d), "rows_data": rows,
+    })
+    .to_string()
+}
+
+fn delta_json(uid: &str, d: &ScreenDump, changed: &[u16]) -> String {
+    let rows: Vec<_> = changed
+        .iter()
+        .filter_map(|&y| d.lines.get(y as usize))
+        .map(row_json)
+        .collect();
+    json!({ "t": "delta", "paneId": uid, "cursor": cursor_json(d), "rows_data": rows }).to_string()
+}
+
+/// Rows whose text OR attributes changed since the previous dump.
+fn changed_rows(cur: &ScreenDump, prev: &ScreenDump) -> Vec<u16> {
+    cur.lines
+        .iter()
+        .zip(prev.lines.iter())
+        .filter_map(|(c, p)| if c != p { Some(c.row) } else { None })
+        .collect()
+}
+
+struct CacheEntry {
+    last_output: Option<Instant>,
+    rows: u16,
+    cols: u16,
+    dump: ScreenDump,
+}
+
+fn fps_from(params: &HashMap<String, String>) -> u64 {
+    params
+        .get("fps")
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_FPS)
+        .clamp(1, 60)
+}
+
+/// Flat snapshot of every pane (wall connect). window/tab grouping lets the 3D
+/// client place each pane on the right monitor.
 async fn panes_snapshot(bridge: &Bridge) -> Vec<serde_json::Value> {
     let sessions = bridge.sessions().await;
     sessions
         .iter()
         .map(|(uid, s)| {
             let title = if s.title.is_empty() { s.shell_name.clone() } else { s.title.clone() };
-            serde_json::json!({
-                "paneId": uid,
-                "title": title,
-                "shellName": s.shell_name,
-                "cols": s.cols,
-                "rows": s.rows,
-                "windowId": s.window_id,
-                "tabId": s.root_tab_uid,
-                "tabName": s.tab_name,
-                "active": s.pane_active,
-                "tabActive": s.tab_active,
-                "state": s.shell_state,
-                "cwd": s.cwd,
+            json!({
+                "paneId": uid, "title": title, "shellName": s.shell_name,
+                "cols": s.cols, "rows": s.rows, "windowId": s.window_id,
+                "tabId": s.root_tab_uid, "tabName": s.tab_name,
+                "active": s.pane_active, "tabActive": s.tab_active,
+                "state": s.shell_state, "cwd": s.cwd,
             })
         })
         .collect()
 }
 
-// --- wall mode: /ws/wall ---------------------------------------------------
+// --- wall mode: /ws/wall (colorized grid keyframe + deltas) ----------------
 
-pub async fn wall_handler(ws: WebSocketUpgrade, State(state): State<crate::AppState>) -> impl IntoResponse {
-    let bridge = state.bridge;
-    ws.on_upgrade(move |socket| wall_loop(socket, bridge))
-}
-
-async fn wall_loop(socket: WebSocket, bridge: Bridge) {
+async fn wall_loop(socket: WebSocket, bridge: Bridge, fps: u64) {
     let (mut tx, mut rx) = socket.split();
     if !send_text(&mut tx, hello("wall")).await {
         return;
     }
     let panes = panes_snapshot(&bridge).await;
-    let snapshot = serde_json::json!({"t": "panes", "v": PROTO_VERSION, "panes": panes}).to_string();
-    if !send_text(&mut tx, snapshot).await {
+    if !send_text(&mut tx, json!({"t": "panes", "v": PROTO_VERSION, "panes": panes}).to_string()).await {
         return;
     }
-    // Keepalive until the client closes. Live deltas (subscribe to StreamHub +
-    // ScreenBuffer::diff() coalescing) are wired here per the spec.
-    let mut ticker = tokio::time::interval(HEARTBEAT);
-    ticker.tick().await; // consume the immediate first tick
+
+    let mut cache: HashMap<String, CacheEntry> = HashMap::new();
+    let mut ticker = tokio::time::interval(Duration::from_millis(1000 / fps));
+    let mut hb = tokio::time::interval(HEARTBEAT);
+    hb.tick().await; // drop the immediate heartbeat tick
+
     loop {
         tokio::select! {
             _ = ticker.tick() => {
+                // Snapshot phase: hold the sessions lock only long enough to dump
+                // the panes that actually changed, then release before sending.
+                let (updates, removed): (Vec<(String, ScreenDump, Option<Instant>)>, Vec<String>) = {
+                    let sessions = bridge.sessions().await;
+                    let mut updates = Vec::new();
+                    for (uid, info) in sessions.iter() {
+                        let need = match cache.get(uid) {
+                            None => true,
+                            Some(c) => info.last_output_at != c.last_output || info.rows != c.rows || info.cols != c.cols,
+                        };
+                        if need {
+                            updates.push((uid.clone(), info.screen.screen_dump(), info.last_output_at));
+                        }
+                    }
+                    let live: HashSet<&String> = sessions.keys().collect();
+                    let removed: Vec<String> = cache.keys().filter(|k| !live.contains(*k)).cloned().collect();
+                    (updates, removed)
+                };
+
+                for uid in removed {
+                    cache.remove(&uid);
+                    if !send_text(&mut tx, json!({"t":"topo","op":"remove","paneId":uid}).to_string()).await {
+                        return;
+                    }
+                }
+                for (uid, dump, last_output) in updates {
+                    let dims_changed = cache
+                        .get(&uid)
+                        .map(|c| c.rows != dump.rows || c.cols != dump.cols)
+                        .unwrap_or(false);
+                    let is_new = !cache.contains_key(&uid);
+                    let ok = if is_new || dims_changed {
+                        send_text(&mut tx, frame_json(&uid, &dump)).await
+                    } else {
+                        let changed = changed_rows(&dump, &cache[&uid].dump);
+                        if changed.is_empty() {
+                            true
+                        } else {
+                            send_text(&mut tx, delta_json(&uid, &dump, &changed)).await
+                        }
+                    };
+                    if !ok {
+                        return;
+                    }
+                    cache.insert(uid, CacheEntry { last_output, rows: dump.rows, cols: dump.cols, dump });
+                }
+            }
+            _ = hb.tick() => {
                 if !send_text(&mut tx, r#"{"t":"ping"}"#.to_string()).await { break; }
             }
             msg = rx.next() => {
@@ -147,7 +226,85 @@ async fn wall_loop(socket: WebSocket, bridge: Bridge) {
     }
 }
 
-// --- focused mode: /ws/pane/{id} -------------------------------------------
+// --- focused mode: /ws/pane/{id} (raw PTY binary, xterm.js-ready) -----------
+
+async fn pane_raw_loop(socket: WebSocket, bridge: Bridge, pane: String) {
+    let (mut tx, mut rx) = socket.split();
+    if !send_text(&mut tx, hello("focused")).await {
+        return;
+    }
+
+    // Resolve the pane prefix → (uid, meta json, boot seed bytes) under one lock.
+    let resolved = {
+        let sessions = bridge.sessions().await;
+        sessions
+            .iter()
+            .find(|(uid, _)| uid.as_str() == pane.as_str() || uid.starts_with(pane.as_str()))
+            .map(|(uid, s)| {
+                let title = if s.title.is_empty() { s.shell_name.clone() } else { s.title.clone() };
+                (
+                    uid.clone(),
+                    json!({"t":"meta","paneId":uid,"title":title,"cols":s.cols,"rows":s.rows,"state":s.shell_state,"cwd":s.cwd}).to_string(),
+                    s.screen.contents_formatted(),
+                )
+            })
+    };
+    let (uid, meta, seed) = match resolved {
+        Some(v) => v,
+        None => {
+            let _ = send_text(&mut tx, json!({"t":"error","code":"no-such-pane","message":pane}).to_string()).await;
+            return;
+        }
+    };
+
+    if !send_text(&mut tx, meta).await {
+        return;
+    }
+    // Boot: text snapshot (compat fallback) + a BINARY seed that reproduces the
+    // current screen for a fresh xterm.js, then `replay-end`.
+    let text = bridge.get_screen_text_by_uid(&uid).await;
+    let _ = send_text(&mut tx, json!({"t":"screen-snapshot","paneId":uid,"text":text}).to_string()).await;
+    if !seed.is_empty() && tx.send(Message::Binary(seed.into())).await.is_err() {
+        return;
+    }
+    let _ = send_text(&mut tx, r#"{"t":"replay-end"}"#.to_string()).await;
+
+    // Live raw PTY bytes as binary frames.
+    let mut out = bridge.subscribe_output(&uid).await;
+    let mut hb = tokio::time::interval(HEARTBEAT);
+    hb.tick().await;
+    loop {
+        tokio::select! {
+            chunk = out.recv() => {
+                match chunk {
+                    Some(bytes) => { if tx.send(Message::Binary(bytes.into())).await.is_err() { break; } }
+                    None => break, // pane gone
+                }
+            }
+            _ = hb.tick() => {
+                if !send_text(&mut tx, r#"{"t":"ping"}"#.to_string()).await { break; }
+            }
+            msg = rx.next() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+// --- axum handlers ---------------------------------------------------------
+
+pub async fn wall_handler(
+    ws: WebSocketUpgrade,
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<crate::AppState>,
+) -> impl IntoResponse {
+    let bridge = state.bridge;
+    let fps = fps_from(&params);
+    ws.on_upgrade(move |socket| wall_loop(socket, bridge, fps))
+}
 
 pub async fn pane_handler(
     ws: WebSocketUpgrade,
@@ -155,63 +312,5 @@ pub async fn pane_handler(
     State(state): State<crate::AppState>,
 ) -> impl IntoResponse {
     let bridge = state.bridge;
-    ws.on_upgrade(move |socket| pane_loop(socket, bridge, pane))
-}
-
-async fn pane_loop(socket: WebSocket, bridge: Bridge, pane: String) {
-    let (mut tx, mut rx) = socket.split();
-    if !send_text(&mut tx, hello("focused")).await {
-        return;
-    }
-    // Resolve the pane prefix → uid + meta (no await while the lock is held).
-    let resolved = {
-        let sessions = bridge.sessions().await;
-        sessions
-            .iter()
-            .find(|(uid, _)| uid.as_str() == pane || uid.starts_with(&pane))
-            .map(|(uid, s)| {
-                let title = if s.title.is_empty() { s.shell_name.clone() } else { s.title.clone() };
-                (
-                    uid.clone(),
-                    serde_json::json!({
-                        "t": "meta", "paneId": uid, "title": title,
-                        "cols": s.cols, "rows": s.rows, "state": s.shell_state, "cwd": s.cwd,
-                    })
-                    .to_string(),
-                )
-            })
-    };
-    let uid = match resolved {
-        Some((uid, meta)) => {
-            if !send_text(&mut tx, meta).await {
-                return;
-            }
-            uid
-        }
-        None => {
-            let err = serde_json::json!({"t":"error","code":"no-such-pane","message":pane}).to_string();
-            let _ = send_text(&mut tx, err).await;
-            return;
-        }
-    };
-    // Scaffold: current screen-text snapshot. Dev agents replace with raw-ring
-    // replay (binary) + live raw PTY bytes per the spec.
-    let screen = bridge.get_screen_text_by_uid(&uid).await;
-    let snap = serde_json::json!({"t":"screen-snapshot","paneId":uid,"text":screen}).to_string();
-    let _ = send_text(&mut tx, snap).await;
-    let mut ticker = tokio::time::interval(HEARTBEAT);
-    ticker.tick().await;
-    loop {
-        tokio::select! {
-            _ = ticker.tick() => {
-                if !send_text(&mut tx, r#"{"t":"ping"}"#.to_string()).await { break; }
-            }
-            msg = rx.next() => {
-                match msg {
-                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                    _ => {}
-                }
-            }
-        }
-    }
+    ws.on_upgrade(move |socket| pane_raw_loop(socket, bridge, pane))
 }

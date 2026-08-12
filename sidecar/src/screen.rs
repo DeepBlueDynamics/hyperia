@@ -28,6 +28,12 @@ impl ScreenBuffer {
         (screen.size().0, screen.size().1)
     }
 
+    /// Bytes that reproduce the CURRENT visible screen when fed to a fresh vt100
+    /// — seeds a raw-PTY stream client (xterm.js) so it boots showing the screen.
+    pub fn contents_formatted(&self) -> Vec<u8> {
+        self.parser.screen().contents_formatted()
+    }
+
     /// Dump the current screen state
     pub fn screen_dump(&self) -> ScreenDump {
         let screen = self.parser.screen();
@@ -155,14 +161,14 @@ pub struct CursorPosition {
     pub col: u16,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ScreenLine {
     pub row: u16,
     pub text: String,
     pub attrs: Vec<CellAttr>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[allow(dead_code)]
 pub struct CellAttr {
     pub fg: String,

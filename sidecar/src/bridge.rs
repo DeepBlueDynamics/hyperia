@@ -1021,6 +1021,15 @@ impl Bridge {
     }
 
     /// Send keys to a session and collect PTY output until `quiet_ms` of silence.
+    /// Subscribe to a pane's raw PTY byte stream: an unbounded receiver fed every
+    /// SessionData chunk for `uid`. The dead sender is auto-pruned on the next
+    /// chunk once the receiver drops. Powers the /ws/pane raw stream.
+    pub async fn subscribe_output(&self, uid: &str) -> mpsc::UnboundedReceiver<Vec<u8>> {
+        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        self.inner.output_subs.lock().await.entry(uid.to_string()).or_default().push(tx);
+        rx
+    }
+
     /// Returns the raw text that came back, or falls back to a screen snapshot.
     pub async fn type_and_collect(&self, uid: &str, keys: &str, quiet_ms: u64) -> String {
         let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
