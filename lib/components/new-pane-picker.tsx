@@ -597,6 +597,12 @@ export interface NewPanePickerProps {
   // session and nothing (e.g. the custom-profile modal) covers the picker.
   hotkeysEnabled?: boolean;
 
+  // Mark THIS pane the active session. A picker pane has no xterm to focus, so
+  // clicking it can't activate the pane the way a shell pane does — without this
+  // a second picker's W/S/A hotkeys stay dead until it's activated some other
+  // way. Called on mousedown anywhere in the picker.
+  onActivate?: () => void;
+
   // Callbacks into Term.
   onUrlChange: (value: string) => void;
   onSubmitUrl: (url?: string) => void;
@@ -1116,6 +1122,17 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         // Content pinned to the TOP (no vertical centering) and the whole pane
         // scrolls when it's too short to show everything.
         style={{zoom: pickerZoom, overflowY: 'auto', outline: 'none'}}
+        // Clicking anywhere in the picker makes THIS pane the active session
+        // (capture phase, so it wins even if a child stops propagation) and
+        // pulls keyboard focus onto the picker root — so W/S/A work in whichever
+        // picker you click, not just the one that won activation on mount.
+        onMouseDownCapture={(e) => {
+          this.props.onActivate?.();
+          const t = e.target as HTMLElement | null;
+          const typing =
+            !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+          if (!typing) this.rootRef.current?.focus({preventScroll: true});
+        }}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();

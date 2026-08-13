@@ -3192,6 +3192,10 @@ export default class Term extends React.PureComponent<
             // W/S/A quick keys only for the active pane, and not while the
             // custom-profile modal covers the picker.
             hotkeysEnabled={this.props.isTermActive && !this.state.isCustomModalOpen}
+            // A picker pane has no xterm to focus, so clicking it can't activate
+            // the pane like a shell does — wire the click straight to onActive so
+            // a second picker's hotkeys come alive when you click into it.
+            onActivate={() => this.props.onActive?.()}
             onUrlChange={(v) => this.setState({urlInput: v, urlError: ''})}
             onSubmitUrl={(url) => this.submitUrl(url)}
             onTriggerGlimmer={() => this.triggerPickerGlimmer()}
