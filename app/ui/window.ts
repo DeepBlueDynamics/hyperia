@@ -36,7 +36,7 @@ import {
 } from '../bridge';
 import {execCommand} from '../commands';
 import {getDefaultProfile} from '../config';
-import {initWebPaneManager, destroyPanesForWindow} from '../web-pane-manager';
+import {initWebPaneManager, destroyPanesForWindow, setWindowWebPanesSuppressed} from '../web-pane-manager';
 import {icon, homeDirectory, cfgPath} from '../config/paths';
 import {getAppIcon} from '../utils/icon';
 import fetchNotifications from '../notifications';
@@ -324,9 +324,15 @@ export function newWindow(
       }
       const id = ++closeConfirmSeq;
       let settled = false;
+      // Native web-pane views paint ABOVE the renderer DOM, so a crisp web pane
+      // would cover the (DOM) close-confirm modal — the terminal dims but the
+      // modal is hidden behind the page. Pull the window's web views off-screen
+      // while the modal is up; restore them when the choice is made.
+      if (!window.isDestroyed()) setWindowWebPanesSuppressed(window, true);
       const finish = (ok: boolean) => {
         if (settled) return;
         settled = true;
+        if (!window.isDestroyed()) setWindowWebPanesSuppressed(window, false);
         const e = pendingClose.get(id);
         if (e) clearTimeout(e.ackTimer);
         pendingClose.delete(id);

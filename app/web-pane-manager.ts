@@ -63,6 +63,31 @@ interface WebPaneEntry {
 
 // Keyed by pane uid (unique across windows).
 const panes = new Map<string, WebPaneEntry>();
+
+// Windows where every native web-pane view is force-hidden regardless of the
+// renderer's desired visibility. Native WebContentsViews always paint ABOVE the
+// renderer DOM, so a DOM overlay (the close-confirm modal) would be occluded by
+// a crisp web pane sitting on top of it. While a window is suppressed we pull
+// its web views off the screen so the DOM modal is visible and clickable.
+const suppressedWins = new Set<number>();
+
+// The visibility the native view should actually have right now: the renderer's
+// desired state, unless the whole window is suppressed (modal up).
+function nativeVisible(entry: WebPaneEntry): boolean {
+  return entry.visible && !suppressedWins.has(entry.win.id);
+}
+
+// Force-hide (or restore) all web panes in a window — used to clear a native
+// view out from over a DOM overlay (e.g. the close-confirm modal).
+export function setWindowWebPanesSuppressed(win: BrowserWindow, suppressed: boolean): void {
+  if (suppressed) suppressedWins.add(win.id);
+  else suppressedWins.delete(win.id);
+  for (const entry of panes.values()) {
+    if (entry.win !== win) continue;
+    if (!entry.view.webContents.isDestroyed()) entry.view.setVisible(nativeVisible(entry));
+    if (entry.devtools) entry.devtools.setVisible(nativeVisible(entry));
+  }
+}
 let configureSession: ConfigureSession | null = null;
 let sharedSession: Session | null = null;
 
@@ -317,7 +342,7 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
       entry.url = url;
       void entry.view.webContents.loadURL(url).catch(() => {});
     }
-    entry.view.setVisible(entry.visible);
+    entry.view.setVisible(nativeVisible(entry));
     return;
   }
   // Reparent with a NEW group uid (some layout collapses re-key the group):
@@ -329,7 +354,7 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
       entry.destroyTimer = undefined;
       panes.delete(oldUid);
       panes.set(uid, entry);
-      entry.view.setVisible(true);
+      entry.view.setVisible(nativeVisible(entry));
       return;
     }
   }
@@ -406,7 +431,7 @@ function openInspector(uid: string, x: number, y: number) {
     entry.view.webContents.setDevToolsWebContents(dt.webContents);
     entry.view.webContents.openDevTools();
     positionViews(entry);
-    dt.setVisible(entry.visible);
+    dt.setVisible(nativeVisible(entry));
     try {
       entry.view.webContents.inspectElement(x, y);
     } catch {
@@ -481,6 +506,7 @@ function destroyPane(uid: string, immediate = false) {
 
 // Tear down every pane belonging to a window (call on window close).
 export function destroyPanesForWindow(win: BrowserWindow) {
+  suppressedWins.delete(win.id);
   for (const [uid, entry] of panes) {
     if (entry.win === win) destroyPane(uid, true);
   }
@@ -545,7 +571,7 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
       } else if (!entry.visible && wantVisible) {
         entry.visible = true;
         const token = entry.swapToken = (entry.swapToken ?? 0) + 1;
-        entry.view.setVisible(true);
+        entry.view.setVisible(nativeVisible(entry));
         // Keep the still up a couple frames while the native view re-composites,
         // THEN clear it. Clearing in the same tick as showing removed the <img>
         // a frame before the view painted, so the pane bg flashed through when
@@ -556,15 +582,16 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
           }
         }, SWAP_BRIDGE_MS);
       } else {
-        entry.view.setVisible(wantVisible);
+        entry.view.setVisible(wantVisible && !suppressedWins.has(entry.win.id));
       }
       // The docked inspector tracks the page's visibility.
-      if (entry.devtools) entry.devtools.setVisible(entry.visible);
+      if (entry.devtools) entry.devtools.setVisible(nativeVisible(entry));
     }
   );
 
   ipcMain.on('web-pane:set-visible', (_e, {uid, visible}: {uid: string; visible: boolean}) => {
-    panes.get(uid)?.view.setVisible(!!visible);
+    const entry = panes.get(uid);
+    if (entry) entry.view.setVisible(!!visible && !suppressedWins.has(entry.win.id));
   });
 
   ipcMain.on('web-pane:destroy', (_e, {uid}: {uid: string}) => destroyPane(uid));
