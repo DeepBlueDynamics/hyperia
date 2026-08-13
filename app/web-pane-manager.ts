@@ -120,7 +120,15 @@ function liveUidOf(wc: WebContents, fallback: string): string {
 
 function wireWebContents(initialUid: string, wc: WebContents) {
   const u = () => liveUidOf(wc, initialUid);
-  wc.on('did-start-loading', () => pushState(u(), {loading: true, error: null}));
+  // When a webContents `focus` lands right after a load START, it's LOAD-induced
+  // (the page finished loading — e.g. an AGENT navigated the pane), NOT a human
+  // click — so it must NOT steal the human's view. Only genuine clicks move
+  // focus, unless config.webPaneFocusOnNavigate opts in. (focus-never-steal)
+  let lastNavAt = 0;
+  wc.on('did-start-loading', () => {
+    lastNavAt = Date.now();
+    pushState(u(), {loading: true, error: null});
+  });
   wc.on('did-stop-loading', () => pushState(u(), {loading: false, ...navState(wc)}));
   wc.on('did-navigate', () => pushState(u(), {...navState(wc)}));
   wc.on('did-navigate-in-page', (_e, _url, isMainFrame) => {
@@ -146,7 +154,14 @@ function wireWebContents(initialUid: string, wc: WebContents) {
   wc.on('dom-ready', () => { const uid = u(); entrySend(uid, 'web-pane:dom-ready', {uid}); });
   // Clicking into the page focuses its webContents — tell the renderer so it can
   // activate the pane (and dismiss the URL navigator).
-  wc.on('focus', () => { const uid = u(); entrySend(uid, 'web-pane:focus', {uid}); });
+  wc.on('focus', () => {
+    const uid = u();
+    // A genuine click activates (moves the view here); a focus that lands right
+    // after a load START is agent/nav-induced and must NOT — unless opted in.
+    const fromNav = Date.now() - lastNavAt < 900;
+    const focusSteal = !!(getConfig() as unknown as {webPaneFocusOnNavigate?: boolean}).webPaneFocusOnNavigate;
+    entrySend(uid, 'web-pane:focus', {uid, activate: !fromNav || focusSteal});
+  });
   // Zoom shortcuts pressed while the PAGE has focus never reach the renderer's
   // window (the native view captures them), so intercept Ctrl/Cmd +/-/0 here and
   // route to the renderer's zoom handlers (which own the zoom-factor state).

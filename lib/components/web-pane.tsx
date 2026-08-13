@@ -1388,9 +1388,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     // Clicking into the page focuses the native view — activate this pane and
     // dismiss the URL navigator (the DOM can't see clicks inside the view).
-    this._focusHandler = (_e: any, payload: {uid: string}) => {
+    this._focusHandler = (_e: any, payload: {uid: string; activate?: boolean}) => {
       if (payload?.uid !== this.props.groupUid) return;
-      this.props.onActive?.();
+      // Only move the human's view here when main says it was a genuine click
+      // (activate !== false). A nav-induced focus from an AGENT navigating this
+      // pane is suppressed so it can't drag the human over. (focus-never-steal)
+      if (payload.activate !== false) this.props.onActive?.();
       if (this.state.isUrlNavigatorOpen) this.setState({isUrlNavigatorOpen: false});
     };
     ipcRenderer.on('web-pane:focus', this._focusHandler);

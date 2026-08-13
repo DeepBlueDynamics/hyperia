@@ -146,6 +146,13 @@ type profileConfigOptions = {
    */
   webPaneLinkTarget?: 'tab' | 'split-right' | 'split-down';
   /**
+   * When a web pane NAVIGATES (a page loads), should Hyperia move your view to
+   * it? Default false — only YOUR clicks (links, URL bar) switch you to a pane;
+   * an AGENT navigating a web pane won't drag you over it. Set true for the
+   * old "explicit steal focus on navigate" behavior.
+   */
+  webPaneFocusOnNavigate?: boolean;
+  /**
    * set to true to enable screen reading apps (like NVDA) to read the contents of the terminal
    */
   screenReaderMode: boolean;
