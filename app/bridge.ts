@@ -13,6 +13,7 @@ import isDev from 'electron-is-dev';
 import WebSocket from 'ws';
 
 import {getProfiles, getConfig} from './config';
+import {capturePaneJpeg} from './web-pane-manager';
 import type Session from './session';
 import {
   createStickyNote,
@@ -394,6 +395,19 @@ function handleCommand(msg: Record<string, unknown>) {
 
     case 'Screen': {
       sendResult(seq, 'Screen reads handled sidecar-side');
+      break;
+    }
+
+    case 'CapturePane': {
+      // Rendered-pixel capture for the /ws/pixels stream (web panes have no PTY).
+      // Capture at the client-requested w×h so we ship exactly the texture size.
+      const uid = msg.uid as string;
+      const w = Number(msg.w) || 0;
+      const h = Number(msg.h) || 0;
+      const quality = Number(msg.quality) || 60;
+      void capturePaneJpeg(uid, w, h, quality)
+        .then((b64) => sendResult(seq, b64))
+        .catch(() => sendResult(seq, ''));
       break;
     }
 

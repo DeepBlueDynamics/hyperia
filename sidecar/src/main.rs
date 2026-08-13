@@ -3263,6 +3263,7 @@ async fn main() -> anyhow::Result<()> {
         // plan/specs/EVENT_STREAM_API.md). Foundation: connect → hello → snapshot.
         .route("/ws/wall", axum::routing::get(stream::wall_handler))
         .route("/ws/pane/{id}", axum::routing::get(stream::pane_handler))
+        .route("/ws/pixels/{id}", axum::routing::get(stream::pixels_handler))
         // Read endpoints
         .route("/api/logs", axum::routing::get(get_logs))
         .route("/api/log", axum::routing::post(post_client_log))

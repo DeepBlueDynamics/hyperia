@@ -82,6 +82,27 @@ function pushState(uid: string, partial: Record<string, unknown>) {
   entry.win.webContents.send('web-pane:state', {uid, ...partial});
 }
 
+// Capture a web pane's CURRENT rendered frame as base64 JPEG at the requested
+// size. Web panes have no PTY, so this is the only way to put one on a 3D
+// monitor — it powers the /ws/pixels stream (the client requests w×h so we
+// render at exactly the texture resolution; no wasted pixels). Front-facing/flat
+// — the 3D scene applies the monitor's tilt via texture mapping. Returns '' when
+// the pane isn't a live web pane or capture fails.
+export async function capturePaneJpeg(uid: string, w: number, h: number, quality = 60): Promise<string> {
+  const entry = panes.get(uid);
+  if (!entry || entry.view.webContents.isDestroyed()) return '';
+  try {
+    let img = await entry.view.webContents.capturePage();
+    if (img.isEmpty()) return '';
+    if (w > 0 && h > 0) {
+      img = img.resize({width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)), quality: 'good'});
+    }
+    return img.toJPEG(Math.max(1, Math.min(100, Math.round(quality)))).toString('base64');
+  } catch {
+    return '';
+  }
+}
+
 function navState(wc: WebContents) {
   return {url: wc.getURL(), canGoBack: wc.navigationHistory.canGoBack(), canGoForward: wc.navigationHistory.canGoForward()};
 }

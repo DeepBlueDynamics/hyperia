@@ -15,6 +15,7 @@
 //! raw-byte fan-out (`Bridge::subscribe_output`).
 
 use std::collections::{HashMap, HashSet};
+use std::hash::Hasher;
 use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket};
@@ -346,4 +347,81 @@ pub async fn pane_handler(
 ) -> impl IntoResponse {
     let bridge = state.bridge;
     ws.on_upgrade(move |socket| pane_raw_loop(socket, bridge, pane))
+}
+
+// --- pixel mode: /ws/pixels/{id} (rendered frames — for WEB panes) ----------
+//
+// Web panes have no PTY, so the only way to put one on a 3D monitor is its
+// rendered pixels. Pull-based: only while a client is watching, Electron
+// captures the pane at the CLIENT-REQUESTED w×h (no wasted pixels — the size is
+// the efficiency lever) and returns a JPEG; we ship it as a binary frame and
+// skip byte-identical frames (static pages cost ~nothing). The frame is flat /
+// front-facing — the 3D scene applies the monitor's tilt via texture mapping.
+
+pub async fn pixels_handler(
+    ws: WebSocketUpgrade,
+    Path(pane): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<crate::AppState>,
+) -> impl IntoResponse {
+    let bridge = state.bridge;
+    let w: u32 = params.get("w").and_then(|s| s.parse().ok()).unwrap_or(640).clamp(16, 4096);
+    let h: u32 = params.get("h").and_then(|s| s.parse().ok()).unwrap_or(400).clamp(16, 4096);
+    let fps = fps_from(&params);
+    ws.on_upgrade(move |socket| pixels_loop(socket, bridge, pane, w, h, fps))
+}
+
+async fn pixels_loop(socket: WebSocket, bridge: Bridge, pane: String, w: u32, h: u32, fps: u64) {
+    let (mut tx, mut rx) = socket.split();
+    if !send_text(&mut tx, hello("pixels")).await {
+        return;
+    }
+    // Resolve to a full uid (web panes ARE in the session map as shell:"web").
+    let uid = {
+        let sessions = bridge.sessions().await;
+        sessions
+            .iter()
+            .find(|(u, _)| u.as_str() == pane.as_str() || u.starts_with(pane.as_str()))
+            .map(|(u, _)| u.clone())
+            .unwrap_or_else(|| pane.clone())
+    };
+    let _ = send_text(&mut tx, json!({"t":"meta","paneId":uid,"w":w,"h":h,"fps":fps,"format":"jpeg"}).to_string()).await;
+
+    let mut ticker = tokio::time::interval(Duration::from_millis(1000 / fps));
+    let mut hb = tokio::time::interval(HEARTBEAT);
+    hb.tick().await;
+    let mut last_hash: u64 = 0;
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                let resp = bridge
+                    .send_command(json!({"type":"CapturePane","uid":uid,"w":w,"h":h,"quality":60}))
+                    .await;
+                if let Ok(b64) = resp {
+                    if !b64.is_empty() {
+                        if let Ok(bytes) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64) {
+                            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                            hasher.write(&bytes);
+                            let hash = hasher.finish();
+                            if hash != last_hash {
+                                last_hash = hash;
+                                if tx.send(Message::Binary(bytes.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ = hb.tick() => {
+                if !send_text(&mut tx, r#"{"t":"ping"}"#.to_string()).await { break; }
+            }
+            msg = rx.next() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    _ => {}
+                }
+            }
+        }
+    }
 }

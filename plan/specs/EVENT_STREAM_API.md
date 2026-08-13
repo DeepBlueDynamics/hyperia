@@ -9,7 +9,8 @@ Two modes, deliberately different fidelity/cost trade-offs:
 | Mode | Endpoint | Scope | Payload | Use |
 |---|---|---|---|---|
 | **Wall** (quick) | `/ws/wall` | ALL panes at once | sidecar-rendered cell-grid **keyframe + row deltas** (JSON) | the monitor wall / overview |
-| **Focused** (full fidelity) | `/ws/pane/{paneId}` | one pane | **raw PTY bytes** (binary) + scrollback replay | pixel-exact single-terminal deep view |
+| **Focused** (full fidelity) | `/ws/pane/{paneId}` | one pane | **raw PTY bytes** (binary) + scrollback replay + keystroke input | pixel-exact interactive terminal |
+| **Pixels** (rendered) | `/ws/pixels/{paneId}?w=&h=&fps=` | one pane | **JPEG frames** (binary), dirty-skip | WEB panes (no PTY) / exact rendered fidelity |
 
 ## Why this is cheap to build (existing sidecar capabilities)
 
@@ -142,6 +143,27 @@ whoever holds the socket — fine on localhost / your own containers; gate behin
 a token via `config.stream.requireToken` if exposing more widely.)
 
 ---
+
+## Pixels mode protocol (`/ws/pixels/{paneId}`)
+
+For panes with **no PTY** — WEB panes especially — the only way onto a monitor is
+rendered pixels. Query: `?w=640&h=400&fps=15` (defaults), `?token=`.
+
+- Server → `hello` (mode `"pixels"`), then a `meta` (`{t,paneId,w,h,fps,format:"jpeg"}`),
+  then **BINARY** frames = JPEG of the pane captured at the requested `w×h`.
+- **The client requests the size** (`w`/`h`) — Hyperia captures at exactly that
+  texture resolution, so no pixels are wasted. Use **LOD**: near/large monitors
+  ask for a crisp frame, far/edge ones a small one — that's where the bandwidth
+  savings live.
+- Frames are **flat / front-facing**. The 3D scene applies the monitor's tilt via
+  texture mapping (perspective-correct, per-frame, free). Do NOT ask Hyperia to
+  pre-tilt — that bakes in one camera angle and wastes foreshortened pixels.
+- Pull-based: Electron captures (`webContents.capturePage` → resize → JPEG) only
+  while a client is watching; byte-identical frames are dropped, so a static page
+  costs ~nothing. (v2: `beginFrameSubscription` dirty-rects, then WebRTC video for
+  full-motion efficiency.)
+- **Terminals stay on `/ws/pane`** (data — KB not MB, crisp text, interactive);
+  `/ws/pixels` is for web panes.
 
 ## Backpressure & lifecycle
 
