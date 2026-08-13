@@ -101,7 +101,15 @@ export function requestTermGroup(_activeUid: string | undefined, _profile: strin
         const activeUid = _activeUid ? _activeUid : sessions.activeUid;
         const activeSession = activeUid && sessions.sessions[activeUid] ? sessions.sessions[activeUid] : null;
         const cwd = (activeSession && activeSession.cwd) || ui.cwd;
-        const profile = _profile ? _profile : activeSession ? activeSession.profile : window.profileName || 'default';
+        // A new tab opens the CONFIGURED DEFAULT profile — NOT whatever the
+        // currently-focused pane happens to be running. Inheriting the active
+        // pane's profile meant that focusing a special profile (e.g. the
+        // "nemesis (server)" profile whose command SSHes into a box) made every
+        // new tab re-open that profile and auto-SSH again. Standard terminals
+        // (Windows Terminal, iTerm) open the default profile on a new tab; this
+        // matches that. Splits/clones still pass their source profile via
+        // _profile when they explicitly want to match the source pane.
+        const profile = _profile ? _profile : ui.defaultProfile || window.profileName || 'default';
         rpc.emit('new', {
           isNewGroup: true,
           cwd,
