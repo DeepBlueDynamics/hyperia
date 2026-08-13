@@ -638,23 +638,12 @@ export default class Term extends React.PureComponent<
       }
       Term.reportRenderer(props.uid, useWebGL ? 'WebGL' : 'Canvas');
 
-      const shallActivateWebLink = (event: MouseEvent): boolean => {
-        if (!event) return false;
-        return props.webLinksActivationKey ? event[`${props.webLinksActivationKey}Key`] : true;
-      };
-
       this.term.attachCustomKeyEventHandler(this.keyboardHandler);
       this.term.loadAddon(this.fitAddon);
       this.term.loadAddon(this.searchAddon);
       this.term.loadAddon(
         new WebLinksAddon(
-          (event, uri) => {
-            // Plain click copies + toasts; Ctrl/Cmd+click opens (mirrors stickies).
-            // Right-click shows link actions (see terms.tsx). This intentionally
-            // overrides the webLinksActivationKey gate — click is now "copy".
-            if (event && (event.ctrlKey || event.metaKey)) openUrl(uri);
-            else this.copyLinkToast(uri);
-          },
+          (event, uri) => this.handleLinkActivate(event, uri),
           {
             // Track the hovered URL so a right-click can offer link actions.
             hover: (_e: MouseEvent, uri: string) => {
@@ -776,9 +765,7 @@ export default class Term extends React.PureComponent<
                 end: {x: endCoord.col + 1, y: endCoord.row + 1}
               },
               text: url,
-              activate: (_event: MouseEvent, text: string) => {
-                if (shallActivateWebLink(_event)) openUrl(text);
-              },
+              activate: (_event: MouseEvent, text: string) => this.handleLinkActivate(_event, text),
               // Track the hovered URL so a right-click can offer link actions.
               hover: () => {
                 this._hoveredLink = url;
@@ -1112,25 +1099,51 @@ export default class Term extends React.PureComponent<
   _hoveredLink: string | null = null;
   getHoveredLink = (): string | null => this._hoveredLink;
 
-  copyLinkToast = (uri: string) => {
+  // Unified activation for ALL detected-URL providers (single-row WebLinksAddon
+  // + the multi-row wrapped-URL provider) so a click behaves identically no
+  // matter which one xterm resolves the link to — this is what kills the "first
+  // click does nothing, second copies" inconsistency (and the stray scroll jump
+  // from the losing provider). Right-click never acts here (the context menu in
+  // terms.tsx handles it); Ctrl/Cmd+click opens in the browser; a plain click
+  // copies + toasts right at the click.
+  handleLinkActivate = (event: MouseEvent | undefined, uri: string) => {
+    if (event && event.button === 2) return;
+    if (event && (event.ctrlKey || event.metaKey)) {
+      openUrl(uri);
+      return;
+    }
+    this.copyLinkToast(uri, event);
+  };
+
+  copyLinkToast = (uri: string, event?: MouseEvent) => {
     clipboard.writeText(uri);
-    this.setState({showCopied: true, copiedMsg: 'Link copied · right-click for options', copiedPos: undefined});
+    // Anchor the toast at the click so it's visible right where the user acted,
+    // instead of flying to a fixed corner. Clamp so it stays inside the pane.
+    let copiedPos: {left: number; top: number} | undefined;
+    const outer = this.termOuterRef.current;
+    if (event && outer) {
+      const o = outer.getBoundingClientRect();
+      const left = Math.max(8, Math.min(event.clientX - o.left + 8, o.width - 230));
+      const top = Math.max(8, Math.min(event.clientY - o.top + 12, o.height - 40));
+      copiedPos = {left, top};
+    }
+    this.setState({showCopied: true, copiedMsg: 'Link copied · right-click for options', copiedPos});
     if (this._copiedTimer) clearTimeout(this._copiedTimer);
-    this._copiedTimer = setTimeout(() => this.setState({showCopied: false, copiedMsg: undefined}), 1700);
+    this._copiedTimer = setTimeout(
+      () => this.setState({showCopied: false, copiedMsg: undefined, copiedPos: undefined}),
+      1700
+    );
   };
 
   onMouseUp = (e: React.MouseEvent) => {
-    if (this.props.quickEdit && e.button === 2) {
-      // Right-clicking a link opens the link menu (terms.tsx) — don't paste.
-      if (this._hoveredLink) return;
-      if (this.term.hasSelection()) {
-        clipboard.writeText(this.term.getSelection());
-        this.term.clearSelection();
-        this.flashCopied();
-      } else {
-        document.execCommand('paste');
-      }
-    } else if (this.props.copyOnSelect && this.term.hasSelection()) {
+    // Right-click is menu-only: never auto-paste or auto-copy. The context menu
+    // (terms.tsx) shows link actions on a link, or the terminal menu otherwise.
+    // This kills the QuickEdit "paste on right-click" that was dumping the
+    // clipboard into the shell whenever a link right-click missed the hover
+    // guard — the "copying content into the pane" bug.
+    if (e.button === 2) return;
+    // Left-click drag-select copies on release when copyOnSelect is enabled.
+    if (this.props.copyOnSelect && this.term.hasSelection()) {
       clipboard.writeText(this.term.getSelection());
       this.flashCopied();
     }
