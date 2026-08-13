@@ -147,11 +147,22 @@ function wireWebContents(initialUid: string, wc: WebContents) {
   const u = () => liveUidOf(wc, initialUid);
   // When a webContents `focus` lands right after a load START, it's LOAD-induced
   // (the page finished loading — e.g. an AGENT navigated the pane), NOT a human
-  // click — so it must NOT steal the human's view. Only genuine clicks move
-  // focus, unless config.webPaneFocusOnNavigate opts in. (focus-never-steal)
-  let lastNavAt = 0;
+  // click — so it must NOT steal the human's view. Only a genuine mouse/keyboard
+  // gesture in THIS pane activates it; agent- or page-initiated focus never does
+  // (unless config.webPaneFocusOnNavigate opts in). (focus-never-steal)
+  //
+  // input-event fires for REAL input routed to this view (mouseDown/keyDown);
+  // programmatic element.focus() / navigation auto-focus / an agent's
+  // web_pane_eval fire NO input-event. So a human click IS the mouseDown here,
+  // and we activate on THAT — not on the ambiguous webContents 'focus' event
+  // (which also fires for the programmatic cases and was the focus-steal source).
+  wc.on('input-event', (_e: Electron.Event, input: Electron.InputEvent) => {
+    if (input.type === 'mouseDown' || input.type === 'keyDown') {
+      const uid = u();
+      entrySend(uid, 'web-pane:focus', {uid, activate: true});
+    }
+  });
   wc.on('did-start-loading', () => {
-    lastNavAt = Date.now();
     pushState(u(), {loading: true, error: null});
   });
   wc.on('did-stop-loading', () => pushState(u(), {loading: false, ...navState(wc)}));
@@ -177,15 +188,17 @@ function wireWebContents(initialUid: string, wc: WebContents) {
   // Let the renderer run its dom-ready work (scrollbar CSS inject, bg-color probe)
   // via web-pane:execute-js — it can't observe the guest's dom-ready directly.
   wc.on('dom-ready', () => { const uid = u(); entrySend(uid, 'web-pane:dom-ready', {uid}); });
-  // Clicking into the page focuses its webContents — tell the renderer so it can
-  // activate the pane (and dismiss the URL navigator).
+  // The webContents 'focus' event ALSO fires for PROGRAMMATIC focus (an agent's
+  // web_pane_eval focusing an element, the page's own JS, a navigation
+  // auto-focus) — indistinguishable here from a real click, and the source of the
+  // focus-steal. So it NEVER activates on its own; genuine clicks activate via the
+  // input-event handler above. Honored only for the explicit opt-in.
   wc.on('focus', () => {
-    const uid = u();
-    // A genuine click activates (moves the view here); a focus that lands right
-    // after a load START is agent/nav-induced and must NOT — unless opted in.
-    const fromNav = Date.now() - lastNavAt < 900;
     const focusSteal = !!(getConfig() as unknown as {webPaneFocusOnNavigate?: boolean}).webPaneFocusOnNavigate;
-    entrySend(uid, 'web-pane:focus', {uid, activate: !fromNav || focusSteal});
+    if (focusSteal) {
+      const uid = u();
+      entrySend(uid, 'web-pane:focus', {uid, activate: true});
+    }
   });
   // Zoom shortcuts pressed while the PAGE has focus never reach the renderer's
   // window (the native view captures them), so intercept Ctrl/Cmd +/-/0 here and

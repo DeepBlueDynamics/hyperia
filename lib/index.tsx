@@ -653,7 +653,7 @@ const isHyperiaShellUrl = (u: string): boolean => {
   }
 };
 
-rpc.on('open web pane req', ({url}: {url?: string}) => {
+rpc.on('open web pane req', ({url, isAgentInitiated}: {url?: string; isAgentInitiated?: boolean}) => {
   if (url) {
     const full = toNavigableUrl(url);
     if (isHyperiaShellUrl(full)) {
@@ -672,18 +672,21 @@ rpc.on('open web pane req', ({url}: {url?: string}) => {
         // remounts the pane, whose componentDidMount re-creates the native
         // view. A healthy tab just briefly re-mounts (page reloads) — the
         // dedupe still beats stacking duplicate agent tabs.
-        store_.dispatch({type: 'TERM_GROUP_ACTIVATE_WEB_TAB', uid} as any);
+        // Only switch the human to the agent tab when a HUMAN asked to open it;
+        // an agent re-opening it refreshes in the background (focus-never-steal).
+        if (!isAgentInitiated) store_.dispatch({type: 'TERM_GROUP_ACTIVATE_WEB_TAB', uid} as any);
         store_.dispatch({type: 'TERM_GROUP_SET_WEB_URL', uid, url: null} as any);
         setTimeout(() => {
           store_.dispatch({type: 'TERM_GROUP_SET_WEB_URL', uid, url: full} as any);
         }, 0);
         return;
       }
-      store_.dispatch(termGroupActions.openWebPaneInNewTab(full, 'Hyperia Agent') as any);
+      store_.dispatch(termGroupActions.openWebPaneInNewTab(full, 'Hyperia Agent', isAgentInitiated) as any);
       return;
     }
-    store_.dispatch(termGroupActions.openWebPaneInNewTab(full) as any);
+    store_.dispatch(termGroupActions.openWebPaneInNewTab(full, undefined, isAgentInitiated) as any);
   } else {
+    // No URL → the human is prompted via the dialog; always a human open.
     showWebPaneDialog((full) => {
       store_.dispatch(termGroupActions.openWebPaneInNewTab(full) as any);
     });

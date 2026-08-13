@@ -403,15 +403,18 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       return state.setIn(['termGroups', uid, 'webUrl'], url);
     }
     case TERM_GROUP_ADD_WEB_TAB: {
-      const {url, name} = act as any;
+      const {url, name, isAgentInitiated} = act as any;
       const uid = uuidv4();
       const termGroup = TermGroup({uid});
       let nextState = state
         .setIn(['termGroups', uid], termGroup)
         .setIn(['termGroups', uid, 'webUrl'], url)
-        .setIn(['activeSessions', uid], null as any)
-        .set('activeRootGroup', uid)
-        .set('activeTermGroup', uid);
+        .setIn(['activeSessions', uid], null as any);
+      // An agent opening a web pane must NOT switch the human's active tab to it
+      // (focus-never-steal) — create it in the background. A human open activates.
+      if (!isAgentInitiated) {
+        nextState = nextState.set('activeRootGroup', uid).set('activeTermGroup', uid);
+      }
       // Optional fixed tab label (e.g. "Hyperia Agent" for the shell tab).
       if (name) {
         nextState = nextState.setIn(['termGroups', uid, 'tabName'], name);

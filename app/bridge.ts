@@ -798,7 +798,10 @@ function handleCommand(msg: Record<string, unknown>) {
       const url = msg.url as string | undefined;
       const win = getFocusedHyperiaWindow();
       if (win && url) {
-        win.rpc.emit('open web pane req', {url});
+        // Agent-initiated: open/refresh the pane but NEVER switch the human's
+        // active tab to it (focus-never-steal). Human-triggered opens (menu,
+        // context-menu, stickies) omit the flag and DO activate.
+        win.rpc.emit('open web pane req', {url, isAgentInitiated: true});
         sendResult(seq, 'ok');
       } else {
         sendResult(seq, win ? 'No url provided' : 'No focused window');

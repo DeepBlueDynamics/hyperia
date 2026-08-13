@@ -311,9 +311,9 @@ export function clearWebPane(groupUid: string) {
   };
 }
 
-export function openWebPaneInNewTab(url: string, name?: string) {
+export function openWebPaneInNewTab(url: string, name?: string, isAgentInitiated?: boolean) {
   return (dispatch: HyperDispatch) => {
-    dispatch({type: TERM_GROUP_ADD_WEB_TAB, url, name} as any);
+    dispatch({type: TERM_GROUP_ADD_WEB_TAB, url, name, isAgentInitiated} as any);
   };
 }
 

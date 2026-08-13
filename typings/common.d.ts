@@ -189,7 +189,7 @@ export type RendererEvents = {
   'leave full screen': never;
   'session data send': {uid: string | null; data: string; escaped?: boolean};
   'agent status': {sessionUid?: string; connected: boolean; working?: boolean; label?: string; humanPercent?: number};
-  'open web pane req': {url?: string};
+  'open web pane req': {url?: string; isAgentInitiated?: boolean};
   /** Main tells the renderer the user confirmed closing this tab (#148). */
   'close-tab-confirmed': {uid: string};
   /** Main asks the renderer to show the in-app close-confirm modal (#148). */
