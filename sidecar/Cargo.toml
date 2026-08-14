@@ -1,6 +1,6 @@
 [package]
 name = "hyperia-sidecar"
-version = "0.16.40"
+version = "0.16.41"
 edition = "2021"
 description = "Rust sidecar for Hyperia: agent engine, MCP, signaling"
 

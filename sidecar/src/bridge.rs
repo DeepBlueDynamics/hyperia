@@ -1051,13 +1051,25 @@ impl Bridge {
             } else {
                 body_text.to_string()
             };
-            let _ = self
+            let body_notice = self
                 .send_command(serde_json::json!({"type": "Keys", "uid": uid, "keys": wrapped}))
-                .await;
+                .await
+                .unwrap_or_else(|e| e);
+            let body_queued = body_notice.to_lowercase().contains("queued");
             tokio::time::sleep(Duration::from_millis(150)).await;
-            let _ = self
-                .send_command(serde_json::json!({"type": "Keys", "uid": uid, "keys": "\r"}))
-                .await;
+            // Body queued → still send the Enter: the renderer glues a bare
+            // terminator onto the pending queued message so the drain delivers a
+            // COMPLETE submit. Body delivered live → only send the isolated
+            // Enter if the human hasn't taken the pane during the settle
+            // window; a bare CR racing their typing lands in their composer as
+            // a stray newline (the cursor-drops-a-line bug).
+            if body_queued || !self.user_active_recently(uid).await {
+                let _ = self
+                    .send_command(serde_json::json!({"type": "Keys", "uid": uid, "keys": "\r"}))
+                    .await;
+            } else {
+                tracing::info!("type_and_collect: human took {uid} during settle; Enter withheld");
+            }
         } else {
             let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys});
             let _ = self.send_command(cmd).await;
@@ -1217,6 +1229,15 @@ impl Bridge {
         }
 
         tokio::time::sleep(Duration::from_millis(150)).await;
+        // Body queued → still send the Enter (the renderer glues a bare
+        // terminator onto the pending message so the drain delivers a complete
+        // submit). Body delivered live but the human took the pane during the
+        // settle → withhold the Enter: delivered late it lands in their typing
+        // as a stray CR (composer newline in Ink TUIs).
+        let body_queued = first_notice.to_lowercase().contains("queued");
+        if !body_queued && self.user_active_recently(pane).await {
+            return "warning: text typed but NOT submitted — the human became active in this pane during delivery, so the Enter was withheld (it would have landed inside their typing). Re-send when the pane is free, or use interrupt=true.".into();
+        }
         let enter_notice = send("\r".to_string()).await;
 
         // If the renderer queued the writes (human active), they'll drain in

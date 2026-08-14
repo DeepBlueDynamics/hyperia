@@ -252,6 +252,30 @@ function enqueueOrWrite(uid: string, keys: string, seq: number | undefined, inte
     return;
   }
 
+  // A BARE terminator (Enter alone — phase 2 of the sidecar's two-phase TUI
+  // delivery, or a submit nudge) is only meaningful the instant it was sent: it
+  // submits whatever is in the input box RIGHT NOW. Queuing it to drain after
+  // the human goes idle is always wrong — by then the box holds THEIR
+  // half-typed text, and the stale CR either submits it or (Ink TUIs, which
+  // submit on LF) drops a stray newline into the composer: the "cursor fell to
+  // the line below while I typed" bug. If OUR message is already waiting in
+  // this pane's queue, the Enter belongs to it — glue it on so the drain
+  // delivers a complete submit. Otherwise drop it.
+  if (keys === '\r' || keys === '\n' || keys === '\r\n') {
+    const pending = agentQueues.get(uid);
+    const last = pending?.[pending.length - 1];
+    if (last) {
+      last.keys += keys;
+      sendResult(seq, 'queued: Enter appended to your pending message for this pane — both deliver when the human goes idle.');
+    } else {
+      sendResult(
+        seq,
+        'dropped: bare Enter while a human is active in this pane — delivered later it would land inside their typing. Re-send the full text when the pane is free, or use interrupt=true.'
+      );
+    }
+    return;
+  }
+
   // User active — queue it and deliver automatically when they go idle. Reply
   // NOW with a clear notice so the agent knows the keys were not sent yet (and
   // how to force them). The queued entry carries no seq, so drainQueues won't
