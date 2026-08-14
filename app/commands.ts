@@ -21,6 +21,11 @@ const commands: Record<string, (focusedWindow?: BrowserWindow) => void> = {
   'pane:openWebPane': (focusedWindow) => {
     focusedWindow?.rpc?.emit('open web pane req', {});
   },
+  // Reconnect live shells main still holds but the visible layout lost (orphaned
+  // by a renderer crash/reload/desync) — each comes back as a tab.
+  'pane:recover': (focusedWindow) => {
+    (focusedWindow as unknown as {recoverPanes?: () => number})?.recoverPanes?.();
+  },
   // Open the Hyperia shell pane — the agentic chat surface served by the
   // sidecar at /shell. Reuses the existing webUrl pane infrastructure;
   // the pane is a `webUrl` group rendering <WebPane> with the shell's URL.

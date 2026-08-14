@@ -61,6 +61,15 @@ const shellMenu = (
         type: 'separator'
       },
       {
+        label: 'Recover Panes',
+        click(item, focusedWindow) {
+          execCommand('pane:recover', focusedWindow);
+        }
+      },
+      {
+        type: 'separator'
+      },
+      {
         label: 'Close',
         accelerator: commandKeys['pane:close'],
         click(item, focusedWindow) {

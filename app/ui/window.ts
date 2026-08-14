@@ -261,6 +261,19 @@ export function newWindow(
   //      via OS process inspection) — this DOES see `ssh` running. Polled below.
   let busyPanes: Array<{name: string}> = [];
   let sidecarBusy: Array<{name: string}> = [];
+  // Orphaned-session recovery. An orphan = a live PTY main still holds
+  // (`sessions`) that the renderer's VISIBLE layout dropped — a renderer
+  // crash/reload/desync loses the tab while the shell keeps running. We POLL for
+  // them (reconcile against every 'session layout sync' → renderedUids) and
+  // RECONNECT by re-emitting the session as a fresh tab bound to its EXISTING
+  // live PTY. `sessionBornAt` gates just-created sessions (their sync lags);
+  // `orphanSince`/`reattachedUids` debounce the auto sweep and stop a reattach
+  // loop if the layout sync is slow to reflect the recovered tab.
+  let renderedUids = new Set<string>();
+  const sessionBornAt = new Map<string, number>();
+  const orphanSince = new Map<string, number>();
+  const reattachedUids = new Set<string>();
+  const ORPHAN_GRACE_MS = 8000;
   const getActiveShellSessions = (): Array<{name: string}> => {
     const seen = new Set<string>();
     const out: Array<{name: string}> = [];
@@ -273,6 +286,65 @@ export function newWindow(
     return out;
   };
   (window as any).getActiveShellSessions = getActiveShellSessions;
+
+  // Re-emit an orphaned session as a fresh tab bound to its EXISTING live PTY.
+  // isRestore avoids re-running any prefill command; the new Term fits itself and
+  // resizes the live PTY, so an ssh/agent you'd lost comes back interactive.
+  const reattachSession = (uid: string, session: any) => {
+    rpc.emit('session add', {
+      rows: 24,
+      cols: 80,
+      uid,
+      activeUid: undefined,
+      shell: session.shell,
+      pid: session.pty ? session.pty.pid : null,
+      profile: session.profile,
+      cwd: session.cwd,
+      isNewGroup: true,
+      isRestore: true
+    });
+  };
+  // Live PTY sessions main holds that the visible layout doesn't show.
+  const listOrphans = (minAgeMs: number): Array<[string, any]> => {
+    const out: Array<[string, any]> = [];
+    for (const [uid, session] of sessions) {
+      if (renderedUids.has(uid)) continue;
+      if (!session || (session as any).ended) continue;
+      if (Date.now() - (sessionBornAt.get(uid) || 0) < minAgeMs) continue;
+      out.push([uid, session]);
+    }
+    return out;
+  };
+  // Manual trigger ("Recover Panes" menu) — bring back everything not visible now.
+  (window as any).recoverPanes = (): number => {
+    const orphans = listOrphans(3000);
+    for (const [uid, session] of orphans) {
+      reattachSession(uid, session);
+      reattachedUids.add(uid);
+    }
+    console.log(`[recover] manual re-attach of ${orphans.length} orphaned pane(s)`);
+    return orphans.length;
+  };
+  // Auto sweep (stop-the-leak-at-source): a session that stays orphaned past the
+  // grace window is reattached ONCE — a legit pane close DESTROYS its session
+  // (it leaves `sessions`), so only true crash/desync orphans ever reach here.
+  const reconcileOrphans = () => {
+    for (const [uid, session] of listOrphans(ORPHAN_GRACE_MS)) {
+      if (reattachedUids.has(uid)) continue;
+      const since = orphanSince.get(uid);
+      if (since === undefined) {
+        orphanSince.set(uid, Date.now());
+        continue;
+      }
+      if (Date.now() - since < ORPHAN_GRACE_MS) continue;
+      reattachSession(uid, session);
+      reattachedUids.add(uid);
+      orphanSince.delete(uid);
+      console.log(`[recover] auto re-attached orphan ${uid.slice(0, 8)}`);
+    }
+  };
+  const reconcileTimer = setInterval(reconcileOrphans, 5000);
+  window.on('closed', () => clearInterval(reconcileTimer));
 
   // Poll the sidecar for THIS window's running panes — the signal the renderer
   // heuristic can't see (ssh→remote agent). Cheap anonymous GET; every 2s.
@@ -546,6 +618,7 @@ export function newWindow(
     const {session, options} = created;
 
     sessions.set(options.uid, session);
+    sessionBornAt.set(options.uid, Date.now());
     rpc.emit('session add', {
       rows: options.rows,
       cols: options.cols,
@@ -706,6 +779,15 @@ export function newWindow(
       });
       (window as any).paneCount = totalPanes;
       busyPanes = busy;
+      // Track which sessions the renderer currently shows (orphan detection). A
+      // uid that's visible again clears its recovery state so a FUTURE orphaning
+      // can recover it.
+      renderedUids = new Set<string>();
+      payload.forEach((tab) => tab.panes?.forEach((p) => renderedUids.add(p.uid)));
+      renderedUids.forEach((uid) => {
+        orphanSince.delete(uid);
+        reattachedUids.delete(uid);
+      });
       updateSessionLayout(payload);
     }
   );
@@ -970,6 +1052,9 @@ export function newWindow(
       forceRemoveSession(key);
       endSessionLog(key);
       sessions.delete(key);
+      sessionBornAt.delete(key);
+      orphanSince.delete(key);
+      reattachedUids.delete(key);
     });
   };
   // we reset the rpc channel only upon
