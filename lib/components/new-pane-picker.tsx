@@ -1122,16 +1122,20 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         // Content pinned to the TOP (no vertical centering) and the whole pane
         // scrolls when it's too short to show everything.
         style={{zoom: pickerZoom, overflowY: 'auto', outline: 'none'}}
-        // Clicking anywhere in the picker makes THIS pane the active session
-        // (capture phase, so it wins even if a child stops propagation) and
-        // pulls keyboard focus onto the picker root — so W/S/A work in whichever
-        // picker you click, not just the one that won activation on mount.
-        onMouseDownCapture={(e) => {
+        // Clicking anywhere in the picker makes THIS pane the active session, so
+        // W/S/A work in whichever picker you click (not just the one that won
+        // activation on mount). BUBBLE phase (not capture): a child handles its
+        // own mousedown FIRST. The combobox rows / enter badge call
+        // preventDefault() on mousedown to KEEP their input focus so the click
+        // commits — so we only grab focus for the picker background (defaultPrevented
+        // is false, target isn't a field). Grabbing it in the capture phase used to
+        // blur the dropdown and eat the click — picking a shell did nothing.
+        onMouseDown={(e) => {
           this.props.onActivate?.();
           const t = e.target as HTMLElement | null;
           const typing =
             !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
-          if (!typing) this.rootRef.current?.focus({preventScroll: true});
+          if (!e.defaultPrevented && !typing) this.rootRef.current?.focus({preventScroll: true});
         }}
         onContextMenu={(e) => {
           e.preventDefault();
