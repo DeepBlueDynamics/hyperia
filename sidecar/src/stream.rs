@@ -425,3 +425,240 @@ async fn pixels_loop(socket: WebSocket, bridge: Bridge, pane: String, w: u32, h:
         }
     }
 }
+
+// --- tab mode: /ws/tab/{tabId} (layout manifest + multiplexed pane streams) --
+//
+// A tab is a BSP layout of panes (terminals AND web panes). We stream the
+// COMPOSITION: a `tab-layout` manifest (pane rects + types) plus each pane's own
+// stream multiplexed on ONE socket, tagged by paneId — terminals as the wall's
+// colorized frame/delta (crisp text, cheap), web panes as JPEG pixels. The 3D
+// client places every pane in its rect on one monitor. Terminals stream from the
+// vt100 mirror regardless of tab visibility; a BACKGROUND tab's web panes may be
+// stale (only the active tab is painted).
+
+/// One pane's layout descriptor for the `tab-layout` manifest. Terminals carry
+/// grid dims; web panes carry the derived capture px size.
+struct TabPane {
+    uid: String,
+    is_web: bool,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    cols: u16,
+    rows: u16,
+    title: String,
+    state: String,
+}
+
+fn tab_pane_json(p: &TabPane, tab_w: u32, tab_h: u32) -> serde_json::Value {
+    if p.is_web {
+        let px = (((p.w as f64) / 100.0) * tab_w as f64).round().max(16.0) as u32;
+        let py = (((p.h as f64) / 100.0) * tab_h as f64).round().max(16.0) as u32;
+        json!({"paneId":p.uid,"type":"web","x":p.x,"y":p.y,"w":p.w,"h":p.h,"px":px,"py":py,"title":p.title,"state":p.state})
+    } else {
+        json!({"paneId":p.uid,"type":"terminal","x":p.x,"y":p.y,"w":p.w,"h":p.h,"cols":p.cols,"rows":p.rows,"title":p.title,"state":p.state})
+    }
+}
+
+/// Stable hash of the layout (pane set + rects + dims + type) so we re-emit the
+/// manifest only when the split actually changes, not every frame.
+fn layout_hash(panes: &[TabPane]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for p in panes {
+        h.write(p.uid.as_bytes());
+        h.write_u8(p.is_web as u8);
+        h.write_i32((p.x * 100.0) as i32);
+        h.write_i32((p.y * 100.0) as i32);
+        h.write_i32((p.w * 100.0) as i32);
+        h.write_i32((p.h * 100.0) as i32);
+        h.write_u16(p.cols);
+        h.write_u16(p.rows);
+    }
+    h.finish()
+}
+
+pub async fn tab_handler(
+    ws: WebSocketUpgrade,
+    Path(tab): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<crate::AppState>,
+) -> impl IntoResponse {
+    let bridge = state.bridge;
+    let fps = fps_from(&params);
+    let w: u32 = params.get("w").and_then(|s| s.parse().ok()).unwrap_or(1920).clamp(16, 7680);
+    let h: u32 = params.get("h").and_then(|s| s.parse().ok()).unwrap_or(1080).clamp(16, 4320);
+    ws.on_upgrade(move |socket| tab_loop(socket, bridge, tab, fps, w, h))
+}
+
+async fn tab_loop(socket: WebSocket, bridge: Bridge, tab_key: String, fps: u64, tab_w: u32, tab_h: u32) {
+    let (mut tx, mut rx) = socket.split();
+    if !send_text(&mut tx, hello("tab")).await {
+        return;
+    }
+
+    // Resolve the tab key → canonical rootTabUid (accept full/prefix uid or name).
+    let tab_uid = {
+        let sessions = bridge.sessions().await;
+        sessions
+            .values()
+            .find(|s| {
+                s.root_tab_uid == tab_key
+                    || s.root_tab_uid.starts_with(tab_key.as_str())
+                    || s.tab_name == tab_key
+            })
+            .map(|s| s.root_tab_uid.clone())
+    };
+    let tab_uid = match tab_uid {
+        Some(v) => v,
+        None => {
+            let _ = send_text(&mut tx, json!({"t":"error","code":"no-such-tab","message":tab_key}).to_string()).await;
+            return;
+        }
+    };
+
+    let mut cache: HashMap<String, CacheEntry> = HashMap::new();
+    let mut web_hashes: HashMap<String, u64> = HashMap::new();
+    let mut last_layout: u64 = 0;
+    let mut ticker = tokio::time::interval(Duration::from_millis(1000 / fps));
+    let mut hb = tokio::time::interval(HEARTBEAT);
+    hb.tick().await;
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                // Snapshot the tab under the lock: build the pane manifest, dump
+                // terminals that changed, collect web capture targets. Release the
+                // lock BEFORE any send / CapturePane (which is an async round-trip).
+                #[allow(clippy::type_complexity)]
+                let (mut panes, term_updates, web_targets, live, tab_name, window_id):
+                    (Vec<TabPane>, Vec<(String, ScreenDump, Option<Instant>, bool)>, Vec<(String, u32, u32)>, HashSet<String>, String, u32) = {
+                    let sessions = bridge.sessions().await;
+                    let mut panes = Vec::new();
+                    let mut term_updates = Vec::new();
+                    let mut web_targets = Vec::new();
+                    let mut live = HashSet::new();
+                    let mut tab_name = String::new();
+                    let mut window_id = 0u32;
+                    for (uid, s) in sessions.iter() {
+                        if s.root_tab_uid != tab_uid {
+                            continue;
+                        }
+                        if tab_name.is_empty() {
+                            tab_name = s.tab_name.clone();
+                            window_id = s.window_id;
+                        }
+                        live.insert(uid.clone());
+                        let is_web = s.name == "web" || s.name == "ai";
+                        panes.push(TabPane {
+                            uid: uid.clone(),
+                            is_web,
+                            x: s.bsp_x, y: s.bsp_y, w: s.bsp_w, h: s.bsp_h,
+                            cols: s.cols, rows: s.rows,
+                            title: if s.title.is_empty() { s.shell_name.clone() } else { s.title.clone() },
+                            state: s.shell_state.clone(),
+                        });
+                        if is_web {
+                            let px = (((s.bsp_w as f64) / 100.0) * tab_w as f64).round().max(16.0) as u32;
+                            let py = (((s.bsp_h as f64) / 100.0) * tab_h as f64).round().max(16.0) as u32;
+                            web_targets.push((uid.clone(), px, py));
+                        } else {
+                            let need = match cache.get(uid) {
+                                None => true,
+                                Some(c) => s.last_output_at != c.last_output || s.rows != c.rows || s.cols != c.cols,
+                            };
+                            if need {
+                                let is_key = cache.get(uid).map(|c| c.rows != s.rows || c.cols != s.cols).unwrap_or(true);
+                                term_updates.push((uid.clone(), s.screen.screen_dump(), s.last_output_at, is_key));
+                            }
+                        }
+                    }
+                    (panes, term_updates, web_targets, live, tab_name, window_id)
+                };
+
+                if panes.is_empty() {
+                    let _ = send_text(&mut tx, json!({"t":"bye","reason":"tab-closed"}).to_string()).await;
+                    break;
+                }
+                cache.retain(|k, _| live.contains(k));
+                web_hashes.retain(|k, _| live.contains(k));
+
+                // Layout change → re-emit the manifest (paneId-sorted for a stable hash).
+                panes.sort_by(|a, b| a.uid.cmp(&b.uid));
+                let lh = layout_hash(&panes);
+                if lh != last_layout {
+                    last_layout = lh;
+                    let pj: Vec<_> = panes.iter().map(|p| tab_pane_json(p, tab_w, tab_h)).collect();
+                    if !send_text(&mut tx, json!({
+                        "t":"tab-layout","v":PROTO_VERSION,"tabId":tab_uid,"tabName":tab_name,
+                        "windowId":window_id,"w":tab_w,"h":tab_h,"panes":pj,
+                    }).to_string()).await {
+                        return;
+                    }
+                }
+
+                // Terminal panes: keyframe (new/resized) or row deltas, tagged by paneId.
+                for (uid, dump, last_output, is_key) in term_updates {
+                    let ok = if is_key {
+                        send_text(&mut tx, frame_json(&uid, &dump)).await
+                    } else {
+                        let changed = changed_rows(&dump, &cache[&uid].dump);
+                        if changed.is_empty() { true } else { send_text(&mut tx, delta_json(&uid, &dump, &changed)).await }
+                    };
+                    if !ok {
+                        return;
+                    }
+                    cache.insert(uid, CacheEntry { last_output, rows: dump.rows, cols: dump.cols, dump });
+                }
+
+                // Web panes: capture at the rect-derived size, skip byte-identical frames.
+                for (uid, px, py) in web_targets {
+                    let resp = bridge
+                        .send_command(json!({"type":"CapturePane","uid":uid,"w":px,"h":py,"quality":60}))
+                        .await;
+                    if let Ok(b64) = resp {
+                        if !b64.is_empty() {
+                            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                            hasher.write(b64.as_bytes());
+                            let hash = hasher.finish();
+                            if web_hashes.get(&uid) != Some(&hash) {
+                                web_hashes.insert(uid.clone(), hash);
+                                if !send_text(&mut tx, json!({"t":"pixels","paneId":uid,"jpeg":b64}).to_string()).await {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ = hb.tick() => {
+                if !send_text(&mut tx, r#"{"t":"ping"}"#.to_string()).await { break; }
+            }
+            msg = rx.next() => {
+                match msg {
+                    // INPUT: {t:"input", paneId, keys} → the named pane's PTY (human
+                    // input). A tab carries many panes, so input MUST name its target.
+                    Some(Ok(Message::Text(t))) => {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
+                            if v["t"] == "input" {
+                                if let (Some(pid), Some(keys)) = (v["paneId"].as_str(), v["keys"].as_str()) {
+                                    if !keys.is_empty() {
+                                        let full = {
+                                            let sessions = bridge.sessions().await;
+                                            sessions.keys().find(|u| u.as_str() == pid || u.starts_with(pid)).cloned()
+                                        };
+                                        if let Some(uid) = full {
+                                            let _ = bridge.send_command(json!({"type":"Keys","uid":uid,"keys":keys})).await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+}

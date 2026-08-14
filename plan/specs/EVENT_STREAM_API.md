@@ -30,6 +30,8 @@ WebSocket only. (SSE rejected: text-only, unidirectional, poor for binary/backpr
 
 - `GET /ws/wall` — wall mode.
 - `GET /ws/pane/{paneId}` — focused mode. `paneId` = full pane UUID **or a 4+ char prefix**, same addressing as MCP tools.
+- `GET /ws/pixels/{paneId}` — pixels mode (web panes; rendered JPEG frames).
+- `GET /ws/tab/{tabId}` — tab mode (one tab's whole layout: manifest + per-pane streams multiplexed). `tabId` = a tab's `rootTabUid` (full or prefix) **or** its tab name.
 
 Base: `ws://<host>:9800` (`HYPERIA_PORT` overrides). The sidecar binds `0.0.0.0` on Linux, so a container reaches it at `ws://host.docker.internal:9800`.
 
@@ -164,6 +166,45 @@ rendered pixels. Query: `?w=640&h=400&fps=15` (defaults), `?token=`.
   full-motion efficiency.)
 - **Terminals stay on `/ws/pane`** (data — KB not MB, crisp text, interactive);
   `/ws/pixels` is for web panes.
+
+## Tab mode protocol (`/ws/tab/{tabId}`)
+
+A tab is a **BSP layout of panes** — terminals and web panes mixed. Instead of a
+new capture primitive, tab mode streams the **composition**: a layout manifest
+plus each pane's own stream, multiplexed on one socket and tagged by `paneId`.
+The 3D client places every pane in its rect on **one** monitor (the same BSP
+Hyperia draws, reconstructed in 3D). Terminals stay DATA (crisp text, cheap,
+interactive); web panes are pixels. A tab ≈ the union of its panes + layout.
+
+Query: `?fps=30` (default 30, clamp 1–60), `?w=1920&h=1080` (the tab's target
+pixel size — used to size **web-pane** captures per their rect; terminals are
+size-independent), `?token=`.
+
+Server → client:
+
+1. `hello` (`mode:"tab"`).
+2. `tab-layout` — the manifest (re-emitted whenever the split changes):
+```jsonc
+{ "t":"tab-layout", "v":1, "tabId":"…", "tabName":"…", "windowId":1, "w":1920, "h":1080,
+  "panes":[
+    { "paneId":"4d5b…", "type":"terminal", "x":0,  "y":0, "w":50, "h":100, "cols":104, "rows":68, "title":"…", "state":"running" },
+    { "paneId":"a8a9…", "type":"web",      "x":50, "y":0, "w":50, "h":100, "px":960, "py":1080,   "title":"…", "state":"idle" }
+  ] }
+```
+   - `x/y/w/h` = the pane's BSP rect in **0–100 %** of the tab — where to place its texture.
+   - terminal panes carry `cols/rows`; web panes carry `px/py` = the pixel size Hyperia captures at (`= rect-fraction × tab w/h`).
+3. Then per-pane frames — **all TEXT/JSON**, each tagged with `paneId`:
+   - **terminal** → `frame` (keyframe) then `delta`s — the **exact same shape as wall mode** (`{t:"frame"|"delta", paneId, cols, rows, cursor, rows_data}`).
+   - **web** → `{ "t":"pixels", "paneId":"…", "jpeg":"<base64>" }` — the pane's current frame; byte-identical frames are dropped. (Base64-in-JSON keeps the whole tab stream uniformly JSON-demuxable by `paneId`. The dedicated `/ws/pixels/{id}` stays raw-binary for single-pane fidelity.)
+4. `resize` per terminal pane when its dims change: `{ "t":"resize", "paneId":"…", "cols":.., "rows":.. }`.
+5. `bye` (`reason:"tab-closed"`) when the last pane leaves the tab.
+
+**Input:** client → server **TEXT** frame `{ "t":"input", "paneId":"…", "keys":"…" }` — routed to that pane's PTY as human input (web panes: no-op). Because a tab carries multiple panes on one socket, input MUST name its target `paneId` (unlike single-pane `/ws/pane`, where input is untagged BINARY).
+
+**Caveats (honest):**
+- **Terminals stream regardless of tab visibility** — the sidecar's vt100 mirror is fed by PTY bytes, render-independent. So a **background** tab still streams its terminals fully.
+- **Web panes are only painted on the active tab.** A background tab's `pixels` frames may be stale/blank; show the last frame or a placeholder until the tab is foregrounded.
+- Web-pane BSP rects are best-effort (a lone web pane is 100 %; mixed-split rects may be approximate until web-pane layout sync tightens).
 
 ## Backpressure & lifecycle
 
