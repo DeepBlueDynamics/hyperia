@@ -204,7 +204,18 @@ function wireWebContents(initialUid: string, wc: WebContents) {
   // window (the native view captures them), so intercept Ctrl/Cmd +/-/0 here and
   // route to the renderer's zoom handlers (which own the zoom-factor state).
   wc.on('before-input-event', (event: Electron.Event, input: Electron.Input) => {
-    if (input.type !== 'keyDown' || !(input.control || input.meta)) return;
+    if (input.type !== 'keyDown') return;
+    // Browser-standard reload keys act on the PAGE, like a browser tab:
+    // Ctrl/Cmd+R and F5 reload; +Shift bypasses the HTTP cache. preventDefault
+    // also keeps the app accelerator (Ctrl+Shift+R = renderer reload) from
+    // firing while the page owns the keyboard.
+    if ((input.key.toLowerCase() === 'r' && (input.control || input.meta) && !input.alt) || input.key === 'F5') {
+      event.preventDefault();
+      if (input.shift) wc.reloadIgnoringCache();
+      else wc.reload();
+      return;
+    }
+    if (!(input.control || input.meta)) return;
     const k = input.key;
     let dir: 'in' | 'out' | 'reset' | null = null;
     if (k === '+' || k === '=' || k === 'Add') dir = 'in';
