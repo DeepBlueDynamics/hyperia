@@ -26,6 +26,9 @@ jobs:
             rust_target: x86_64-unknown-linux-gnu
 
     runs-on: ${{ matrix.os }}
+    # Hard cap per leg — without it a hung step (default job timeout is 6h)
+    # silently blocks the release job that attaches ALL platform assets.
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v5
@@ -54,9 +57,22 @@ jobs:
 
       # Linux: the sidecar's TTS stack (rodio → cpal) compiles against ALSA —
       # without libasound2-dev the cargo build fails at alsa-sys.
+      # Hardened after a 2h hang here wedged the v0.17.0 release: the runner's
+      # unattended-upgrades can hold the dpkg lock and a flaky mirror can stall
+      # apt-get update indefinitely (no default step timeout). Lock-timeout +
+      # noninteractive + one retry + a hard 10-minute cap: a flake now fails
+      # fast (and re-runs), instead of silently blocking the release job.
       - name: Install Linux sidecar build deps (ALSA for rodio/cpal)
         if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+        timeout-minutes: 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          for i in 1 2; do
+            sudo apt-get -o DPkg::Lock::Timeout=180 update && \
+            sudo apt-get -o DPkg::Lock::Timeout=180 install -y libasound2-dev pkg-config && break
+            echo "apt attempt $i failed; retrying in 20s" && sleep 20
+          done
 
       # Build sidecar
       # On macOS we MUST use --target so the binary lands in the
