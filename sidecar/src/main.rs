@@ -798,9 +798,6 @@ async fn post_split(
     headers: HeaderMap,
     body: String,
 ) -> (StatusCode, String) {
-    if let Err(resp) = enforce_create(&state, &headers, "create_pane").await {
-        return resp;
-    }
     // No human-activity lockout: a split creates a NEW pane; it doesn't
     // stomp on whatever the human is typing in the active pane. Blocking
     // it just made splits silently fail with 409 while the user was busy.
@@ -847,6 +844,16 @@ async fn post_split(
         "uid": target_uid,
         "url": url
     });
+    // Consent AFTER building the command so a pending prompt can HOLD the split
+    // itself — approving then EXECUTES it (parity with held keystrokes) instead
+    // of granting a permission the agent has to come back and re-use.
+    if let Err(resp) = enforce_create(&state, &headers, "create_pane").await {
+        if resp.0 == StatusCode::ACCEPTED {
+            let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+            state.bridge.hold_create(&id.label(), cmd).await;
+        }
+        return resp;
+    }
     match state.bridge.send_command(cmd).await {
         Ok(r) => {
             stamp_created_pane(&state, &headers, &r).await;
@@ -1672,6 +1679,28 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
             } else {
                 let _ = state.bridge.take_action(&req.target_pane).await;
             }
+            // A held CREATE (split/new-tab/web-pane) executes on approval — the
+            // human said "ok, that's fine", so DO the thing, don't just grant
+            // permission the agent has to come back and re-use. Denial drops it.
+            if req.action.starts_with("create") {
+                if allow {
+                    if let Some(cmd) = state.bridge.take_create(&req.requester).await {
+                        if let Ok(r) = state.bridge.send_command(cmd).await {
+                            // Stamp the ORIGINAL requester as the new pane's owner
+                            // (mirrors stamp_created_pane, but the HTTP caller here
+                            // is the human's consent response, not the agent).
+                            if let Some(pane) = serde_json::from_str::<serde_json::Value>(&r)
+                                .ok()
+                                .and_then(|v| v["paneId"].as_str().map(|s| s.to_string()))
+                            {
+                                state.bridge.perms().stamp_owner(&pane, &req.requester).await;
+                            }
+                        }
+                    }
+                } else {
+                    let _ = state.bridge.take_create(&req.requester).await;
+                }
+            }
             let _ = state
                 .bridge
                 .notify(serde_json::json!({
@@ -2174,9 +2203,6 @@ async fn post_new_tab(
     headers: HeaderMap,
     body: String,
 ) -> (StatusCode, String) {
-    if let Err(resp) = enforce_create(&state, &headers, "create_tab").await {
-        return resp;
-    }
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let profile = parsed["profile"].as_str().unwrap_or("").to_string();
     let command = parsed["command"].as_str().unwrap_or("").to_string();
@@ -2198,6 +2224,15 @@ async fn post_new_tab(
         "command": command,
         "windowId": window_id,
     });
+    // Consent AFTER building the command — a pending prompt HOLDS the tab
+    // creation and approval executes it (see post_split).
+    if let Err(resp) = enforce_create(&state, &headers, "create_tab").await {
+        if resp.0 == StatusCode::ACCEPTED {
+            let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+            state.bridge.hold_create(&id.label(), cmd).await;
+        }
+        return resp;
+    }
     match state.bridge.send_command(cmd).await {
         Ok(r) => {
             stamp_created_pane(&state, &headers, &r).await;

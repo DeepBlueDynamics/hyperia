@@ -199,6 +199,13 @@ struct BridgeInner {
     /// Keystrokes an agent tried to send to a pane it doesn't own yet, held while
     /// the human decides. Flushed on approval, dropped on denial. Key = target uid.
     held_actions: Mutex<HashMap<String, HeldAction>>,
+    /// CREATE commands (Split/NewTab/OpenWebPane) held while the human decides on
+    /// the create-consent prompt. Parity with held keys: approving EXECUTES the
+    /// create instead of merely granting permission the agent must re-chase
+    /// (before this, an approval after the ~8s inline wait did nothing).
+    /// Key = requester label (one pending create per requester, matching the
+    /// create-consent dedupe).
+    held_creates: Mutex<HashMap<String, serde_json::Value>>,
     /// Capped, edge-triggered self idle-callbacks: when a pane goes running->idle,
     /// deliver the stored keys to it. Watched + fired by the idle-monitor task.
     idle_callbacks: Mutex<Vec<IdleCallback>>,
@@ -239,6 +246,7 @@ impl Bridge {
                 focused_window_id: Mutex::new(None),
                 app_foreground: Mutex::new(true),
                 held_actions: Mutex::new(HashMap::new()),
+                held_creates: Mutex::new(HashMap::new()),
                 idle_callbacks: Mutex::new(Vec::new()),
                 liveness: Mutex::new(HashMap::new()),
                 pulses: Mutex::new(load_pulses()),
@@ -517,6 +525,19 @@ impl Bridge {
             .await
             .remove(target_uid)
             .map(|h| h.keys)
+    }
+
+    /// Hold a CREATE command (Split/NewTab/OpenWebPane bridge json) pending the
+    /// human's create-consent decision. Approval executes it (take_create);
+    /// denial drops it. Overwrites any prior held create for the requester.
+    pub async fn hold_create(&self, requester_label: &str, cmd: serde_json::Value) {
+        self.inner.held_creates.lock().await.insert(requester_label.to_string(), cmd);
+    }
+
+    /// Take (remove + return) the held create command for a requester — called
+    /// when the human resolves the create-consent prompt.
+    pub async fn take_create(&self, requester_label: &str) -> Option<serde_json::Value> {
+        self.inner.held_creates.lock().await.remove(requester_label)
     }
 
     /// Arm a one-shot (capped) idle callback for a pane — the caller's OWN pane.
