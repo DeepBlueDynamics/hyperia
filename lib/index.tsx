@@ -20,6 +20,7 @@ import * as termGroupActions from './actions/term-groups';
 import * as uiActions from './actions/ui';
 import * as updaterActions from './actions/updater';
 import AgentToast from './components/agent-toast';
+import ToastStack, {pushToast} from './components/toast-stack';
 import ConsentModal from './components/consent-modal';
 import CloseConfirmModal, {showCloseConfirm} from './components/close-confirm-modal';
 import {activeTerminals} from './components/term';
@@ -149,15 +150,18 @@ rpc.on('close-tab-confirmed', ({uid}: {uid: string}) => {
 });
 
 // Drag-and-drop file copy result (main copied the dropped file(s) into the
-// pane's cwd) — surface a toast so the copy is visible without an `ls`.
+// pane's cwd) — surface a STACKING toast (toast-stack.tsx): new results push
+// earlier ones upward instead of replacing them, each auto-expires after 30s
+// and has a close button. (The legacy single-slot notification replaced the
+// previous message and never expired.)
 rpc.on(
   'pane copy files done',
   (r: {uid: string; ok: boolean; dir: string; count: number; names?: string[]; error?: string}) => {
     if (r.ok) {
       const what = r.names && r.names.length ? r.names.join(', ') : `${r.count} item(s)`;
-      store_.dispatch(addNotificationMessage(`Copied ${what} → ${r.dir}`));
+      pushToast(`Copied ${what} → ${r.dir}`);
     } else {
-      store_.dispatch(addNotificationMessage(`Couldn't copy to ${r.dir}${r.error ? `: ${r.error}` : ''}`));
+      pushToast(`Couldn't copy to ${r.dir}${r.error ? `: ${r.error}` : ''}`, {kind: 'error'});
     }
   }
 );
@@ -611,6 +615,7 @@ root.render(
     <HyperContainer />
     <WebPaneDialog />
     <AgentToast />
+    <ToastStack />
     <ConsentModal />
     <CloseConfirmModal />
   </Provider>
