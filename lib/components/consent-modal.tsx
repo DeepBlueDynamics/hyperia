@@ -1,7 +1,14 @@
 import React from 'react';
 import {useSelector} from 'react-redux';
 
-import {subscribeAllRequests, clearRequest, type PermRequest} from '../permissions-bus';
+import {
+  subscribeAllRequests,
+  subscribeExpiredRequests,
+  clearRequest,
+  expireRequest,
+  reviveRequest,
+  type PermRequest
+} from '../permissions-bus';
 
 // Segmented-control pill (scope + duration rows). Mirrors the old per-pane card.
 const segStyle = (active: boolean): React.CSSProperties => ({
@@ -54,7 +61,9 @@ function respond(
  */
 export default function ConsentModal(): React.ReactElement | null {
   const [reqs, setReqs] = React.useState<PermRequest[]>([]);
+  const [expiredReqs, setExpiredReqs] = React.useState<PermRequest[]>([]);
   React.useEffect(() => subscribeAllRequests(setReqs), []);
+  React.useEffect(() => subscribeExpiredRequests(setExpiredReqs), []);
 
   const req = reqs[0] || null;
 
@@ -75,7 +84,49 @@ export default function ConsentModal(): React.ReactElement | null {
     return (sess && (sess.shellName || sess.title)) || (req ? `pane ${req.targetPane.slice(0, 8)}` : '');
   });
 
-  if (!req) return null;
+  // No ACTIVE prompt — but pending (expired/snoozed) requests collapse into a
+  // persistent pill instead of vanishing. Click re-opens the full prompt. The
+  // request also re-opens by itself when the agent re-asks or retries the
+  // gated action (the sidecar re-notifies → setRequest revives it).
+  if (!req) {
+    if (expiredReqs.length === 0) return null;
+    const first = expiredReqs[0];
+    return (
+      <div
+        onClick={() => reviveRequest(first.targetPane)}
+        title="Click to review"
+        style={{
+          position: 'fixed',
+          top: '10px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 99998,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '6px 14px',
+          borderRadius: '999px',
+          border: '1px solid var(--accent-primary, #6ea8fe)',
+          background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',
+          color: 'var(--text-primary, #e8e8ea)',
+          fontFamily: 'var(--font-sans)',
+          fontSize: '12px',
+          fontWeight: 500,
+          cursor: 'pointer',
+          boxShadow: '0 6px 20px rgba(0,0,0,0.45)',
+          animation: 'hyConsentPill 2.4s ease-in-out infinite'
+        }}
+      >
+        <style>{`@keyframes hyConsentPill{0%,100%{box-shadow:0 6px 20px rgba(0,0,0,0.45)}50%{box-shadow:0 0 14px 2px var(--accent-primary, #6ea8fe)}}`}</style>
+        <span style={{fontSize: '14px', lineHeight: 1}}>🛂</span>
+        <span>
+          {expiredReqs.length === 1
+            ? `${first.requesterName || first.requester} is waiting for approval — click to review`
+            : `${expiredReqs.length} agents waiting for approval — click to review`}
+        </span>
+      </div>
+    );
+  }
 
   const act = (decision: 'allow' | 'deny') => {
     setBusy(true);
@@ -95,7 +146,11 @@ export default function ConsentModal(): React.ReactElement | null {
         backdropFilter: 'blur(1.5px)',
         animation: 'hyConsentBg 140ms ease'
       }}
-      onClick={() => act('deny')}
+      // Backdrop click SNOOZES to the pill — it must NOT silently DENY: a stray
+      // click anywhere in the window was killing agents' requests (and while
+      // the prompt was up, this full-window layer ate every hover/click — the
+      // "all the icons are broken" reports). Only the explicit buttons decide.
+      onClick={() => expireRequest(req.targetPane)}
     >
       <style>{`
         @keyframes hyConsentBg{from{opacity:0}to{opacity:1}}

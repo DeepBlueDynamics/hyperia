@@ -22,6 +22,19 @@ type Listener = (req: PermRequest | null) => void;
 const current = new Map<string, PermRequest>();
 const listeners = new Map<string, Set<Listener>>();
 
+// Requests whose PROMPT timed out (or was snoozed by a backdrop click) but are
+// still pending sidecar-side. They collapse into a persistent "pending
+// approvals" pill instead of vanishing — before this, a 45s TTL silently
+// deleted an unseen prompt and the requesting agent waited forever with the
+// human never knowing anything was asked ("Bass can't connect").
+const expired = new Map<string, PermRequest>();
+const expiredListeners = new Set<(reqs: PermRequest[]) => void>();
+
+function emitExpired(): void {
+  const list = Array.from(expired.values());
+  expiredListeners.forEach((cb) => cb(list));
+}
+
 // Window-level subscribers (the centered consent modal) — see ALL pending
 // requests at once, regardless of which pane/tab owns them.
 const allListeners = new Set<(reqs: PermRequest[]) => void>();
@@ -72,14 +85,43 @@ const reqTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /** A request arrived for a pane — show its prompt. */
 export function setRequest(req: PermRequest): void {
   if (!req.targetPane) return;
+  if (expired.delete(req.targetPane)) emitExpired();
   current.set(req.targetPane, req);
   const prev = reqTimers.get(req.targetPane);
   if (prev) clearTimeout(prev);
   reqTimers.set(
     req.targetPane,
-    setTimeout(() => clearRequest(req.targetPane), OVERLAY_TTL_MS)
+    setTimeout(() => expireRequest(req.targetPane), OVERLAY_TTL_MS)
   );
   emit(req.targetPane);
+}
+
+/**
+ * The prompt timed out (or was snoozed) — collapse it to the pending pill.
+ * The overlay releases (web panes un-hide, the #156 safety net stays intact)
+ * but the request survives; reviveRequest() brings the modal back.
+ */
+export function expireRequest(paneId: string): void {
+  const req = current.get(paneId);
+  if (!req) return;
+  const t = reqTimers.get(paneId);
+  if (t) {
+    clearTimeout(t);
+    reqTimers.delete(paneId);
+  }
+  current.delete(paneId);
+  expired.set(paneId, req);
+  emit(paneId);
+  emitExpired();
+}
+
+/** Re-open the full prompt for a collapsed (expired/snoozed) request. */
+export function reviveRequest(paneId: string): void {
+  const req = expired.get(paneId);
+  if (!req) return;
+  expired.delete(paneId);
+  emitExpired();
+  setRequest(req);
 }
 
 /** The request for a pane was answered (or the pane closed) — dismiss it. */
@@ -89,7 +131,20 @@ export function clearRequest(paneId: string): void {
     clearTimeout(t);
     reqTimers.delete(paneId);
   }
+  if (expired.delete(paneId)) emitExpired();
   if (current.delete(paneId)) emit(paneId);
+}
+
+/**
+ * Subscribe to COLLAPSED (expired/snoozed but still pending) requests — the
+ * "pending approvals" pill. Fires immediately with the current list.
+ */
+export function subscribeExpiredRequests(cb: (reqs: PermRequest[]) => void): () => void {
+  expiredListeners.add(cb);
+  cb(Array.from(expired.values()));
+  return () => {
+    expiredListeners.delete(cb);
+  };
 }
 
 /**
