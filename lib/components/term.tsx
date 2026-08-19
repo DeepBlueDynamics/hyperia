@@ -5,17 +5,17 @@ import Color from 'color';
 import isEqual from 'lodash/isEqual';
 import pickBy from 'lodash/pickBy';
 import throttle from 'lodash/throttle';
-import {Terminal} from 'xterm';
-import type {ITerminalOptions, IDisposable} from 'xterm';
-import {CanvasAddon} from 'xterm-addon-canvas';
-import {FitAddon} from 'xterm-addon-fit';
-import {ImageAddon} from 'xterm-addon-image';
-import {LigaturesAddon} from 'xterm-addon-ligatures';
-import {SearchAddon} from 'xterm-addon-search';
-import type {ISearchDecorationOptions} from 'xterm-addon-search';
-import {Unicode11Addon} from 'xterm-addon-unicode11';
-import {WebLinksAddon} from 'xterm-addon-web-links';
-import {WebglAddon} from 'xterm-addon-webgl';
+import {Terminal} from '@xterm/xterm';
+import type {ITerminalOptions, IDisposable} from '@xterm/xterm';
+import {CanvasAddon} from '@xterm/addon-canvas';
+import {FitAddon} from '@xterm/addon-fit';
+import {ImageAddon} from '@xterm/addon-image';
+import {LigaturesAddon} from '@xterm/addon-ligatures';
+import {SearchAddon} from '@xterm/addon-search';
+import type {ISearchDecorationOptions} from '@xterm/addon-search';
+import {Unicode11Addon} from '@xterm/addon-unicode11';
+import {WebLinksAddon} from '@xterm/addon-web-links';
+import {WebglAddon} from '@xterm/addon-webgl';
 
 import type {TermProps} from '../../typings/hyper';
 import rpc from '../rpc';
@@ -31,7 +31,7 @@ import {PaneBand} from './pane-band';
 
 const path = require('path');
 
-import 'xterm/css/xterm.css';
+import '@xterm/xterm/css/xterm.css';
 
 export const activeTerminals = new Map<string, Term>();
 
