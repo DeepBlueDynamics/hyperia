@@ -181,9 +181,20 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
           display: flex;
           align-items: center;
           justify-content: center;
-          width: 46px;
+          width: 34px;
           height: 34px;
           -webkit-app-region: no-drag;
+        }
+
+        /* The shared .header_shape sizing (40px + 12/15 padding, content-box)
+           left a ~10px glyph adrift in an oversized cell — the three controls
+           read as scattered. Scope a tight box for the window buttons only:
+           34px cells flush together, ~12px glyphs. (Hamburger untouched.) */
+        .header_winBtn .header_shape,
+        .header_winBtn .header_shape > svg {
+          width: 34px;
+          height: 34px;
+          padding: 11px;
         }
 
         .header_closeWindow:hover {
