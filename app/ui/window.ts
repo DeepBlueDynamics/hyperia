@@ -1012,10 +1012,28 @@ export function newWindow(
         rpc.emit('pane copy files done', {uid, ok: false, dir: cwd || '', count: 0, error: "couldn't determine the pane's directory"});
         return;
       }
+      // A folder drag can enumerate the folder AND its descendants as separate
+      // top-level entries (Chromium expands directory drops into
+      // dataTransfer.files) — copying each one then splatters the folder's
+      // contents into the cwd root NEXT TO the folder copy. Keep only ROOT
+      // paths: anything inside another dropped path already comes along with
+      // the recursive copy of its parent.
+      const candidates = (paths || []).filter((p): p is string => !!p && existsSync(p));
+      const normPath = (p: string) => {
+        const n = p.replace(/[\\/]+$/, '');
+        return process.platform === 'win32' ? n.toLowerCase() : n;
+      };
+      const rootPaths = candidates.filter((p) => {
+        const np = normPath(p);
+        return !candidates.some((other) => {
+          if (other === p) return false;
+          const no = normPath(other);
+          return np !== no && (np.startsWith(`${no}\\`) || np.startsWith(`${no}/`));
+        });
+      });
       const names: string[] = [];
-      for (const src of paths || []) {
+      for (const src of rootPaths) {
         try {
-          if (!src || !existsSync(src)) continue;
           const srcBase = basename(src);
           let dest = join(dir, srcBase);
           if (existsSync(dest)) {
