@@ -1700,10 +1700,16 @@ impl Bridge {
                         tab_active,
                         pane_active,
                         screen: ScreenBuffer::new(rows, cols, 1000),
-                        bsp_x: 0.0,
-                        bsp_y: 0.0,
-                        bsp_w: 100.0,
-                        bsp_h: 100.0,
+                        // Honor the rect carried IN the register message (main
+                        // sends the tracked session's current BSP). Hardcoding
+                        // defaults here left any pane that (re)registered
+                        // without a subsequent layout CHANGE stuck at
+                        // 0,0,100x100 — tab-stream clients then stacked those
+                        // panes over the whole monitor ("panes not appearing").
+                        bsp_x: msg["bsp"]["x"].as_f64().unwrap_or(0.0) as f32,
+                        bsp_y: msg["bsp"]["y"].as_f64().unwrap_or(0.0) as f32,
+                        bsp_w: msg["bsp"]["width"].as_f64().unwrap_or(100.0) as f32,
+                        bsp_h: msg["bsp"]["height"].as_f64().unwrap_or(100.0) as f32,
                         cwd: String::new(),
                         last_user_activity: None,
                         last_output_at: None,
