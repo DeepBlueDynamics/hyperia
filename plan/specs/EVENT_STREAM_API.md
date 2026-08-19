@@ -187,12 +187,13 @@ Server → client:
 ```jsonc
 { "t":"tab-layout", "v":1, "tabId":"…", "tabName":"…", "windowId":1, "w":1920, "h":1080,
   "panes":[
-    { "paneId":"4d5b…", "type":"terminal", "x":0,  "y":0, "w":50, "h":100, "cols":104, "rows":68, "title":"…", "state":"running" },
-    { "paneId":"a8a9…", "type":"web",      "x":50, "y":0, "w":50, "h":100, "px":960, "py":1080,   "title":"…", "state":"idle" }
+    { "paneId":"4d5b…", "type":"terminal", "x":0,  "y":0, "w":50, "h":100, "cols":104, "rows":68, "name":"Brave Skink 🥐", "title":"…", "state":"running" },
+    { "paneId":"a8a9…", "type":"web",      "x":50, "y":0, "w":50, "h":100, "px":960, "py":1080,   "name":"…", "title":"…", "state":"idle" }
   ] }
 ```
    - `x/y/w/h` = the pane's BSP rect in **0–100 %** of the tab — where to place its texture.
    - terminal panes carry `cols/rows`; web panes carry `px/py` = the pixel size Hyperia captures at (`= rect-fraction × tab w/h`).
+   - `name` = the **stable friendly codename** ("Brave Skink 🥐") — layout-stable, never shadowed; label monitors with this. `title` = the volatile display title (OSC title, falls back to the codename).
 3. Then per-pane frames — **all TEXT/JSON**, each tagged with `paneId`:
    - **terminal** → `frame` (keyframe) then `delta`s — the **exact same shape as wall mode** (`{t:"frame"|"delta", paneId, cols, rows, cursor, rows_data}`).
    - **web** → `{ "t":"pixels", "paneId":"…", "jpeg":"<base64>" }` — the pane's current frame; byte-identical frames are dropped. (Base64-in-JSON keeps the whole tab stream uniformly JSON-demuxable by `paneId`. The dedicated `/ws/pixels/{id}` stays raw-binary for single-pane fidelity.)
