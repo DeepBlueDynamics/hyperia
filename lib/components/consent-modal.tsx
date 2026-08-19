@@ -101,6 +101,10 @@ export default function ConsentModal(): React.ReactElement | null {
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 99998,
+          // The pill parks INSIDE the frameless window's drag strip — without
+          // no-drag, clicks start a WINDOW DRAG instead of dispatching DOM
+          // events, so "click to review" did nothing.
+          ['WebkitAppRegion' as any]: 'no-drag',
           display: 'flex',
           alignItems: 'center',
           gap: '8px',

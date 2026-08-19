@@ -86,6 +86,10 @@ export default function AgentToast(): React.ReactElement | null {
           key={r.id}
           style={{
             pointerEvents: 'auto',
+            // Top-center = the frameless window's drag strip; without no-drag,
+            // clicks on the card's TOP edge start a window drag instead of
+            // reaching the buttons (same bug as the consent pill).
+            ['WebkitAppRegion' as any]: 'no-drag',
             background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',
             border: '1px solid var(--accent-primary, #6ea8fe)',
             borderRadius: '10px',
