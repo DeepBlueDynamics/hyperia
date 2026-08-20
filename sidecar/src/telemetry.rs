@@ -11,19 +11,26 @@ use serde::{Deserialize, Serialize};
 // Event types
 // ---------------------------------------------------------------------------
 
+// Liberal-in-what-we-accept: every variant carries lowercase/short aliases so a
+// producer sending "in"/"Out"/"rx"/"write" parses instead of 400ing (an exact-
+// casing mismatch caused a 7.5k-reject storm from the n8 pusher on 2026-08-20 —
+// never again). Serialization stays canonical.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum TelemetryEvent {
+    #[serde(alias = "fileop", alias = "file_op", alias = "file")]
     FileOp {
         path: String,
         op: FileOp,
         bytes: Option<u64>,
     },
+    #[serde(alias = "network", alias = "net")]
     Network {
         direction: NetDirection,
         host: String,
         bytes: u64,
     },
+    #[serde(alias = "tokens", alias = "token")]
     Tokens {
         input: u64,
         output: u64,
@@ -34,16 +41,23 @@ pub enum TelemetryEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FileOp {
+    #[serde(alias = "create")]
     Create,
+    #[serde(alias = "write")]
     Write,
+    #[serde(alias = "delete")]
     Delete,
+    #[serde(alias = "rename")]
     Rename,
+    #[serde(alias = "read")]
     Read,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NetDirection {
+    #[serde(alias = "In", alias = "in", alias = "inbound", alias = "rx", alias = "Rx", alias = "RX")]
     Inbound,
+    #[serde(alias = "Out", alias = "out", alias = "outbound", alias = "tx", alias = "Tx", alias = "TX")]
     Outbound,
 }
 
