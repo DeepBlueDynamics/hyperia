@@ -37,7 +37,7 @@
   .ghost.on{background:var(--violet);color:#0a0e15;border-color:var(--violet);font-weight:600}
 
   /* shell */
-  .shell{display:grid;grid-template-columns:256px 1fr 340px;gap:16px;padding:16px 18px;flex:1;align-items:start}
+  .shell{display:grid;grid-template-columns:256px 1fr auto;gap:16px;padding:16px 18px;flex:1;align-items:start}
   aside,main,.chatcol{min-width:0}
   aside{display:flex;flex-direction:column;gap:12px;position:sticky;top:16px}
   main{display:flex;flex-direction:column;gap:14px}
@@ -119,11 +119,26 @@
   .ev .body{color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ev .by{color:var(--ink-dim);font-size:10.5px}
 
-  /* chat rail */
-  .chatcol{position:sticky;top:16px;display:flex;flex-direction:column;gap:0;height:calc(100vh - 110px)}
-  .chat-head{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;border-bottom:1px solid var(--line)}
-  .chatcol .card{display:flex;flex-direction:column;height:100%}
+  /* collapsible sections */
+  .sec-h{display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;gap:8px}
+  .caret{font-family:var(--mono);color:var(--ink-dim);font-size:10px;transition:transform .15s;flex:none}
+  .closed > .sec-h .caret{transform:rotate(-90deg)}
+  .sec-body{margin-top:8px}
+  .closed .sec-body{display:none}
+
+  /* chat rail — collapsible; hideous-in-340px shell only loads when opened */
+  .chatcol{position:sticky;top:16px}
+  .chatcol .card{display:flex;flex-direction:column}
+  .chatcol.open{width:420px}
+  .chatcol.open .card{height:calc(100vh - 110px)}
+  .chatcol.closed-rail{width:46px}
+  .chat-head{display:flex;justify-content:space-between;align-items:center;padding:13px 14px;
+    border-bottom:1px solid var(--line);cursor:pointer;user-select:none;gap:8px}
+  .chatcol.closed-rail .chat-head{border-bottom:0;flex-direction:column;padding:14px 8px;gap:10px}
+  .chatcol.closed-rail .chat-head .panel-t{writing-mode:vertical-rl;letter-spacing:.14em;font-size:10.5px}
+  .chatcol.closed-rail .chat-head .eyebrow{display:none}
   #chat-frame{flex:1;border:0;width:100%;border-radius:0 0 12px 12px;background:var(--ground)}
+  .chatcol.closed-rail #chat-frame{display:none}
 
   /* bottom bar */
   .botbar{display:flex;align-items:center;gap:16px;padding:8px 18px;border-top:1px solid var(--line);
@@ -153,22 +168,26 @@
 
 <div class="shell">
   <aside>
-    <section class="card pad">
-      <div class="eyebrow" style="margin-bottom:10px">Agent Status</div>
-      <div class="agent-mode" id="agent-mode">—</div>
-      <div class="kv" style="border-top:0"><span class="k">Active model</span><span class="chip num" id="agent-model">—</span></div>
-      <div class="kv"><span class="k">Maximus compressor</span><span class="num" id="maximus-state">—</span></div>
-      <div class="kv"><span class="k">Live panes</span><span class="num" id="pane-count">—</span></div>
+    <section class="card pad" id="sec-agent">
+      <div class="sec-h" onclick="toggleSec('sec-agent')"><span class="eyebrow">Agent Status</span><span class="caret">▾</span></div>
+      <div class="sec-body">
+        <div class="agent-mode" id="agent-mode">—</div>
+        <div class="kv" style="border-top:0"><span class="k">Active model</span><span class="chip num" id="agent-model">—</span></div>
+        <div class="kv"><span class="k">Maximus compressor</span><span class="num" id="maximus-state">—</span></div>
+        <div class="kv"><span class="k">Live panes</span><span class="num" id="pane-count">—</span></div>
+      </div>
     </section>
-    <section class="card pad">
-      <div class="eyebrow" style="margin-bottom:8px">Core Services</div>
-      <div id="services"></div>
+    <section class="card pad" id="sec-services">
+      <div class="sec-h" onclick="toggleSec('sec-services')"><span class="eyebrow">Core Services</span><span class="caret">▾</span></div>
+      <div class="sec-body"><div id="services"></div></div>
     </section>
-    <section class="card pad">
-      <div class="eyebrow" style="margin-bottom:8px">Hardware Diagnostics</div>
-      <div class="kv" style="border-top:0"><span class="k">VRAM</span><span class="num" id="vram">—</span></div>
-      <div class="bar"><i id="vram-bar" style="width:0%"></i></div>
-      <div class="kv"><span class="k">Sidecar</span><span class="num" id="sidecar-v">—</span></div>
+    <section class="card pad" id="sec-hw">
+      <div class="sec-h" onclick="toggleSec('sec-hw')"><span class="eyebrow">Hardware Diagnostics</span><span class="caret">▾</span></div>
+      <div class="sec-body">
+        <div class="kv" style="border-top:0"><span class="k">VRAM</span><span class="num" id="vram">—</span></div>
+        <div class="bar"><i id="vram-bar" style="width:0%"></i></div>
+        <div class="kv"><span class="k">Sidecar</span><span class="num" id="sidecar-v">—</span></div>
+      </div>
     </section>
   </aside>
 
@@ -224,10 +243,13 @@
     </section>
   </main>
 
-  <div class="chatcol">
+  <div class="chatcol closed-rail" id="chatcol">
     <section class="card">
-      <div class="chat-head"><span class="panel-t">Agent Chat</span><span class="eyebrow">Hyperia Agent</span></div>
-      <iframe id="chat-frame" src="/shell" title="Hyperia Agent"></iframe>
+      <div class="chat-head" onclick="toggleChat()">
+        <span class="panel-t">Agent Chat</span>
+        <span class="eyebrow" id="chat-caret">◂ open</span>
+      </div>
+      <iframe id="chat-frame" title="Hyperia Agent"></iframe>
     </section>
   </div>
 </div>
@@ -453,6 +475,25 @@ $("btn-pause").onclick=()=>{ paused=!paused;
 $("btn-reset").onclick=async()=>{ if(confirm("Clear all telemetry counters?")){
   await fetch("/api/telemetry/reset",{method:"POST"}); hist.length=0; refresh(); } };
 $("scope-window").onclick=()=>refresh();
+
+// collapsible sections (state persists across reloads)
+function toggleSec(id){
+  const el=$(id); el.classList.toggle("closed");
+  try{ localStorage.setItem("deck."+id, el.classList.contains("closed")?"1":"0"); }catch(_e){}
+}
+function toggleChat(){
+  const col=$("chatcol"); const open=col.classList.contains("closed-rail");
+  col.classList.toggle("closed-rail",!open); col.classList.toggle("open",open);
+  $("chat-caret").textContent = open ? "▸ collapse" : "◂ open";
+  const f=$("chat-frame");
+  if(open && !f.src) f.src="/shell";   // lazy-load: never render the shell while hidden
+  try{ localStorage.setItem("deck.chat", open?"1":"0"); }catch(_e){}
+}
+// restore persisted states
+try{
+  ["sec-agent","sec-services","sec-hw"].forEach(id=>{ if(localStorage.getItem("deck."+id)==="1") $(id).classList.add("closed"); });
+  if(localStorage.getItem("deck.chat")==="1") toggleChat();
+}catch(_e){}
 
 let pageV=null;
 setInterval(async()=>{ try{ const r=await fetch("/api/dashboard/version"); const j=await r.json();
