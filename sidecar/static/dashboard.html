@@ -3,213 +3,240 @@
 <style>
   :root{
     --ground:#0a0e15; --panel:#10161f; --panel-2:#141c28;
-    --line:#1f2a38; --line-bright:#2c3b4f;
-    --ink:#e8eef6; --ink-mid:#9aa8bd; --ink-dim:#5f6d80;
+    --line:#1f2a38; --ink:#e8eef6; --ink-mid:#9aa8bd; --ink-dim:#5f6d80;
     --green:#34d399; --cyan:#38bdf8; --violet:#a78bfa; --amber:#fbbf24; --rose:#fb5b6d;
     --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,monospace;
     --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   }
   *{box-sizing:border-box;margin:0}
-  body{background:var(--ground);color:var(--ink);font-family:var(--sans);
-    font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;
-    padding:18px;min-height:100vh}
-  .eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
-    text-transform:uppercase;color:var(--ink-dim)}
+  html,body{height:100%}
+  body{background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:13.5px;
+    line-height:1.5;-webkit-font-smoothing:antialiased;display:flex;flex-direction:column;min-height:100vh}
+  .eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-dim)}
   .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px}
-  header{display:flex;align-items:center;gap:16px;padding:2px 6px 16px;flex-wrap:wrap}
-  .brand{font-weight:700;letter-spacing:.16em;font-size:15px}
-  .live{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);
-    font-size:11px;color:var(--green);padding:4px 10px;border-radius:20px;
-    background:color-mix(in srgb,var(--green) 12%,transparent);
-    border:1px solid color-mix(in srgb,var(--green) 30%,transparent)}
-  .dot{width:7px;height:7px;border-radius:50%;background:currentColor;
-    animation:pulse 2.4s ease-out infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,currentColor 60%,transparent)}
-    70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
+
+  /* top bar */
+  .topbar{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .brand{font-weight:800;letter-spacing:.12em;font-size:14.5px;white-space:nowrap}
+  .live{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;color:var(--green);
+    padding:3px 10px;border-radius:20px;background:color-mix(in srgb,var(--green) 12%,transparent);
+    border:1px solid color-mix(in srgb,var(--green) 30%,transparent);white-space:nowrap}
+  .dot{width:6px;height:6px;border-radius:50%;background:currentColor;animation:pulse 2.4s ease-out infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,currentColor 60%,transparent)}70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
   @media(prefers-reduced-motion:reduce){.dot{animation:none}}
-  .spacer{flex:1}
-  .ghost{font-family:var(--mono);font-size:11px;color:var(--ink-mid);
-    background:var(--panel-2);border:1px solid var(--line);padding:7px 13px;
-    border-radius:8px;cursor:pointer}
-  .shell{display:grid;grid-template-columns:288px 1fr;gap:18px;align-items:start}
-  aside{display:flex;flex-direction:column;gap:14px}
-  main{display:flex;flex-direction:column;gap:16px;min-width:0}
-  .pad{padding:16px 17px}
-  .rail-h{margin-bottom:12px}
-  .agent-mode{font-size:26px;font-weight:800;letter-spacing:.02em;
-    background:linear-gradient(92deg,var(--cyan),var(--violet));
+  nav{display:flex;gap:4px;margin:0 auto}
+  nav a{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--ink-dim);text-decoration:none;padding:7px 13px;border-radius:8px}
+  nav a:hover{color:var(--ink-mid)}
+  nav a.on{color:var(--cyan);background:color-mix(in srgb,var(--cyan) 9%,transparent)}
+  .tb-right{display:flex;align-items:center;gap:8px;white-space:nowrap}
+  .uptime{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);padding:6px 11px;border:1px solid var(--line);border-radius:8px}
+  .ghost{font-family:var(--mono);font-size:10.5px;color:var(--ink-mid);background:var(--panel-2);
+    border:1px solid var(--line);padding:6px 12px;border-radius:8px;cursor:pointer}
+  .ghost.on{background:var(--violet);color:#0a0e15;border-color:var(--violet);font-weight:600}
+
+  /* shell */
+  .shell{display:grid;grid-template-columns:256px 1fr 340px;gap:16px;padding:16px 18px;flex:1;align-items:start}
+  aside,main,.chatcol{min-width:0}
+  aside{display:flex;flex-direction:column;gap:12px;position:sticky;top:16px}
+  main{display:flex;flex-direction:column;gap:14px}
+  .pad{padding:14px 15px}
+  .agent-mode{font-size:24px;font-weight:800;background:linear-gradient(92deg,var(--cyan),var(--violet));
     -webkit-background-clip:text;background-clip:text;color:transparent;line-height:1.1}
-  .kv{display:flex;justify-content:space-between;align-items:center;padding:7px 0;
-    border-top:1px solid var(--line);gap:8px}
-  .kv .k{color:var(--ink-mid);font-size:12.5px;white-space:nowrap}
-  .chip{font-family:var(--mono);font-size:11px;color:var(--ink);
-    background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:3px 7px;
-    overflow:hidden;text-overflow:ellipsis;max-width:170px;white-space:nowrap}
+  .kv{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--line);gap:8px}
+  .kv .k{color:var(--ink-mid);font-size:12px;white-space:nowrap}
+  .chip{font-family:var(--mono);font-size:10.5px;background:var(--panel-2);border:1px solid var(--line);
+    border-radius:6px;padding:2px 7px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ok{color:var(--green)} .bad{color:var(--rose)}
-  .svc{display:flex;gap:10px;padding:11px 0;border-top:1px solid var(--line);align-items:flex-start}
+  .svc{display:flex;gap:9px;padding:9px 0;border-top:1px solid var(--line);align-items:flex-start}
   .svc:first-of-type{border-top:0}
-  .svc .led{width:8px;height:8px;border-radius:50%;margin-top:5px;flex:none}
+  .svc .led{width:7px;height:7px;border-radius:50%;margin-top:6px;flex:none}
   .led.up{background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 60%,transparent)}
-  .led.down{background:var(--rose)}
-  .led.na{background:var(--ink-dim)}
-  .svc .name{font-weight:600;font-size:13px}
-  .svc .name small{color:var(--ink-dim);font-weight:400;font-size:11px}
-  .svc .sub{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin-top:2px;word-break:break-all}
+  .led.down{background:var(--rose)} .led.na{background:var(--ink-dim)}
+  .svc .name{font-weight:600;font-size:12.5px}
+  .svc .name small{color:var(--ink-dim);font-weight:400;font-size:10.5px}
+  .svc .sub{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);margin-top:1px;word-break:break-all}
   .svc .sub.bad{color:var(--rose)}
-  .models{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
-  .m{font-family:var(--mono);font-size:10px;color:var(--cyan);
-    background:color-mix(in srgb,var(--cyan) 8%,transparent);
-    border:1px solid color-mix(in srgb,var(--cyan) 22%,transparent);
-    border-radius:5px;padding:2px 6px}
+  .models{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}
+  .m{font-family:var(--mono);font-size:9.5px;color:var(--cyan);background:color-mix(in srgb,var(--cyan) 8%,transparent);
+    border:1px solid color-mix(in srgb,var(--cyan) 22%,transparent);border-radius:5px;padding:1px 6px}
   .m.more{color:var(--ink-dim);background:none;border-color:var(--line)}
-  .panes{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  .ptab{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;
-    background:var(--panel);border:1px solid var(--line);border-radius:9px;
-    padding:7px 12px;cursor:pointer;color:var(--ink-mid);font-family:var(--sans)}
-  .ptab .prov{font-family:var(--mono);font-size:10px;color:var(--ink-dim)}
-  .ptab[aria-selected=true]{border-color:var(--violet);color:var(--ink);
-    background:color-mix(in srgb,var(--violet) 10%,transparent)}
-  .ptab[aria-selected=true] .prov{color:var(--violet)}
-  .hero{display:grid;grid-template-columns:1fr 300px;gap:0}
-  .hero .left{padding:20px 22px;border-right:1px solid var(--line)}
-  .hero .right{padding:20px 22px;display:flex;flex-direction:column;justify-content:center;gap:14px}
-  .big{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:46px;
-    font-weight:600;line-height:1;letter-spacing:-.02em}
-  .big .unit{font-size:16px;color:var(--ink-dim);margin-left:8px;letter-spacing:0}
-  .split{display:flex;height:9px;border-radius:5px;overflow:hidden;margin-top:16px;background:var(--panel-2)}
-  .split .i{background:var(--violet)} .split .o{background:var(--cyan)}
-  .legend{display:flex;gap:20px;margin-top:11px;font-size:12px;color:var(--ink-mid);flex-wrap:wrap}
-  .legend b{color:var(--ink);font-family:var(--mono)}
-  .sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:middle}
-  .stat .v{font-family:var(--mono);font-size:22px;font-variant-numeric:tabular-nums}
-  .spark{width:100%;height:52px;display:block;margin-top:6px}
-  .lead-head{display:flex;justify-content:space-between;align-items:baseline;padding:15px 18px 8px}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  thead th{text-align:right;font-family:var(--mono);font-size:10px;letter-spacing:.1em;
-    text-transform:uppercase;color:var(--ink-dim);font-weight:500;padding:6px 18px}
+  .bar{height:6px;background:var(--panel-2);border-radius:4px;overflow:hidden;margin-top:6px}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),var(--violet))}
+
+  /* overview cards */
+  .ov-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+  .ranges{display:flex;gap:2px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:2px}
+  .ranges button{font-family:var(--mono);font-size:10px;color:var(--ink-dim);background:none;border:0;
+    padding:4px 9px;border-radius:6px;cursor:pointer}
+  .ranges button.on{background:var(--cyan);color:#0a0e15;font-weight:700}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:10px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 13px 8px}
+  .stat .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase}
+  .stat .v{font-family:var(--mono);font-size:23px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.2;margin-top:2px}
+  .stat .u{font-size:11px;color:var(--ink-dim);margin-left:4px;font-weight:400}
+  .stat canvas{width:100%;height:26px;display:block;margin-top:4px}
+  .c-vio .lbl{color:var(--violet)} .c-cyan .lbl{color:var(--cyan)} .c-green .lbl{color:var(--green)} .c-amber .lbl{color:var(--amber)}
+
+  /* flow + donut */
+  .row-flow{display:grid;grid-template-columns:1fr 300px;gap:14px}
+  .panel-t{font-weight:700;letter-spacing:.08em;font-size:11.5px;text-transform:uppercase;color:var(--ink-mid)}
+  .flow-head{display:flex;justify-content:space-between;align-items:center;padding:13px 16px 4px}
+  .legend{display:flex;gap:14px;font-size:11px;color:var(--ink-mid)}
+  .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle}
+  #flow{width:100%;height:190px;display:block;padding:4px 8px 8px}
+  .donut-wrap{display:flex;flex-direction:column;align-items:center;padding:10px 16px 14px;gap:10px}
+  #donut{width:150px;height:150px}
+  .dlegend{width:100%;font-size:11.5px}
+  .dlegend .li{display:flex;justify-content:space-between;padding:4px 0;border-top:1px solid var(--line);color:var(--ink-mid)}
+  .dlegend .li:first-child{border-top:0}
+  .dlegend b{font-family:var(--mono);color:var(--ink)}
+
+  /* table */
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  thead th{text-align:right;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-dim);font-weight:500;padding:5px 16px}
   thead th:first-child,tbody td:first-child{text-align:left}
-  tbody td{padding:11px 18px;border-top:1px solid var(--line);
-    font-variant-numeric:tabular-nums;text-align:right;font-family:var(--mono)}
+  tbody td{padding:9px 16px;border-top:1px solid var(--line);font-variant-numeric:tabular-nums;text-align:right;font-family:var(--mono)}
   tbody tr:hover{background:var(--panel-2)}
-  .who{display:flex;align-items:center;gap:9px;font-family:var(--sans)}
-  .who .mdl{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);margin-top:1px}
-  .share{width:120px}
-  .share .track{height:6px;background:var(--panel-2);border-radius:3px;overflow:hidden}
-  .share .track i{display:block;height:100%;background:var(--violet)}
-  .row2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  .metric-h{display:flex;justify-content:space-between;align-items:center;padding:15px 18px 4px}
-  .metric-h .t{font-weight:700;letter-spacing:.06em;font-size:12px;text-transform:uppercase}
-  .fh .t{color:var(--green)} .nh .t{color:var(--cyan)}
-  .metric-big{font-family:var(--mono);font-size:30px;padding:4px 18px 0;font-variant-numeric:tabular-nums}
-  .lines{padding:8px 18px 16px}
-  .li{display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line);
-    color:var(--ink-mid);font-size:12.5px}
-  .li .num{color:var(--ink)}
-  .li:first-child{border-top:0}
-  .ev-h{display:flex;justify-content:space-between;align-items:center;padding:14px 18px 6px}
-  .stream{padding:2px 18px 14px;max-height:240px;overflow-y:auto;font-family:var(--mono);font-size:12px}
-  .ev{display:grid;grid-template-columns:70px 74px 1fr auto;gap:12px;align-items:center;
-    padding:7px 0;border-top:1px solid var(--line)}
+  .who{font-family:var(--sans)}
+  .who .mdl{font-family:var(--mono);font-size:10px;color:var(--ink-dim)}
+  .share{width:110px}
+  .track{height:5px;background:var(--panel-2);border-radius:3px;overflow:hidden}
+  .track i{display:block;height:100%;background:var(--violet)}
+  .empty{color:var(--ink-dim);font-size:12px;padding:10px 16px}
+
+  /* events */
+  .stream{padding:2px 16px 12px;max-height:220px;overflow-y:auto;font-family:var(--mono);font-size:11.5px}
+  .ev{display:grid;grid-template-columns:64px 66px 1fr auto;gap:10px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
   .ev:first-child{border-top:0}
-  .ev .ts{color:var(--ink-dim);font-size:11px}
-  .tag{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;padding:2px 7px;
-    border-radius:4px;text-align:center;font-weight:600}
+  .ev .ts{color:var(--ink-dim);font-size:10.5px}
+  .tag{font-size:9px;letter-spacing:.08em;text-transform:uppercase;padding:2px 6px;border-radius:4px;text-align:center;font-weight:600}
   .tag.file{color:var(--green);background:color-mix(in srgb,var(--green) 12%,transparent)}
   .tag.net{color:var(--cyan);background:color-mix(in srgb,var(--cyan) 12%,transparent)}
   .tag.tok{color:var(--violet);background:color-mix(in srgb,var(--violet) 12%,transparent)}
   .ev .body{color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .ev .by{color:var(--ink-dim);font-size:11px}
-  .empty{color:var(--ink-dim);font-size:12px;padding:10px 0}
-  .foot{padding:10px 6px 0;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:.08em}
-  @media(max-width:1080px){.shell{grid-template-columns:1fr}.hero{grid-template-columns:1fr}
-    .hero .left{border-right:0;border-bottom:1px solid var(--line)}.row2{grid-template-columns:1fr}}
+  .ev .by{color:var(--ink-dim);font-size:10.5px}
+
+  /* chat rail */
+  .chatcol{position:sticky;top:16px;display:flex;flex-direction:column;gap:0;height:calc(100vh - 110px)}
+  .chat-head{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;border-bottom:1px solid var(--line)}
+  .chatcol .card{display:flex;flex-direction:column;height:100%}
+  #chat-frame{flex:1;border:0;width:100%;border-radius:0 0 12px 12px;background:var(--ground)}
+
+  /* bottom bar */
+  .botbar{display:flex;align-items:center;gap:16px;padding:8px 18px;border-top:1px solid var(--line);
+    font-family:var(--mono);font-size:10.5px;color:var(--ink-dim)}
+  .pill{display:inline-flex;align-items:center;gap:6px}
+  .pill .led{width:6px;height:6px;border-radius:50%}
+  @media(max-width:1500px){.shell{grid-template-columns:240px 1fr}.chatcol{display:none}}
+  @media(max-width:1000px){.shell{grid-template-columns:1fr}aside{position:static}.row-flow{grid-template-columns:1fr}}
 </style></head><body>
 
-<header>
+<div class="topbar">
   <span class="brand">HYPERIA CONTROL DECK</span>
   <span class="live"><span class="dot"></span>SYSTEM LIVE</span>
-  <span class="spacer"></span>
-  <button class="ghost" id="scope-window" aria-pressed="true">Window</button>
-  <button class="ghost" id="btn-reset" title="Clear all telemetry counters">Reset</button>
-</header>
+  <nav>
+    <a class="on" href="/dashboard">Telemetry</a>
+    <a href="/shell">Agents</a>
+    <a href="/agent/config">Config</a>
+    <a href="/guide">Guide</a>
+  </nav>
+  <div class="tb-right">
+    <span class="uptime num" id="uptime">SESSION 00:00:00</span>
+    <button class="ghost on" id="scope-window">Window</button>
+    <button class="ghost" id="btn-pause">Pause</button>
+    <button class="ghost" id="btn-reset" title="Clear all telemetry counters">Reset</button>
+  </div>
+</div>
 
 <div class="shell">
   <aside>
     <section class="card pad">
-      <div class="eyebrow rail-h">Agent Status</div>
+      <div class="eyebrow" style="margin-bottom:10px">Agent Status</div>
       <div class="agent-mode" id="agent-mode">—</div>
-      <div class="kv" style="border-top:0"><span class="k">Active model</span><span class="chip" id="agent-model">—</span></div>
+      <div class="kv" style="border-top:0"><span class="k">Active model</span><span class="chip num" id="agent-model">—</span></div>
       <div class="kv"><span class="k">Maximus compressor</span><span class="num" id="maximus-state">—</span></div>
       <div class="kv"><span class="k">Live panes</span><span class="num" id="pane-count">—</span></div>
     </section>
     <section class="card pad">
-      <div class="eyebrow rail-h">Core Services</div>
+      <div class="eyebrow" style="margin-bottom:8px">Core Services</div>
       <div id="services"></div>
     </section>
-    <div class="foot" id="foot">HYPERIA SIDECAR</div>
+    <section class="card pad">
+      <div class="eyebrow" style="margin-bottom:8px">Hardware Diagnostics</div>
+      <div class="kv" style="border-top:0"><span class="k">VRAM</span><span class="num" id="vram">—</span></div>
+      <div class="bar"><i id="vram-bar" style="width:0%"></i></div>
+      <div class="kv"><span class="k">Sidecar</span><span class="num" id="sidecar-v">—</span></div>
+    </section>
   </aside>
 
   <main>
-    <div class="panes" id="pane-tabs"><span class="eyebrow" style="margin-right:4px">Panes</span></div>
-
-    <section class="card hero">
-      <div class="left">
-        <div class="eyebrow" id="hero-label">Token usage</div>
-        <div class="big" style="margin-top:10px"><span id="tok-total">0</span><span class="unit">tokens</span></div>
-        <div class="split" aria-hidden="true"><span class="i" id="split-i" style="width:0%"></span><span class="o" id="split-o" style="width:0%"></span></div>
-        <div class="legend">
-          <span><span class="sw" style="background:var(--violet)"></span>Input <b id="tok-in">0</b></span>
-          <span><span class="sw" style="background:var(--cyan)"></span>Output <b id="tok-out">0</b></span>
-          <span><span class="sw" style="background:var(--ink-dim)"></span>Cache <b id="tok-cache">0</b></span>
+    <section>
+      <div class="ov-head">
+        <span class="panel-t">Telemetry Overview</span>
+        <div class="ranges" id="ranges">
+          <button data-r="60">1m</button><button data-r="300">5m</button>
+          <button data-r="900" class="on">15m</button><button data-r="3600">1h</button>
         </div>
       </div>
-      <div class="right">
-        <div class="eyebrow">Throughput · tokens/s (last 2 min)</div>
-        <canvas class="spark" id="spark" width="300" height="52"></canvas>
-        <div class="stat"><div class="eyebrow">Current rate</div><div class="v"><span id="tok-rate">0</span> tok/s</div></div>
+      <div class="cards">
+        <div class="stat c-vio"><div class="lbl">Tokens In</div><div class="v"><span id="s-in">0</span><span class="u">tok/s</span></div><canvas id="sp-in"></canvas></div>
+        <div class="stat c-cyan"><div class="lbl">Tokens Out</div><div class="v"><span id="s-out">0</span><span class="u">tok/s</span></div><canvas id="sp-out"></canvas></div>
+        <div class="stat c-vio"><div class="lbl">Total Tokens</div><div class="v" id="s-total">0</div><canvas id="sp-total"></canvas></div>
+        <div class="stat c-green"><div class="lbl">File Ops</div><div class="v" id="s-files">0</div><canvas id="sp-files"></canvas></div>
+        <div class="stat c-cyan"><div class="lbl">Network</div><div class="v" id="s-net">0 B</div><canvas id="sp-net"></canvas></div>
+        <div class="stat c-amber"><div class="lbl">Active Panes</div><div class="v" id="s-panes">0</div><canvas id="sp-panes"></canvas></div>
       </div>
     </section>
 
-    <section class="card">
-      <div class="lead-head"><span class="eyebrow" style="letter-spacing:.1em">Token usage by pane</span>
-        <span class="eyebrow" id="lead-total">—</span></div>
-      <div style="overflow-x:auto">
-      <table>
-        <thead><tr><th>Pane</th><th>In</th><th>Out</th><th class="share">Share</th></tr></thead>
-        <tbody id="leaderboard"><tr><td colspan="4"><span class="empty">no per-pane telemetry yet</span></td></tr></tbody>
-      </table>
-      </div>
-    </section>
-
-    <div class="row2">
-      <section class="card fh">
-        <div class="metric-h"><span class="t">File operations</span><span class="eyebrow" id="file-scope">window</span></div>
-        <div class="metric-big" id="file-total">0</div>
-        <div class="lines">
-          <div class="li"><span>Reads</span><span class="num" id="f-reads">0</span></div>
-          <div class="li"><span>Writes</span><span class="num" id="f-writes">0</span></div>
-          <div class="li"><span>Creates</span><span class="num" id="f-creates">0</span></div>
-          <div class="li"><span>Bytes written</span><span class="num" id="f-bytes">0 B</span></div>
-        </div>
+    <div class="row-flow">
+      <section class="card">
+        <div class="flow-head"><span class="panel-t">Token Flow</span>
+          <span class="legend"><span><span class="sw" style="background:var(--violet)"></span>Input</span>
+          <span><span class="sw" style="background:var(--cyan)"></span>Output</span></span></div>
+        <canvas id="flow"></canvas>
       </section>
-      <section class="card nh">
-        <div class="metric-h"><span class="t">Network traffic</span><span class="eyebrow" id="net-scope">window</span></div>
-        <div class="metric-big" id="net-total">0 B</div>
-        <div class="lines">
-          <div class="li"><span>Inbound</span><span class="num" id="n-in">0 B</span></div>
-          <div class="li"><span>Outbound</span><span class="num" id="n-out">0 B</span></div>
-          <div class="li"><span>Hosts</span><span class="num" id="n-hosts">—</span></div>
+      <section class="card">
+        <div class="flow-head"><span class="panel-t">Tokens by Pane</span></div>
+        <div class="donut-wrap">
+          <canvas id="donut" width="150" height="150"></canvas>
+          <div class="dlegend" id="dlegend"><div class="empty" style="padding:4px 0">no data yet</div></div>
         </div>
       </section>
     </div>
 
     <section class="card">
-      <div class="ev-h"><span class="eyebrow" style="letter-spacing:.1em">Live event stream</span>
-        <span class="live" style="font-size:10px;padding:2px 8px"><span class="dot"></span><span id="ev-state">waiting</span></span></div>
-      <div class="stream" id="stream"><div class="empty">No events yet — token pushes are aggregated; file/network event feeds land as producers wire up.</div></div>
+      <div class="flow-head"><span class="panel-t">Pane Activity</span><span class="eyebrow" id="lead-total">—</span></div>
+      <div style="overflow-x:auto">
+      <table>
+        <thead><tr><th>Pane</th><th>In</th><th>Out</th><th>Files</th><th>Net</th><th class="share">Share</th></tr></thead>
+        <tbody id="leaderboard"><tr><td colspan="6"><span class="empty">no per-pane telemetry yet</span></td></tr></tbody>
+      </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="flow-head"><span class="panel-t">Live Event Stream</span>
+        <span class="live" style="font-size:9.5px;padding:2px 8px"><span class="dot"></span><span id="ev-state">waiting</span></span></div>
+      <div class="stream" id="stream"><div class="empty" style="padding:8px 0">No events yet — the stream fills as producers report file/network/token events.</div></div>
     </section>
   </main>
+
+  <div class="chatcol">
+    <section class="card">
+      <div class="chat-head"><span class="panel-t">Agent Chat</span><span class="eyebrow">Hyperia Agent</span></div>
+      <iframe id="chat-frame" src="/shell" title="Hyperia Agent"></iframe>
+    </section>
+  </div>
+</div>
+
+<div class="botbar">
+  <span class="pill"><span class="led" id="conn-led" style="background:var(--ink-dim)"></span><span id="conn-text">connecting…</span></span>
+  <span class="pill" id="page-src">page: —</span>
+  <span style="flex:1"></span>
+  <span id="poll-state">polling 2s</span>
 </div>
 
 <script>
@@ -221,205 +248,217 @@ const fmtB = (n) => { n = n ?? 0;
   if (n >= 1e6) return (n/1e6).toFixed(1)+" MB";
   if (n >= 1e3) return (n/1e3).toFixed(1)+" KB";
   return n+" B"; };
-
-let scope = "window";          // "window" | pane uid
-let names = {};                 // uid -> {name, app}
-let paneAgg = {};               // uid -> telemetry
-let ring = [];                  // [{t, total}] window token history for the sparkline
-let paneRing = {};              // uid -> last total (for share/trend later)
-
 function esc(s){ const d=document.createElement("div"); d.textContent=s??""; return d.innerHTML; }
+
+let names = {};                // uid -> {name, app}
+let paneAgg = {};
+let rangeSecs = 900;
+let paused = false;
+const t0 = Date.now();
+// history rings: [{t, in, out, files, net}] window-level, 2s cadence, ~2h cap
+const hist = [];
+const DONUT_COLORS = ["#a78bfa","#38bdf8","#34d399","#fbbf24","#fb5b6d","#e879f9","#94a3b8"];
+
+setInterval(()=>{ const s=Math.floor((Date.now()-t0)/1000);
+  $("uptime").textContent = "SESSION " + [3600,60,1].map(d=>String(Math.floor(s/d)%(d===3600?100:60)).padStart(2,"0")).join(":");
+},1000);
 
 async function fetchNames(){
   try {
     const r = await fetch("/api/status"); const j = await r.json();
     const map = {}; let count = 0;
     for (const w of j.windows||[]) for (const t of w.tabs||[]) for (const p of t.panes||[]) {
-      map[p.paneId] = { name: p.name || p.title || p.paneId.slice(0,8), app: (p.app&&p.app.name)||p.process||p.shell||"" };
+      map[p.paneId] = { name: p.name || p.title || p.paneId.slice(0,8), app: (p.app&&p.app.name)||p.process||"" };
       if (p.shell !== "web") count++;
     }
-    names = map; $("pane-count").textContent = count + " panes";
+    names = map; $("pane-count").textContent = count + " panes"; $("s-panes").textContent = count;
   } catch(_e){}
 }
 
 function renderServices(sys){
   const rows = [];
-  const svc = (led, name, kind, sub, bad) =>
-    rows.push(`<div class="svc"><span class="led ${led}"></span><div style="flex:1">
-      <div class="name">${esc(name)} <small>${esc(kind)}</small></div>
-      <div class="sub${bad?" bad":""}">${sub}</div><div class="models" style="display:none"></div></div></div>`);
-
+  const svc = (led,name,kind,sub,bad) => rows.push(
+    `<div class="svc"><span class="led ${led}"></span><div style="flex:1">
+     <div class="name">${esc(name)} <small>${esc(kind)}</small></div>
+     <div class="sub${bad?" bad":""}">${sub}</div></div></div>`);
   const ol = sys.providers?.ollama || {};
   if (ol.reachable) {
-    const ms = ol.models || [];
-    const chips = ms.slice(0,5).map(m=>`<span class="m">${esc(m)}</span>`).join("")
-      + (ms.length>5?`<span class="m more">+${ms.length-5}</span>`:"");
+    const ms = ol.models||[];
     rows.push(`<div class="svc"><span class="led up"></span><div style="flex:1">
       <div class="name">Ollama <small>local LLM</small></div>
       <div class="sub">up · ${esc((ol.endpoint||"").replace(/^https?:\/\//,""))} · ${ms.length} models</div>
-      <div class="models">${chips}</div></div></div>`);
+      <div class="models">${ms.slice(0,4).map(m=>`<span class="m">${esc(m)}</span>`).join("")}${ms.length>4?`<span class="m more">+${ms.length-4}</span>`:""}</div></div></div>`);
   } else svc("down","Ollama","local LLM","down · not reachable",true);
-
-  const fe = sys.ferricula || {};
-  svc(fe.reachable?"up":"down","Ferricula","memory index",
-      (fe.reachable?"up":"down")+" · "+esc((fe.base_url||"").replace(/^https?:\/\//,"")), !fe.reachable);
-
-  const kk = sys.kokoro || {};
-  if (kk.model_present) {
-    const last = kk.last_spoke_ms ? Math.round((Date.now()-kk.last_spoke_ms)/60000) : null;
+  const fe = sys.ferricula||{};
+  svc(fe.reachable?"up":"down","Ferricula","memory index",(fe.reachable?"up":"down")+" · "+esc((fe.base_url||"").replace(/^https?:\/\//,"")),!fe.reachable);
+  const kk = sys.kokoro||{};
+  if (kk.model_present){ const last = kk.last_spoke_ms?Math.round((Date.now()-kk.last_spoke_ms)/60000):null;
     svc("up","Kokoro TTS","in-process","ready"+(last!==null?` · last spoke ${last<1?"<1":last}m ago`:" · not used yet"),false);
   } else svc("na","Kokoro TTS","in-process","model downloads on first use",false);
-
-  const mx = sys.maximus || {};
-  svc(mx.enabled?"up":"na","Maximus","in-process",
-      mx.enabled?`active · ${esc(mx.model||"?")}`:"disabled via config", !mx.enabled && false);
-
-  const sf = sys.sailfish || {};
-  if (sf.configured) svc(sf.reachable?"up":"down","Sailfish","local inference",
-      (sf.reachable?"up":"down")+" · :"+(sf.port||"?"), !sf.reachable);
-
-  const tr = sys.transcription || {};
-  svc(tr.configured ? (tr.reachable?"up":"down") : "na","Whisper","transcription",
-      tr.configured ? ((tr.reachable?"up":"down")+" · "+esc(tr.target||"")) : "not configured", tr.configured && !tr.reachable);
-
+  const mx = sys.maximus||{};
+  svc(mx.enabled?"up":"na","Maximus","in-process",mx.enabled?`active · ${esc(mx.model||"?")}`:"disabled via config",false);
+  const sf = sys.sailfish||{};
+  if (sf.configured) svc(sf.reachable?"up":"down","Sailfish","local inference",(sf.reachable?"up":"down")+" · :"+(sf.port||"?"),!sf.reachable);
+  const tr = sys.transcription||{};
+  svc(tr.configured?(tr.reachable?"up":"down"):"na","Whisper","transcription",
+      tr.configured?((tr.reachable?"up":"down")+" · "+esc(tr.target||"")):"not configured",tr.configured&&!tr.reachable);
   $("services").innerHTML = rows.join("");
 }
 
-function renderScope(t){
-  $("tok-total").textContent = fmt((t.tokens_in||0)+(t.tokens_out||0));
-  $("tok-in").textContent = fmt(t.tokens_in); $("tok-out").textContent = fmt(t.tokens_out);
-  $("tok-cache").textContent = fmt(t.tokens_cache);
-  const total = (t.tokens_in||0)+(t.tokens_out||0);
-  $("split-i").style.width = total ? (100*(t.tokens_in||0)/total)+"%" : "0%";
-  $("split-o").style.width = total ? (100*(t.tokens_out||0)/total)+"%" : "0%";
-  $("file-total").textContent = fmt((t.file_reads||0)+(t.file_writes||0)+(t.file_creates||0)+(t.file_deletes||0)+(t.file_renames||0));
-  $("f-reads").textContent = fmt(t.file_reads); $("f-writes").textContent = fmt(t.file_writes);
-  $("f-creates").textContent = fmt(t.file_creates); $("f-bytes").textContent = fmtB(t.file_bytes_written);
-  $("net-total").textContent = fmtB((t.net_inbound_bytes||0)+(t.net_outbound_bytes||0));
-  $("n-in").textContent = fmtB(t.net_inbound_bytes); $("n-out").textContent = fmtB(t.net_outbound_bytes);
-  $("n-hosts").textContent = (t.net_hosts&&t.net_hosts.length) ? t.net_hosts.slice(0,3).join(", ") : "—";
+function slice(){ const cut = Date.now() - rangeSecs*1000; return hist.filter(h=>h.t>=cut); }
+
+function drawMini(id, pts, color){
+  const c=$(id); if(!c) return;
+  const w=c.clientWidth||140, h=26; c.width=w; c.height=h;
+  const ctx=c.getContext("2d"); ctx.clearRect(0,0,w,h);
+  if(pts.length<2) return;
+  const max=Math.max(...pts,1);
+  ctx.beginPath();
+  pts.forEach((v,i)=>{ const x=(i/(pts.length-1))*w, y=h-(v/max)*(h-4)-2; i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+  ctx.strokeStyle=color; ctx.lineWidth=1.4; ctx.stroke();
 }
 
-function renderTabs(){
-  const uids = Object.keys(paneAgg);
-  const holder = $("pane-tabs");
-  holder.querySelectorAll(".ptab").forEach(e=>e.remove());
-  for (const uid of uids) {
-    const info = names[uid] || {name: uid==="probe"?"probe":uid.slice(0,8), app:""};
-    const b = document.createElement("button");
-    b.className = "ptab"; b.setAttribute("aria-selected", String(scope===uid));
-    b.innerHTML = `${esc(info.name)}${info.app?` <span class="prov">${esc(info.app)}</span>`:""}`;
-    b.onclick = () => { scope = (scope===uid) ? "window" : uid; syncScopeUI(); refresh(); };
-    holder.appendChild(b);
-  }
-  $("scope-window").setAttribute("aria-pressed", String(scope==="window"));
-  $("scope-window").style.color = scope==="window" ? "var(--ink)" : "var(--ink-mid)";
+function rates(sel){ // per-sample deltas/sec from sliced history
+  const s = slice(); const out=[];
+  for(let i=1;i<s.length;i++){ const dt=(s[i].t-s[i-1].t)/1000;
+    out.push(dt>0?Math.max(0,(sel(s[i])-sel(s[i-1]))/dt):0); }
+  return out;
 }
 
-function syncScopeUI(){
-  const label = scope==="window" ? "this window" : (names[scope]?.name || scope.slice(0,8));
-  $("hero-label").textContent = "Token usage · " + label;
-  $("file-scope").textContent = label; $("net-scope").textContent = label;
+function drawFlow(){
+  const c=$("flow"); const w=c.clientWidth||700, h=190; c.width=w; c.height=h;
+  const ctx=c.getContext("2d"); ctx.clearRect(0,0,w,h);
+  const rIn=rates(x=>x.in), rOut=rates(x=>x.out);
+  if(rIn.length<2) return;
+  const max=Math.max(...rIn,...rOut,1);
+  const line=(pts,color,fill)=>{
+    ctx.beginPath();
+    pts.forEach((v,i)=>{ const x=(i/(pts.length-1))*w, y=h-(v/max)*(h-16)-6; i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+    ctx.strokeStyle=color; ctx.lineWidth=1.6; ctx.stroke();
+    if(fill){ ctx.lineTo(w,h); ctx.lineTo(0,h); ctx.closePath();
+      const g=ctx.createLinearGradient(0,0,0,h); g.addColorStop(0,color+"40"); g.addColorStop(1,color+"00");
+      ctx.fillStyle=g; ctx.fill(); }
+  };
+  line(rIn,"#a78bfa",true); line(rOut,"#38bdf8",true);
+}
+
+function drawDonut(rows){
+  const c=$("donut"); const ctx=c.getContext("2d"); ctx.clearRect(0,0,150,150);
+  const total=rows.reduce((s,r)=>s+r.tot,0);
+  if(!total){ $("dlegend").innerHTML='<div class="empty" style="padding:4px 0">no data yet</div>'; return; }
+  let a=-Math.PI/2;
+  rows.slice(0,6).forEach((r,i)=>{
+    const frac=r.tot/total, end=a+frac*2*Math.PI;
+    ctx.beginPath(); ctx.arc(75,75,66,a,end); ctx.arc(75,75,44,end,a,true); ctx.closePath();
+    ctx.fillStyle=DONUT_COLORS[i%DONUT_COLORS.length]; ctx.fill(); a=end;
+  });
+  ctx.fillStyle="#e8eef6"; ctx.font="600 17px ui-monospace,monospace"; ctx.textAlign="center";
+  ctx.fillText(total>=1e6?(total/1e6).toFixed(1)+"M":total>=1e3?(total/1e3).toFixed(1)+"k":String(total),75,72);
+  ctx.fillStyle="#5f6d80"; ctx.font="9px ui-monospace,monospace"; ctx.fillText("tokens",75,86);
+  $("dlegend").innerHTML = rows.slice(0,6).map((r,i)=>
+    `<div class="li"><span><span class="sw" style="background:${DONUT_COLORS[i%DONUT_COLORS.length]}"></span>${esc(r.name)}</span><b>${Math.round(100*r.tot/total)}%</b></div>`).join("");
 }
 
 function renderLeaderboard(){
   const rows = Object.entries(paneAgg)
-    .map(([uid,t]) => ({uid, in_:t.tokens_in||0, out:t.tokens_out||0, tot:(t.tokens_in||0)+(t.tokens_out||0)}))
-    .filter(r => r.tot > 0)
-    .sort((a,b) => b.tot - a.tot);
-  const grand = rows.reduce((s,r)=>s+r.tot,0);
-  $("lead-total").textContent = fmt(grand) + " total · window";
-  if (!rows.length) { $("leaderboard").innerHTML = `<tr><td colspan="4"><span class="empty">no per-pane telemetry yet</span></td></tr>`; return; }
-  const max = rows[0].tot || 1;
-  $("leaderboard").innerHTML = rows.map(r => {
-    const info = names[r.uid] || {name: r.uid==="probe"?"probe (test)":r.uid.slice(0,8), app:""};
-    return `<tr title="${esc(r.uid)}"><td><div class="who"><div>${esc(info.name)}
-      ${info.app?`<div class="mdl">${esc(info.app)}</div>`:""}</div></div></td>
-      <td>${fmt(r.in_)}</td><td>${fmt(r.out)}</td>
-      <td class="share"><div class="track"><i style="width:${Math.round(100*r.tot/max)}%"></i></div></td></tr>`;
-  }).join("");
-}
-
-function drawSpark(){
-  const c = $("spark"), ctx = c.getContext("2d");
-  ctx.clearRect(0,0,c.width,c.height);
-  if (ring.length < 2) return;
-  // per-sample rate (tokens/s)
-  const rates = [];
-  for (let i=1;i<ring.length;i++) {
-    const dt = (ring[i].t - ring[i-1].t)/1000;
-    rates.push(dt>0 ? Math.max(0,(ring[i].total - ring[i-1].total)/dt) : 0);
-  }
-  const max = Math.max(...rates, 1);
-  ctx.beginPath();
-  rates.forEach((v,i)=>{
-    const x = (i/(rates.length-1||1))*c.width;
-    const y = c.height - (v/max)*(c.height-6) - 3;
-    i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
-  });
-  ctx.strokeStyle = "#a78bfa"; ctx.lineWidth = 1.6; ctx.stroke();
-  $("tok-rate").textContent = Math.round(rates[rates.length-1]||0);
+    .map(([uid,t])=>({uid, name:(names[uid]?.name)||(uid==="probe"?"probe (test)":uid.slice(0,8)),
+      app:names[uid]?.app||"", in_:t.tokens_in||0, out:t.tokens_out||0,
+      files:(t.file_reads||0)+(t.file_writes||0)+(t.file_creates||0),
+      net:(t.net_inbound_bytes||0)+(t.net_outbound_bytes||0),
+      tot:(t.tokens_in||0)+(t.tokens_out||0)}))
+    .filter(r=>r.tot>0||r.files>0||r.net>0)
+    .sort((a,b)=>b.tot-a.tot);
+  const grand=rows.reduce((s,r)=>s+r.tot,0);
+  $("lead-total").textContent = fmt(grand)+" tokens total";
+  drawDonut(rows);
+  if(!rows.length){ $("leaderboard").innerHTML='<tr><td colspan="6"><span class="empty">no per-pane telemetry yet</span></td></tr>'; return; }
+  const max=rows[0].tot||1;
+  $("leaderboard").innerHTML = rows.map(r=>
+    `<tr title="${esc(r.uid)}"><td><div class="who">${esc(r.name)}${r.app?`<div class="mdl">${esc(r.app)}</div>`:""}</div></td>
+     <td>${fmt(r.in_)}</td><td>${fmt(r.out)}</td><td>${fmt(r.files)}</td><td>${fmtB(r.net)}</td>
+     <td class="share"><div class="track"><i style="width:${Math.round(100*r.tot/max)}%"></i></div></td></tr>`).join("");
 }
 
 function renderEvents(t){
-  const evs = t.events || [];
-  if (!evs.length) return; // keep the honest empty message
-  $("ev-state").textContent = "streaming";
-  $("stream").innerHTML = evs.slice(-40).reverse().map(e => {
-    const kind = e.kind || Object.keys(e).find(k=>k!=="ts"&&k!=="pane_uid") || "event";
-    const tag = kind==="FileOp"?"file":kind==="Network"?"net":kind==="Tokens"?"tok":"file";
-    const who = names[e.pane_uid]?.name || (e.pane_uid||"").slice(0,8);
-    const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : "";
-    let body = "";
-    if (kind==="Tokens") body = `${esc(e.model||"")} · +${fmt(e.input)} in / +${fmt(e.output)} out`;
-    else if (kind==="Network") body = `${esc(String(e.direction||"").toLowerCase())} · ${esc(e.host||"")} · ${fmtB(e.bytes)}`;
-    else if (kind==="FileOp") body = `${esc(String(e.op||"").toLowerCase())} · ${esc(e.path||"")}${e.bytes?` · ${fmtB(e.bytes)}`:""}`;
-    else body = esc(JSON.stringify(e)).slice(0,120);
+  const evs=t.events||[];
+  if(!evs.length) return;
+  $("ev-state").textContent="streaming";
+  $("stream").innerHTML = evs.slice(-40).reverse().map(e=>{
+    const kind=e.kind||"event";
+    const tag=kind==="FileOp"?"file":kind==="Network"?"net":kind==="Tokens"?"tok":"file";
+    const who=names[e.pane_uid]?.name||(e.pane_uid||"").slice(0,8);
+    const ts=e.ts?new Date(e.ts).toLocaleTimeString():"";
+    let body="";
+    if(kind==="Tokens") body=`${esc(e.model||"")} · +${fmt(e.input)} in / +${fmt(e.output)} out`;
+    else if(kind==="Network") body=`${esc(String(e.direction||"").toLowerCase())} · ${esc(e.host||"")} · ${fmtB(e.bytes)}`;
+    else if(kind==="FileOp") body=`${esc(String(e.op||"").toLowerCase())} · ${esc(e.path||"")}`;
+    else body=esc(JSON.stringify(e)).slice(0,110);
     return `<div class="ev"><span class="ts">${ts}</span><span class="tag ${tag}">${tag}</span>
-      <span class="body">${body}</span><span class="by">${esc(who)}</span></div>`;
-  }).join("");
+      <span class="body">${body}</span><span class="by">${esc(who)}</span></div>`;}).join("");
 }
 
 async function refresh(){
+  if (paused) return;
   try {
-    const [w, p] = await Promise.all([
+    const [w,p] = await Promise.all([
       fetch("/api/telemetry/snapshot?level=window").then(r=>r.json()),
       fetch("/api/telemetry/snapshot?level=pane").then(r=>r.json()),
     ]);
-    const sys = w.system || {};
-    paneAgg = p.telemetry || {};
-    // rail
-    $("agent-mode").textContent = (sys.level||"local").toUpperCase();
-    $("agent-model").textContent = `${sys.agent?.provider||"?"} / ${sys.agent?.model||"?"}`;
-    const mx = sys.maximus || {};
-    $("maximus-state").textContent = mx.enabled ? "ACTIVE" : "OFF";
-    $("maximus-state").className = "num " + (mx.enabled ? "ok" : "bad");
+    $("conn-led").style.background="var(--green)"; $("conn-text").textContent="connected to hyperia sidecar";
+    const sys=w.system||{}; const wt=w.telemetry||{};
+    paneAgg=p.telemetry||{};
+    $("agent-mode").textContent=(sys.level||"local").toUpperCase();
+    $("agent-model").textContent=`${sys.agent?.provider||"?"} / ${sys.agent?.model||"?"}`;
+    const mx=sys.maximus||{};
+    $("maximus-state").textContent=mx.enabled?"ACTIVE":"OFF";
+    $("maximus-state").className="num "+(mx.enabled?"ok":"bad");
     renderServices(sys);
-    if (sys.version) $("foot").textContent = "HYPERIA SIDECAR V" + sys.version + " · " + (sys.dashboard_source==="disk"?"page: disk (live)":"page: embedded");
-    // scope cards
-    const wt = w.telemetry || {};
-    const t = scope==="window" ? wt : (paneAgg[scope] || {});
-    renderScope(t);
-    renderTabs(); syncScopeUI(); renderLeaderboard(); renderEvents(wt);
-    // sparkline ring (window totals)
-    ring.push({t: Date.now(), total:(wt.tokens_in||0)+(wt.tokens_out||0)});
-    if (ring.length > 60) ring.shift();
-    drawSpark();
-  } catch(_e){}
+    if(sys.vram_gb){ $("vram").textContent=sys.vram_gb+" GB"; $("vram-bar").style.width="50%"; }
+    $("sidecar-v").textContent="v"+(sys.version||"?");
+    $("page-src").textContent="page: "+(sys.dashboard_source==="disk"?"disk (live)":"embedded");
+
+    // history sample
+    hist.push({t:Date.now(), in:wt.tokens_in||0, out:wt.tokens_out||0,
+      files:(wt.file_reads||0)+(wt.file_writes||0)+(wt.file_creates||0)+(wt.file_deletes||0)+(wt.file_renames||0),
+      net:(wt.net_inbound_bytes||0)+(wt.net_outbound_bytes||0)});
+    if(hist.length>3600) hist.shift();
+
+    // overview cards
+    const rIn=rates(x=>x.in), rOut=rates(x=>x.out);
+    $("s-in").textContent=Math.round(rIn[rIn.length-1]||0);
+    $("s-out").textContent=Math.round(rOut[rOut.length-1]||0);
+    const s=slice();
+    const dTotal = s.length>1 ? (s[s.length-1].in+s[s.length-1].out)-(s[0].in+s[0].out) : 0;
+    $("s-total").textContent=fmt(dTotal);
+    $("s-files").textContent=fmt(wt.file_reads+wt.file_writes+wt.file_creates+wt.file_deletes+wt.file_renames||0);
+    $("s-net").textContent=fmtB((wt.net_inbound_bytes||0)+(wt.net_outbound_bytes||0));
+    drawMini("sp-in",rIn,"#a78bfa"); drawMini("sp-out",rOut,"#38bdf8");
+    drawMini("sp-total",s.map(x=>x.in+x.out),"#a78bfa");
+    drawMini("sp-files",rates(x=>x.files),"#34d399");
+    drawMini("sp-net",rates(x=>x.net),"#38bdf8");
+    drawFlow(); renderLeaderboard(); renderEvents(wt);
+  } catch(_e){
+    $("conn-led").style.background="var(--rose)"; $("conn-text").textContent="sidecar unreachable";
+  }
 }
 
-$("scope-window").onclick = () => { scope = "window"; syncScopeUI(); refresh(); };
-$("btn-reset").onclick = async () => { if (confirm("Clear all telemetry counters?")) { await fetch("/api/telemetry/reset",{method:"POST"}); ring=[]; refresh(); } };
+$("ranges").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+  $("ranges").querySelectorAll("button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on"); rangeSecs=Number(b.dataset.r); refresh();
+});
+$("btn-pause").onclick=()=>{ paused=!paused;
+  $("btn-pause").textContent=paused?"Resume":"Pause";
+  $("btn-pause").classList.toggle("on",paused);
+  $("poll-state").textContent=paused?"paused":"polling 2s"; };
+$("btn-reset").onclick=async()=>{ if(confirm("Clear all telemetry counters?")){
+  await fetch("/api/telemetry/reset",{method:"POST"}); hist.length=0; refresh(); } };
+$("scope-window").onclick=()=>refresh();
 
-// live-reload: page version poll (disk edits land ~1.5s later)
-let pageV = null;
-setInterval(async () => {
-  try { const r = await fetch("/api/dashboard/version"); const j = await r.json();
-    if (pageV === null) pageV = j.v; else if (j.v !== pageV) location.reload();
-  } catch(_e){}
-}, 1500);
+let pageV=null;
+setInterval(async()=>{ try{ const r=await fetch("/api/dashboard/version"); const j=await r.json();
+  if(pageV===null) pageV=j.v; else if(j.v!==pageV) location.reload(); }catch(_e){} },1500);
 
-fetchNames(); setInterval(fetchNames, 6000);
-refresh(); setInterval(refresh, 2000);
+fetchNames(); setInterval(fetchNames,6000);
+refresh(); setInterval(refresh,2000);
 </script>
 </body></html>
