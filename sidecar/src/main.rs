@@ -9,6 +9,7 @@ mod doors;
 mod identity;
 mod fsnav;
 mod ghost;
+mod render;
 mod logs;
 mod mcp;
 /// Agent-facing prose, keyed and per-locale — see `messages/mod.rs`.
@@ -64,10 +65,11 @@ struct Args {
 }
 
 #[derive(Clone)]
-struct AppState {
-    bridge: Bridge,
+pub(crate) struct AppState {
+    pub(crate) bridge: Bridge,
     log_buffer: logs::LogBuffer,
     telemetry: telemetry::TelemetryStore,
+    pub(crate) render: render::RenderStore,
 }
 
 // ---------------------------------------------------------------------------
@@ -2357,6 +2359,63 @@ async fn post_open_web_pane(
     }
 }
 
+/// POST /api/render {path?|content?, title?} — register a markdown document
+/// (with the ==highlight== extension) and open its LIVE render page in a new
+/// web-pane tab. Backs the `render` MCP tool. Same create_web consent + held-
+/// create semantics as open_web_pane.
+async fn post_render(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let path = parsed["path"].as_str().unwrap_or("").trim().to_string();
+    let content = parsed["content"].as_str().unwrap_or("").to_string();
+    if path.is_empty() && content.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Provide `path` (a markdown file on disk — live-reloads on change) or `content` (inline markdown)".into(),
+        );
+    }
+    let source = if !path.is_empty() {
+        let pb = std::path::PathBuf::from(&path);
+        if !pb.is_file() {
+            return (StatusCode::NOT_FOUND, format!("No such file: {path}"));
+        }
+        render::RenderSource::File(pb)
+    } else {
+        render::RenderSource::Inline(content)
+    };
+    let title = parsed["title"]
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            std::path::Path::new(&path)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Rendered document".into())
+        });
+    let id = state.render.insert(render::RenderDoc { title, source }).await;
+    let port = std::env::var("HYPERIA_PORT").unwrap_or_else(|_| "9800".into());
+    let url = format!("http://localhost:{port}/render/{id}");
+    let cmd = serde_json::json!({"type": "OpenWebPane", "url": url});
+    if let Err(resp) = enforce_create(&state, &headers, "create_web").await {
+        if resp.0 == StatusCode::ACCEPTED {
+            let caller = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+            state.bridge.hold_create(&caller.label(), cmd).await;
+        }
+        return resp;
+    }
+    match state.bridge.send_command(cmd).await {
+        Ok(_) => (
+            StatusCode::OK,
+            serde_json::json!({"ok": true, "id": id, "url": url, "note": "opened in a new background tab; file-backed docs live-reload ~1.5s after the file changes"}).to_string(),
+        ),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
 async fn post_web_pane_reload(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3280,7 +3339,7 @@ async fn main() -> anyhow::Result<()> {
     let bridge = Bridge::new();
     let telem = telemetry::TelemetryStore::new();
     let dash_state = dashboard::DashboardState::new(telem.clone());
-    let state = AppState { bridge, log_buffer, telemetry: telem };
+    let state = AppState { bridge, log_buffer, telemetry: telem, render: render::RenderStore::new() };
     // Grab lume handles before `state` is moved into the router below.
     let lume_for_flush = state.bridge.lume();
     let lume_for_shutdown = state.bridge.lume();
@@ -3322,6 +3381,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pulse/status", axum::routing::get(get_pulse_status))
         .route("/api/type-and-collect", axum::routing::post(post_type_and_collect))
         .route("/api/pane/split", axum::routing::post(post_split))
+        .route("/render/{id}", axum::routing::get(render::get_render_page))
+        .route("/api/render", axum::routing::post(post_render))
+        .route("/api/render/{id}/version", axum::routing::get(render::get_render_version))
         .route("/api/pane/focus", axum::routing::post(post_focus))
         .route("/api/perms/request-access", axum::routing::post(post_request_access))
         .route("/api/perms/request", axum::routing::post(post_perm_request))

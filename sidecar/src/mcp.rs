@@ -470,6 +470,17 @@ pub struct OpenWebPaneRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RenderRequest {
+    /// Path to a markdown file on disk. The rendered tab LIVE-RELOADS ~1.5s
+    /// after the file changes — edit the file to update the analysis in place.
+    pub path: Option<String>,
+    /// Inline markdown content (used when `path` is omitted). Static — no live reload.
+    pub content: Option<String>,
+    /// Tab/document title. Defaults to the file name.
+    pub title: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct WebReloadRequest {
     /// Window ID — the `id` field from terminal_status. Omit to use the focused window.
     pub window: Option<u32>,
@@ -1515,6 +1526,22 @@ impl HyperiaMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let resp = self
             .post_json_as("/api/web-pane", &serde_json::json!({"url": req.url}), forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Render a markdown document into a NEW Hyperia tab for the human. Supports full markdown (tables, task lists, strikethrough, footnotes) PLUS a highlight extension for joint human+agent analysis: ==text== marks a passage yellow; =={red}text== uses a named color (yellow, red, green, blue, purple, orange, pink, cyan); =={#7af}text== uses any hex color. Highlights inside code blocks/spans are left literal. Pass `path` for a markdown FILE — the tab LIVE-RELOADS ~1.5s after the file changes, so you can keep editing highlights into the file and the human sees them appear in place (ideal for marking up a doc while discussing it). Pass `content` for a one-shot inline render. The tab opens in the BACKGROUND (never steals the human's view); tell them it's there.")]
+    async fn render(
+        &self,
+        Parameters(req): Parameters<RenderRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let resp = self
+            .post_json_as(
+                "/api/render",
+                &serde_json::json!({"path": req.path, "content": req.content, "title": req.title}),
+                forwarded_auth(&ctx).as_deref(),
+            )
             .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }

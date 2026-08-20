@@ -144,6 +144,7 @@ pub const DOORS: &[Door] = &[
         description: "Open web panes, read/eval/click pages, fetch URLs",
         ghost_tools: &[
             "open_web_pane",
+            "render",
             "web_pane_content",
             "web_pane_eval",
             "web_pane_mouse",
@@ -153,6 +154,7 @@ pub const DOORS: &[Door] = &[
         ],
         mcp_tools: &[
             "open_web_pane",
+            "render",
             "web_pane_content",
             "web_pane_eval",
             "web_pane_mouse",
