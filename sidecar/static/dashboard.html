@@ -1,0 +1,425 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hyperia Control Deck</title>
+<style>
+  :root{
+    --ground:#0a0e15; --panel:#10161f; --panel-2:#141c28;
+    --line:#1f2a38; --line-bright:#2c3b4f;
+    --ink:#e8eef6; --ink-mid:#9aa8bd; --ink-dim:#5f6d80;
+    --green:#34d399; --cyan:#38bdf8; --violet:#a78bfa; --amber:#fbbf24; --rose:#fb5b6d;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--ground);color:var(--ink);font-family:var(--sans);
+    font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;
+    padding:18px;min-height:100vh}
+  .eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--ink-dim)}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px}
+  header{display:flex;align-items:center;gap:16px;padding:2px 6px 16px;flex-wrap:wrap}
+  .brand{font-weight:700;letter-spacing:.16em;font-size:15px}
+  .live{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);
+    font-size:11px;color:var(--green);padding:4px 10px;border-radius:20px;
+    background:color-mix(in srgb,var(--green) 12%,transparent);
+    border:1px solid color-mix(in srgb,var(--green) 30%,transparent)}
+  .dot{width:7px;height:7px;border-radius:50%;background:currentColor;
+    animation:pulse 2.4s ease-out infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,currentColor 60%,transparent)}
+    70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
+  @media(prefers-reduced-motion:reduce){.dot{animation:none}}
+  .spacer{flex:1}
+  .ghost{font-family:var(--mono);font-size:11px;color:var(--ink-mid);
+    background:var(--panel-2);border:1px solid var(--line);padding:7px 13px;
+    border-radius:8px;cursor:pointer}
+  .shell{display:grid;grid-template-columns:288px 1fr;gap:18px;align-items:start}
+  aside{display:flex;flex-direction:column;gap:14px}
+  main{display:flex;flex-direction:column;gap:16px;min-width:0}
+  .pad{padding:16px 17px}
+  .rail-h{margin-bottom:12px}
+  .agent-mode{font-size:26px;font-weight:800;letter-spacing:.02em;
+    background:linear-gradient(92deg,var(--cyan),var(--violet));
+    -webkit-background-clip:text;background-clip:text;color:transparent;line-height:1.1}
+  .kv{display:flex;justify-content:space-between;align-items:center;padding:7px 0;
+    border-top:1px solid var(--line);gap:8px}
+  .kv .k{color:var(--ink-mid);font-size:12.5px;white-space:nowrap}
+  .chip{font-family:var(--mono);font-size:11px;color:var(--ink);
+    background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:3px 7px;
+    overflow:hidden;text-overflow:ellipsis;max-width:170px;white-space:nowrap}
+  .ok{color:var(--green)} .bad{color:var(--rose)}
+  .svc{display:flex;gap:10px;padding:11px 0;border-top:1px solid var(--line);align-items:flex-start}
+  .svc:first-of-type{border-top:0}
+  .svc .led{width:8px;height:8px;border-radius:50%;margin-top:5px;flex:none}
+  .led.up{background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 60%,transparent)}
+  .led.down{background:var(--rose)}
+  .led.na{background:var(--ink-dim)}
+  .svc .name{font-weight:600;font-size:13px}
+  .svc .name small{color:var(--ink-dim);font-weight:400;font-size:11px}
+  .svc .sub{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin-top:2px;word-break:break-all}
+  .svc .sub.bad{color:var(--rose)}
+  .models{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+  .m{font-family:var(--mono);font-size:10px;color:var(--cyan);
+    background:color-mix(in srgb,var(--cyan) 8%,transparent);
+    border:1px solid color-mix(in srgb,var(--cyan) 22%,transparent);
+    border-radius:5px;padding:2px 6px}
+  .m.more{color:var(--ink-dim);background:none;border-color:var(--line)}
+  .panes{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .ptab{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;
+    background:var(--panel);border:1px solid var(--line);border-radius:9px;
+    padding:7px 12px;cursor:pointer;color:var(--ink-mid);font-family:var(--sans)}
+  .ptab .prov{font-family:var(--mono);font-size:10px;color:var(--ink-dim)}
+  .ptab[aria-selected=true]{border-color:var(--violet);color:var(--ink);
+    background:color-mix(in srgb,var(--violet) 10%,transparent)}
+  .ptab[aria-selected=true] .prov{color:var(--violet)}
+  .hero{display:grid;grid-template-columns:1fr 300px;gap:0}
+  .hero .left{padding:20px 22px;border-right:1px solid var(--line)}
+  .hero .right{padding:20px 22px;display:flex;flex-direction:column;justify-content:center;gap:14px}
+  .big{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:46px;
+    font-weight:600;line-height:1;letter-spacing:-.02em}
+  .big .unit{font-size:16px;color:var(--ink-dim);margin-left:8px;letter-spacing:0}
+  .split{display:flex;height:9px;border-radius:5px;overflow:hidden;margin-top:16px;background:var(--panel-2)}
+  .split .i{background:var(--violet)} .split .o{background:var(--cyan)}
+  .legend{display:flex;gap:20px;margin-top:11px;font-size:12px;color:var(--ink-mid);flex-wrap:wrap}
+  .legend b{color:var(--ink);font-family:var(--mono)}
+  .sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:middle}
+  .stat .v{font-family:var(--mono);font-size:22px;font-variant-numeric:tabular-nums}
+  .spark{width:100%;height:52px;display:block;margin-top:6px}
+  .lead-head{display:flex;justify-content:space-between;align-items:baseline;padding:15px 18px 8px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead th{text-align:right;font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--ink-dim);font-weight:500;padding:6px 18px}
+  thead th:first-child,tbody td:first-child{text-align:left}
+  tbody td{padding:11px 18px;border-top:1px solid var(--line);
+    font-variant-numeric:tabular-nums;text-align:right;font-family:var(--mono)}
+  tbody tr:hover{background:var(--panel-2)}
+  .who{display:flex;align-items:center;gap:9px;font-family:var(--sans)}
+  .who .mdl{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);margin-top:1px}
+  .share{width:120px}
+  .share .track{height:6px;background:var(--panel-2);border-radius:3px;overflow:hidden}
+  .share .track i{display:block;height:100%;background:var(--violet)}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .metric-h{display:flex;justify-content:space-between;align-items:center;padding:15px 18px 4px}
+  .metric-h .t{font-weight:700;letter-spacing:.06em;font-size:12px;text-transform:uppercase}
+  .fh .t{color:var(--green)} .nh .t{color:var(--cyan)}
+  .metric-big{font-family:var(--mono);font-size:30px;padding:4px 18px 0;font-variant-numeric:tabular-nums}
+  .lines{padding:8px 18px 16px}
+  .li{display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line);
+    color:var(--ink-mid);font-size:12.5px}
+  .li .num{color:var(--ink)}
+  .li:first-child{border-top:0}
+  .ev-h{display:flex;justify-content:space-between;align-items:center;padding:14px 18px 6px}
+  .stream{padding:2px 18px 14px;max-height:240px;overflow-y:auto;font-family:var(--mono);font-size:12px}
+  .ev{display:grid;grid-template-columns:70px 74px 1fr auto;gap:12px;align-items:center;
+    padding:7px 0;border-top:1px solid var(--line)}
+  .ev:first-child{border-top:0}
+  .ev .ts{color:var(--ink-dim);font-size:11px}
+  .tag{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;padding:2px 7px;
+    border-radius:4px;text-align:center;font-weight:600}
+  .tag.file{color:var(--green);background:color-mix(in srgb,var(--green) 12%,transparent)}
+  .tag.net{color:var(--cyan);background:color-mix(in srgb,var(--cyan) 12%,transparent)}
+  .tag.tok{color:var(--violet);background:color-mix(in srgb,var(--violet) 12%,transparent)}
+  .ev .body{color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ev .by{color:var(--ink-dim);font-size:11px}
+  .empty{color:var(--ink-dim);font-size:12px;padding:10px 0}
+  .foot{padding:10px 6px 0;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:.08em}
+  @media(max-width:1080px){.shell{grid-template-columns:1fr}.hero{grid-template-columns:1fr}
+    .hero .left{border-right:0;border-bottom:1px solid var(--line)}.row2{grid-template-columns:1fr}}
+</style></head><body>
+
+<header>
+  <span class="brand">HYPERIA CONTROL DECK</span>
+  <span class="live"><span class="dot"></span>SYSTEM LIVE</span>
+  <span class="spacer"></span>
+  <button class="ghost" id="scope-window" aria-pressed="true">Window</button>
+  <button class="ghost" id="btn-reset" title="Clear all telemetry counters">Reset</button>
+</header>
+
+<div class="shell">
+  <aside>
+    <section class="card pad">
+      <div class="eyebrow rail-h">Agent Status</div>
+      <div class="agent-mode" id="agent-mode">—</div>
+      <div class="kv" style="border-top:0"><span class="k">Active model</span><span class="chip" id="agent-model">—</span></div>
+      <div class="kv"><span class="k">Maximus compressor</span><span class="num" id="maximus-state">—</span></div>
+      <div class="kv"><span class="k">Live panes</span><span class="num" id="pane-count">—</span></div>
+    </section>
+    <section class="card pad">
+      <div class="eyebrow rail-h">Core Services</div>
+      <div id="services"></div>
+    </section>
+    <div class="foot" id="foot">HYPERIA SIDECAR</div>
+  </aside>
+
+  <main>
+    <div class="panes" id="pane-tabs"><span class="eyebrow" style="margin-right:4px">Panes</span></div>
+
+    <section class="card hero">
+      <div class="left">
+        <div class="eyebrow" id="hero-label">Token usage</div>
+        <div class="big" style="margin-top:10px"><span id="tok-total">0</span><span class="unit">tokens</span></div>
+        <div class="split" aria-hidden="true"><span class="i" id="split-i" style="width:0%"></span><span class="o" id="split-o" style="width:0%"></span></div>
+        <div class="legend">
+          <span><span class="sw" style="background:var(--violet)"></span>Input <b id="tok-in">0</b></span>
+          <span><span class="sw" style="background:var(--cyan)"></span>Output <b id="tok-out">0</b></span>
+          <span><span class="sw" style="background:var(--ink-dim)"></span>Cache <b id="tok-cache">0</b></span>
+        </div>
+      </div>
+      <div class="right">
+        <div class="eyebrow">Throughput · tokens/s (last 2 min)</div>
+        <canvas class="spark" id="spark" width="300" height="52"></canvas>
+        <div class="stat"><div class="eyebrow">Current rate</div><div class="v"><span id="tok-rate">0</span> tok/s</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="lead-head"><span class="eyebrow" style="letter-spacing:.1em">Token usage by pane</span>
+        <span class="eyebrow" id="lead-total">—</span></div>
+      <div style="overflow-x:auto">
+      <table>
+        <thead><tr><th>Pane</th><th>In</th><th>Out</th><th class="share">Share</th></tr></thead>
+        <tbody id="leaderboard"><tr><td colspan="4"><span class="empty">no per-pane telemetry yet</span></td></tr></tbody>
+      </table>
+      </div>
+    </section>
+
+    <div class="row2">
+      <section class="card fh">
+        <div class="metric-h"><span class="t">File operations</span><span class="eyebrow" id="file-scope">window</span></div>
+        <div class="metric-big" id="file-total">0</div>
+        <div class="lines">
+          <div class="li"><span>Reads</span><span class="num" id="f-reads">0</span></div>
+          <div class="li"><span>Writes</span><span class="num" id="f-writes">0</span></div>
+          <div class="li"><span>Creates</span><span class="num" id="f-creates">0</span></div>
+          <div class="li"><span>Bytes written</span><span class="num" id="f-bytes">0 B</span></div>
+        </div>
+      </section>
+      <section class="card nh">
+        <div class="metric-h"><span class="t">Network traffic</span><span class="eyebrow" id="net-scope">window</span></div>
+        <div class="metric-big" id="net-total">0 B</div>
+        <div class="lines">
+          <div class="li"><span>Inbound</span><span class="num" id="n-in">0 B</span></div>
+          <div class="li"><span>Outbound</span><span class="num" id="n-out">0 B</span></div>
+          <div class="li"><span>Hosts</span><span class="num" id="n-hosts">—</span></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="card">
+      <div class="ev-h"><span class="eyebrow" style="letter-spacing:.1em">Live event stream</span>
+        <span class="live" style="font-size:10px;padding:2px 8px"><span class="dot"></span><span id="ev-state">waiting</span></span></div>
+      <div class="stream" id="stream"><div class="empty">No events yet — token pushes are aggregated; file/network event feeds land as producers wire up.</div></div>
+    </section>
+  </main>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => (n ?? 0).toLocaleString("en-US");
+const fmtB = (n) => { n = n ?? 0;
+  if (n >= 1e9) return (n/1e9).toFixed(1)+" GB";
+  if (n >= 1e6) return (n/1e6).toFixed(1)+" MB";
+  if (n >= 1e3) return (n/1e3).toFixed(1)+" KB";
+  return n+" B"; };
+
+let scope = "window";          // "window" | pane uid
+let names = {};                 // uid -> {name, app}
+let paneAgg = {};               // uid -> telemetry
+let ring = [];                  // [{t, total}] window token history for the sparkline
+let paneRing = {};              // uid -> last total (for share/trend later)
+
+function esc(s){ const d=document.createElement("div"); d.textContent=s??""; return d.innerHTML; }
+
+async function fetchNames(){
+  try {
+    const r = await fetch("/api/status"); const j = await r.json();
+    const map = {}; let count = 0;
+    for (const w of j.windows||[]) for (const t of w.tabs||[]) for (const p of t.panes||[]) {
+      map[p.paneId] = { name: p.name || p.title || p.paneId.slice(0,8), app: (p.app&&p.app.name)||p.process||p.shell||"" };
+      if (p.shell !== "web") count++;
+    }
+    names = map; $("pane-count").textContent = count + " panes";
+  } catch(_e){}
+}
+
+function renderServices(sys){
+  const rows = [];
+  const svc = (led, name, kind, sub, bad) =>
+    rows.push(`<div class="svc"><span class="led ${led}"></span><div style="flex:1">
+      <div class="name">${esc(name)} <small>${esc(kind)}</small></div>
+      <div class="sub${bad?" bad":""}">${sub}</div><div class="models" style="display:none"></div></div></div>`);
+
+  const ol = sys.providers?.ollama || {};
+  if (ol.reachable) {
+    const ms = ol.models || [];
+    const chips = ms.slice(0,5).map(m=>`<span class="m">${esc(m)}</span>`).join("")
+      + (ms.length>5?`<span class="m more">+${ms.length-5}</span>`:"");
+    rows.push(`<div class="svc"><span class="led up"></span><div style="flex:1">
+      <div class="name">Ollama <small>local LLM</small></div>
+      <div class="sub">up · ${esc((ol.endpoint||"").replace(/^https?:\/\//,""))} · ${ms.length} models</div>
+      <div class="models">${chips}</div></div></div>`);
+  } else svc("down","Ollama","local LLM","down · not reachable",true);
+
+  const fe = sys.ferricula || {};
+  svc(fe.reachable?"up":"down","Ferricula","memory index",
+      (fe.reachable?"up":"down")+" · "+esc((fe.base_url||"").replace(/^https?:\/\//,"")), !fe.reachable);
+
+  const kk = sys.kokoro || {};
+  if (kk.model_present) {
+    const last = kk.last_spoke_ms ? Math.round((Date.now()-kk.last_spoke_ms)/60000) : null;
+    svc("up","Kokoro TTS","in-process","ready"+(last!==null?` · last spoke ${last<1?"<1":last}m ago`:" · not used yet"),false);
+  } else svc("na","Kokoro TTS","in-process","model downloads on first use",false);
+
+  const mx = sys.maximus || {};
+  svc(mx.enabled?"up":"na","Maximus","in-process",
+      mx.enabled?`active · ${esc(mx.model||"?")}`:"disabled via config", !mx.enabled && false);
+
+  const sf = sys.sailfish || {};
+  if (sf.configured) svc(sf.reachable?"up":"down","Sailfish","local inference",
+      (sf.reachable?"up":"down")+" · :"+(sf.port||"?"), !sf.reachable);
+
+  const tr = sys.transcription || {};
+  svc(tr.configured ? (tr.reachable?"up":"down") : "na","Whisper","transcription",
+      tr.configured ? ((tr.reachable?"up":"down")+" · "+esc(tr.target||"")) : "not configured", tr.configured && !tr.reachable);
+
+  $("services").innerHTML = rows.join("");
+}
+
+function renderScope(t){
+  $("tok-total").textContent = fmt((t.tokens_in||0)+(t.tokens_out||0));
+  $("tok-in").textContent = fmt(t.tokens_in); $("tok-out").textContent = fmt(t.tokens_out);
+  $("tok-cache").textContent = fmt(t.tokens_cache);
+  const total = (t.tokens_in||0)+(t.tokens_out||0);
+  $("split-i").style.width = total ? (100*(t.tokens_in||0)/total)+"%" : "0%";
+  $("split-o").style.width = total ? (100*(t.tokens_out||0)/total)+"%" : "0%";
+  $("file-total").textContent = fmt((t.file_reads||0)+(t.file_writes||0)+(t.file_creates||0)+(t.file_deletes||0)+(t.file_renames||0));
+  $("f-reads").textContent = fmt(t.file_reads); $("f-writes").textContent = fmt(t.file_writes);
+  $("f-creates").textContent = fmt(t.file_creates); $("f-bytes").textContent = fmtB(t.file_bytes_written);
+  $("net-total").textContent = fmtB((t.net_inbound_bytes||0)+(t.net_outbound_bytes||0));
+  $("n-in").textContent = fmtB(t.net_inbound_bytes); $("n-out").textContent = fmtB(t.net_outbound_bytes);
+  $("n-hosts").textContent = (t.net_hosts&&t.net_hosts.length) ? t.net_hosts.slice(0,3).join(", ") : "—";
+}
+
+function renderTabs(){
+  const uids = Object.keys(paneAgg);
+  const holder = $("pane-tabs");
+  holder.querySelectorAll(".ptab").forEach(e=>e.remove());
+  for (const uid of uids) {
+    const info = names[uid] || {name: uid==="probe"?"probe":uid.slice(0,8), app:""};
+    const b = document.createElement("button");
+    b.className = "ptab"; b.setAttribute("aria-selected", String(scope===uid));
+    b.innerHTML = `${esc(info.name)}${info.app?` <span class="prov">${esc(info.app)}</span>`:""}`;
+    b.onclick = () => { scope = (scope===uid) ? "window" : uid; syncScopeUI(); refresh(); };
+    holder.appendChild(b);
+  }
+  $("scope-window").setAttribute("aria-pressed", String(scope==="window"));
+  $("scope-window").style.color = scope==="window" ? "var(--ink)" : "var(--ink-mid)";
+}
+
+function syncScopeUI(){
+  const label = scope==="window" ? "this window" : (names[scope]?.name || scope.slice(0,8));
+  $("hero-label").textContent = "Token usage · " + label;
+  $("file-scope").textContent = label; $("net-scope").textContent = label;
+}
+
+function renderLeaderboard(){
+  const rows = Object.entries(paneAgg)
+    .map(([uid,t]) => ({uid, in_:t.tokens_in||0, out:t.tokens_out||0, tot:(t.tokens_in||0)+(t.tokens_out||0)}))
+    .filter(r => r.tot > 0)
+    .sort((a,b) => b.tot - a.tot);
+  const grand = rows.reduce((s,r)=>s+r.tot,0);
+  $("lead-total").textContent = fmt(grand) + " total · window";
+  if (!rows.length) { $("leaderboard").innerHTML = `<tr><td colspan="4"><span class="empty">no per-pane telemetry yet</span></td></tr>`; return; }
+  const max = rows[0].tot || 1;
+  $("leaderboard").innerHTML = rows.map(r => {
+    const info = names[r.uid] || {name: r.uid==="probe"?"probe (test)":r.uid.slice(0,8), app:""};
+    return `<tr title="${esc(r.uid)}"><td><div class="who"><div>${esc(info.name)}
+      ${info.app?`<div class="mdl">${esc(info.app)}</div>`:""}</div></div></td>
+      <td>${fmt(r.in_)}</td><td>${fmt(r.out)}</td>
+      <td class="share"><div class="track"><i style="width:${Math.round(100*r.tot/max)}%"></i></div></td></tr>`;
+  }).join("");
+}
+
+function drawSpark(){
+  const c = $("spark"), ctx = c.getContext("2d");
+  ctx.clearRect(0,0,c.width,c.height);
+  if (ring.length < 2) return;
+  // per-sample rate (tokens/s)
+  const rates = [];
+  for (let i=1;i<ring.length;i++) {
+    const dt = (ring[i].t - ring[i-1].t)/1000;
+    rates.push(dt>0 ? Math.max(0,(ring[i].total - ring[i-1].total)/dt) : 0);
+  }
+  const max = Math.max(...rates, 1);
+  ctx.beginPath();
+  rates.forEach((v,i)=>{
+    const x = (i/(rates.length-1||1))*c.width;
+    const y = c.height - (v/max)*(c.height-6) - 3;
+    i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
+  });
+  ctx.strokeStyle = "#a78bfa"; ctx.lineWidth = 1.6; ctx.stroke();
+  $("tok-rate").textContent = Math.round(rates[rates.length-1]||0);
+}
+
+function renderEvents(t){
+  const evs = t.events || [];
+  if (!evs.length) return; // keep the honest empty message
+  $("ev-state").textContent = "streaming";
+  $("stream").innerHTML = evs.slice(-40).reverse().map(e => {
+    const kind = e.kind || Object.keys(e).find(k=>k!=="ts"&&k!=="pane_uid") || "event";
+    const tag = kind==="FileOp"?"file":kind==="Network"?"net":kind==="Tokens"?"tok":"file";
+    const who = names[e.pane_uid]?.name || (e.pane_uid||"").slice(0,8);
+    const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : "";
+    let body = "";
+    if (kind==="Tokens") body = `${esc(e.model||"")} · +${fmt(e.input)} in / +${fmt(e.output)} out`;
+    else if (kind==="Network") body = `${esc(String(e.direction||"").toLowerCase())} · ${esc(e.host||"")} · ${fmtB(e.bytes)}`;
+    else if (kind==="FileOp") body = `${esc(String(e.op||"").toLowerCase())} · ${esc(e.path||"")}${e.bytes?` · ${fmtB(e.bytes)}`:""}`;
+    else body = esc(JSON.stringify(e)).slice(0,120);
+    return `<div class="ev"><span class="ts">${ts}</span><span class="tag ${tag}">${tag}</span>
+      <span class="body">${body}</span><span class="by">${esc(who)}</span></div>`;
+  }).join("");
+}
+
+async function refresh(){
+  try {
+    const [w, p] = await Promise.all([
+      fetch("/api/telemetry/snapshot?level=window").then(r=>r.json()),
+      fetch("/api/telemetry/snapshot?level=pane").then(r=>r.json()),
+    ]);
+    const sys = w.system || {};
+    paneAgg = p.telemetry || {};
+    // rail
+    $("agent-mode").textContent = (sys.level||"local").toUpperCase();
+    $("agent-model").textContent = `${sys.agent?.provider||"?"} / ${sys.agent?.model||"?"}`;
+    const mx = sys.maximus || {};
+    $("maximus-state").textContent = mx.enabled ? "ACTIVE" : "OFF";
+    $("maximus-state").className = "num " + (mx.enabled ? "ok" : "bad");
+    renderServices(sys);
+    if (sys.version) $("foot").textContent = "HYPERIA SIDECAR V" + sys.version + " · " + (sys.dashboard_source==="disk"?"page: disk (live)":"page: embedded");
+    // scope cards
+    const wt = w.telemetry || {};
+    const t = scope==="window" ? wt : (paneAgg[scope] || {});
+    renderScope(t);
+    renderTabs(); syncScopeUI(); renderLeaderboard(); renderEvents(wt);
+    // sparkline ring (window totals)
+    ring.push({t: Date.now(), total:(wt.tokens_in||0)+(wt.tokens_out||0)});
+    if (ring.length > 60) ring.shift();
+    drawSpark();
+  } catch(_e){}
+}
+
+$("scope-window").onclick = () => { scope = "window"; syncScopeUI(); refresh(); };
+$("btn-reset").onclick = async () => { if (confirm("Clear all telemetry counters?")) { await fetch("/api/telemetry/reset",{method:"POST"}); ring=[]; refresh(); } };
+
+// live-reload: page version poll (disk edits land ~1.5s later)
+let pageV = null;
+setInterval(async () => {
+  try { const r = await fetch("/api/dashboard/version"); const j = await r.json();
+    if (pageV === null) pageV = j.v; else if (j.v !== pageV) location.reload();
+  } catch(_e){}
+}, 1500);
+
+fetchNames(); setInterval(fetchNames, 6000);
+refresh(); setInterval(refresh, 2000);
+</script>
+</body></html>

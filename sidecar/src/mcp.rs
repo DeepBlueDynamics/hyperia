@@ -2204,12 +2204,18 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "Record a telemetry event (file op, network, tokens) for a pane.")]
+    #[tool(description = "Record a telemetry event (file op, network, tokens) for a pane. `event` is an object like {\"kind\":\"Tokens\",\"input\":120,\"output\":40,\"cache\":0,\"model\":\"...\"} — kinds: Tokens, Network (direction: Inbound|Outbound, host, bytes), FileOp (op: Create|Write|Delete|Rename, path, bytes?).")]
     async fn telemetry_record(
         &self,
         Parameters(req): Parameters<TelemetryEventRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut body = req.event.clone();
+        // Some MCP clients deliver the untyped `event` param as a JSON STRING —
+        // parse it back to an object instead of forwarding a useless string.
+        let mut body = match &req.event {
+            serde_json::Value::String(s) => serde_json::from_str::<serde_json::Value>(s)
+                .map_err(|e| ErrorData::invalid_params(format!("event is a string that isn't valid JSON: {e}"), None))?,
+            v => v.clone(),
+        };
         if let Some(obj) = body.as_object_mut() {
             obj.insert("pane_uid".into(), serde_json::json!(req.pane_uid));
         }

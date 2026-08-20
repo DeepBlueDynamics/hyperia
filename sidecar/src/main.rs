@@ -355,10 +355,13 @@ async fn post_tts(
         // `spoken` echoes the EXACT transcript delivered to the user (frame
         // included) so callers can see the wrapper already carries the
         // callsigns + "Over and out" and don't add their own radio phrases.
-        Ok(secs) => Json(serde_json::json!({
-            "ok": true, "duration_secs": secs, "caller": caller, "recipient": recipient,
-            "spoken": spoken
-        })),
+        Ok(secs) => {
+            dashboard::mark_tts_spoke();
+            Json(serde_json::json!({
+                "ok": true, "duration_secs": secs, "caller": caller, "recipient": recipient,
+                "spoken": spoken
+            }))
+        }
         Err(e) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
     }
 }
@@ -3428,6 +3431,7 @@ async fn main() -> anyhow::Result<()> {
     // Dashboard routes with their own state
     let dash_routes = axum::Router::new()
         .route("/dashboard", axum::routing::get(dashboard::get_dashboard))
+        .route("/api/dashboard/version", axum::routing::get(dashboard::get_dashboard_version))
         .route("/api/telemetry/snapshot", axum::routing::get(dashboard::get_telemetry_snapshot))
         .route("/api/telemetry/toggle", axum::routing::post(dashboard::post_telemetry_toggle))
         .route("/api/telemetry/reset", axum::routing::post(dashboard::post_telemetry_reset))

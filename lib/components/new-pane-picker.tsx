@@ -799,6 +799,16 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     this.newWithProfile(name);
   };
 
+  // Dashboard link: swap THIS picker pane into the sidecar-served /dashboard —
+  // same exit + setWebPaneUrl pattern the guide (W) uses.
+  private openDashboardPane = () => {
+    const {groupUid, uid, setWebPaneUrl} = this.props;
+    if (!setWebPaneUrl || !groupUid) return;
+    const port = process.env.HYPERIA_PORT || '9800';
+    rpc.emit('exit', {uid});
+    setWebPaneUrl(groupUid, `http://localhost:${port}/dashboard`);
+  };
+
   // Hyperia Agent always gets its OWN tab (labeled "Hyperia Agent"; focuses
   // the existing one if open) — routed through the shared 'open web pane req'
   // handler in lib/index.tsx. The picker pane closes itself. Remembered under
@@ -1228,6 +1238,44 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
               rememberedAgentItem ? rememberedAgentItem.label : 'the Hyperia Agent'
             }`}
           />
+
+          {/* Quick page links — below the pickers, above the version footer.
+              Styled to match the sidecar pages (agent config): quiet text
+              links, info accent, no chrome. */}
+          <div
+            style={{
+              ...pickerRowStyle,
+              justifyContent: 'center',
+              gap: 'var(--space-8)',
+              marginTop: 'var(--space-8)'
+            }}
+          >
+            <span
+              onClick={this.openDashboardPane}
+              title="Open the Hyperia dashboard in this pane"
+              style={{
+                fontSize: '11px',
+                fontFamily: 'var(--font-sans)',
+                color: 'var(--info-text)',
+                cursor: 'pointer'
+              }}
+            >
+              Dashboard
+            </span>
+            <span style={{fontSize: '11px', color: 'var(--text-tertiary)'}}>·</span>
+            <span
+              onClick={this.launchHyperiaShell}
+              title="Open the Hyperia Agent tab"
+              style={{
+                fontSize: '11px',
+                fontFamily: 'var(--font-sans)',
+                color: 'var(--info-text)',
+                cursor: 'pointer'
+              }}
+            >
+              Hyperia Agent
+            </span>
+          </div>
 
           {/* Footer — running version + self-update command. Like the install
               view, [run] opens a shell with the command TYPED but not
