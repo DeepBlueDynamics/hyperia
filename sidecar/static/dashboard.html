@@ -383,7 +383,7 @@ function drawDonut(rows){
 
 function renderLeaderboard(){
   const rows = Object.entries(paneAgg)
-    .map(([uid,t])=>({uid, name:(names[uid]?.name)||(uid==="probe"?"probe (test)":uid.slice(0,8)),
+    .map(([uid,t])=>({uid, name:(names[uid]?.name)||(uid==="probe"?"probe (test)":uid.slice(0,8)+" (closed pane)"),
       app:names[uid]?.app||"", in_:t.tokens_in||0, out:t.tokens_out||0,
       files:(t.file_reads||0)+(t.file_writes||0)+(t.file_creates||0),
       net:(t.net_inbound_bytes||0)+(t.net_outbound_bytes||0),
@@ -408,7 +408,7 @@ function renderEvents(t){
   $("stream").innerHTML = evs.slice(-40).reverse().map(e=>{
     const kind=e.kind||"event";
     const tag=kind==="FileOp"?"file":kind==="Network"?"net":kind==="Tokens"?"tok":"file";
-    const who=names[e.pane_uid]?.name||(e.pane_uid||"").slice(0,8);
+    const who=names[e.pane_uid]?.name||((e.pane_uid||"").slice(0,8)+" (closed)");
     const ts=e.ts?new Date(e.ts).toLocaleTimeString():"";
     let body="";
     if(kind==="Tokens") body=`${esc(e.model||"")} · +${fmt(e.input)} in / +${fmt(e.output)} out`;
