@@ -37,31 +37,24 @@
   .ghost.on{background:var(--violet);color:#0a0e15;border-color:var(--violet);font-weight:600}
 
   /* shell */
-  .shell{display:grid;grid-template-columns:256px 1fr auto auto;gap:16px;padding:16px 18px;flex:1;align-items:start}
-  aside,main,.chatcol,.filecol{min-width:0}
-  aside{display:flex;flex-direction:column;gap:12px;position:sticky;top:16px}
+  .shell{display:grid;grid-template-columns:1fr auto auto;gap:16px;padding:16px 18px;flex:1;align-items:start}
+  /* services strip — status lights only; detail lives in the tooltip */
+  .svcbar{display:flex;align-items:center;gap:18px;padding:7px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .si{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;
+      text-transform:uppercase;color:var(--ink-mid);background:none;border:0;padding:2px 0;cursor:default}
+  .si .led{width:7px;height:7px;border-radius:50%;flex:none}
+  .si.mx{cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:3px 9px}
+  .si.mx:hover{border-color:var(--cyan);color:var(--ink)}
+  .si.mx b{font-weight:700;color:var(--cyan)} .si.mx.off b{color:var(--ink-dim)}
+  .si.mx.busy{opacity:.5;pointer-events:none}
+  main,.chatcol,.filecol{min-width:0}
   main{display:flex;flex-direction:column;gap:14px}
   .pad{padding:14px 15px}
-  .agent-mode{font-size:24px;font-weight:800;background:linear-gradient(92deg,var(--cyan),var(--violet));
-    -webkit-background-clip:text;background-clip:text;color:transparent;line-height:1.1}
-  .kv{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--line);gap:8px}
-  .kv .k{color:var(--ink-mid);font-size:12px;white-space:nowrap}
   .chip{font-family:var(--mono);font-size:10.5px;background:var(--panel-2);border:1px solid var(--line);
     border-radius:6px;padding:2px 7px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ok{color:var(--green)} .bad{color:var(--rose)}
-  .svc{display:flex;gap:9px;padding:9px 0;border-top:1px solid var(--line);align-items:flex-start}
-  .svc:first-of-type{border-top:0}
-  .svc .led{width:7px;height:7px;border-radius:50%;margin-top:6px;flex:none}
   .led.up{background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 60%,transparent)}
   .led.down{background:var(--rose)} .led.na{background:var(--ink-dim)}
-  .svc .name{font-weight:600;font-size:12.5px}
-  .svc .name small{color:var(--ink-dim);font-weight:400;font-size:10.5px}
-  .svc .sub{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);margin-top:1px;word-break:break-all}
-  .svc .sub.bad{color:var(--rose)}
-  .models{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}
-  .m{font-family:var(--mono);font-size:9.5px;color:var(--cyan);background:color-mix(in srgb,var(--cyan) 8%,transparent);
-    border:1px solid color-mix(in srgb,var(--cyan) 22%,transparent);border-radius:5px;padding:1px 6px}
-  .m.more{color:var(--ink-dim);background:none;border-color:var(--line)}
   .bar{height:6px;background:var(--panel-2);border-radius:4px;overflow:hidden;margin-top:6px}
   .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),var(--violet))}
 
@@ -186,31 +179,9 @@
   </div>
 </div>
 
-<div class="shell">
-  <aside>
-    <section class="card pad" id="sec-agent">
-      <div class="sec-h" onclick="toggleSec('sec-agent')"><span class="eyebrow">Agent Status</span><span class="caret">▾</span></div>
-      <div class="sec-body">
-        <div class="agent-mode" id="agent-mode">—</div>
-        <div class="kv" style="border-top:0"><span class="k">Active model</span><span class="chip num" id="agent-model">—</span></div>
-        <div class="kv"><span class="k">Maximus compressor</span><span class="num" id="maximus-state">—</span></div>
-        <div class="kv"><span class="k">Live panes</span><span class="num" id="pane-count">—</span></div>
-      </div>
-    </section>
-    <section class="card pad" id="sec-services">
-      <div class="sec-h" onclick="toggleSec('sec-services')"><span class="eyebrow">Core Services</span><span class="caret">▾</span></div>
-      <div class="sec-body"><div id="services"></div></div>
-    </section>
-    <section class="card pad" id="sec-hw">
-      <div class="sec-h" onclick="toggleSec('sec-hw')"><span class="eyebrow">Hardware Diagnostics</span><span class="caret">▾</span></div>
-      <div class="sec-body">
-        <div class="kv" style="border-top:0"><span class="k">VRAM</span><span class="num" id="vram">—</span></div>
-        <div class="bar"><i id="vram-bar" style="width:0%"></i></div>
-        <div class="kv"><span class="k">Sidecar</span><span class="num" id="sidecar-v">—</span></div>
-      </div>
-    </section>
-  </aside>
+<div class="svcbar" id="svcbar"><span class="empty">connecting to services…</span></div>
 
+<div class="shell">
   <main>
     <section>
       <div class="ov-head">
@@ -225,6 +196,7 @@
         <div class="stat c-green"><div class="lbl">File Ops</div><div class="v" id="s-files">0</div><canvas id="sp-files"></canvas></div>
         <div class="stat c-cyan"><div class="lbl">Network</div><div class="v" id="s-net">0 B</div><canvas id="sp-net"></canvas></div>
         <div class="stat c-amber"><div class="lbl">Active Panes</div><div class="v" id="s-panes">0</div><canvas id="sp-panes"></canvas></div>
+        <div class="stat c-amber"><div class="lbl">VRAM</div><div class="v" id="s-vram">—</div></div>
       </div>
     </section>
 
@@ -239,7 +211,7 @@
         <div class="flow-head"><span class="panel-t">Tokens by Pane</span></div>
         <div class="donut-wrap">
           <canvas id="donut" width="150" height="150"></canvas>
-          <div class="dlegend" id="dlegend"><div class="empty" style="padding:4px 0">no data yet</div></div>
+          <div class="dlegend" id="dlegend"><div class="empty" style="padding:4px 0">no producer reporting tokens</div></div>
         </div>
       </section>
     </div>
@@ -318,38 +290,39 @@ async function fetchNames(){
       map[p.paneId] = { name: p.name || p.title || p.paneId.slice(0,8), app: (p.app&&p.app.name)||p.process||"" };
       if (p.shell !== "web") count++;
     }
-    names = map; $("pane-count").textContent = count + " panes"; $("s-panes").textContent = count;
+    names = map; $("s-panes").textContent = count;
   } catch(_e){}
 }
 
 function renderServices(sys){
-  const rows = [];
-  const svc = (led,name,kind,sub,bad) => rows.push(
-    `<div class="svc"><span class="led ${led}"></span><div style="flex:1">
-     <div class="name">${esc(name)} <small>${esc(kind)}</small></div>
-     <div class="sub${bad?" bad":""}">${sub}</div></div></div>`);
+  const items = [];
+  const si=(led,name,tip)=>items.push(`<span class="si" title="${esc(tip)}"><i class="led ${led}"></i>${esc(name)}</span>`);
   const ol = sys.providers?.ollama || {};
-  if (ol.reachable) {
-    const ms = ol.models||[];
-    rows.push(`<div class="svc"><span class="led up"></span><div style="flex:1">
-      <div class="name">Ollama <small>local LLM</small></div>
-      <div class="sub">up · ${esc((ol.endpoint||"").replace(/^https?:\/\//,""))} · ${ms.length} models</div>
-      <div class="models">${ms.slice(0,4).map(m=>`<span class="m">${esc(m)}</span>`).join("")}${ms.length>4?`<span class="m more">+${ms.length-4}</span>`:""}</div></div></div>`);
-  } else svc("down","Ollama","local LLM","down · not reachable",true);
+  si(ol.reachable?"up":"down","Ollama",
+     ol.reachable?`up · ${(ol.endpoint||"").replace(/^https?:\/\//,"")} · ${(ol.models||[]).length} models`:"down · not reachable");
   const fe = sys.ferricula||{};
-  svc(fe.reachable?"up":"down","Ferricula","memory index",(fe.reachable?"up":"down")+" · "+esc((fe.base_url||"").replace(/^https?:\/\//,"")),!fe.reachable);
+  si(fe.reachable?"up":"down","Ferricula",(fe.reachable?"up":"down")+" · "+(fe.base_url||"").replace(/^https?:\/\//,""));
   const kk = sys.kokoro||{};
-  if (kk.model_present){ const last = kk.last_spoke_ms?Math.round((Date.now()-kk.last_spoke_ms)/60000):null;
-    svc("up","Kokoro TTS","in-process","ready"+(last!==null?` · last spoke ${last<1?"<1":last}m ago`:" · not used yet"),false);
-  } else svc("na","Kokoro TTS","in-process","model downloads on first use",false);
-  const mx = sys.maximus||{};
-  svc(mx.enabled?"up":"na","Maximus","in-process",mx.enabled?`active · ${esc(mx.model||"?")}`:"disabled via config",false);
+  si(kk.model_present?"up":"na","Kokoro",kk.model_present?"ready":"model downloads on first use");
   const sf = sys.sailfish||{};
-  if (sf.configured) svc(sf.reachable?"up":"down","Sailfish","local inference",(sf.reachable?"up":"down")+" · :"+(sf.port||"?"),!sf.reachable);
+  if (sf.configured) si(sf.reachable?"up":"down","Sailfish",(sf.reachable?"up":"down")+" · :"+(sf.port||"?"));
   const tr = sys.transcription||{};
-  svc(tr.configured?(tr.reachable?"up":"down"):"na","Whisper","transcription",
-      tr.configured?((tr.reachable?"up":"down")+" · "+esc(tr.target||"")):"not configured",tr.configured&&!tr.reachable);
-  $("services").innerHTML = rows.join("");
+  si(tr.configured?(tr.reachable?"up":"down"):"na","Whisper",
+     tr.configured?((tr.reachable?"up":"down")+" · "+(tr.target||"")):"not configured");
+  const mx = sys.maximus||{};
+  items.push(`<button class="si mx${mx.enabled?"":" off"}" id="mx-toggle" onclick="toggleMaximus()"
+    title="${mx.enabled?"active · "+esc(mx.model||"?"):"disabled"} — click to turn ${mx.enabled?"off":"on"}">
+    <i class="led ${mx.enabled?"up":"na"}"></i>Maximus <b>${mx.enabled?"ON":"OFF"}</b></button>`);
+  $("svcbar").innerHTML = items.join("");
+}
+
+async function toggleMaximus(){
+  const b=$("mx-toggle"); if(b) b.classList.add("busy");
+  try{
+    const r=await fetch("/api/maximus/toggle",{method:"POST"});
+    if(!r.ok) throw new Error();
+    await refresh();
+  }catch(_e){ if(b){ b.classList.remove("busy"); b.title="toggle needs sidecar 0.17.18+ — install the new build"; } }
 }
 
 function slice(){ const cut = Date.now() - rangeSecs*1000; return hist.filter(h=>h.t>=cut); }
@@ -392,7 +365,7 @@ function drawFlow(){
 function drawDonut(rows){
   const c=$("donut"); const ctx=c.getContext("2d"); ctx.clearRect(0,0,150,150);
   const total=rows.reduce((s,r)=>s+r.tot,0);
-  if(!total){ $("dlegend").innerHTML='<div class="empty" style="padding:4px 0">no data yet</div>'; return; }
+  if(!total){ $("dlegend").innerHTML='<div class="empty" style="padding:4px 0">no producer reporting tokens</div>'; return; }
   let a=-Math.PI/2;
   rows.slice(0,6).forEach((r,i)=>{
     const frac=r.tot/total, end=a+frac*2*Math.PI;
@@ -500,15 +473,9 @@ async function refresh(){
     $("conn-led").style.background="var(--green)"; $("conn-text").textContent="connected to hyperia sidecar";
     const sys=w.system||{}; const wt=w.telemetry||{};
     paneAgg=p.telemetry||{};
-    $("agent-mode").textContent=(sys.level||"local").toUpperCase();
-    $("agent-model").textContent=`${sys.agent?.provider||"?"} / ${sys.agent?.model||"?"}`;
-    const mx=sys.maximus||{};
-    $("maximus-state").textContent=mx.enabled?"ACTIVE":"OFF";
-    $("maximus-state").className="num "+(mx.enabled?"ok":"bad");
     renderServices(sys);
-    if(sys.vram_gb){ $("vram").textContent=sys.vram_gb+" GB"; $("vram-bar").style.width="50%"; }
-    $("sidecar-v").textContent="v"+(sys.version||"?");
-    $("page-src").textContent="page: "+(sys.dashboard_source==="disk"?"disk (live)":"embedded");
+    $("s-vram").textContent=sys.vram_gb?sys.vram_gb+" GB":"—";
+    $("page-src").textContent="v"+(sys.version||"?")+" · "+(sys.dashboard_source==="disk"?"disk (live)":"embedded");
 
     // history sample
     hist.push({t:Date.now(), in:wt.tokens_in||0, out:wt.tokens_out||0,
@@ -551,11 +518,6 @@ $("btn-reset").onclick=async()=>{ if(confirm("Clear all telemetry counters?")){
   await fetch("/api/telemetry/reset",{method:"POST"}); hist.length=0; refresh(); } };
 $("scope-window").onclick=()=>refresh();
 
-// collapsible sections (state persists across reloads)
-function toggleSec(id){
-  const el=$(id); el.classList.toggle("closed");
-  try{ localStorage.setItem("deck."+id, el.classList.contains("closed")?"1":"0"); }catch(_e){}
-}
 function toggleChat(){
   const col=$("chatcol"); const open=col.classList.contains("closed-rail");
   col.classList.toggle("closed-rail",!open); col.classList.toggle("open",open);
@@ -566,7 +528,6 @@ function toggleChat(){
 }
 // restore persisted states
 try{
-  ["sec-agent","sec-services","sec-hw"].forEach(id=>{ if(localStorage.getItem("deck."+id)==="1") $(id).classList.add("closed"); });
   if(localStorage.getItem("deck.chat")==="1") toggleChat();
 }catch(_e){}
 

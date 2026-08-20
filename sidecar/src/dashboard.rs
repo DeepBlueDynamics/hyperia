@@ -209,6 +209,31 @@ pub async fn get_dashboard_version() -> (StatusCode, String) {
     (StatusCode::OK, format!("{{\"v\":\"{v}\"}}"))
 }
 
+/// POST /api/maximus/toggle — flip config.maximus.disabled in the shared config
+/// and persist. Backs the header-bar Maximus toggle on the dashboard.
+pub async fn post_maximus_toggle() -> (StatusCode, String) {
+    let path = match crate::util::shared_config_path() {
+        Some(p) => p,
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, r#"{"error":"no config path"}"#.into()),
+    };
+    let mut cfg: serde_json::Value = match std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+    {
+        Some(v) => v,
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, r#"{"error":"config unreadable"}"#.into()),
+    };
+    let was_disabled = cfg["config"]["maximus"]["disabled"].as_bool().unwrap_or(false);
+    if !cfg["config"]["maximus"].is_object() {
+        cfg["config"]["maximus"] = serde_json::json!({});
+    }
+    cfg["config"]["maximus"]["disabled"] = serde_json::json!(!was_disabled);
+    if let Err(e) = crate::util::write_json_file_atomic(&path, &cfg) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!(r#"{{"error":"write config: {e}"}}"#));
+    }
+    (StatusCode::OK, format!(r#"{{"ok":true,"enabled":{}}}"#, was_disabled))
+}
+
 /// GET /api/telemetry/snapshot?level=window|pane&uid=optional
 pub async fn get_telemetry_snapshot(
     State(state): State<DashboardState>,

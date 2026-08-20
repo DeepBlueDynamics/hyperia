@@ -3432,6 +3432,7 @@ async fn main() -> anyhow::Result<()> {
     let dash_routes = axum::Router::new()
         .route("/dashboard", axum::routing::get(dashboard::get_dashboard))
         .route("/api/dashboard/version", axum::routing::get(dashboard::get_dashboard_version))
+        .route("/api/maximus/toggle", axum::routing::post(dashboard::post_maximus_toggle))
         .route("/api/telemetry/snapshot", axum::routing::get(dashboard::get_telemetry_snapshot))
         .route("/api/telemetry/toggle", axum::routing::post(dashboard::post_telemetry_toggle))
         .route("/api/telemetry/reset", axum::routing::post(dashboard::post_telemetry_reset))
