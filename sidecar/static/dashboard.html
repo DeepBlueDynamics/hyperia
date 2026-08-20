@@ -37,8 +37,8 @@
   .ghost.on{background:var(--violet);color:#0a0e15;border-color:var(--violet);font-weight:600}
 
   /* shell */
-  .shell{display:grid;grid-template-columns:256px 1fr auto;gap:16px;padding:16px 18px;flex:1;align-items:start}
-  aside,main,.chatcol{min-width:0}
+  .shell{display:grid;grid-template-columns:256px 1fr auto auto;gap:16px;padding:16px 18px;flex:1;align-items:start}
+  aside,main,.chatcol,.filecol{min-width:0}
   aside{display:flex;flex-direction:column;gap:12px;position:sticky;top:16px}
   main{display:flex;flex-direction:column;gap:14px}
   .pad{padding:14px 15px}
@@ -129,6 +129,25 @@
   .closed .sec-body{display:none}
 
   /* chat rail — collapsible; hideous-in-340px shell only loads when opened */
+  /* file ops matrix — session-scoped, fed by the same event buffer as the stream */
+  .filecol{position:sticky;top:16px;width:292px}
+  .filecol .card{max-height:calc(100vh - 110px);display:flex;flex-direction:column}
+  #fmatrix{overflow-y:auto;margin-top:2px}
+  .frow{display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--line)}
+  .frow:first-child{border-top:0}
+  .fpath{flex:1;min-width:0;font-family:var(--mono);font-size:10.5px}
+  .fpath b{font-weight:600;color:var(--ink);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .fpath .fdir{display:block;font-size:9px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
+  .fchips{display:flex;gap:3px;flex-shrink:0}
+  .chip{font-family:var(--mono);font-size:8.5px;font-weight:600;padding:1.5px 5px;border-radius:4px;letter-spacing:.04em}
+  .chip.cC{color:var(--green);background:color-mix(in srgb,var(--green) 12%,transparent)}
+  .chip.cW{color:var(--cyan);background:color-mix(in srgb,var(--cyan) 12%,transparent)}
+  .chip.cD{color:var(--rose);background:color-mix(in srgb,var(--rose) 12%,transparent)}
+  .chip.cR{color:var(--amber);background:color-mix(in srgb,var(--amber) 12%,transparent)}
+  .chip.cRd{color:var(--violet);background:color-mix(in srgb,var(--violet) 12%,transparent)}
+  .fts{font-family:var(--mono);font-size:9px;color:var(--ink-dim);flex-shrink:0;width:26px;text-align:right}
+  .frow.hot{animation:fhot 1.6s ease-out}
+  @keyframes fhot{0%{background:color-mix(in srgb,var(--cyan) 14%,transparent)}100%{background:transparent}}
   .chatcol{position:sticky;top:16px}
   .chatcol .card{display:flex;flex-direction:column}
   .chatcol.open{width:420px}
@@ -147,7 +166,7 @@
     font-family:var(--mono);font-size:10.5px;color:var(--ink-dim)}
   .pill{display:inline-flex;align-items:center;gap:6px}
   .pill .led{width:6px;height:6px;border-radius:50%}
-  @media(max-width:1500px){.shell{grid-template-columns:240px 1fr}.chatcol{display:none}}
+  @media(max-width:1500px){.shell{grid-template-columns:240px 1fr}.chatcol,.filecol{display:none}}
   @media(max-width:1000px){.shell{grid-template-columns:1fr}aside{position:static}.row-flow{grid-template-columns:1fr}}
 </style></head><body>
 
@@ -156,7 +175,6 @@
   <span class="live"><span class="dot"></span>SYSTEM LIVE</span>
   <nav>
     <a class="on" href="/dashboard">Telemetry</a>
-    <a href="/shell">Agents</a>
     <a href="/agent/config">Config</a>
     <a href="/guide">Guide</a>
   </nav>
@@ -242,6 +260,13 @@
       <div class="stream" id="stream"><div class="empty" style="padding:8px 0">No events yet — the stream fills as producers report file/network/token events.</div></div>
     </section>
   </main>
+
+  <div class="filecol">
+    <section class="card">
+      <div class="flow-head"><span class="panel-t">File Ops Matrix</span><span class="eyebrow" id="fm-count">—</span></div>
+      <div id="fmatrix"><div class="empty" style="padding:8px 0">no file activity yet — fills as producers report file ops</div></div>
+    </section>
+  </div>
 
   <div class="chatcol closed-rail" id="chatcol">
     <section class="card">
@@ -431,6 +456,40 @@ function renderEvents(t){
       <span class="body">${body}</span><span class="by">${esc(who)}</span></div>`;}).join("");
 }
 
+// File Ops Matrix: aggregate evBuf FileOps per path — op counts, bytes, last touch.
+const fmLast={};  // path -> last ts rendered, to flash rows that just changed
+let fmSeeded=false;  // suppress the flash on the very first paint
+function renderFileMatrix(){
+  const files={};
+  for(const e of evBuf.values()){
+    if(e.kind!=="FileOp"||!e.path) continue;
+    const f=files[e.path]||(files[e.path]={C:0,W:0,D:0,R:0,Rd:0,bytes:0,last:0,who:new Set()});
+    const op=String(e.op||"");
+    if(op==="Create")f.C++; else if(op==="Write")f.W++; else if(op==="Delete")f.D++;
+    else if(op==="Rename")f.R++; else if(op==="Read")f.Rd++;
+    f.bytes+=e.bytes||0;
+    if(e.ts>f.last)f.last=e.ts;
+    f.who.add(names[e.pane_uid]?.name||(e.pane_uid||"").slice(0,8));
+  }
+  const rows=Object.entries(files).sort((a,b)=>b[1].last-a[1].last).slice(0,40);
+  const totalOps=rows.reduce((s,[,f])=>s+f.C+f.W+f.D+f.R+f.Rd,0);
+  $("fm-count").textContent=rows.length?`${rows.length} files · ${totalOps} ops`:"—";
+  if(!rows.length) return;
+  const rel=ts=>{const s=(Date.now()-ts)/1000;
+    return s<60?Math.floor(s)+"s":s<3600?Math.floor(s/60)+"m":Math.floor(s/3600)+"h";};
+  $("fmatrix").innerHTML=rows.map(([path,f])=>{
+    const i=path.lastIndexOf("/");
+    const base=i>=0?path.slice(i+1):path, dir=i>=0?path.slice(0,i):"";
+    const chips=[["C",f.C,"cC"],["W",f.W,"cW"],["D",f.D,"cD"],["Rn",f.R,"cR"],["Rd",f.Rd,"cRd"]]
+      .filter(([,n])=>n>0).map(([l,n,c])=>`<span class="chip ${c}">${l}${n>1?"×"+n:""}</span>`).join("");
+    const hot=fmSeeded && f.last>(fmLast[path]||0); fmLast[path]=f.last;
+    return `<div class="frow${hot?" hot":""}" title="${esc(path)} — ${[...f.who].map(esc).join(", ")}${f.bytes?" · "+fmtB(f.bytes):""}">
+      <div class="fpath"><b>${esc(base)}</b><span class="fdir">${esc(dir)}</span></div>
+      <div class="fchips">${chips}</div><span class="fts">${rel(f.last)}</span></div>`;
+  }).join("");
+  fmSeeded=true;
+}
+
 async function refresh(){
   if (paused) return;
   try {
@@ -474,7 +533,7 @@ async function refresh(){
     drawMini("sp-tok",s.map(x=>x.in+x.out),"#a78bfa");
     drawMini("sp-files",rates(x=>x.files),"#34d399");
     drawMini("sp-net",rates(x=>x.net),"#38bdf8");
-    drawFlow(); renderLeaderboard(); renderEvents(wt);
+    drawFlow(); renderLeaderboard(); renderEvents(wt); renderFileMatrix();
   } catch(_e){
     $("conn-led").style.background="var(--rose)"; $("conn-text").textContent="sidecar unreachable";
   }
