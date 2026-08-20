@@ -77,6 +77,8 @@
   .stat .v{font-family:var(--mono);font-size:23px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.2;margin-top:2px}
   .stat .u{font-size:11px;color:var(--ink-dim);margin-left:4px;font-weight:400}
   .stat canvas{width:100%;height:26px;display:block;margin-top:4px}
+  .stat .sub{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stat .nodata{font-size:13px;color:var(--ink-dim);font-weight:400}
   .c-vio .lbl{color:var(--violet)} .c-cyan .lbl{color:var(--cyan)} .c-green .lbl{color:var(--green)} .c-amber .lbl{color:var(--amber)}
 
   /* flow + donut */
@@ -201,9 +203,7 @@
         </div>
       </div>
       <div class="cards">
-        <div class="stat c-vio"><div class="lbl">Tokens In</div><div class="v"><span id="s-in">0</span><span class="u">tok/s</span></div><canvas id="sp-in"></canvas></div>
-        <div class="stat c-cyan"><div class="lbl">Tokens Out</div><div class="v"><span id="s-out">0</span><span class="u">tok/s</span></div><canvas id="sp-out"></canvas></div>
-        <div class="stat c-vio"><div class="lbl">Total Tokens</div><div class="v" id="s-total">0</div><canvas id="sp-total"></canvas></div>
+        <div class="stat c-vio"><div class="lbl">Tokens</div><div class="v" id="s-tok"><span class="nodata">no data</span></div><div class="sub" id="s-tok-sub">no producer reporting tokens</div><canvas id="sp-tok"></canvas></div>
         <div class="stat c-green"><div class="lbl">File Ops</div><div class="v" id="s-files">0</div><canvas id="sp-files"></canvas></div>
         <div class="stat c-cyan"><div class="lbl">Network</div><div class="v" id="s-net">0 B</div><canvas id="sp-net"></canvas></div>
         <div class="stat c-amber"><div class="lbl">Active Panes</div><div class="v" id="s-panes">0</div><canvas id="sp-panes"></canvas></div>
@@ -401,11 +401,23 @@ function renderLeaderboard(){
      <td class="share"><div class="track"><i style="width:${Math.round(100*r.tot/max)}%"></i></div></td></tr>`).join("");
 }
 
+// Client-side accumulator: the server ring (200) floods with Network events and
+// evicts rare FileOp/Tokens within ~2 min — keep everything we've seen this session.
+const evBuf=new Map();
 function renderEvents(t){
-  const evs=t.events||[];
-  if(!evs.length) return;
+  (t.events||[]).forEach(e=>{
+    evBuf.set(`${e.ts}|${e.pane_uid}|${e.kind}|${e.path||e.host||e.model||""}|${e.bytes||""}`,e);
+  });
+  if(!evBuf.size) return;
+  let evs=[...evBuf.values()].sort((a,b)=>(a.ts||0)-(b.ts||0));
+  if(evs.length>600){ evs=evs.slice(-600); evBuf.clear();
+    evs.forEach(e=>evBuf.set(`${e.ts}|${e.pane_uid}|${e.kind}|${e.path||e.host||e.model||""}|${e.bytes||""}`,e)); }
   $("ev-state").textContent="streaming";
-  $("stream").innerHTML = evs.slice(-40).reverse().map(e=>{
+  // Rare kinds must not scroll away under the Network flood: always show the
+  // last 12 non-Network events alongside the newest 40 overall.
+  const rare=evs.filter(e=>e.kind!=="Network").slice(-12);
+  const show=[...new Set([...evs.slice(-40),...rare])].sort((a,b)=>(b.ts||0)-(a.ts||0));
+  $("stream").innerHTML = show.map(e=>{
     const kind=e.kind||"event";
     const tag=kind==="FileOp"?"file":kind==="Network"?"net":kind==="Tokens"?"tok":"file";
     const who=names[e.pane_uid]?.name||((e.pane_uid||"").slice(0,8)+" (closed)");
@@ -447,15 +459,19 @@ async function refresh(){
 
     // overview cards
     const rIn=rates(x=>x.in), rOut=rates(x=>x.out);
-    $("s-in").textContent=Math.round(rIn[rIn.length-1]||0);
-    $("s-out").textContent=Math.round(rOut[rOut.length-1]||0);
     const s=slice();
-    const dTotal = s.length>1 ? (s[s.length-1].in+s[s.length-1].out)-(s[0].in+s[0].out) : 0;
-    $("s-total").textContent=fmt(dTotal);
-    $("s-files").textContent=fmt(wt.file_reads+wt.file_writes+wt.file_creates+wt.file_deletes+wt.file_renames||0);
+    const tokEver=(wt.tokens_in||0)+(wt.tokens_out||0);
+    if(!tokEver){
+      $("s-tok").innerHTML='<span class="nodata">no data</span>';
+      $("s-tok-sub").textContent="no producer reporting tokens";
+    } else {
+      const dTotal = s.length>1 ? (s[s.length-1].in+s[s.length-1].out)-(s[0].in+s[0].out) : 0;
+      $("s-tok").innerHTML=fmt(dTotal)+'<span class="u">tok</span>';
+      $("s-tok-sub").textContent=`in ${Math.round(rIn[rIn.length-1]||0)}/s · out ${Math.round(rOut[rOut.length-1]||0)}/s · ${fmt(tokEver)} all-time`;
+    }
+    $("s-files").textContent=fmt((wt.file_reads||0)+(wt.file_writes||0)+(wt.file_creates||0)+(wt.file_deletes||0)+(wt.file_renames||0));
     $("s-net").textContent=fmtB((wt.net_inbound_bytes||0)+(wt.net_outbound_bytes||0));
-    drawMini("sp-in",rIn,"#a78bfa"); drawMini("sp-out",rOut,"#38bdf8");
-    drawMini("sp-total",s.map(x=>x.in+x.out),"#a78bfa");
+    drawMini("sp-tok",s.map(x=>x.in+x.out),"#a78bfa");
     drawMini("sp-files",rates(x=>x.files),"#34d399");
     drawMini("sp-net",rates(x=>x.net),"#38bdf8");
     drawFlow(); renderLeaderboard(); renderEvents(wt);
