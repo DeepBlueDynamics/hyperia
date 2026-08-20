@@ -142,6 +142,11 @@ pub struct WindowMetrics {
     /// Cross-pane recent-events ring (cap 200) feeding the live stream.
     #[serde(skip)]
     pub recent: std::collections::VecDeque<RecordedEvent>,
+    /// FileOp-only ring (cap 300). Kept separate because the Network tick flood
+    /// evicts rare FileOps from `recent` within minutes — the dashboard's file
+    /// matrix reads this and survives page reloads.
+    #[serde(skip)]
+    pub recent_files: std::collections::VecDeque<RecordedEvent>,
 }
 
 #[derive(Clone)]
@@ -156,6 +161,7 @@ impl TelemetryStore {
                 panes: HashMap::new(),
                 enabled: true,
                 recent: std::collections::VecDeque::new(),
+                recent_files: std::collections::VecDeque::new(),
             })),
         }
     }
@@ -179,6 +185,16 @@ impl TelemetryStore {
             pane_uid: pane_uid.to_string(),
             event: event.clone(),
         });
+        if matches!(event, TelemetryEvent::FileOp { .. }) {
+            if store.recent_files.len() >= 300 {
+                store.recent_files.pop_front();
+            }
+            store.recent_files.push_back(RecordedEvent {
+                ts_ms,
+                pane_uid: pane_uid.to_string(),
+                event: event.clone(),
+            });
+        }
         store
             .panes
             .entry(pane_uid.to_string())
@@ -213,6 +229,7 @@ impl TelemetryStore {
         let mut store = self.inner.lock().unwrap();
         store.panes.clear();
         store.recent.clear();
+        store.recent_files.clear();
     }
 
     /// JSON snapshot at requested level.
@@ -262,8 +279,21 @@ impl TelemetryStore {
                         ev
                     })
                     .collect();
+                let file_events: Vec<serde_json::Value> = store
+                    .recent_files
+                    .iter()
+                    .map(|re| {
+                        let mut ev = serde_json::to_value(&re.event).unwrap_or(serde_json::json!({}));
+                        if let Some(obj) = ev.as_object_mut() {
+                            obj.insert("ts".into(), serde_json::json!(re.ts_ms));
+                            obj.insert("pane_uid".into(), serde_json::json!(re.pane_uid));
+                        }
+                        ev
+                    })
+                    .collect();
                 if let Some(obj) = out.as_object_mut() {
                     obj.insert("events".into(), serde_json::Value::Array(events));
+                    obj.insert("file_events".into(), serde_json::Value::Array(file_events));
                 }
                 out
             }

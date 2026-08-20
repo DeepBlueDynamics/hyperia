@@ -1211,7 +1211,7 @@ dependencies = [
 
 [[package]]
 name = "hyperia-sidecar"
-version = "0.17.18"
+version = "0.17.19"
 dependencies = [
  "aegis-edit",
  "anyhow",

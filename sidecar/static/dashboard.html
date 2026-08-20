@@ -125,6 +125,14 @@
   /* file ops matrix — session-scoped, fed by the same event buffer as the stream */
   .filecol{position:sticky;top:16px;width:292px}
   .filecol .card{max-height:calc(100vh - 110px);display:flex;flex-direction:column}
+  .file-head{display:flex;justify-content:space-between;align-items:center;padding:13px 14px;
+    cursor:pointer;user-select:none;gap:10px}
+  .filecol .card>#fmatrix{padding:0 14px 12px}
+  .filecol.closed-rail{width:46px}
+  .filecol.closed-rail .file-head{flex-direction:column;padding:14px 8px;gap:10px}
+  .filecol.closed-rail .file-head .panel-t{writing-mode:vertical-rl;letter-spacing:.14em;font-size:10.5px}
+  .filecol.closed-rail .file-head .eyebrow{display:none}
+  .filecol.closed-rail #fmatrix{display:none}
   #fmatrix{overflow-y:auto;margin-top:2px}
   .frow{display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--line)}
   .frow:first-child{border-top:0}
@@ -233,10 +241,13 @@
     </section>
   </main>
 
-  <div class="filecol">
+  <div class="filecol closed-rail" id="filecol">
     <section class="card">
-      <div class="flow-head"><span class="panel-t">File Ops Matrix</span><span class="eyebrow" id="fm-count">—</span></div>
-      <div id="fmatrix"><div class="empty" style="padding:8px 0">no file activity yet — fills as producers report file ops</div></div>
+      <div class="file-head" onclick="toggleFiles()">
+        <span class="panel-t">File Ops</span>
+        <span class="eyebrow" id="fm-count">no data</span>
+      </div>
+      <div id="fmatrix"><div class="empty" style="padding:8px 0">no file activity reported yet</div></div>
     </section>
   </div>
 
@@ -429,13 +440,21 @@ function renderEvents(t){
       <span class="body">${body}</span><span class="by">${esc(who)}</span></div>`;}).join("");
 }
 
-// File Ops Matrix: aggregate evBuf FileOps per path — op counts, bytes, last touch.
+// File Ops Matrix: aggregate FileOps per path — op counts, bytes, last touch.
+// Sources: the server's FileOp-only ring (survives page reloads, sidecar
+// 0.17.19+) merged with anything seen in the live-stream buffer.
+const fmBuf=new Map();
 const fmLast={};  // path -> last ts rendered, to flash rows that just changed
 let fmSeeded=false;  // suppress the flash on the very first paint
-function renderFileMatrix(){
+function renderFileMatrix(t){
+  ((t&&t.file_events)||[]).forEach(e=>{
+    fmBuf.set(`${e.ts}|${e.pane_uid}|${e.path}|${e.op}|${e.bytes||""}`,e);
+  });
+  for(const e of evBuf.values()){ if(e.kind==="FileOp"&&e.path)
+    fmBuf.set(`${e.ts}|${e.pane_uid}|${e.path}|${e.op}|${e.bytes||""}`,e); }
   const files={};
-  for(const e of evBuf.values()){
-    if(e.kind!=="FileOp"||!e.path) continue;
+  for(const e of fmBuf.values()){
+    if(!e.path) continue;
     const f=files[e.path]||(files[e.path]={C:0,W:0,D:0,R:0,Rd:0,bytes:0,last:0,who:new Set()});
     const op=String(e.op||"");
     if(op==="Create")f.C++; else if(op==="Write")f.W++; else if(op==="Delete")f.D++;
@@ -446,8 +465,11 @@ function renderFileMatrix(){
   }
   const rows=Object.entries(files).sort((a,b)=>b[1].last-a[1].last).slice(0,40);
   const totalOps=rows.reduce((s,[,f])=>s+f.C+f.W+f.D+f.R+f.Rd,0);
-  $("fm-count").textContent=rows.length?`${rows.length} files · ${totalOps} ops`:"—";
+  $("fm-count").textContent=rows.length?`${rows.length} files · ${totalOps} ops`:"no data";
   if(!rows.length) return;
+  // First data with no explicit user choice: open the rail so it's noticed.
+  if(!fmSeeded && localStorage.getItem("deck.files")===null && $("filecol").classList.contains("closed-rail"))
+    toggleFiles(true);
   const rel=ts=>{const s=(Date.now()-ts)/1000;
     return s<60?Math.floor(s)+"s":s<3600?Math.floor(s/60)+"m":Math.floor(s/3600)+"h";};
   $("fmatrix").innerHTML=rows.map(([path,f])=>{
@@ -500,7 +522,7 @@ async function refresh(){
     drawMini("sp-tok",s.map(x=>x.in+x.out),"#a78bfa");
     drawMini("sp-files",rates(x=>x.files),"#34d399");
     drawMini("sp-net",rates(x=>x.net),"#38bdf8");
-    drawFlow(); renderLeaderboard(); renderEvents(wt); renderFileMatrix();
+    drawFlow(); renderLeaderboard(); renderEvents(wt); renderFileMatrix(wt);
   } catch(_e){
     $("conn-led").style.background="var(--rose)"; $("conn-text").textContent="sidecar unreachable";
   }
@@ -518,6 +540,11 @@ $("btn-reset").onclick=async()=>{ if(confirm("Clear all telemetry counters?")){
   await fetch("/api/telemetry/reset",{method:"POST"}); hist.length=0; refresh(); } };
 $("scope-window").onclick=()=>refresh();
 
+function toggleFiles(auto){
+  const col=$("filecol");
+  col.classList.toggle("closed-rail");
+  if(!auto) try{ localStorage.setItem("deck.files", col.classList.contains("closed-rail")?"0":"1"); }catch(_e){}
+}
 function toggleChat(){
   const col=$("chatcol"); const open=col.classList.contains("closed-rail");
   col.classList.toggle("closed-rail",!open); col.classList.toggle("open",open);
@@ -529,6 +556,7 @@ function toggleChat(){
 // restore persisted states
 try{
   if(localStorage.getItem("deck.chat")==="1") toggleChat();
+  if(localStorage.getItem("deck.files")==="1") toggleFiles(true);
 }catch(_e){}
 
 let pageV=null;
