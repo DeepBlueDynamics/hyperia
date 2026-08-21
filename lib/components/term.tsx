@@ -104,7 +104,11 @@ const getTermOptions = (props: TermProps): ITerminalOptions => {
     letterSpacing: props.letterSpacing,
     allowTransparency: needTransparency,
     macOptionClickForcesSelection: props.macOptionSelectionMode === 'force',
-    windowsMode: isWindows,
+    // windowsMode only as the legacy fallback: when windowsPty is present xterm
+    // derives behaviour from the build number, and leaving windowsMode on ALSO
+    // flips Buffer.resize's grow-rows branch to "push a blank line at the
+    // bottom" instead of pulling one back out of scrollback.
+    windowsMode: isWindows && !props.windowsPty,
     ...(isWindows && props.windowsPty && {windowsPty: props.windowsPty}),
     theme: {
       foreground: props.foregroundColor,
@@ -1247,12 +1251,17 @@ export default class Term extends React.PureComponent<
   forceReflow() {
     if (!this.termWrapperRef || !this.term) return;
     try {
-      const cols = this.term.cols;
-      const rows = this.term.rows;
-      if (cols > 0 && rows > 0) {
-        this.term.resize(cols + 1, rows);
-        this.term.resize(cols, rows);
-      }
+      // Force a re-measure + full repaint WITHOUT touching the grid. This used
+      // to be a term.resize(cols+1) / resize(cols) jiggle, but every resize()
+      // fires term.onResize -> props.onResize -> pty.resize, so the jiggle
+      // shipped two ioctls of DIFFERENT width in one tick (two SIGWINCHs) and
+      // ran two xterm buffer reflows. Reflow is not symmetric — _reflowSmaller
+      // skips the cursor's line and _reflowLargerAdjustViewport pushes blank
+      // lines at the bottom — so widen-then-narrow shifts the frame by a row.
+      // Inline Ink TUIs (codex, claude-code) erase their last frame with a
+      // relative cursor-up of N lines, so that shift orphans a border row under
+      // the input box until something forces a full re-render (#extra-linefeed).
+      this.term.clearTextureAtlas();
       this.fitAddon.fit();
       this.term.refresh(0, this.term.rows - 1);
     } catch (e) {
@@ -1265,27 +1274,19 @@ export default class Term extends React.PureComponent<
       this.setState({isDirNavigatorOpen: false});
     }
 
+    // One trailing settle, not two. The 100ms + 300ms pair fired BOTH times,
+    // and each forceReflow was its own SIGWINCH the TUI had to react to.
     clearTimeout(this.resizeTimeout);
     this.resizeTimeout = setTimeout(() => {
       this.forceReflow();
-    }, 100);
-
-    clearTimeout(this.stabilizeResizeTimeout);
-    this.stabilizeResizeTimeout = setTimeout(() => {
-      this.forceReflow();
-    }, 300);
+    }, 150);
   };
 
   onWindowMove = () => {
     clearTimeout(this.resizeTimeout);
     this.resizeTimeout = setTimeout(() => {
       this.forceReflow();
-    }, 100);
-
-    clearTimeout(this.stabilizeResizeTimeout);
-    this.stabilizeResizeTimeout = setTimeout(() => {
-      this.forceReflow();
-    }, 300);
+    }, 150);
   };
 
   keyboardHandler = (e: any) => {
