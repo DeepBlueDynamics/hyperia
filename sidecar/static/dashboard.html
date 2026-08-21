@@ -104,10 +104,11 @@
 
   /* events */
   .stream{padding:2px 16px 12px;max-height:220px;overflow-y:auto;font-family:var(--mono);font-size:11.5px}
-  .ev{display:grid;grid-template-columns:64px 66px 1fr auto;gap:10px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
+  .ev{display:grid;grid-template-columns:132px auto 1fr auto;gap:10px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
+  .ev .ts{white-space:nowrap}
   .ev:first-child{border-top:0}
   .ev .ts{color:var(--ink-dim);font-size:10.5px}
-  .tag{font-size:9px;letter-spacing:.08em;text-transform:uppercase;padding:2px 6px;border-radius:4px;text-align:center;font-weight:600}
+  .tag{font-size:9px;letter-spacing:.08em;text-transform:uppercase;padding:2px 5px;border-radius:4px;text-align:center;font-weight:600;justify-self:start}
   .tag.file{color:var(--green);background:color-mix(in srgb,var(--green) 12%,transparent)}
   .tag.net{color:var(--cyan);background:color-mix(in srgb,var(--cyan) 12%,transparent)}
   .tag.tok{color:var(--violet);background:color-mix(in srgb,var(--violet) 12%,transparent)}
@@ -161,6 +162,12 @@
   .chatcol.closed-rail .chat-head .eyebrow{display:none}
   #chat-frame{flex:1;border:0;width:100%;border-radius:0 0 12px 12px;background:var(--ground)}
   .chatcol.closed-rail #chat-frame{display:none}
+  .chat-keys{display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--line)}
+  .chat-keys button{flex:1;font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+    background:var(--panel-2);border:1px solid var(--line);border-radius:6px;color:var(--ink-mid);padding:5px 0;cursor:pointer}
+  .chat-keys button:hover{border-color:var(--cyan);color:var(--ink)}
+  .chat-keys button.stop:hover{border-color:var(--rose);color:var(--rose)}
+  .chatcol.closed-rail .chat-keys{display:none}
 
   /* bottom bar */
   .botbar{display:flex;align-items:center;gap:16px;padding:8px 18px;border-top:1px solid var(--line);
@@ -258,6 +265,12 @@
         <span class="eyebrow" id="chat-caret">◂ open</span>
       </div>
       <iframe id="chat-frame" title="Hyperia Agent"></iframe>
+      <div class="chat-keys">
+        <button onclick="chatKey('send')" title="Submit the input">Send</button>
+        <button onclick="chatKey('nl')" title="Insert newline without sending">⏎ NL</button>
+        <button onclick="chatKey('esc')" title="Escape — cancels the current agent turn">Esc</button>
+        <button class="stop" onclick="chatKey('stop')" title="Request the agent to stop now">Stop</button>
+      </div>
     </section>
   </div>
 </div>
@@ -430,7 +443,7 @@ function renderEvents(t){
     const kind=e.kind||"event";
     const tag=kind==="FileOp"?"file":kind==="Network"?"net":kind==="Tokens"?"tok":"file";
     const who=names[e.pane_uid]?.name||((e.pane_uid||"").slice(0,8)+" (closed)");
-    const ts=e.ts?new Date(e.ts).toLocaleTimeString():"";
+    const ts=e.ts?new Date(e.ts).toISOString().replace("T"," ").slice(0,19)+"Z":"";
     let body="";
     if(kind==="Tokens") body=`${esc(e.model||"")} · +${fmt(e.input)} in / +${fmt(e.output)} out`;
     else if(kind==="Network") body=`${esc(String(e.direction||"").toLowerCase())} · ${esc(e.host||"")} · ${fmtB(e.bytes)}`;
@@ -544,6 +557,18 @@ function toggleFiles(auto){
   const col=$("filecol");
   col.classList.toggle("closed-rail");
   if(!auto) try{ localStorage.setItem("deck.files", col.classList.contains("closed-rail")?"0":"1"); }catch(_e){}
+}
+// Chat quick keys — drive the /shell iframe (same origin) or the stop endpoint.
+function chatKey(k){
+  if(k==="stop"){ fetch("/api/ghost/stop",{method:"POST"}).catch(()=>{}); return; }
+  const f=$("chat-frame"); const cw=f&&f.src?f.contentWindow:null;
+  if(!cw) return;
+  const inp=cw.document.getElementById("input");
+  if(k==="send"){ try{ cw.submit(); }catch(_e){} }
+  else if(k==="nl"&&inp){ inp.value+="\n";
+    inp.dispatchEvent(new cw.Event("input",{bubbles:true})); inp.focus(); }
+  else if(k==="esc"&&inp){
+    inp.dispatchEvent(new cw.KeyboardEvent("keydown",{key:"Escape",bubbles:true})); }
 }
 function toggleChat(){
   const col=$("chatcol"); const open=col.classList.contains("closed-rail");
