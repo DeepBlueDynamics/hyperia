@@ -471,6 +471,7 @@ async fn get_status_data(client: &reqwest::Client) -> serde_json::Value {
     };
 
     let vram = crate::ghost::gpu::get_gpu_vram_gb();
+    let vram_used = crate::ghost::gpu::get_gpu_vram_used_gb();
 
     // Built-in (in-process) services — invisible to port probes, real all the same.
     let kokoro_dir = dirs_home().join(".hyperia").join("kokoro");
@@ -497,6 +498,7 @@ async fn get_status_data(client: &reqwest::Client) -> serde_json::Value {
     serde_json::json!({
         "level": level,
         "vram_gb": vram,
+        "vram_used_gb": vram_used,
         "version": env!("CARGO_PKG_VERSION"),
         "dashboard_source": if dashboard_disk_path().is_file() { "disk" } else { "embedded" },
         "kokoro": {

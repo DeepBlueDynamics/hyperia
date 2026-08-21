@@ -162,12 +162,6 @@
   .chatcol.closed-rail .chat-head .eyebrow{display:none}
   #chat-frame{flex:1;border:0;width:100%;border-radius:0 0 12px 12px;background:var(--ground)}
   .chatcol.closed-rail #chat-frame{display:none}
-  .chat-keys{display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--line)}
-  .chat-keys button{flex:1;font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;
-    background:var(--panel-2);border:1px solid var(--line);border-radius:6px;color:var(--ink-mid);padding:5px 0;cursor:pointer}
-  .chat-keys button:hover{border-color:var(--cyan);color:var(--ink)}
-  .chat-keys button.stop:hover{border-color:var(--rose);color:var(--rose)}
-  .chatcol.closed-rail .chat-keys{display:none}
 
   /* bottom bar */
   .botbar{display:flex;align-items:center;gap:16px;padding:8px 18px;border-top:1px solid var(--line);
@@ -211,7 +205,8 @@
         <div class="stat c-green"><div class="lbl">File Ops</div><div class="v" id="s-files">0</div><canvas id="sp-files"></canvas></div>
         <div class="stat c-cyan"><div class="lbl">Network</div><div class="v" id="s-net">0 B</div><canvas id="sp-net"></canvas></div>
         <div class="stat c-amber"><div class="lbl">Active Panes</div><div class="v" id="s-panes">0</div><canvas id="sp-panes"></canvas></div>
-        <div class="stat c-amber"><div class="lbl">VRAM</div><div class="v" id="s-vram">—</div></div>
+        <div class="stat c-amber"><div class="lbl">VRAM</div><div class="v" id="s-vram">—</div>
+          <div class="sub" id="s-vram-sub"></div><div class="bar"><i id="s-vram-bar" style="width:0%"></i></div></div>
       </div>
     </section>
 
@@ -252,7 +247,7 @@
     <section class="card">
       <div class="file-head" onclick="toggleFiles()">
         <span class="panel-t">File Ops</span>
-        <span class="eyebrow" id="fm-count">no data</span>
+        <span class="eyebrow"><span id="fm-count">no data</span> <span id="files-caret">◂</span></span>
       </div>
       <div id="fmatrix"><div class="empty" style="padding:8px 0">no file activity reported yet</div></div>
     </section>
@@ -262,15 +257,9 @@
     <section class="card">
       <div class="chat-head" onclick="toggleChat()">
         <span class="panel-t">Agent Chat</span>
-        <span class="eyebrow" id="chat-caret">◂ open</span>
+        <span class="eyebrow" id="chat-caret">◂</span>
       </div>
       <iframe id="chat-frame" title="Hyperia Agent"></iframe>
-      <div class="chat-keys">
-        <button onclick="chatKey('send')" title="Submit the input">Send</button>
-        <button onclick="chatKey('nl')" title="Insert newline without sending">⏎ NL</button>
-        <button onclick="chatKey('esc')" title="Escape — cancels the current agent turn">Esc</button>
-        <button class="stop" onclick="chatKey('stop')" title="Request the agent to stop now">Stop</button>
-      </div>
     </section>
   </div>
 </div>
@@ -294,12 +283,17 @@ const fmtB = (n) => { n = n ?? 0;
 function esc(s){ const d=document.createElement("div"); d.textContent=s??""; return d.innerHTML; }
 
 let names = {};                // uid -> {name, app}
+let lastPaneCount = 0;         // live pane count, sampled into hist for the sparkline
 let paneAgg = {};
 let rangeSecs = 900;
 let paused = false;
 const t0 = Date.now();
 // history rings: [{t, in, out, files, net}] window-level, 2s cadence, ~2h cap
 const hist = [];
+// History survives the live-edit reloads: restore last 2h, save every 10s.
+try{ const s=JSON.parse(localStorage.getItem("deck.hist")||"[]");
+  if(Array.isArray(s)) hist.push(...s.filter(h=>h&&h.t>Date.now()-7200000)); }catch(_e){}
+let histSavedAt=0;
 const DONUT_COLORS = ["#a78bfa","#38bdf8","#34d399","#fbbf24","#fb5b6d","#e879f9","#94a3b8"];
 
 setInterval(()=>{ const s=Math.floor((Date.now()-t0)/1000);
@@ -314,7 +308,7 @@ async function fetchNames(){
       map[p.paneId] = { name: p.name || p.title || p.paneId.slice(0,8), app: (p.app&&p.app.name)||p.process||"" };
       if (p.shell !== "web") count++;
     }
-    names = map; $("s-panes").textContent = count;
+    names = map; lastPaneCount = count; $("s-panes").textContent = count;
   } catch(_e){}
 }
 
@@ -356,9 +350,11 @@ function drawMini(id, pts, color){
   const w=c.clientWidth||140, h=26; c.width=w; c.height=h;
   const ctx=c.getContext("2d"); ctx.clearRect(0,0,w,h);
   if(pts.length<2) return;
+  // Zero-baseline pinned to the bottom edge on every card; curves autoscale to
+  // their own max with fixed headroom above.
   const max=Math.max(...pts,1);
   ctx.beginPath();
-  pts.forEach((v,i)=>{ const x=(i/(pts.length-1))*w, y=h-(v/max)*(h-4)-2; i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+  pts.forEach((v,i)=>{ const x=(i/(pts.length-1))*w, y=(h-1)-(v/max)*(h-7); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
   ctx.strokeStyle=color; ctx.lineWidth=1.4; ctx.stroke();
 }
 
@@ -377,7 +373,7 @@ function drawFlow(){
   const max=Math.max(...rIn,...rOut,1);
   const line=(pts,color,fill)=>{
     ctx.beginPath();
-    pts.forEach((v,i)=>{ const x=(i/(pts.length-1))*w, y=h-(v/max)*(h-16)-6; i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+    pts.forEach((v,i)=>{ const x=(i/(pts.length-1))*w, y=(h-1)-(v/max)*(h-16); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
     ctx.strokeStyle=color; ctx.lineWidth=1.6; ctx.stroke();
     if(fill){ ctx.lineTo(w,h); ctx.lineTo(0,h); ctx.closePath();
       const g=ctx.createLinearGradient(0,0,0,h); g.addColorStop(0,color+"40"); g.addColorStop(1,color+"00");
@@ -509,14 +505,21 @@ async function refresh(){
     const sys=w.system||{}; const wt=w.telemetry||{};
     paneAgg=p.telemetry||{};
     renderServices(sys);
-    $("s-vram").textContent=sys.vram_gb?sys.vram_gb+" GB":"—";
+    const vt=sys.vram_gb, vu=sys.vram_used_gb;
+    if(vt){
+      $("s-vram").textContent=(vu!=null?vu.toFixed(1)+" / ":"")+vt+" GB";
+      $("s-vram-bar").style.width=(vu!=null?Math.min(100,Math.round(100*vu/vt)):0)+"%";
+      $("s-vram-sub").textContent=vu!=null?Math.round(100*vu/vt)+"% used":"usage needs sidecar 0.17.21+";
+    } else $("s-vram").textContent="—";
     $("page-src").textContent="v"+(sys.version||"?")+" · "+(sys.dashboard_source==="disk"?"disk (live)":"embedded");
 
     // history sample
-    hist.push({t:Date.now(), in:wt.tokens_in||0, out:wt.tokens_out||0,
+    hist.push({t:Date.now(), panes:lastPaneCount, in:wt.tokens_in||0, out:wt.tokens_out||0,
       files:(wt.file_reads||0)+(wt.file_writes||0)+(wt.file_creates||0)+(wt.file_deletes||0)+(wt.file_renames||0),
       net:(wt.net_inbound_bytes||0)+(wt.net_outbound_bytes||0)});
     if(hist.length>3600) hist.shift();
+    if(Date.now()-histSavedAt>10000){ histSavedAt=Date.now();
+      try{ localStorage.setItem("deck.hist",JSON.stringify(hist.slice(-1800))); }catch(_e){} }
 
     // overview cards
     const rIn=rates(x=>x.in), rOut=rates(x=>x.out);
@@ -528,12 +531,13 @@ async function refresh(){
     } else {
       const dTotal = s.length>1 ? (s[s.length-1].in+s[s.length-1].out)-(s[0].in+s[0].out) : 0;
       $("s-tok").innerHTML=fmt(dTotal)+'<span class="u">tok</span>';
-      $("s-tok-sub").textContent=`in ${Math.round(rIn[rIn.length-1]||0)}/s · out ${Math.round(rOut[rOut.length-1]||0)}/s · ${fmt(tokEver)} all-time`;
+      $("s-tok-sub").textContent=`in ${Math.round(Math.max(0,...rIn))}/s · out ${Math.round(Math.max(0,...rOut))}/s max · ${fmt(tokEver)} all-time`;
     }
     $("s-files").textContent=fmt((wt.file_reads||0)+(wt.file_writes||0)+(wt.file_creates||0)+(wt.file_deletes||0)+(wt.file_renames||0));
     $("s-net").textContent=fmtB((wt.net_inbound_bytes||0)+(wt.net_outbound_bytes||0));
     drawMini("sp-tok",s.map(x=>x.in+x.out),"#a78bfa");
     drawMini("sp-files",rates(x=>x.files),"#34d399");
+    drawMini("sp-panes",s.map(x=>x.panes||0),"#fbbf24");
     drawMini("sp-net",rates(x=>x.net),"#38bdf8");
     drawFlow(); renderLeaderboard(); renderEvents(wt); renderFileMatrix(wt);
   } catch(_e){
@@ -556,26 +560,26 @@ $("scope-window").onclick=()=>refresh();
 function toggleFiles(auto){
   const col=$("filecol");
   col.classList.toggle("closed-rail");
+  $("files-caret").textContent = col.classList.contains("closed-rail") ? "◂" : "▸";
   if(!auto) try{ localStorage.setItem("deck.files", col.classList.contains("closed-rail")?"0":"1"); }catch(_e){}
 }
-// Chat quick keys — drive the /shell iframe (same origin) or the stop endpoint.
-function chatKey(k){
-  if(k==="stop"){ fetch("/api/ghost/stop",{method:"POST"}).catch(()=>{}); return; }
-  const f=$("chat-frame"); const cw=f&&f.src?f.contentWindow:null;
-  if(!cw) return;
-  const inp=cw.document.getElementById("input");
-  if(k==="send"){ try{ cw.submit(); }catch(_e){} }
-  else if(k==="nl"&&inp){ inp.value+="\n";
-    inp.dispatchEvent(new cw.Event("input",{bubbles:true})); inp.focus(); }
-  else if(k==="esc"&&inp){
-    inp.dispatchEvent(new cw.KeyboardEvent("keydown",{key:"Escape",bubbles:true})); }
+async function loadChatFrame(){
+  const f=$("chat-frame");
+  if(f.dataset.loaded) return;
+  f.dataset.loaded="1";
+  // The shell's input has `autofocus`, which yanks Electron's focus to this web
+  // pane on every live-edit reload (focus-steal). Load a fetched copy with the
+  // attribute stripped instead of pointing src at /shell.
+  try{
+    const html=await (await fetch("/shell")).text();
+    f.srcdoc=html.replace(/\sautofocus\b/g,"");
+  }catch(_e){ f.src="/shell"; }
 }
 function toggleChat(){
   const col=$("chatcol"); const open=col.classList.contains("closed-rail");
   col.classList.toggle("closed-rail",!open); col.classList.toggle("open",open);
-  $("chat-caret").textContent = open ? "▸ collapse" : "◂ open";
-  const f=$("chat-frame");
-  if(open && !f.src) f.src="/shell";   // lazy-load: never render the shell while hidden
+  $("chat-caret").textContent = open ? "▸" : "◂";
+  if(open) loadChatFrame();   // lazy-load: never render the shell while hidden
   try{ localStorage.setItem("deck.chat", open?"1":"0"); }catch(_e){}
 }
 // restore persisted states

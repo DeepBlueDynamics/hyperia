@@ -1,5 +1,22 @@
 use std::process::Command;
 
+/// Detect used GPU VRAM in gigabytes (nvidia-smi only; None on other stacks —
+/// callers must show an honest no-data state rather than a fake percentage).
+pub fn get_gpu_vram_used_gb() -> Option<f64> {
+    if let Ok(output) = Command::new("nvidia-smi")
+        .args(&["--query-gpu=memory.used", "--format=csv,noheader,nounits"])
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(mb) = stdout.lines().next().and_then(|l| l.trim().parse::<u64>().ok()) {
+                return Some((mb as f64) / 1024.0);
+            }
+        }
+    }
+    None
+}
+
 /// Detect total GPU VRAM in gigabytes.
 /// Queries nvidia-smi for dedicated GPUs, falls back to macOS sysctl hw.memsize
 /// (unified memory), and Linux /proc/meminfo as system fallbacks.
