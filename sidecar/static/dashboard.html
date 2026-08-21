@@ -201,7 +201,11 @@
         </div>
       </div>
       <div class="cards">
-        <div class="stat c-vio"><div class="lbl">Tokens</div><div class="v" id="s-tok"><span class="nodata">no data</span></div><div class="sub" id="s-tok-sub">no producer reporting tokens</div><canvas id="sp-tok"></canvas></div>
+        <div class="stat c-vio"><div class="lbl">Tokens</div><div class="v" id="s-tok"><span class="nodata">no data</span></div>
+          <div class="sub" id="s-tok-now">no producer reporting tokens</div>
+          <div class="sub" id="s-tok-max"></div>
+          <div class="sub" id="s-tok-all"></div>
+          <canvas id="sp-tok"></canvas></div>
         <div class="stat c-green"><div class="lbl">File Ops</div><div class="v" id="s-files">0</div><canvas id="sp-files"></canvas></div>
         <div class="stat c-cyan"><div class="lbl">Network</div><div class="v" id="s-net">0 B</div><canvas id="sp-net"></canvas></div>
         <div class="stat c-amber"><div class="lbl">Active Panes</div><div class="v" id="s-panes">0</div><canvas id="sp-panes"></canvas></div>
@@ -527,11 +531,14 @@ async function refresh(){
     const tokEver=(wt.tokens_in||0)+(wt.tokens_out||0);
     if(!tokEver){
       $("s-tok").innerHTML='<span class="nodata">no data</span>';
-      $("s-tok-sub").textContent="no producer reporting tokens";
+      $("s-tok-now").textContent="no producer reporting tokens";
+      $("s-tok-max").textContent=""; $("s-tok-all").textContent="";
     } else {
       const dTotal = s.length>1 ? (s[s.length-1].in+s[s.length-1].out)-(s[0].in+s[0].out) : 0;
       $("s-tok").innerHTML=fmt(dTotal)+'<span class="u">tok</span>';
-      $("s-tok-sub").textContent=`in ${Math.round(Math.max(0,...rIn))}/s · out ${Math.round(Math.max(0,...rOut))}/s max · ${fmt(tokEver)} all-time`;
+      $("s-tok-now").textContent=`now  in ${Math.round(rIn[rIn.length-1]||0)}/s · out ${Math.round(rOut[rOut.length-1]||0)}/s`;
+      $("s-tok-max").textContent=`max  in ${Math.round(Math.max(0,...rIn))}/s · out ${Math.round(Math.max(0,...rOut))}/s`;
+      $("s-tok-all").textContent=`all-time ${fmt(tokEver)}`;
     }
     $("s-files").textContent=fmt((wt.file_reads||0)+(wt.file_writes||0)+(wt.file_creates||0)+(wt.file_deletes||0)+(wt.file_renames||0));
     $("s-net").textContent=fmtB((wt.net_inbound_bytes||0)+(wt.net_outbound_bytes||0));
