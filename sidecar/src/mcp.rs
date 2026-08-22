@@ -295,7 +295,8 @@ pub struct SplitRequest {
     /// pane. ALWAYS pass this to target a specific pane: splitting does NOT depend on UI focus when set.
     pub pane: Option<String>,
     /// If set, the new split opens a WEB PANE at this URL (an embedded browser, no shell/PTY) instead of a
-    /// terminal. The `profile`/`command` fields are ignored in that case. e.g. "https://news.ycombinator.com".
+    /// terminal — THE way to place a web page beside an existing pane in the same tab. `profile`/`command`
+    /// are ignored in that case. e.g. "https://news.ycombinator.com".
     pub url: Option<String>,
 }
 
@@ -1300,7 +1301,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Split a pane into two. Returns the new pane's stable paneId UUID. Direction: 'horizontal' (top/bottom) or 'vertical' (left/right, default). Pass window/tab/pane to split a SPECIFIC pane (recommended — splitting that pane does not depend on UI focus); omit them to split the focused pane. The new split is a SHELL by default — pick which shell with `profile`, and optionally run a startup `command` in it. To instead open a WEB PANE (embedded browser) in the new split, pass `url` (profile/command are then ignored). If no profile is specified, the shell defaults to the 'default' profile. PREFER this over terminal_new_tab for one-off commands/diagnostics — it stays next to the active work and doesn't steal focus; terminal_close it when you're done to restore the layout.")]
+    #[tool(description = "Split a pane into two — a SHELL by default, or a WEB PANE (embedded browser) when you pass `url`. This is the ONLY way to put a web page side-by-side with a terminal in the same tab (open_web_pane always creates a separate dedicated tab instead). Returns the new pane's stable paneId UUID. Direction: 'horizontal' (top/bottom) or 'vertical' (left/right, default). Pass window/tab/pane to split a SPECIFIC pane (recommended — splitting that pane does not depend on UI focus); omit them to split the focused pane. For a shell split, pick which shell with `profile` (defaults to the 'default' profile) and optionally run a startup `command` in it; when `url` is set, profile/command are ignored. PREFER this over terminal_new_tab for one-off commands/diagnostics — it stays next to the active work and doesn't steal focus; terminal_close it when you're done to restore the layout.")]
     async fn terminal_split(
         &self,
         Parameters(req): Parameters<SplitRequest>,
@@ -1518,7 +1519,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Open a URL in a new dedicated web pane tab inside Hyperia. Opens an embedded browser tab alongside your terminal tabs — does NOT replace or overlay any existing terminal. Pass a full URL (https://...). Use this to show docs, dashboards, localhost servers, or any web content.")]
+    #[tool(description = "Open a URL in its own SEPARATE web-pane tab inside Hyperia. This tool ALWAYS creates a new dedicated browser tab alongside your terminal tabs — never a split; it does NOT replace or overlay any existing terminal. To put a web page NEXT TO an existing pane in the SAME tab, use terminal_split with `url` instead. Pass a full URL (https://...). Use this for web content that deserves its own tab: docs, dashboards, localhost servers.")]
     async fn open_web_pane(
         &self,
         Parameters(req): Parameters<OpenWebPaneRequest>,
