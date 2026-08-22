@@ -497,11 +497,24 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: pulseActive ? 'var(--accent-primary, #6ea8fe)' : undefined,
-                  animation: pulseActive ? 'hyPulseRun 1.4s ease-in-out infinite' : undefined
+                  color: pulseActive ? 'var(--accent-primary, #6ea8fe)' : undefined
                 }}
               >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                {/* Animate the SVG only — the hover tooltip is a child of this
+                    span, so animating the span made the tooltip (a big bordered
+                    box under the path bar) throb along with the icon. */}
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{animation: pulseActive ? 'hyPulseRun 1.4s ease-in-out infinite' : undefined}}
+                  aria-hidden="true"
+                >
                   <circle cx="12" cy="12" r="9" />
                   <polyline points="12 7 12 12 15 14" />
                 </svg>

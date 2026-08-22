@@ -598,7 +598,8 @@ impl Bridge {
     }
 
     /// Register a recurring pulse on a pane. Clamps interval (>=20s) and lifetime
-    /// (<=1h). One pulse per (window,tab) — dedupe. Returns the id.
+    /// (<=1h). One pulse per PANE — re-setting the same pane replaces its pulse;
+    /// other panes in the tab keep theirs. Returns the id.
     #[allow(clippy::too_many_arguments)]
     pub async fn register_pulse(
         &self,
@@ -643,7 +644,13 @@ impl Bridge {
         };
         {
             let mut pulses = self.inner.pulses.lock().await;
-            pulses.retain(|x| !(x.window == window && x.tab == tab));
+            // Replace only a pulse on THIS pane: same live uid, or same
+            // (window, tab, display name) — the restart-stable identity a dead
+            // pane's pulse re-binds through. Other panes' pulses are kept.
+            pulses.retain(|x| {
+                !(x.pane == pane
+                    || (x.window == window && x.tab == tab && x.target_label == target_label))
+            });
             pulses.push(p);
         }
         self.persist_pulses().await;
