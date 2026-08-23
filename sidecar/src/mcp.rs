@@ -1802,7 +1802,7 @@ impl HyperiaMcp {
         }
     }
 
-    #[tool(description = "Get a persistent Hyperia identity token for an EXTERNAL agent — one NOT running inside a Hyperia pane, so it has no HYPERIA_AGENT_TOKEN in its environment. Call this the moment a state-changing tool returns 'No identity': it mints (or returns) a persistent hyp_agent_… token. Then set your MCP client's Authorization header to 'Bearer <that token>' and reconnect — after which terminal_run / terminal_keys / terminal_split / request_access etc. work. Read-only/monitoring tools never needed it. The token persists in ~/.hyperia/agents.json across restarts; minting the same name again returns the same token. DOES NOT HELP in-pane agents (you cannot inject a token into your own running connection — fix your MCP config's Authorization header and restart) or containerized agents (the container is ephemeral — fix the host orchestrator's config instead); the 'No identity' refusal text spells out both.")]
+    #[tool(description = "Get a persistent Hyperia identity token — call this the moment a state-changing tool returns 'No identity' (reads never needed one). Mints (or returns) a persistent hyp_agent_… token; the same name always returns the same token, and it survives restarts in ~/.hyperia/agents.json. The reply tells you how to use it IMMEDIATELY — the sidecar honors it on direct HTTP calls to its /api/... routes right away, no restart — and the exact `claude mcp add` command to hand your human so future sessions are born with it. Only your CURRENT MCP connection's header stays frozen until the session restarts; use the direct-HTTP path in the meantime.")]
     async fn request_token(
         &self,
         Parameters(req): Parameters<RequestTokenRequest>,

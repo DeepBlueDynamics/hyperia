@@ -90,23 +90,28 @@ pub fn get(key: Msg) -> Option<&'static str> {
         // ── Tool responses ───────────────────────────────────────────────────
         Msg::RequestTokenMinted => "Minted a persistent Hyperia agent token for \"{{name}}\":\n\n  \
              {{token}}\n\n\
-             Wire it into your MCP client and reconnect:\n  \
-             claude mcp add --transport http --scope user hyperia {{base}}/mcp --header \
+             USE IT RIGHT NOW — NO RESTART NEEDED. Your MCP connection's Authorization header is \
+             frozen at startup, but the sidecar reads credentials fresh on EVERY plain-HTTP \
+             request. Call the HTTP API directly with the header \
+             Authorization: Bearer {{token}} — prove it with GET {{base}}/api/identity/whoami, \
+             then use any endpoint (the MCP tools are thin wrappers over {{base}}/api/... routes). \
+             This works from anywhere that can reach the sidecar: host shells, panes, and \
+             containers (same base URL you already use).\n\n\
+             MAKE IT PERMANENT — hand this to your human (or run it yourself if you are a host \
+             session) so future sessions are born working:\n  \
+             claude mcp add --transport http hyperia {{base}}/mcp --header \
              \"Authorization: Bearer {{token}}\"\n\
-             (or set headers.Authorization = \"Bearer {{token}}\" on the hyperia server in your MCP \
-             config — for Claude Code that's the `hyperia` block in ~/.claude.json — then restart \
-             the session).\n\n\
-             After reconnect, state-changing tools work. This token persists in \
-             ~/.hyperia/agents.json; calling request_token again with the same name returns it.\n\n\
-             CAVEATS — if either applies to you, this token will NOT fix your problem:\n\
-             - IN A HYPERIA PANE (you have HYPERIA_AGENT_TOKEN in your env): you cannot inject \
-             this token into your own running connection — headers load at process startup only. \
-             Fix the header in whichever config block your session actually loaded (a \
-             project-scoped entry silently shadows the global one) and fully restart.\n\
-             - IN A CONTAINER (docker or podman — you reach this sidecar via host.docker.internal, \
-             host.containers.internal, or a gateway IP): do NOT wire this token into \
-             container-local config; that filesystem is ephemeral and the edit is wiped on the \
-             next reset. Fix the host orchestrator instead (nemesis8: mcp-servers/hyperia.toml + \
-             HYPERIA_URL), then restart the container.",
+             SCOPE WARNING: for the same server name a project-scoped entry silently SHADOWS a \
+             user/global one — they are not merged. Fix the entry your session ACTUALLY loads \
+             (check the project scope first; `claude mcp remove hyperia` there if one exists), or \
+             the add changes nothing. The new header takes effect on the NEXT session start.\n\n\
+             This token persists in ~/.hyperia/agents.json; calling request_token again with the \
+             same name returns it.\n\n\
+             CAVEAT — IN A CONTAINER (docker or podman — you reach this sidecar via \
+             host.docker.internal, host.containers.internal, or a gateway IP): the direct-HTTP \
+             path above works immediately, but do NOT wire this token into container-local \
+             config; that filesystem is ephemeral and the edit is wiped on the next reset. For \
+             the permanent fix, report to the host orchestrator instead (nemesis8: \
+             mcp-servers/hyperia.toml + HYPERIA_URL), then restart the container.",
     })
 }
