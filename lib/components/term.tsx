@@ -309,6 +309,15 @@ export default class Term extends React.PureComponent<
     return !!e.dataTransfer && e.dataTransfer.types.includes('Files');
   }
 
+  // A pane-band name being dragged (see pane-band.tsx handleNameDragStart).
+  // Dropping it types the pane's handle into THIS pane as staged input — no
+  // Enter — so you can hand an agent another pane's name by dragging. Unlike
+  // file copy this is NOT busy-gated: typing into a running agent's composer
+  // is the point.
+  private isPaneLabelDrag(e: React.DragEvent): boolean {
+    return !!e.dataTransfer && e.dataTransfer.types.includes('application/x-hyperia-pane');
+  }
+
   private setDropAffordance(on: boolean) {
     const el = this.termOuterRef.current;
     if (!el) return;
@@ -317,6 +326,13 @@ export default class Term extends React.PureComponent<
   }
 
   onFileDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (this.isPaneLabelDrag(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      this.setDropAffordance(true);
+      return;
+    }
     // Only intercept when this pane is an idle shell with a known cwd. On a busy
     // pane we do NOT preventDefault, so the drop falls through to the existing
     // will-navigate path-paste (e.g. hand a running agent a file path).
@@ -328,11 +344,20 @@ export default class Term extends React.PureComponent<
   };
 
   onFileDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    if (!this.isFileDrag(e)) return;
+    if (!this.isFileDrag(e) && !this.isPaneLabelDrag(e)) return;
     this.setDropAffordance(false);
   };
 
   onFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    if (this.isPaneLabelDrag(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.setDropAffordance(false);
+      const txt =
+        e.dataTransfer.getData('application/x-hyperia-pane') || e.dataTransfer.getData('text/plain');
+      if (txt) this.props.onData(txt);
+      return;
+    }
     if (!this.isFileDrag(e) || !this.canAcceptFileDrop()) return;
     e.preventDefault();
     e.stopPropagation();

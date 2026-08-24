@@ -195,27 +195,35 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       });
     }, [paneId]);
 
-    const handleNameClick = (e: React.MouseEvent) => {
-      e.stopPropagation();
-      // Prefer the visible label text (what the user actually sees) and only
-      // fall back to an explicit override or a generic placeholder. If we
-      // know the underlying UID, append a short suffix so two panes with
-      // the same name remain distinguishable. Shape:
-      //   `<name> (pane <8charHex>)`
-      // Pasting that anywhere reads as the human name first; the parenthetical
-      // tells the reader (or an agent) the kind and gives a stable handle.
+    // The canonical copy/drag payload for this pane. Prefer the visible label
+    // text (what the user actually sees) and only fall back to an explicit
+    // override or a generic placeholder. If we know the underlying UID, append
+    // a short suffix so two panes with the same name remain distinguishable.
+    // Pasting that anywhere reads as the human name first; the parenthetical
+    // tells the reader (or an agent) the kind and gives a stable handle.
+    const buildCopyText = (): string => {
       const name = (paneName || getTextFromNode(label) || 'Pane').trim();
       const shortId = paneId ? paneId.replace(/-/g, '').slice(0, 8) : '';
-      let cleanText = name;
-      if (shortId) {
-        if (paneType === 'web') {
-          cleanText = `Hyperia WebPane: ${name} (${shortId})`;
-        } else if (paneType === 'ai') {
-          cleanText = `Hyperia AIPane: ${name} (${shortId})`;
-        } else {
-          cleanText = `Hyperia Pane: ${name} (${shortId})`;
-        }
-      }
+      if (!shortId) return name;
+      if (paneType === 'web') return `Hyperia WebPane: ${name} (${shortId})`;
+      if (paneType === 'ai') return `Hyperia AIPane: ${name} (${shortId})`;
+      return `Hyperia Pane: ${name} (${shortId})`;
+    };
+
+    // Dragging the name drops the same string click-to-copy produces — a
+    // terminal pane accepts it as staged input (see term.tsx onFileDrop), so
+    // you can hand one agent another pane's handle by dragging the label over.
+    const handleNameDragStart = (e: React.DragEvent) => {
+      e.stopPropagation();
+      const txt = buildCopyText();
+      e.dataTransfer.setData('text/plain', txt);
+      e.dataTransfer.setData('application/x-hyperia-pane', txt);
+      e.dataTransfer.effectAllowed = 'copy';
+    };
+
+    const handleNameClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      const cleanText = buildCopyText();
       if (cleanText) {
         // Use Electron's clipboard, not navigator.clipboard — the latter fails
         // silently in this (non-secure-context) renderer.
@@ -239,7 +247,6 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       e.preventDefault();
       e.stopPropagation();
       const name = (paneName || getTextFromNode(label) || 'Pane').trim();
-      const shortId = paneId ? paneId.replace(/-/g, '').slice(0, 8) : '';
       try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const {Menu, MenuItem} = require('@electron/remote');
@@ -250,17 +257,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           new MenuItem({
             label: 'Copy Pane Name',
             click: () => {
-              let cleanText = name;
-              if (shortId) {
-                if (paneType === 'web') {
-                  cleanText = `Hyperia WebPane: ${name} (${shortId})`;
-                } else if (paneType === 'ai') {
-                  cleanText = `Hyperia AIPane: ${name} (${shortId})`;
-                } else {
-                  cleanText = `Hyperia Pane: ${name} (${shortId})`;
-                }
-              }
-              clipboard.writeText(cleanText);
+              clipboard.writeText(buildCopyText());
               setCopied(true);
             }
           })
@@ -387,7 +384,9 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 className="pane-band-name-cluster"
                 onClick={handleNameClick}
                 onContextMenu={handleNameContextMenu}
-                title={copied ? 'Copied ✓' : 'Click to copy name'}
+                draggable
+                onDragStart={handleNameDragStart}
+                title={copied ? 'Copied ✓' : 'Click to copy name · drag onto a pane to type it there'}
                 style={{
                   flex: '0 1 auto',
                   minWidth: 0,
@@ -412,6 +411,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 className="pane-band-name-cluster"
                 onClick={handleNameClick}
                 onContextMenu={handleNameContextMenu}
+                draggable
+                onDragStart={handleNameDragStart}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -428,7 +429,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   overflowX: 'auto',
                   whiteSpace: 'nowrap'
                 }}
-                title="Click to copy name (scroll to view full)"
+                title="Click to copy name · drag onto a pane to type it there"
               >
                 {!isPlaceholder && resolvedIcon && (
                   <span style={{display: 'flex', alignItems: 'center', flexShrink: 0}}>{resolvedIcon}</span>
