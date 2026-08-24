@@ -765,6 +765,14 @@ impl Bridge {
             .filter(|n| !n.is_empty())
     }
 
+    /// True when no renderer windows are registered (no live sessions at all).
+    /// Used by the zero-window recovery path: consent prompts render inside a
+    /// Hyperia window, so with none open a create-consent request can never be
+    /// approved and would deadlock (bug_1a03461105e).
+    pub async fn has_no_windows(&self) -> bool {
+        self.inner.sessions.lock().await.is_empty()
+    }
+
     /// The (window_id, tab_name) a pane lives in — for restart-stable pulse
     /// addressing (a pulse re-binds to the tab's current active pane each tick).
     pub async fn pane_window_tab(&self, uid: &str) -> Option<(u32, String)> {

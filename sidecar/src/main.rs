@@ -2310,10 +2310,18 @@ async fn get_where_pane(
 }
 
 async fn post_new_window(State(state): State<AppState>, headers: HeaderMap) -> (StatusCode, String) {
-    if let Err(resp) = enforce_create(&state, &headers, "create_window").await {
-        return resp;
+    // Zero-window recovery: the create-consent prompt renders INSIDE a Hyperia
+    // window, so with none open the approval can never be shown and the request
+    // deadlocks (bug_1a03461105e). There is also no focus to steal. Auto-allow
+    // the FIRST window; Electron opens it on the new-pane picker instead of
+    // spawning a default shell nobody asked for.
+    let first_window = state.bridge.has_no_windows().await;
+    if !first_window {
+        if let Err(resp) = enforce_create(&state, &headers, "create_window").await {
+            return resp;
+        }
     }
-    let cmd = serde_json::json!({"type": "NewWindow"});
+    let cmd = serde_json::json!({"type": "NewWindow", "firstWindow": first_window});
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),

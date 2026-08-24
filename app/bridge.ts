@@ -688,9 +688,18 @@ function handleCommand(msg: Record<string, unknown>) {
     }
 
     case 'NewWindow': {
-      const createWin = (app as any).createWindow as (() => void) | undefined;
+      const createWin = (app as any).createWindow as
+        | ((fn?: (win: any) => void, options?: {size?: [number, number]}, profileName?: string) => void)
+        | undefined;
       if (createWin) {
-        createWin();
+        if (msg.firstWindow) {
+          // Agent-created FIRST window (none were open — the zero-window
+          // recovery path): land on the new-pane picker so the human chooses
+          // what runs, instead of spawning the default shell.
+          createWin((win: any) => win.rpc.emit('termgroup add req', {profile: 'picker'}));
+        } else {
+          createWin();
+        }
         sendResult(seq, 'ok');
       } else {
         sendResult(seq, 'createWindow not available');
