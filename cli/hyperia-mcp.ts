@@ -11,7 +11,7 @@
 // This is a CLI tool — console output is the product.
 /* eslint no-console: 0 */
 import {mkdirSync, readFileSync, writeFileSync} from 'fs';
-import {homedir} from 'os';
+import {homedir, hostname, userInfo} from 'os';
 import {dirname, join} from 'path';
 
 import got from 'got';
@@ -289,21 +289,36 @@ async function cmdWhoami(wantJson: boolean): Promise<number> {
 }
 
 async function cmdLogin(name: string | undefined, wantJson: boolean): Promise<number> {
+  // ASCII-only output in this command: Windows consoles on a legacy codepage
+  // render UTF-8 punctuation as mojibake (an em-dash printed as "GC-").
   if (process.env.HYPERIA_AGENT_TOKEN) {
-    console.error('note: HYPERIA_AGENT_TOKEN is set (in-pane identity) — it takes precedence over a saved token.');
+    console.error('note: HYPERIA_AGENT_TOKEN is set (in-pane identity); it takes precedence over the saved token.');
   }
-  const n = name || process.env.HYPERIA_CLI_NAME || `cli-${process.platform}-${process.pid}`;
+  // Default identity is STABLE per machine+user. The old pid-based default
+  // minted a brand-new identity on every login and littered agents.json.
+  let stable = 'cli';
+  try {
+    stable = `cli-${hostname()}-${userInfo().username}`.toLowerCase();
+  } catch {
+    /* keep 'cli' */
+  }
+  const n = name || process.env.HYPERIA_CLI_NAME || stable;
   const rec = await mint(n);
   saveToken(rec.token, rec.name);
   if (wantJson) {
     console.log(JSON.stringify({name: rec.name, saved: cliConfigPath()}, null, 2));
     return 0;
   }
-  // Never echo the token to stdout — just where it landed.
+  // Never echo the token to stdout — just where it landed. Written for the
+  // likely reader (an agent): what identity unlocks, what still gates, and
+  // the next command to run.
   console.log(
-    `logged in as "${rec.name}". Token saved to ${cliConfigPath()}.\n` +
-      'It only NAMES you — pane actions still need the human\'s consent via ' +
-      '`hyperia call request_access \'{"pane":"<id>","purpose":"..."}\'`.'
+    `logged in as "${rec.name}". Token saved to ${cliConfigPath()};\n` +
+      'every hyperia command uses it automatically from now on.\n' +
+      'You now have an identity: state-changing commands (run/keys/split/rename/...)\n' +
+      'work on panes you create. Driving a pane you do NOT own still asks the human\n' +
+      'first: hyperia request-access <pane> --purpose "why"\n' +
+      'Next: hyperia status   (the window/tab/pane tree)'
   );
   return 0;
 }
