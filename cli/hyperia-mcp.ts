@@ -496,6 +496,11 @@ ANYTHING (generic, mirrors the live tool catalog)
   hyperia describe <tool>        its arguments
   hyperia call <tool> '{json}'   invoke any tool
 
+APP
+  hyperia launch [dir]           start the Hyperia app
+  hyperia version                app version
+  hyperia plugins <cmd>          legacy Hyper plugin manager
+
 Add --json to any command for machine-readable output.`
   );
   return 0;
