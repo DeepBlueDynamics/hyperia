@@ -8,7 +8,7 @@ export const BROWSER_UA = (() => {
   const FALLBACK =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
   try {
-    let ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    let ua = (typeof navigator !== 'undefined' ? navigator.userAgent : '') || '';
     if (!ua) return FALLBACK;
     // Drop "Electron/x.y.z" and the app product (Hyper/Hyperia/x.y.z).
     ua = ua.replace(/\s*(?:Electron|Hyper\w*)\/\S+/gi, '');

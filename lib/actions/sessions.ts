@@ -23,9 +23,9 @@ import {
 import {TERM_GROUP_SET_TAB_NAME} from '../../typings/constants/term-groups';
 import type {HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
+import {openLayout} from '../utils/layouts';
 import {keys} from '../utils/object';
 import findBySession from '../utils/term-groups';
-import {openLayout} from '../utils/layouts';
 
 export function addSession(data: Session) {
   const {
@@ -150,9 +150,7 @@ export function requestSession(profile: string | undefined) {
         // lays out into 80x24 before the first resize → whacked borders. The new
         // <Term> still fits + resizes to its exact size on mount, so this is just
         // a correct birth size, not a fixed one. (Hyper/VS Code do the same.)
-        const active = state.sessions.activeUid
-          ? state.sessions.sessions[state.sessions.activeUid]
-          : undefined;
+        const active = state.sessions.activeUid ? state.sessions.sessions[state.sessions.activeUid] : undefined;
         const cols = active?.cols ?? undefined;
         const rows = active?.rows ?? undefined;
         rpc.emit('new', {cwd, profile, cols, rows});
@@ -369,7 +367,10 @@ export function setSessionCwd(uid: string, cwd: string): HyperActions {
   };
 }
 
-export function setSessionShellState(uid: string, shellState: { state: 'idle' | 'busy'; lastExit?: number; command?: string }): HyperActions {
+export function setSessionShellState(
+  uid: string,
+  shellState: {state: 'idle' | 'busy'; lastExit?: number; command?: string}
+): HyperActions {
   return {
     type: SESSION_SET_SHELL_STATE,
     uid,

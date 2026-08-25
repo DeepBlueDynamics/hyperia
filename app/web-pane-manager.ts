@@ -18,6 +18,7 @@ import {join} from 'path';
 
 import {BrowserWindow, WebContentsView, ipcMain, session, shell, Menu, clipboard} from 'electron';
 import type {Session, WebContents} from 'electron';
+
 import {getConfig} from './config';
 
 const PARTITION = 'persist:hyperia-web';
@@ -136,7 +137,11 @@ export async function capturePaneJpeg(uid: string, w: number, h: number, quality
 }
 
 function navState(wc: WebContents) {
-  return {url: wc.getURL(), canGoBack: wc.navigationHistory.canGoBack(), canGoForward: wc.navigationHistory.canGoForward()};
+  return {
+    url: wc.getURL(),
+    canGoBack: wc.navigationHistory.canGoBack(),
+    canGoForward: wc.navigationHistory.canGoForward()
+  };
 }
 
 // Panes get ADOPTED across React remounts (delayed-destroy + create re-keys the
@@ -194,7 +199,10 @@ function wireWebContents(initialUid: string, wc: WebContents) {
   });
   // Let the renderer run its dom-ready work (scrollbar CSS inject, bg-color probe)
   // via web-pane:execute-js — it can't observe the guest's dom-ready directly.
-  wc.on('dom-ready', () => { const uid = u(); entrySend(uid, 'web-pane:dom-ready', {uid}); });
+  wc.on('dom-ready', () => {
+    const uid = u();
+    entrySend(uid, 'web-pane:dom-ready', {uid});
+  });
   // The webContents 'focus' event ALSO fires for PROGRAMMATIC focus (an agent's
   // web_pane_eval focusing an element, the page's own JS, a navigation
   // auto-focus) — indistinguishable here from a real click, and the source of the
@@ -292,13 +300,17 @@ function wireWebContents(initialUid: string, wc: WebContents) {
       {type: 'separator'},
       // Not offered when this pane IS the agent shell (renderer dedupes to a
       // single Hyperia Agent tab anyway — the item would just focus itself).
-      ...(/\/shell\b/.test(wc.getURL()) ? [] : [{
-        label: 'Hyperia Agent',
-        click: () => {
-          const port = process.env.HYPERIA_PORT || '9800';
-          (entry.win as any).rpc?.emit('open web pane req', {url: `http://localhost:${port}/shell`});
-        }
-      } as Electron.MenuItemConstructorOptions]),
+      ...(/\/shell\b/.test(wc.getURL())
+        ? []
+        : [
+            {
+              label: 'Hyperia Agent',
+              click: () => {
+                const port = process.env.HYPERIA_PORT || '9800';
+                (entry.win as any).rpc?.emit('open web pane req', {url: `http://localhost:${port}/shell`});
+              }
+            } as Electron.MenuItemConstructorOptions
+          ]),
       {type: 'separator'},
       {label: 'New Stickys', click: () => void ipcMain.emit('new-sticky', {})},
       {label: 'Search Stickys', click: () => void ipcMain.emit('search-stickies')}
@@ -348,7 +360,7 @@ function wireWebContents(initialUid: string, wc: WebContents) {
       return {action: 'deny'};
     }
     const liveUid = u();
-    const target = ((getConfig() as unknown as {webPaneLinkTarget?: string}).webPaneLinkTarget) || 'tab';
+    const target = (getConfig() as unknown as {webPaneLinkTarget?: string}).webPaneLinkTarget || 'tab';
     if (target === 'split-right' || target === 'split-down') {
       entrySend(liveUid, 'web-pane:open-split', {
         uid: liveUid,
@@ -358,7 +370,9 @@ function wireWebContents(initialUid: string, wc: WebContents) {
     } else {
       // Default: open the link in a new Hyperia tab.
       const entry = panes.get(liveUid);
-      (entry?.win as unknown as {rpc?: {emit: (ch: string, p: unknown) => void}})?.rpc?.emit('open web pane req', {url});
+      (entry?.win as unknown as {rpc?: {emit: (ch: string, p: unknown) => void}})?.rpc?.emit('open web pane req', {
+        url
+      });
     }
     return {action: 'deny'};
   });
@@ -428,7 +442,9 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
   panes.set(uid, entry);
   wireWebContents(uid, view.webContents);
   if (url) void view.webContents.loadURL(url).catch(() => {});
-  console.log(`[wp] createPane BUILT fresh uid=${uid.slice(0,8)} win=${win.id} childViews=${win.contentView.children.length}`);
+  console.log(
+    `[wp] createPane BUILT fresh uid=${uid.slice(0, 8)} win=${win.id} childViews=${win.contentView.children.length}`
+  );
 }
 
 // Lay out the page view (and, when open, the docked DevTools view below it)
@@ -497,7 +513,7 @@ function openInspector(uid: string, x: number, y: number) {
 
 function closeInspector(uid: string) {
   const entry = panes.get(uid);
-  if (!entry || !entry.devtools) return;
+  if (!entry?.devtools) return;
   const dt = entry.devtools;
   entry.devtools = undefined;
   try {
@@ -572,8 +588,7 @@ export function destroyPanesForWindow(win: BrowserWindow) {
 export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
   configureSession = deps.configureSession;
 
-  const winOf = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) =>
-    BrowserWindow.fromWebContents(e.sender);
+  const winOf = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) => BrowserWindow.fromWebContents(e.sender);
   const wcOf = (uid: string) => panes.get(uid)?.view.webContents;
 
   ipcMain.on('web-pane:create', (e, {uid, url}: {uid: string; url: string}) => {
@@ -583,62 +598,68 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
 
   ipcMain.on(
     'web-pane:set-bounds',
-    async (_e, {uid, bounds, visible, freeze}: {uid: string; bounds: any; visible: boolean; freeze?: boolean}) => {
-      const entry = panes.get(uid);
-      if (!entry) return;
-      if (bounds) {
-        entry.lastBounds = roundRect(bounds);
-        positionViews(entry);
-      }
-      const wantVisible = visible !== false;
-      if (entry.visible && !wantVisible) {
-        entry.visible = false;
-        const token = entry.swapToken = (entry.swapToken ?? 0) + 1;
-        if (freeze) {
-          // Freeze-swap: capture the LIVE view and hand the still to the renderer
-          // BEFORE hiding, so a DOM overlay (URL navigator / find bar / header
-          // tooltip) paints over a frozen frame of the page instead of white.
-          let shot: string | null = null;
-          try {
-            shot = (await entry.view.webContents.capturePage()).toDataURL();
-          } catch {
-            /* keep null */
+    (_e, {uid, bounds, visible, freeze}: {uid: string; bounds: any; visible: boolean; freeze?: boolean}) => {
+      void (async () => {
+        const entry = panes.get(uid);
+        if (!entry) return;
+        if (bounds) {
+          entry.lastBounds = roundRect(bounds);
+          positionViews(entry);
+        }
+        const wantVisible = visible !== false;
+        if (entry.visible && !wantVisible) {
+          entry.visible = false;
+          const token = (entry.swapToken = (entry.swapToken ?? 0) + 1);
+          if (freeze) {
+            // Freeze-swap: capture the LIVE view and hand the still to the renderer
+            // BEFORE hiding, so a DOM overlay (URL navigator / find bar / header
+            // tooltip) paints over a frozen frame of the page instead of white.
+            let shot: string | null = null;
+            try {
+              shot = (await entry.view.webContents.capturePage()).toDataURL();
+            } catch {
+              /* keep null */
+            }
+            entrySend(uid, 'web-pane:frozen', {uid, shot});
+            // Hide the native view only AFTER giving the renderer a couple frames
+            // to paint the still. Hiding it in the same tick as sending the still
+            // left a one-frame hole (pane bg showed through before the <img>
+            // painted) that flashed when mousing page → header. Bail if a newer
+            // transition (re-show) superseded this one.
+            setTimeout(() => {
+              if (
+                panes.get(uid) === entry &&
+                entry.swapToken === token &&
+                !entry.visible &&
+                !entry.view.webContents.isDestroyed()
+              ) {
+                entry.view.setVisible(false);
+              }
+            }, SWAP_BRIDGE_MS);
+          } else {
+            // Off-screen (tab switched away) — no still needed; just hide now.
+            entrySend(uid, 'web-pane:frozen', {uid, shot: null});
+            if (panes.get(uid) === entry && !entry.view.webContents.isDestroyed()) entry.view.setVisible(false);
           }
-          entrySend(uid, 'web-pane:frozen', {uid, shot});
-          // Hide the native view only AFTER giving the renderer a couple frames
-          // to paint the still. Hiding it in the same tick as sending the still
-          // left a one-frame hole (pane bg showed through before the <img>
-          // painted) that flashed when mousing page → header. Bail if a newer
-          // transition (re-show) superseded this one.
+        } else if (!entry.visible && wantVisible) {
+          entry.visible = true;
+          const token = (entry.swapToken = (entry.swapToken ?? 0) + 1);
+          entry.view.setVisible(nativeVisible(entry));
+          // Keep the still up a couple frames while the native view re-composites,
+          // THEN clear it. Clearing in the same tick as showing removed the <img>
+          // a frame before the view painted, so the pane bg flashed through when
+          // mousing header → page. Bail if a newer transition superseded this one.
           setTimeout(() => {
-            if (panes.get(uid) === entry && entry.swapToken === token && !entry.visible
-                && !entry.view.webContents.isDestroyed()) {
-              entry.view.setVisible(false);
+            if (panes.get(uid) === entry && entry.swapToken === token && entry.visible) {
+              entrySend(uid, 'web-pane:frozen', {uid, shot: null});
             }
           }, SWAP_BRIDGE_MS);
         } else {
-          // Off-screen (tab switched away) — no still needed; just hide now.
-          entrySend(uid, 'web-pane:frozen', {uid, shot: null});
-          if (panes.get(uid) === entry && !entry.view.webContents.isDestroyed()) entry.view.setVisible(false);
+          entry.view.setVisible(wantVisible && !suppressedWins.has(entry.win.id));
         }
-      } else if (!entry.visible && wantVisible) {
-        entry.visible = true;
-        const token = entry.swapToken = (entry.swapToken ?? 0) + 1;
-        entry.view.setVisible(nativeVisible(entry));
-        // Keep the still up a couple frames while the native view re-composites,
-        // THEN clear it. Clearing in the same tick as showing removed the <img>
-        // a frame before the view painted, so the pane bg flashed through when
-        // mousing header → page. Bail if a newer transition superseded this one.
-        setTimeout(() => {
-          if (panes.get(uid) === entry && entry.swapToken === token && entry.visible) {
-            entrySend(uid, 'web-pane:frozen', {uid, shot: null});
-          }
-        }, SWAP_BRIDGE_MS);
-      } else {
-        entry.view.setVisible(wantVisible && !suppressedWins.has(entry.win.id));
-      }
-      // The docked inspector tracks the page's visibility.
-      if (entry.devtools) entry.devtools.setVisible(nativeVisible(entry));
+        // The docked inspector tracks the page's visibility.
+        if (entry.devtools) entry.devtools.setVisible(nativeVisible(entry));
+      })();
     }
   );
 
@@ -696,10 +717,13 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
     if (wc) wc.setZoomFactor(Math.max(0.5, Math.min(3, factor)));
   });
 
-  ipcMain.on('web-pane:find', (_e, {uid, text, forward, findNext}: {uid: string; text: string; forward?: boolean; findNext?: boolean}) => {
-    const wc = wcOf(uid);
-    if (wc && text) wc.findInPage(text, {forward: forward !== false, findNext: !!findNext});
-  });
+  ipcMain.on(
+    'web-pane:find',
+    (_e, {uid, text, forward, findNext}: {uid: string; text: string; forward?: boolean; findNext?: boolean}) => {
+      const wc = wcOf(uid);
+      if (wc && text) wc.findInPage(text, {forward: forward !== false, findNext: !!findNext});
+    }
+  );
 
   ipcMain.on('web-pane:stop-find', (_e, {uid}: {uid: string}) => {
     wcOf(uid)?.stopFindInPage('clearSelection');

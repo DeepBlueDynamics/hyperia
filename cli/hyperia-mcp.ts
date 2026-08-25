@@ -184,7 +184,9 @@ function coerce(v: string): unknown {
   return v;
 }
 function firstSentence(s: string, max = 140): string {
-  const oneLine = String(s || '').replace(/\s+/g, ' ').trim();
+  const oneLine = String(s || '')
+    .replace(/\s+/g, ' ')
+    .trim();
   const dot = oneLine.indexOf('. ');
   const cut = dot > 0 ? oneLine.slice(0, dot + 1) : oneLine;
   return cut.length > max ? `${cut.slice(0, max - 1)}...` : cut;
@@ -223,7 +225,9 @@ async function cmdDescribe(tool: string | undefined, wantJson: boolean): Promise
     console.log(JSON.stringify(t, null, 2));
     return 0;
   }
-  console.log(`${t.name}\n\n${t.description || '(no description)'}\n\nInput schema:\n${JSON.stringify(t.inputSchema, null, 2)}`);
+  console.log(
+    `${t.name}\n\n${t.description || '(no description)'}\n\nInput schema:\n${JSON.stringify(t.inputSchema, null, 2)}`
+  );
   return 0;
 }
 
@@ -431,10 +435,12 @@ function fmtStatus(raw: string): string {
       lines.push(`  tab "${tab.name}"${tab.active ? ' (active)' : ''}`);
       for (const p of tab.panes || []) {
         const id = String(p.paneId || '').slice(0, 8);
-        const app = p.app && p.app.name ? ` ${p.app.name}` : '';
+        const app = p.app?.name ? ` ${p.app.name}` : '';
         const cwd = p.cwd ? ` cwd=${p.cwd}` : '';
         const focused = p.focused ? '  <focused>' : '';
-        lines.push(`    - ${p.name || p.title || '(pane)'}  [${id}]  ${p.state || ''} ${p.shell || ''}${app}${cwd}${focused}`);
+        lines.push(
+          `    - ${p.name || p.title || '(pane)'}  [${id}]  ${p.state || ''} ${p.shell || ''}${app}${cwd}${focused}`
+        );
       }
     }
   }
@@ -447,7 +453,10 @@ async function cmdStatus(wantJson: boolean): Promise<number> {
     console.log(JSON.stringify(result, null, 2));
     return 0;
   }
-  const text = ((result?.content as Array<{text?: string}>) || []).map((c) => c?.text ?? '').join('').trim();
+  const text = ((result?.content as Array<{text?: string}>) || [])
+    .map((c) => c?.text ?? '')
+    .join('')
+    .trim();
   console.log(fmtStatus(text));
   return 0;
 }
@@ -559,7 +568,9 @@ async function cmdDoctor(wantJson: boolean): Promise<number> {
   console.log(`endpoint:   ${base}`);
   console.log(`reachable:  ${reachable ? 'yes' : `NO -- ${err}`}`);
   console.log(`token:      ${tokenSource}`);
-  console.log(`identity:   ${identity ? `${identity.kind} (${identity.label})${identity.anonymous ? ' -- ANONYMOUS' : ''}` : 'unknown'}`);
+  console.log(
+    `identity:   ${identity ? `${identity.kind} (${identity.label})${identity.anonymous ? ' -- ANONYMOUS' : ''}` : 'unknown'}`
+  );
   console.log(`-> ${hint}`);
   return code;
 }

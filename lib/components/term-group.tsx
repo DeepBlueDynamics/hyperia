@@ -176,7 +176,6 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
   render() {
     const {childGroups, termGroup} = this.props;
     const splitOffset = ((this.props as any).splitOffset as number) || 0;
-    const isRoot = !(this.props as any).splitLabel && !splitOffset;
 
     if ((termGroup as any).webUrl !== undefined && (termGroup as any).webUrl !== null) {
       const label = ((this.props as any).splitLabel as string | undefined) || 'a';
@@ -206,8 +205,6 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       );
     }
 
-    // Count total leaves to decide if we need labels at all
-    const totalLeaves = this.countLeaves(termGroup);
     const needLabels = true;
 
     let offset = splitOffset;

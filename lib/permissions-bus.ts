@@ -217,7 +217,10 @@ export function setToast(req: ToastRequest): void {
   toasts.set(req.id, req);
   const prev = toastTimers.get(req.id);
   if (prev) clearTimeout(prev);
-  toastTimers.set(req.id, setTimeout(() => expireToast(req.id), OVERLAY_TTL_MS));
+  toastTimers.set(
+    req.id,
+    setTimeout(() => expireToast(req.id), OVERLAY_TTL_MS)
+  );
   emitToasts();
 }
 

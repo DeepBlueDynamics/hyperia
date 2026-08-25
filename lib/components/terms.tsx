@@ -1,10 +1,9 @@
 import {clipboard} from 'electron';
 import React from 'react';
 
-import rpc from '../rpc';
-
 import type {TermsProps, HyperDispatch} from '../../typings/hyper';
 import {registerCommandHandlers} from '../command-registry';
+import rpc from '../rpc';
 import {ObjectTypedKeys} from '../utils/object';
 import {decorate, getTermGroupProps} from '../utils/plugins';
 

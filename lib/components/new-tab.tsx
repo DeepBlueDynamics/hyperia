@@ -1,6 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-argument */
-import {existsSync} from 'fs';
-
 import React, {useState, useRef, useEffect} from 'react';
 
 import type {configOptions} from '../../typings/config';
@@ -14,12 +11,9 @@ interface Props {
   [key: string]: any;
 }
 
-const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
+const NewTabButton = ({defaultProfile, openNewTab}: Props) => {
   const [open, setOpen] = useState(false);
-  // Optimistic override so right-click "set as default" updates the
-  // visual highlight immediately without waiting for a config reload.
-  const [localDefault, setLocalDefault] = useState<string | null>(null);
-  const effectiveDefault = localDefault || defaultProfile;
+  const effectiveDefault = defaultProfile;
   const ref = useRef<HTMLDivElement>(null);
 
   // Close dropdown on outside click
@@ -34,47 +28,8 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  // Only show profiles that define a shell AND where the shell actually exists on this platform
-  const shellProfiles = (profiles || []).filter((p: any) => {
-    if (!p.config?.shell) return false;
-    // Check if shell path exists (filter out Windows shells on Mac, Mac shells on Windows, etc.)
-    try {
-      return existsSync(p.config.shell);
-    } catch {
-      return false;
-    }
-  });
-
   const handleClick = () => {
     openNewTab(effectiveDefault);
-  };
-
-  const handleSetDefault = (e: React.MouseEvent, name: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setLocalDefault(name);
-    // Persist to ~/.hyperia/hyperia.json via main-process IPC.
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const {ipcRenderer} = require('electron') as {ipcRenderer: {send: (ch: string, ...args: any[]) => void}};
-      ipcRenderer.send('set-default-profile', name);
-    } catch {
-      // Renderer might not have IPC available in some test contexts —
-      // optimistic update still wins for this session.
-    }
-    // Don't close the dropdown — the user might want to launch right
-    // after setting default. They can outside-click to dismiss.
-  };
-
-  const handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setOpen(!open);
-  };
-
-  const handleSelect = (name: string) => {
-    setOpen(false);
-    openNewTab(name);
   };
 
   const handleNewWindow = () => {
@@ -210,4 +165,3 @@ const NewTabButton = ({defaultProfile, profiles, openNewTab}: Props) => {
 };
 
 export default NewTabButton;
-/* eslint-enable @typescript-eslint/no-unsafe-argument */

@@ -790,7 +790,6 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
     const isTyping = val !== (isAi ? '' : (props as any).activeUrl || props.url || '');
 
     let statusText = '';
-    let statusColor = 'var(--text-tertiary)';
 
     if (isTyping && val.trim()) {
       const trimmed = val.trim();

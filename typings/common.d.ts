@@ -25,7 +25,7 @@ export type Session = {
   prefillCommand?: string;
   splitPlacement?: 'BEFORE' | 'AFTER';
   layoutPattern?: string;
-  shellState?: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
+  shellState?: {state: 'idle' | 'busy'; lastExit?: number; command?: string};
   isAgentInitiated?: boolean;
 };
 
@@ -109,9 +109,26 @@ export type MainEvents = {
   'web-pane-read-result': {uid: string; result: any};
   'web-pane-eval-result': {uid: string; result: any};
   'web-pane-mouse-result': {uid: string; result: any};
-  'split request vertical': {activeUid?: string | null; profile?: string | null; url?: string; splitPlacement?: 'BEFORE' | 'AFTER'; isAgentInitiated?: boolean};
-  'split request horizontal': {activeUid?: string | null; profile?: string | null; url?: string; splitPlacement?: 'BEFORE' | 'AFTER'; isAgentInitiated?: boolean};
-  'split web pane req': {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'; isAgentInitiated?: boolean};
+  'split request vertical': {
+    activeUid?: string | null;
+    profile?: string | null;
+    url?: string;
+    splitPlacement?: 'BEFORE' | 'AFTER';
+    isAgentInitiated?: boolean;
+  };
+  'split request horizontal': {
+    activeUid?: string | null;
+    profile?: string | null;
+    url?: string;
+    splitPlacement?: 'BEFORE' | 'AFTER';
+    isAgentInitiated?: boolean;
+  };
+  'split web pane req': {
+    activeUid?: string | null;
+    url?: string;
+    direction?: 'HORIZONTAL' | 'VERTICAL';
+    isAgentInitiated?: boolean;
+  };
   'clone request vertical': any;
   'clone request horizontal': any;
   'layout-state-reply': any;
@@ -168,9 +185,26 @@ export type RendererEvents = {
   'term selectAll': never;
   reload: never;
   'session clear req': never;
-  'split request horizontal': {activeUid?: string | null; profile?: string | null; url?: string; splitPlacement?: 'BEFORE' | 'AFTER'; isAgentInitiated?: boolean};
-  'split web pane req': {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'; isAgentInitiated?: boolean};
-  'split request vertical': {activeUid?: string | null; profile?: string | null; url?: string; splitPlacement?: 'BEFORE' | 'AFTER'; isAgentInitiated?: boolean};
+  'split request horizontal': {
+    activeUid?: string | null;
+    profile?: string | null;
+    url?: string;
+    splitPlacement?: 'BEFORE' | 'AFTER';
+    isAgentInitiated?: boolean;
+  };
+  'split web pane req': {
+    activeUid?: string | null;
+    url?: string;
+    direction?: 'HORIZONTAL' | 'VERTICAL';
+    isAgentInitiated?: boolean;
+  };
+  'split request vertical': {
+    activeUid?: string | null;
+    profile?: string | null;
+    url?: string;
+    splitPlacement?: 'BEFORE' | 'AFTER';
+    isAgentInitiated?: boolean;
+  };
   'clone request vertical': any;
   'clone request horizontal': any;
   'termgroup add req': {activeUid?: string | null; profile?: string | null; isAgentInitiated?: boolean};
@@ -180,7 +214,7 @@ export type RendererEvents = {
   'session data': string;
   'session cwd': {uid: string; cwd: string};
   'session exit': {uid: string};
-  'session shellstate': {uid: string; shellState: { state: 'idle' | 'busy'; lastExit?: number; command?: string }};
+  'session shellstate': {uid: string; shellState: {state: 'idle' | 'busy'; lastExit?: number; command?: string}};
   'permission request': {id: string; requester: string; requesterPane: string; targetPane: string; purpose?: string};
   'permission resolved': {targetPane: string; decision: string; id?: string};
   'agent toast': {id: string; requester: string; action: string};
@@ -195,7 +229,13 @@ export type RendererEvents = {
   /** Main tells the renderer the user confirmed closing this tab (#148). */
   'close-tab-confirmed': {uid: string};
   /** Main asks the renderer to show the in-app close-confirm modal (#148). */
-  'close-confirm': {id: number; scope: 'window' | 'quit' | 'tab'; names: string[]; tabCount?: number; paneCount?: number};
+  'close-confirm': {
+    id: number;
+    scope: 'window' | 'quit' | 'tab';
+    names: string[];
+    tabCount?: number;
+    paneCount?: number;
+  };
   'get-layout-state-req': never;
   'restore-layout-state': any;
   'web-pane-zoom-in': {uid: string};

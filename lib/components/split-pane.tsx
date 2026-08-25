@@ -86,7 +86,7 @@ const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
     };
   }, []);
 
-  const {children, direction, borderColor} = props;
+  const {children, direction} = props;
   const sizeProperty = direction === 'horizontal' ? 'height' : 'width';
   // workaround for the fact that if we don't specify
   // sizes, sometimes flex fails to calculate the

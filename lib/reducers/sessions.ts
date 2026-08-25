@@ -409,9 +409,7 @@ const reducer: ISessionReducer = (state = initialState, action) => {
       // beats shellName).
       const a = action as any;
       if (!state.sessions[a.uid]) return state;
-      return state
-        .setIn(['sessions', a.uid, 'shellName'], a.name)
-        .setIn(['sessions', a.uid, 'manualTitle'], false);
+      return state.setIn(['sessions', a.uid, 'shellName'], a.name).setIn(['sessions', a.uid, 'manualTitle'], false);
     }
 
     case SESSION_RESIZE:

@@ -69,7 +69,6 @@ export function initSettings() {
   });
 
   ipcMain.on('show-about', () => {
-    const {dialog} = require('electron');
     dialog.showMessageBoxSync({
       title: `About Hyperia`,
       message: `Hyperia 0.10.8 (stable)`,

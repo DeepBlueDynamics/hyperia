@@ -143,7 +143,7 @@ export type session = {
   shellName?: string;
   lastCommand?: string;
   manualTitle?: boolean;
-  shellState?: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
+  shellState?: {state: 'idle' | 'busy'; lastExit?: number; command?: string};
   /** Reliable "running a foreground program" flag, published by Term (#148). */
   busy?: boolean;
 };
@@ -473,7 +473,7 @@ export type TermProps = {
   defaultProfile?: string;
   profiles?: any[];
   sessionCwd?: string;
-  shellState?: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
+  shellState?: {state: 'idle' | 'busy'; lastExit?: number; command?: string};
   onCwd?: (cwd: string) => void;
 } & extensionProps;
 

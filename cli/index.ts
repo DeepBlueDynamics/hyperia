@@ -258,9 +258,8 @@ const main = (argv: string[]) => {
   const child = spawn(process.execPath, args_, options);
 
   if (flags.verbose) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     child.stdout?.on('data', (data) => console.log(data.toString('utf8')));
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+
     child.stderr?.on('data', (data) => console.error(data.toString('utf8')));
   }
   if (flags.verbose) {
@@ -299,7 +298,7 @@ const runMcp = (argv: string[]) =>
   runMcpCli(argv)
     .then((code) => process.exit(code))
     .catch((err) => {
-      console.error(err && err.stack ? err.stack : err);
+      console.error(err?.stack ? err.stack : err);
       process.exit(1);
     });
 const runLegacy = (argv: string[]) =>

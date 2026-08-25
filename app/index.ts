@@ -1,6 +1,5 @@
 // eslint-disable-next-line import/order
 import {cfgPath} from './config/paths';
-import {SYSTEM_TOKEN} from './system-token';
 
 // Print diagnostic information for a few arguments instead of running Hyperia.
 if (['--help', '-v', '--version'].includes(process.argv[1])) {
@@ -90,7 +89,6 @@ try {
   console.warn('[userData] failed to pin stable path:', e);
 }
 
-
 // A broken stdout/stderr pipe must NEVER crash the main process. When Hyperia is
 // launched detached (or the parent terminal/pipe that captured its output
 // closes), a later console.* write throws an uncaught EPIPE — which Electron
@@ -117,9 +115,10 @@ import {initTray, destroyTray} from './notify';
 import * as plugins from './plugins';
 import {initSettings} from './settings';
 import {initSticky} from './sticky';
+import {SYSTEM_TOKEN} from './system-token';
 import {newWindow} from './ui/window';
-import {getAppIcon} from './utils/icon';
 import {installCLI} from './utils/cli-install';
+import {getAppIcon} from './utils/icon';
 import * as windowUtils from './utils/window-utils';
 import {restoreFor} from './window-state';
 
@@ -131,10 +130,10 @@ import {restoreFor} from './window-state';
 {
   const errLogPath = () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const {join} = require('path') as typeof import('path');
+    const pathModule = require('path') as typeof import('path');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const {homedir} = require('os') as typeof import('os');
-    return join(homedir(), '.hyperia', 'logs', 'main-errors.log');
+    return pathModule.join(homedir(), '.hyperia', 'logs', 'main-errors.log');
   };
   let lastNotified = 0;
   const handle = (kind: string) => (err: unknown) => {
@@ -144,9 +143,9 @@ import {restoreFor} from './window-state';
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const {appendFileSync, mkdirSync} = require('fs') as typeof import('fs');
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const {dirname} = require('path') as typeof import('path');
+      const pathModule = require('path') as typeof import('path');
       const p = errLogPath();
-      mkdirSync(dirname(p), {recursive: true});
+      mkdirSync(pathModule.dirname(p), {recursive: true});
       appendFileSync(p, `${new Date().toISOString()} [${kind}] ${msg}\n`);
     } catch {
       /* logging must never throw */
@@ -329,7 +328,7 @@ function findSidecarBinary(): string | null {
 
   for (const candidate of candidates) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
       require('fs').accessSync(candidate);
       return candidate;
     } catch {
@@ -544,21 +543,18 @@ if (!gotLock) {
   process.exit(0); // belt-and-suspenders: nothing below may run in the loser
 }
 app.on('second-instance', () => {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
   const win = (app as any).getLastFocusedWindow?.();
   if (win) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     if (win.isMinimized()) win.restore();
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+
     win.focus();
   } else {
     // All windows were closed — open a new one
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+
     (app as any).createWindow?.();
   }
 });
 
-// eslint-disable-next-line @typescript-eslint/no-misused-promises
 // macOS: after a "drag to Applications" install, the .dmg stays mounted as a
 // /Volumes/Hyperia… volume. When we're running from a completed install (in
 // /Applications — NOT off the DMG), eject any leftover Hyperia DMG so the user
@@ -630,7 +626,7 @@ app.on('ready', () => {
     setTimeout(() => sendAppFocus(BrowserWindow.getAllWindows().some((w) => w.isFocused())), 60);
   });
 
-  return installDevExtensions(isDev)
+  void installDevExtensions(isDev)
     .then(() => {
       function createWindow(
         fn?: (win: BrowserWindow) => void,
@@ -739,12 +735,10 @@ app.on('ready', () => {
       // and we don't have any active windows open,
       // we open one
       app.on('activate', () => {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         const win = (app as any).getLastFocusedWindow?.();
         if (win) {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
           win.show();
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+
           win.focus();
         } else {
           createWindow();
@@ -802,7 +796,9 @@ app.on('ready', () => {
         // fallback lives inside confirmCloseModal). Hold the quit until answered.
         e.preventDefault();
         const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
-        const confirmFn = (win as any)?.confirmCloseModal as undefined | ((p: {scope: string; names: string[]}) => Promise<boolean>);
+        const confirmFn = (win as any)?.confirmCloseModal as
+          | undefined
+          | ((p: {scope: string; names: string[]}) => Promise<boolean>);
         if (!win || typeof confirmFn !== 'function') {
           teardown();
           app.quit();

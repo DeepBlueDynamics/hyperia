@@ -45,7 +45,6 @@ export function initTray() {
         win.show();
         win.focus();
       } else {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         (app as any).createWindow?.();
       }
     });
@@ -145,7 +144,6 @@ function reconnectStreamDeck() {
 }
 
 function getWindow(): Electron.BrowserWindow | null {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call
   return (app as any).getLastFocusedWindow?.() || null;
 }
 
@@ -164,7 +162,6 @@ function updateTrayMenu() {
           win.show();
           win.focus();
         } else {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
           (app as any).createWindow?.();
         }
       }
@@ -189,7 +186,6 @@ function updateTrayMenu() {
     {
       label: 'New Window',
       click: () => {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         (app as any).createWindow?.();
       }
     },

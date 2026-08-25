@@ -33,7 +33,7 @@ export interface SessionAddAction {
   url?: string;
   cwd?: string;
   isNewGroup?: boolean;
-  shellState?: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
+  shellState?: {state: 'idle' | 'busy'; lastExit?: number; command?: string};
 }
 export interface SessionResizeAction {
   type: typeof SESSION_RESIZE;
@@ -104,7 +104,7 @@ export interface SessionSetDescriptionAction {
 export interface SessionSetShellStateAction {
   type: typeof SESSION_SET_SHELL_STATE;
   uid: string;
-  shellState: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
+  shellState: {state: 'idle' | 'busy'; lastExit?: number; command?: string};
 }
 
 export interface SessionSetBusyAction {

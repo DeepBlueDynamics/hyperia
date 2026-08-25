@@ -1,5 +1,5 @@
 import {existsSync, readFileSync, writeFileSync, cpSync, statSync} from 'fs';
-import {dirname, isAbsolute, join, normalize, sep, basename, extname} from 'path';
+import {isAbsolute, join, normalize, sep, basename, extname} from 'path';
 import {URL, fileURLToPath} from 'url';
 
 import {app, BrowserWindow, shell, Menu, dialog, nativeImage, clipboard} from 'electron';
@@ -36,18 +36,17 @@ import {
 } from '../bridge';
 import {execCommand} from '../commands';
 import {getDefaultProfile} from '../config';
-import {initWebPaneManager, destroyPanesForWindow, setWindowWebPanesSuppressed} from '../web-pane-manager';
-import {icon, homeDirectory, cfgPath} from '../config/paths';
-import {getAppIcon} from '../utils/icon';
+import {homeDirectory, cfgPath} from '../config/paths';
 import fetchNotifications from '../notifications';
-import notify from '../notify';
 import {decorateSessionOptions, decorateSessionClass} from '../plugins';
 import createRPC from '../rpc';
 import Session from '../session';
 import {startSessionLog, writeSessionLog, endSessionLog} from '../session-logger';
 import updater from '../updater';
+import {getAppIcon} from '../utils/icon';
 import {setRendererType, unsetRendererType} from '../utils/renderer-utils';
 import toElectronBackgroundColor from '../utils/to-electron-background-color';
+import {initWebPaneManager, destroyPanesForWindow, setWindowWebPanesSuppressed} from '../web-pane-manager';
 
 import contextMenuTemplate from './contextmenu';
 
@@ -222,7 +221,7 @@ export function newWindow(
   // root as base for relative requires. Intercept and resolve manually.
 
   const wc = window.webContents as any;
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+
   wc.on('remote-require', (event: any, moduleName: string) => {
     if (moduleName === './plugins') {
       event.returnValue = require('../plugins');
@@ -435,7 +434,13 @@ export function newWindow(
       };
       const ackTimer = setTimeout(nativeFallback, 1000);
       pendingClose.set(id, {finish, ackTimer});
-      rpc.emit('close-confirm', {id, scope: payload.scope, names: n, tabCount: payload.tabCount, paneCount: payload.paneCount});
+      rpc.emit('close-confirm', {
+        id,
+        scope: payload.scope,
+        names: n,
+        tabCount: payload.tabCount,
+        paneCount: payload.paneCount
+      });
     });
   };
   (window as any).confirmCloseModal = confirmCloseModal;
@@ -502,7 +507,7 @@ export function newWindow(
       (app.windowCallback || fn)(window);
     }
     app.windowCallback = undefined;
-    fetchNotifications(window);
+    fetchNotifications();
     // auto updates
     if (!isDev) {
       updater(window);
@@ -830,7 +835,7 @@ export function newWindow(
     Menu.getApplicationMenu()!.popup({x: Math.ceil(x), y: Math.ceil(y)});
   });
   // Update Electron window title + taskbar icon when active session title changes
-  rpc.on('session set xterm title', ({uid, title, manual}: {uid: string; title: string; manual?: boolean}) => {
+  rpc.on('session set xterm title', ({title}: {uid: string; title: string; manual?: boolean}) => {
     // Only update window chrome — tab names come from renderer via 'session set tab name'
     // Update only the window TITLE. Do NOT override the taskbar icon per-session
     // — the window keeps the proper Hyperia icon set at creation (winOpts.icon).
@@ -974,7 +979,7 @@ export function newWindow(
   // 'close-tab-confirmed' if the user proceeds.
   rpc.on('confirm-close-tab', ({uid, names}) => {
     void (async () => {
-      const ok = await confirmCloseModal({scope: 'tab', names: names && names.length ? names : []});
+      const ok = await confirmCloseModal({scope: 'tab', names: names?.length ? names : []});
       if (ok) {
         rpc.emit('close-tab-confirmed', {uid});
       }
@@ -986,7 +991,7 @@ export function newWindow(
   });
   rpc.on('session-cd', ({uid, path}) => {
     const result = executeSessionCd(uid, path, undefined, true);
-    rpc.emit('session-cd-reply', { uid, ...result });
+    rpc.emit('session-cd-reply', {uid, ...result});
   });
   // Drag-and-drop: copy OS files dropped onto an IDLE terminal pane into that
   // pane's cwd. The renderer gates on shell state (idle) + a known cwd and sends
@@ -1002,14 +1007,20 @@ export function newWindow(
       let dir = isDir(cwd) ? cwd : '';
       if (!dir) {
         const session = sessions.get(uid);
-        if (isDir(session?.cwd)) dir = session!.cwd;
+        if (isDir(session?.cwd)) dir = session.cwd;
         else if (session?.pty?.pid) {
           const live = getWorkingDirectoryFromPID(session.pty.pid);
           if (isDir(live)) dir = live;
         }
       }
       if (!dir) {
-        rpc.emit('pane copy files done', {uid, ok: false, dir: cwd || '', count: 0, error: "couldn't determine the pane's directory"});
+        rpc.emit('pane copy files done', {
+          uid,
+          ok: false,
+          dir: cwd || '',
+          count: 0,
+          error: "couldn't determine the pane's directory"
+        });
         return;
       }
       // A folder drag can enumerate the folder AND its descendants as separate
@@ -1053,7 +1064,13 @@ export function newWindow(
       }
       rpc.emit('pane copy files done', {uid, ok: names.length > 0, dir, count: names.length, names});
     } catch (err) {
-      rpc.emit('pane copy files done', {uid, ok: false, dir: cwd || '', count: 0, error: (err as Error)?.message || String(err)});
+      rpc.emit('pane copy files done', {
+        uid,
+        ok: false,
+        dir: cwd || '',
+        count: 0,
+        error: (err as Error)?.message || String(err)
+      });
     }
   });
   // pass on the full screen events from the window to react

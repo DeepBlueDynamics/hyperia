@@ -362,25 +362,6 @@ function getStickyDefaultSize(): {width: number; height: number} {
   }
 }
 
-function saveStickyDefaultSize(width: number, height: number) {
-  // Merge — defaults.json also holds the renderer-owned fontSize/titleFontSize,
-  // so overwriting with just {width,height} would wipe the user's font size.
-  try {
-    const p = join(stickysDir(), 'defaults.json');
-    let d: Record<string, unknown> = {};
-    try {
-      d = JSON.parse(readFileSync(p, 'utf8')) || {};
-    } catch {
-      d = {};
-    }
-    d.width = width;
-    d.height = height;
-    writeFileSync(p, JSON.stringify(d), 'utf8');
-  } catch (e) {
-    console.error('Failed to save sticky defaults:', e);
-  }
-}
-
 // ── Global "see through" mode ───────────────────────────────────────────────
 // ONE toggle for ALL stickys: either every sticky is semi-transparent or none
 // is. No per-sticky focus/hover opacity. Persisted in defaults.json.
@@ -559,7 +540,6 @@ function updateNote(id: string, text: string): boolean {
   return !!(note || win);
 }
 
-const lastStickyNotify = new Map<string, number>();
 function notifyStickyUpdated(note: NoteData): void {
   const w = stickyWindows.get(note.id);
   if (w && !w.isDestroyed()) {

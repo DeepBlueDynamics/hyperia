@@ -29,6 +29,7 @@ const PICKER_EMOJIS = [
   '🎈'
 ];
 
+// eslint-disable-next-line no-misleading-character-class
 const EMOJI_REGEX = /^([\p{Extended_Pictographic}\u200d\uFE0F]+)\s*(.*)$/u;
 
 const parseTabName = (name: string, isWeb?: boolean, hasCustomName?: boolean) => {
@@ -130,7 +131,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const handleContextMenu = (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    /* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
+    /* eslint-disable @typescript-eslint/no-var-requires */
     const remote = require('@electron/remote');
     const {Menu, MenuItem} = remote;
     const {clipboard} = require('electron');
@@ -208,7 +209,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     menu.append(new MenuItem({label: 'Close', click: () => props.onClose()}));
 
     menu.popup();
-    /* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
+    /* eslint-enable @typescript-eslint/no-var-requires */
   };
 
   // Clear pendingName once Redux state has caught up to the committed rename.

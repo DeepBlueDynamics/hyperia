@@ -1,7 +1,8 @@
-import React from 'react';
 import {ipcRenderer} from 'electron';
+import React from 'react';
 
 import {subscribePulseStatus, refreshPulseStatus} from '../pulse-status-bus';
+import {openLayout} from '../utils/layouts';
 
 // Pulse picker pills + action buttons (re-poke watchdog editor in the band).
 const pulseSeg = (active: boolean): React.CSSProperties => ({
@@ -79,8 +80,6 @@ const getTextFromNode = (node: React.ReactNode): string => {
   }
   return '';
 };
-
-import {openLayout} from '../utils/layouts';
 
 export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
   (
@@ -322,9 +321,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       ) : (
         // Terminal panes: the classic shell prompt glyph (no clean emoji exists
         // for ">_", so render it in mono so it reads as a console).
-        <span style={{fontFamily: 'var(--font-mono)', fontSize: '11px', fontWeight: 700, opacity: 0.85}}>
-          {'>_'}
-        </span>
+        <span style={{fontFamily: 'var(--font-mono)', fontSize: '11px', fontWeight: 700, opacity: 0.85}}>{'>_'}</span>
       );
 
     return (
@@ -556,35 +553,68 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 <rect x="16" y="16" width="4" height="4" fill="currentColor" opacity="0.3" />
               </svg>
               <div className="pane-band-tooltip pane-band-layout-tooltip" style={{minWidth: '180px'}}>
-                <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 600, marginBottom: '8px', textAlign: 'center'}}>
+                <div
+                  style={{
+                    fontSize: '11px',
+                    color: 'var(--text-primary)',
+                    fontWeight: 600,
+                    marginBottom: '8px',
+                    textAlign: 'center'
+                  }}
+                >
                   Quick Layouts
                 </div>
                 <div className="pane-band-layout-grid">
-                  <div 
-                    className="pane-band-layout-item" 
-                    onClick={(e) => openLayout('3cols', paneId, e.shiftKey ? (paneType === 'shell' ? 'default' : paneType) : undefined)} 
+                  <div
+                    className="pane-band-layout-item"
+                    onClick={(e) =>
+                      openLayout(
+                        '3cols',
+                        paneId,
+                        e.shiftKey ? (paneType === 'shell' ? 'default' : paneType) : undefined
+                      )
+                    }
                     title="3 Columns (Shift+Click to Clone)"
                   >
                     <div className="layout-preview-box l-3cols">
-                      <div /><div /><div />
+                      <div />
+                      <div />
+                      <div />
                     </div>
                   </div>
-                  <div 
-                    className="pane-band-layout-item" 
-                    onClick={(e) => openLayout('3rows', paneId, e.shiftKey ? (paneType === 'shell' ? 'default' : paneType) : undefined)} 
+                  <div
+                    className="pane-band-layout-item"
+                    onClick={(e) =>
+                      openLayout(
+                        '3rows',
+                        paneId,
+                        e.shiftKey ? (paneType === 'shell' ? 'default' : paneType) : undefined
+                      )
+                    }
                     title="3 Rows (Shift+Click to Clone)"
                   >
                     <div className="layout-preview-box l-3rows">
-                      <div /><div /><div />
+                      <div />
+                      <div />
+                      <div />
                     </div>
                   </div>
-                  <div 
-                    className="pane-band-layout-item" 
-                    onClick={(e) => openLayout('grid2x2', paneId, e.shiftKey ? (paneType === 'shell' ? 'default' : paneType) : undefined)} 
+                  <div
+                    className="pane-band-layout-item"
+                    onClick={(e) =>
+                      openLayout(
+                        'grid2x2',
+                        paneId,
+                        e.shiftKey ? (paneType === 'shell' ? 'default' : paneType) : undefined
+                      )
+                    }
                     title="Grid 2x2 (Shift+Click to Clone)"
                   >
                     <div className="layout-preview-box l-grid2x2">
-                      <div /><div /><div /><div />
+                      <div />
+                      <div />
+                      <div />
+                      <div />
                     </div>
                   </div>
                 </div>
@@ -601,7 +631,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 const profile = e.shiftKey ? (paneType === 'shell' ? 'default' : paneType) : 'picker';
                 const rpc = (window as any).rpc;
                 if (rpc && paneId) {
-                  rpc.emit('split request horizontal', { activeUid: paneId, profile });
+                  rpc.emit('split request horizontal', {activeUid: paneId, profile});
                 } else {
                   onSplitDown();
                 }
@@ -623,14 +653,14 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 <line x1="3" y1="12" x2="21" y2="12" />
               </svg>
               <div className="pane-band-tooltip pane-band-split-down-tooltip">
-                <div 
+                <div
                   className="pane-band-tooltip-item"
                   onClick={(e) => {
                     e.stopPropagation();
                     const profile = e.shiftKey ? (paneType === 'shell' ? 'default' : paneType) : 'picker';
                     const rpc = (window as any).rpc;
                     if (rpc && paneId) {
-                      rpc.emit('split request horizontal', { activeUid: paneId, profile });
+                      rpc.emit('split request horizontal', {activeUid: paneId, profile});
                     } else {
                       onSplitDown();
                     }
@@ -640,14 +670,14 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   <span className="tooltip-item-label">Split Down</span>
                   <span className="tooltip-item-key">Ctrl+Shift+_</span>
                 </div>
-                <div 
+                <div
                   className="pane-band-tooltip-item"
                   onClick={(e) => {
                     e.stopPropagation();
                     const profile = e.shiftKey ? (paneType === 'shell' ? 'default' : paneType) : 'picker';
                     const rpc = (window as any).rpc;
                     if (rpc && paneId) {
-                      rpc.emit('split request horizontal', { activeUid: paneId, profile, splitPlacement: 'BEFORE' });
+                      rpc.emit('split request horizontal', {activeUid: paneId, profile, splitPlacement: 'BEFORE'});
                     } else {
                       if (onSplitUp) onSplitUp();
                     }
@@ -658,7 +688,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   <span className="tooltip-item-key">Place to Top</span>
                 </div>
                 <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: '4px 0'}} />
-                <div 
+                <div
                   className="pane-band-tooltip-item"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -674,7 +704,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   <span className="tooltip-item-label">Clone Down</span>
                   <span className="tooltip-item-key">Ctrl+Alt+Shift+_</span>
                 </div>
-                <div 
+                <div
                   className="pane-band-tooltip-item"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -704,7 +734,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 const profile = e.shiftKey ? (paneType === 'shell' ? 'default' : paneType) : 'picker';
                 const rpc = (window as any).rpc;
                 if (rpc && paneId) {
-                  rpc.emit('split request vertical', { activeUid: paneId, profile });
+                  rpc.emit('split request vertical', {activeUid: paneId, profile});
                 } else {
                   onSplitRight();
                 }
@@ -726,14 +756,14 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 <line x1="12" y1="3" x2="12" y2="21" />
               </svg>
               <div className="pane-band-tooltip pane-band-split-right-tooltip">
-                <div 
+                <div
                   className="pane-band-tooltip-item"
                   onClick={(e) => {
                     e.stopPropagation();
                     const profile = e.shiftKey ? (paneType === 'shell' ? 'default' : paneType) : 'picker';
                     const rpc = (window as any).rpc;
                     if (rpc && paneId) {
-                      rpc.emit('split request vertical', { activeUid: paneId, profile });
+                      rpc.emit('split request vertical', {activeUid: paneId, profile});
                     } else {
                       onSplitRight();
                     }
@@ -743,14 +773,14 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   <span className="tooltip-item-label">Split Right</span>
                   <span className="tooltip-item-key">Ctrl+Shift+D</span>
                 </div>
-                <div 
+                <div
                   className="pane-band-tooltip-item"
                   onClick={(e) => {
                     e.stopPropagation();
                     const profile = e.shiftKey ? (paneType === 'shell' ? 'default' : paneType) : 'picker';
                     const rpc = (window as any).rpc;
                     if (rpc && paneId) {
-                      rpc.emit('split request vertical', { activeUid: paneId, profile, splitPlacement: 'BEFORE' });
+                      rpc.emit('split request vertical', {activeUid: paneId, profile, splitPlacement: 'BEFORE'});
                     } else {
                       if (onSplitLeft) onSplitLeft();
                     }
@@ -761,7 +791,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   <span className="tooltip-item-key">Place to Left</span>
                 </div>
                 <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: '4px 0'}} />
-                <div 
+                <div
                   className="pane-band-tooltip-item"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -777,7 +807,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   <span className="tooltip-item-label">Clone Right</span>
                   <span className="tooltip-item-key">Ctrl+Alt+Shift+D</span>
                 </div>
-                <div 
+                <div
                   className="pane-band-tooltip-item"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -815,7 +845,13 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               }
               onClose();
             }}
-            style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, position: 'relative'}}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              position: 'relative'
+            }}
           >
             {/* Inline SVG (not the `ti` icon font, which may not be loaded —
                 that's why the close × was invisible while the split controls,
@@ -924,10 +960,24 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             />
 
             <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8}}>
-              <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>Every</span>
+              <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>
+                Every
+              </span>
               <div style={{display: 'flex', gap: 4}}>
-                {([['30s', 30], ['1m', 60], ['2m', 120], ['5m', 300]] as const).map(([lbl, secs]) => (
-                  <button key={lbl} type="button" onClick={() => setPInterval(secs)} style={pulseSeg(pInterval === secs)}>
+                {(
+                  [
+                    ['30s', 30],
+                    ['1m', 60],
+                    ['2m', 120],
+                    ['5m', 300]
+                  ] as const
+                ).map(([lbl, secs]) => (
+                  <button
+                    key={lbl}
+                    type="button"
+                    onClick={() => setPInterval(secs)}
+                    style={pulseSeg(pInterval === secs)}
+                  >
                     {lbl}
                   </button>
                 ))}
@@ -944,7 +994,9 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             </div>
 
             <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8}}>
-              <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>When</span>
+              <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>
+                When
+              </span>
               <div style={{display: 'flex', gap: 4}}>
                 <button type="button" onClick={() => setPIdleOnly(true)} style={pulseSeg(pIdleOnly)}>
                   Only if idle
@@ -958,8 +1010,18 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12}}>
               <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>For</span>
               <div style={{display: 'flex', gap: 4}}>
-                {([['15 min', 900], ['1 hour', 3600]] as const).map(([lbl, secs]) => (
-                  <button key={lbl} type="button" onClick={() => setPLifetime(secs)} style={pulseSeg(pLifetime === secs)}>
+                {(
+                  [
+                    ['15 min', 900],
+                    ['1 hour', 3600]
+                  ] as const
+                ).map(([lbl, secs]) => (
+                  <button
+                    key={lbl}
+                    type="button"
+                    onClick={() => setPLifetime(secs)}
+                    style={pulseSeg(pLifetime === secs)}
+                  >
                     {lbl}
                   </button>
                 ))}
@@ -1085,7 +1147,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             z-index: 1000;
             text-align: left;
             pointer-events: auto;
-            box-shadow: 0 6px 16px rgba(0,0,0,0.35);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
           }
 
           /* Positioning individual tooltips */
@@ -1233,8 +1295,6 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             grid-template-rows: 1fr 1fr;
             gap: 1px;
           }
-
-
 
           .pane-band-name-cluster {
             scrollbar-width: none !important;
