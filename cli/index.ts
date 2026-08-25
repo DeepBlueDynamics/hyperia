@@ -283,6 +283,18 @@ function eventuallyExit(code: number) {
 //   hyperia launch [dir]          → start the app (the old bare default)
 //   hyperia plugins <cmd>         → legacy Hyper plugin manager
 //   hyperia version               → app version
+// Legacy-codepage Windows consoles render our UTF-8 output (pane-name emojis,
+// tree glyphs) as mojibake ("≡ƒªä"). Flip the console to UTF-8 up front; a
+// per-console setting, harmless when already 65001 (Windows Terminal default).
+if (process.platform === 'win32') {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('child_process').spawnSync('cmd', ['/c', 'chcp', '65001'], {stdio: 'ignore'});
+  } catch {
+    /* cosmetic only */
+  }
+}
+
 const runMcp = (argv: string[]) =>
   runMcpCli(argv)
     .then((code) => process.exit(code))
