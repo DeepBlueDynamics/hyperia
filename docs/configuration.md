@@ -179,6 +179,24 @@ With no usable frontier provider/token, the Ghost falls back to local Ollama (`g
 - `kind` marks user-added custom profiles (`shell` or `agent`); custom agent profiles appear under "pick an agent" in the Chooser.
 - `defaultProfile` names the fallback for first-ever picks; the picker otherwise remembers your last-used shell.
 
+## Pane styles (color a single pane, live)
+
+Styles are **named, reusable sets of appearance overrides** stored in `config.styles[]`, applied to individual panes at runtime. The full agent flow:
+
+```
+style_create {"name": "alert", "overrides": {"backgroundColor": "#2a0a0a", "colors": {"red": "#ff5c57"}, "fontSize": 15}}
+style_list   {}                                              // ["alert", ...]
+style_apply  {"name": "alert", "pane": "Brilliant Peacock"}  // that pane recolors live
+style_apply  {"name": "default", "pane": "Brilliant Peacock"} // clear back to normal
+style_delete {"name": "alert"}
+```
+
+- Overrides accept **any appearance key from the reference above** (colors, `backgroundColor`, `foregroundColor`, cursor keys, `fontSize`, `fontFamily`, weights, `lineHeight`, `letterSpacing`, `padding`, `selectionColor`, `borderColor`). Partial `colors` maps merge key-by-key.
+- `style_apply` requires an **explicit pane target** (name or paneId — it never defaults to the human's focused pane) and applies live, no restart.
+- **Gating:** creating/deleting styles requires an identity (they write shared config); applying to a pane you don't own raises the human's consent prompt, like any pane write. `style_list` is a free read.
+- Applied styles are runtime state — they last for the pane's life and don't persist across app restarts (the style definitions themselves do).
+- Styles layer on top: pane style > profile `config` > root config.
+
 ## Keyboard shortcuts
 
 Two layers:

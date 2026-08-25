@@ -17,7 +17,8 @@ import {
   SESSION_SET_CWD,
   SESSION_SET_SHELL_STATE,
   SESSION_SET_BUSY,
-  SESSION_PANE_RENAME
+  SESSION_PANE_RENAME,
+  SESSION_SET_PANE_STYLE
 } from '../../typings/constants/sessions';
 import {TERM_GROUP_SET_TAB_NAME} from '../../typings/constants/term-groups';
 import type {HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
@@ -249,6 +250,17 @@ export function renamePaneShell(uid: string, name: string) {
     type: SESSION_PANE_RENAME,
     uid,
     name
+  } as any;
+}
+
+// Apply (or clear, style=null) a per-pane appearance override set — from the
+// sidecar's style_apply tool. term-group merges it over the profile/global
+// appearance for that pane only.
+export function setPaneStyle(uid: string, style: Record<string, any> | null) {
+  return {
+    type: SESSION_SET_PANE_STYLE,
+    uid,
+    style
   } as any;
 }
 

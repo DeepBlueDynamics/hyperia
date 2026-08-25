@@ -558,6 +558,20 @@ pub struct StyleDeleteRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct StyleApplyRequest {
+    /// Style name from style_list. 'default' or 'none' clears the pane back to
+    /// its profile/global appearance.
+    pub name: String,
+    /// Window ID of the target pane — the `id` field from terminal_status.
+    pub window: Option<u32>,
+    /// Tab name of the target pane.
+    pub tab: Option<String>,
+    /// Target pane — name or paneId (from terminal_status). An explicit target
+    /// is required; this never defaults to the human's focused pane.
+    pub pane: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct AgentStatusRequest {
     /// Whether an agent is connected (true = green light, false = grey)
     pub connected: bool,
@@ -1867,8 +1881,8 @@ impl HyperiaMcp {
             },
             {
                 "name": "styles",
-                "description": "Create, list, and delete reusable visual styles for panes.",
-                "tools": ["style_list", "style_create", "style_delete"]
+                "description": "Reusable visual styles for panes: create/list/delete named appearance override sets and apply one to a specific pane live.",
+                "tools": ["style_list", "style_create", "style_apply", "style_delete"]
             },
             {
                 "name": "telemetry",
@@ -1921,6 +1935,45 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
+    /// Styles are config WRITES — identified callers only (reads stay open).
+    /// Returns Err(refusal text) for anonymous/unrecognized callers.
+    async fn require_style_identity(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+    ) -> Result<(), CallToolResult> {
+        let auth = forwarded_auth(ctx);
+        let who = self
+            .get_as("/api/identity/whoami", auth.as_deref())
+            .await
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+        let anonymous = who.map(|w| w["anonymous"].as_bool().unwrap_or(true)).unwrap_or(true);
+        if anonymous {
+            return Err(CallToolResult::success(vec![Content::text(
+                "Style changes require identity (they write shared config). Run request_token, wire the Bearer token into your MCP client, and retry. style_list works without identity.",
+            )]));
+        }
+        Ok(())
+    }
+
+    #[tool(description = "Apply a named style's appearance overrides to ONE pane, live (colors, fontSize, padding, ...). Pass name plus window/tab/pane — an explicit pane target is required. Applying to a pane you don't own asks the human for consent. name 'default' (or 'none') clears the pane back to its profile/global appearance. Create styles with style_create; see docs/configuration.md.")]
+    async fn style_apply(
+        &self,
+        Parameters(req): Parameters<StyleApplyRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({
+            "name": req.name,
+            "window": req.window,
+            "tab": req.tab,
+            "pane": req.pane,
+        });
+        let resp = self
+            .post_json_as("/api/styles/apply", &body, forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
     #[tool(description = "List all styles in the Hyperia config.")]
     async fn style_list(&self) -> Result<CallToolResult, ErrorData> {
         let cfg = self.read_config().await?;
@@ -1937,11 +1990,15 @@ impl HyperiaMcp {
         )]))
     }
 
-    #[tool(description = "Create or clone a style. Optionally clone from an existing style and apply overrides.")]
+    #[tool(description = "Create or clone a style — a named, reusable set of appearance overrides (e.g. {\"backgroundColor\": \"#1a1a2e\", \"fontSize\": 16}; any appearance key from docs/configuration.md). Apply to a pane with style_apply. Requires identity.")]
     async fn style_create(
         &self,
         Parameters(req): Parameters<StyleCreateRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        if let Err(refusal) = self.require_style_identity(&ctx).await {
+            return Ok(refusal);
+        }
         let mut cfg = self.read_config().await?;
         let styles = cfg["config"]["styles"]
             .as_array()
@@ -1993,11 +2050,15 @@ impl HyperiaMcp {
         )]))
     }
 
-    #[tool(description = "Delete a style by name. Cannot delete the 'default' style.")]
+    #[tool(description = "Delete a style by name. Cannot delete the 'default' style. Requires identity.")]
     async fn style_delete(
         &self,
         Parameters(req): Parameters<StyleDeleteRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        if let Err(refusal) = self.require_style_identity(&ctx).await {
+            return Ok(refusal);
+        }
         if req.name == "default" {
             return Ok(CallToolResult::success(vec![Content::text(
                 "Cannot delete the 'default' style",

@@ -142,6 +142,12 @@ rpc.on('session rename pane', ({uid, name}: {uid: string; name: string}) => {
   store_.dispatch(sessionActions.renamePaneShell(uid, name) as any);
 });
 
+// Per-pane style application (style_apply tool) — appearance overrides for one
+// pane, merged over profile/global config in term-group. null clears.
+rpc.on('pane style', ({uid, style}: {uid: string; style: Record<string, any> | null}) => {
+  store_.dispatch(sessionActions.setPaneStyle(uid, style) as any);
+});
+
 rpc.on('session cwd', ({uid, cwd}: {uid: string; cwd: string}) => {
   store_.dispatch(sessionActions.setSessionCwd(uid, cwd));
 });

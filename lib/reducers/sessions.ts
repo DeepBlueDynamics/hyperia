@@ -10,6 +10,7 @@ import {
   SESSION_CLEAR_ACTIVE,
   SESSION_SET_TAB_NAME,
   SESSION_PANE_RENAME,
+  SESSION_SET_PANE_STYLE,
   SESSION_RESIZE,
   SESSION_SET_XTERM_TITLE,
   SESSION_SET_CWD,
@@ -395,6 +396,12 @@ const reducer: ISessionReducer = (state = initialState, action) => {
 
     case SESSION_SET_TAB_NAME:
       return state.setIn(['sessions', action.uid, 'tabName'], action.tabName);
+
+    case SESSION_SET_PANE_STYLE: {
+      const a = action as any;
+      if (!state.sessions[a.uid]) return state;
+      return state.setIn(['sessions', a.uid, 'paneStyle'], a.style || null);
+    }
 
     case SESSION_PANE_RENAME: {
       // Rename the pane's stable codename. Also clear any manual title so the

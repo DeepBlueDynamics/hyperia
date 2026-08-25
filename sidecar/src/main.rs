@@ -2104,6 +2104,81 @@ async fn post_perm_check(State(state): State<AppState>, body: String) -> (Status
     (StatusCode::OK, serde_json::json!({"allowed": allowed}).to_string())
 }
 
+/// POST /api/styles/apply — apply a named style's overrides to ONE pane's
+/// appearance, live. Drive-gated like every pane write (own pane free; another
+/// pane raises the human's consent prompt). name "" / "default" / "none"
+/// clears the pane back to its profile/global appearance.
+async fn post_style_apply(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    if !(parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "No pane addressed. style apply will NOT default to the focused pane — pass window/tab/pane.".into(),
+        );
+    }
+    let uid = match state
+        .bridge
+        .resolve_pane_uid(
+            parsed["window"].as_u64().map(|v| v as u32),
+            parsed["tab"].as_str(),
+            parsed["pane"].as_str(),
+        )
+        .await
+    {
+        Some(u) => u,
+        None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
+    };
+    if let Err(resp) = enforce_drive(&state, &headers, &uid).await {
+        return resp;
+    }
+    let name = parsed["name"].as_str().unwrap_or("").trim().to_string();
+    let clearing = name.is_empty() || name == "default" || name == "none";
+    let style_config = if clearing {
+        serde_json::Value::Null
+    } else {
+        let cfg_path = crate::util::shared_config_path()
+            .unwrap_or_else(|| std::path::PathBuf::from(".").join("hyperia.json"));
+        let cfg: serde_json::Value = match std::fs::read_to_string(&cfg_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+        {
+            Some(v) => v,
+            None => return (StatusCode::INTERNAL_SERVER_ERROR, "Could not read hyperia.json".into()),
+        };
+        match cfg["config"]["styles"]
+            .as_array()
+            .and_then(|a| a.iter().find(|s| s["name"].as_str() == Some(name.as_str())))
+            .map(|s| s["config"].clone())
+        {
+            Some(c) if c.is_object() => c,
+            _ => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    format!("Unknown style '{name}'. `style_list` shows the styles; `style_create` makes one."),
+                )
+            }
+        }
+    };
+    let cmd = serde_json::json!({"type": "ApplyStyle", "uid": uid, "style": style_config});
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (
+            StatusCode::OK,
+            serde_json::json!({
+                "ok": true,
+                "pane": uid,
+                "style": if clearing { serde_json::Value::Null } else { serde_json::Value::String(name) },
+                "applied": r
+            })
+            .to_string(),
+        ),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
 async fn post_cd(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3505,6 +3580,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/identity/agents", axum::routing::get(get_identity_agents))
         .route("/api/pane/close", axum::routing::post(post_close))
         .route("/api/pane/cd", axum::routing::post(post_cd))
+        .route("/api/styles/apply", axum::routing::post(post_style_apply))
         .route("/api/pane/new", axum::routing::post(post_new_tab))
         .route("/api/window/new", axum::routing::post(post_new_window))
         .route("/api/window/size", axum::routing::post(post_window_size))

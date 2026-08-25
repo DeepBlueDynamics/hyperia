@@ -759,6 +759,23 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'ApplyStyle': {
+      // Apply (or clear, style=null) a per-pane appearance override set. The
+      // renderer stores it on the session; term-group merges it over the
+      // profile/global appearance when building that pane's terminal props.
+      const uid = msg.uid as string;
+      const style = msg.style ?? null;
+      const tracked = trackedSessions.get(uid);
+      if (tracked) {
+        const win = getHyperiaWindowById(tracked.windowId);
+        if (win) win.rpc.emit('pane style', {uid, style});
+        sendResult(seq, JSON.stringify({ok: true, pane: uid}));
+      } else {
+        sendResult(seq, `No session: ${uid}`);
+      }
+      break;
+    }
+
     case 'RenamePane': {
       // Rename ONE pane's stable codename (shellName) — unlike 'Rename', which
       // renames the whole tab. The renderer updates its store; its layout sync

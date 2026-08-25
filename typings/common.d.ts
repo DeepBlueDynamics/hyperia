@@ -133,6 +133,7 @@ export type RendererEvents = {
   ready: never;
   'session rename': {uid: string; name: string};
   'session rename pane': {uid: string; name: string};
+  'pane style': {uid: string; style: Record<string, any> | null};
   'session set active': {uid: string};
   'web-pane-click': {uid: string; text?: string; selector?: string};
   'web-pane-read': {uid: string};
