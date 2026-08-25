@@ -407,6 +407,8 @@ export type TermProps = {
   backgroundColor: string;
   bell: 'SOUND' | false;
   bellSound: string | null;
+  /** Per-pane style flag (style_apply): CRT scan-line overlay on this pane. */
+  scanlines?: boolean;
   bellSoundURL: string | null;
   borderColor: string;
   cleared: boolean;

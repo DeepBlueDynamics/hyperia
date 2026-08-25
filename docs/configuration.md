@@ -191,7 +191,7 @@ style_apply  {"name": "default", "pane": "Brilliant Peacock"} // clear back to n
 style_delete {"name": "alert"}
 ```
 
-- Overrides accept **any appearance key from the reference above** (colors, `backgroundColor`, `foregroundColor`, cursor keys, `fontSize`, `fontFamily`, weights, `lineHeight`, `letterSpacing`, `padding`, `selectionColor`, `borderColor`). Partial `colors` maps merge key-by-key.
+- Overrides accept **any appearance key from the reference above** (colors, `backgroundColor`, `foregroundColor`, cursor keys, `fontSize`, `fontFamily`, weights, `lineHeight`, `letterSpacing`, `padding`, `selectionColor`, `borderColor`). Partial `colors` maps merge key-by-key. Plus the style-only flag `"scanlines": true` — a CRT scan-line overlay on the pane.
 - `style_apply` requires an **explicit pane target** (name or paneId — it never defaults to the human's focused pane) and applies live, no restart.
 - **Gating:** creating/deleting styles requires an identity (they write shared config); applying to a pane you don't own raises the human's consent prompt, like any pane write. `style_list` is a free read.
 - Applied styles are runtime state — they last for the pane's life and don't persist across app restarts (the style definitions themselves do).

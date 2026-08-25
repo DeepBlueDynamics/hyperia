@@ -82,6 +82,7 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       fitAddon: termRef ? termRef.fitAddon : null,
       searchAddon: termRef ? termRef.searchAddon : null,
       scrollback: this.props.scrollback,
+      scanlines: !!st.scanlines,
       backgroundColor: st.backgroundColor ?? this.props.backgroundColor,
       foregroundColor: st.foregroundColor ?? this.props.foregroundColor,
       colors: st.colors ? {...(this.props.colors as any), ...st.colors} : this.props.colors,

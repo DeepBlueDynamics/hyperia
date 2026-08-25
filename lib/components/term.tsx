@@ -2855,6 +2855,21 @@ export default class Term extends React.PureComponent<
         onDrop={this.onFileDrop}
         style={{position: 'relative'}}
       >
+        {/* CRT scan-line overlay (paneStyle.scanlines) — pure cosmetics: sits
+            above the terminal canvas, ignores the mouse, costs no layout. */}
+        {(this.props as any).scanlines && (
+          <div
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 6,
+              pointerEvents: 'none',
+              background:
+                'repeating-linear-gradient(to bottom, rgba(0,0,0,0.28) 0px, rgba(0,0,0,0.28) 1px, transparent 1px, transparent 3px)'
+            }}
+          />
+        )}
         {this.state.showCopied && (
           <div
             style={{
