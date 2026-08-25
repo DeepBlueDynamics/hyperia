@@ -6,8 +6,7 @@
 // Agent input is deferred while the user is actively typing/interacting
 // with a session. Per-session queues drain once the user goes idle.
 
-import {app} from 'electron';
-import type {BrowserWindow} from 'electron';
+import {app, BrowserWindow} from 'electron';
 
 import isDev from 'electron-is-dev';
 import WebSocket from 'ws';
@@ -1260,7 +1259,15 @@ export function updateSessionActive(uid: string, windowId: number) {
 
   tracked.paneActive = true;
   focusedWindowId = windowId;
-  notifyUserActivity(uid);
+  // Activation is NOT typing. Count it as human activity only when the OS
+  // window actually has focus — re-activations fired while the human is in a
+  // browser or another app (focus juggling, tab/layout sync, web-pane
+  // handoffs) were stamping panes "human occupied" and locking agents out of
+  // panes nobody was in. Real keystrokes stamp via the 'data' handler anyway.
+  const win = BrowserWindow.fromId(windowId);
+  if (win && !win.isDestroyed() && win.isFocused()) {
+    notifyUserActivity(uid);
+  }
   send({type: 'SessionActive', uid, windowId});
 }
 
