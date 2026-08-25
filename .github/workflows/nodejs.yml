@@ -43,7 +43,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-yarn-
       - name: Install
-        run: yarn install
+        # --network-timeout: yarn v1's 30s socket default keeps tripping
+        # ESOCKETTIMEDOUT on big tarballs from the Windows runner.
+        run: yarn install --network-timeout 300000
         env:
           npm_config_node_gyp: ${{ github.workspace }}${{ runner.os == 'Windows' && '\node_modules\node-gyp\bin\node-gyp.js' || '/node_modules/node-gyp/bin/node-gyp.js' }}
       - name: Install libarchive-tools
@@ -151,7 +153,7 @@ jobs:
             ${{ runner.os }}-yarn-
       - name: Install
         run: |
-          yarn install
+          yarn install --network-timeout 300000
           sudo apt update
           sudo apt install libarchive-tools
       - name: Compile
