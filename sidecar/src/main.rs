@@ -1752,16 +1752,28 @@ async fn post_pane_on_idle(
     }
     let life = parsed["max_lifetime_secs"].as_u64().unwrap_or(900);
     let max_fires = parsed["max_fires"].as_u64().unwrap_or(1) as u32;
-    let cb_id = state
+    let (cb_id, replaced) = match state
         .bridge
         .register_idle_callback(&pane, &keys, life, max_fires, &id.label())
-        .await;
+        .await
+    {
+        Ok(v) => v,
+        Err(msg) => return (StatusCode::TOO_MANY_REQUESTS, msg),
+    };
+    // Say the load-bearing things OUT LOUD: replace semantics (fresh ids made
+    // an agent believe callbacks stack) and the cancel path (its absence made
+    // the same agent believe pokes were uncancellable).
+    let replaced_note = replaced
+        .map(|r| format!(" This REPLACED this pane's previous callback ({r}) — ONE callback per pane, they never stack."))
+        .unwrap_or_default();
     (
         StatusCode::OK,
         serde_json::json!({
             "ok": true,
             "id": cb_id,
-            "message": "Armed. The next time this pane goes idle, the prompt is delivered to it (edge-triggered, capped, expires within 1h)."
+            "message": format!(
+                "Armed. The next time this pane goes idle, the prompt is delivered to it (edge-triggered, capped, expires within 1h, min 60s between fires).{replaced_note} To CANCEL: pane_pulse_clear with this id, or re-arm with max_lifetime_secs=1."
+            )
         })
         .to_string(),
     )
@@ -1880,7 +1892,21 @@ async fn post_pulse_clear(
         }
     };
     let n = state.bridge.clear_pulse(&key).await;
-    (StatusCode::OK, serde_json::json!({"ok": true, "cleared": n}).to_string())
+    // cleared:0 with a bare ok:true read as "success, nothing to see" and sent
+    // an agent to the conclusion that pokes are uncancellable. Say what was
+    // searched and what a valid handle looks like.
+    let body = if n == 0 {
+        serde_json::json!({
+            "ok": true,
+            "cleared": 0,
+            "message": format!(
+                "Nothing matched '{key}'. This clears BOTH pulses (ids pulse_N) and pane_on_idle callbacks (ids cb_N), by id or by pane uid. Check pane_pulse_status for pulses; an idle callback may already have fired out or expired."
+            )
+        })
+    } else {
+        serde_json::json!({"ok": true, "cleared": n})
+    };
+    (StatusCode::OK, body.to_string())
 }
 
 /// Pause/resume a pulse by id.

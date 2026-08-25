@@ -1330,7 +1330,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Schedule a SELF-poke: the next time YOUR OWN pane goes idle (you finish what you're doing), Hyperia delivers `keys` back to you. The safe way to keep yourself moving when you'd otherwise stall — edge-triggered (fires once per running->idle transition, NOT in a loop), capped (max_fires, default 1), and expiring (<=1h). Only works from inside a Hyperia pane (you have a HYPERIA_AGENT_TOKEN env var); an external agent has no pane to target — use pane_pulse_set for another pane.")]
+    #[tool(description = "Schedule a SELF-poke: the next time YOUR OWN pane goes idle (you finish what you're doing), Hyperia delivers `keys` back to you. The safe way to keep yourself moving when you'd otherwise stall — edge-triggered (fires once per running->idle transition, NOT in a loop), capped (max_fires, default 1), expiring (<=1h), and throttled (min 60s between fires; sustained hot re-arming gets warned, then suspended for 1h). ONE callback per pane: registering again REPLACES the existing one — callbacks never stack, so re-arming does not add pokes. To CANCEL a pending poke: pane_pulse_clear with its cb_ id, or re-arm with max_lifetime_secs=1. Only works from inside a Hyperia pane (you have a HYPERIA_AGENT_TOKEN env var); an external agent has no pane to target — use pane_pulse_set for another pane.")]
     async fn pane_on_idle(
         &self,
         Parameters(req): Parameters<OnIdleRequest>,
@@ -1391,7 +1391,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Clear a pane pulse — by its id, or by addressing the pane (window/tab/pane).")]
+    #[tool(description = "Clear a pane pulse OR a pane_on_idle callback — by its id (pulse_N or cb_N), or by addressing the pane (window/tab/pane), which clears everything armed on it.")]
     async fn pane_pulse_clear(
         &self,
         Parameters(req): Parameters<PulseClearRequest>,
