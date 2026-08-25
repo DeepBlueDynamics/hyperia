@@ -2022,8 +2022,22 @@ impl HyperiaMcp {
         };
 
         if let Some(overrides) = req.overrides {
-            if let Some(obj) = overrides.as_object() {
-                for (k, v) in obj {
+            // MCP clients routinely stringify untyped object params — unwrap a
+            // stringified object, and REFUSE anything that still isn't an
+            // object. Silently storing an empty style here is exactly how
+            // "style_apply does nothing" happened: create succeeded, config
+            // was {}, and the apply faithfully painted nothing.
+            let overrides = coerce_json_string(overrides);
+            let obj = match overrides.as_object() {
+                Some(o) => o.clone(),
+                None => {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "Error: overrides must be a JSON object (e.g. {\"backgroundColor\": \"#1a1a2e\"}). Got a non-object value — the style was NOT created.",
+                    )]))
+                }
+            };
+            {
+                for (k, v) in &obj {
                     config.insert(k.clone(), v.clone());
                 }
             }
