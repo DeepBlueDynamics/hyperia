@@ -57,7 +57,16 @@ test.after(async () => {
       // outputFile (not writeFile): dist/tmp doesn't exist on a fresh build.
       await fs.outputFile(`dist/tmp/${process.platform}_test.png`, imageBuffer);
     });
-  await app.close();
+  // app.close() waits for process EXIT — but Hyperia (tray keep-alive on
+  // Windows) outlives its windows, so an unbounded close hangs ava until the
+  // suite times out even after every test passed. Bound it, then hard-kill.
+  const proc = app.process();
+  await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 10000))]);
+  try {
+    proc.kill();
+  } catch {
+    /* already gone */
+  }
 });
 
 test('see if dev tools are open', async (t) => {
