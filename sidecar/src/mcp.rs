@@ -2064,7 +2064,15 @@ impl HyperiaMcp {
         // config.profiles as the string "[{...}]" instead of an array crashes
         // the app's config loader. Unwrap a stringified array/object to the real
         // structure before writing.
-        let value = coerce_json_string(req.value.clone());
+        let mut value = coerce_json_string(req.value.clone());
+        // Some MCP clients stringify an untyped null param, so the literal
+        // string "null" arrives instead of JSON null — and we once stored it
+        // verbatim (an unparseable "null" backgroundColor crashed the app's
+        // color parser with an error dialog). Nobody stores the string "null"
+        // on purpose: treat it as key removal, same as real null.
+        if value == serde_json::Value::String("null".into()) {
+            value = serde_json::Value::Null;
+        }
         match set_path(&mut cfg, &req.path, value.clone()) {
             Ok(()) => {
                 self.write_config(&cfg).await?;
