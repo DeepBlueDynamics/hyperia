@@ -123,6 +123,53 @@ import {installCLI} from './utils/cli-install';
 import * as windowUtils from './utils/window-utils';
 import {restoreFor} from './window-state';
 
+// Electron's DEFAULT uncaught-exception behavior is a BLOCKING modal error
+// dialog in the main process — one bad config value (an unparseable color)
+// threw on every config change, queued a dialog per throw, and froze the
+// whole app until each was clicked away. Catch instead: log to disk, surface
+// ONE non-blocking OS notification per burst, keep running.
+{
+  const errLogPath = () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const {join} = require('path') as typeof import('path');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const {homedir} = require('os') as typeof import('os');
+    return join(homedir(), '.hyperia', 'logs', 'main-errors.log');
+  };
+  let lastNotified = 0;
+  const handle = (kind: string) => (err: unknown) => {
+    const msg = err instanceof Error ? err.stack || err.message : String(err);
+    console.error(`[main:${kind}]`, msg);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const {appendFileSync, mkdirSync} = require('fs') as typeof import('fs');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const {dirname} = require('path') as typeof import('path');
+      const p = errLogPath();
+      mkdirSync(dirname(p), {recursive: true});
+      appendFileSync(p, `${new Date().toISOString()} [${kind}] ${msg}\n`);
+    } catch {
+      /* logging must never throw */
+    }
+    const now = Date.now();
+    if (now - lastNotified > 10000) {
+      lastNotified = now;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const {Notification} = require('electron') as typeof import('electron');
+        new Notification({
+          title: 'Hyperia hit an internal error (still running)',
+          body: `${String(msg).split('\n')[0].slice(0, 120)}\nDetails: ~/.hyperia/logs/main-errors.log`
+        }).show();
+      } catch {
+        /* headless or too early — the log still has it */
+      }
+    }
+  };
+  process.on('uncaughtException', handle('uncaughtException'));
+  process.on('unhandledRejection', handle('unhandledRejection'));
+}
+
 const windowSet = new Set<BrowserWindow>([]);
 
 // Splash screen — shown ONCE per installed version. The first launch after an
