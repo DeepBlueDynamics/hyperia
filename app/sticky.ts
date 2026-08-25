@@ -1336,6 +1336,10 @@ export function anyStickyHidden(): boolean {
 const SIDECAR = 'http://localhost:9800';
 
 function computeFireAt(s: StickySchedule): number | undefined {
+  // 'once' = run NOW: fires on the next scheduler tick.
+  if ((s.when as string) === 'once') {
+    return Date.now();
+  }
   if (s.when === 'reminder') {
     const mult = s.unit === 'h' ? 3600000 : s.unit === 'd' ? 86400000 : 60000;
     return Date.now() + (s.delay || 0) * mult;
@@ -1352,6 +1356,13 @@ function lockNote(noteId: string, locked: boolean): void {
   if (win && !win.isDestroyed()) win.webContents.send('sticky-lock', locked);
 }
 
+/// Armed = a schedule exists (ANY runner — notify reminders too). Drives the
+/// pulsing ⏰ in the titlebar; separate from lock, which only hard runners get.
+function armNote(noteId: string, armed: boolean): void {
+  const win = stickyWindows.get(noteId);
+  if (win && !win.isDestroyed()) win.webContents.send('sticky-armed', armed);
+}
+
 export function scheduleSticky(noteId: string, sched: StickySchedule): void {
   const note = getNote(noteId);
   if (!note) return;
@@ -1360,6 +1371,7 @@ export function scheduleSticky(noteId: string, sched: StickySchedule): void {
   upsertNote({...note, schedule: s});
   // Runner != notify → "hard" sticky (lock content until unscheduled).
   lockNote(noteId, s.runner !== 'notify');
+  armNote(noteId, true);
   startScheduler(); // ensure the loop is running (e.g. MCP before initSticky ran)
 }
 
@@ -1368,6 +1380,7 @@ export function unscheduleSticky(noteId: string): void {
   if (!note) return;
   upsertNote({...note, schedule: null});
   lockNote(noteId, false);
+  armNote(noteId, false);
 }
 
 function cronMatches(expr: string, d: Date): boolean {
@@ -1416,9 +1429,24 @@ async function fireSchedule(note: NoteData): Promise<void> {
   const cmd = extractRunCommands(note.text || '');
   try {
     if (s.runner === 'shell') {
-      // Run the note's ```run``` block(s) and APPEND the output back into the
-      // note. The rest of the note content is preserved.
-      runStickyAndAppend(note.id, s.dir);
+      // The label promises "runs visibly in its own tab" — so DO that: open a
+      // new default-shell tab and run the command where the human can see it.
+      // (The old behavior ran invisibly and appended output to the note, which
+      // read as "the agent stuff isn't working".) If the sidecar is down, fall
+      // back to the invisible run+append so the schedule still executes.
+      const full = s.dir ? `cd "${s.dir}"; ${cmd}` : cmd;
+      try {
+        await fetch(`${SIDECAR}/api/pane/new`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${SYSTEM_TOKEN}`
+          },
+          body: JSON.stringify({command: full})
+        });
+      } catch {
+        runStickyAndAppend(note.id, s.dir);
+      }
     } else if (s.runner === 'n8shell') {
       const full = s.dir ? `cd "${s.dir}"; ${cmd}` : cmd;
       await fetch(`${SIDECAR}/api/pane/new`, {
@@ -1478,9 +1506,13 @@ let schedulerStarted = false;
 function startScheduler(): void {
   if (schedulerStarted) return;
   schedulerStarted = true;
-  // Re-lock any "hard" notes whose windows are open at startup.
+  // Re-lock any "hard" notes whose windows are open at startup — and re-arm
+  // the pulsing ⏰ on every scheduled note (any runner).
   for (const note of readAllNotes()) {
-    if (note.schedule && note.schedule.runner !== 'notify') lockNote(note.id, true);
+    if (note.schedule) {
+      armNote(note.id, true);
+      if (note.schedule.runner !== 'notify') lockNote(note.id, true);
+    }
   }
   let lastCronMinute = -1;
   setInterval(() => {
@@ -1498,9 +1530,10 @@ function startScheduler(): void {
           void fireSchedule(note);
         }
       } else if (s.fire_at && nowMs >= s.fire_at) {
-        // One-shot: clear the schedule + unlock after firing.
+        // One-shot: clear the schedule + unlock + stop the ⏰ pulse after firing.
         upsertNote({...note, schedule: null});
         lockNote(note.id, false);
+        armNote(note.id, false);
         void fireSchedule(note);
       }
     }
