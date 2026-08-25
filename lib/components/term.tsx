@@ -2855,6 +2855,58 @@ export default class Term extends React.PureComponent<
         onDrop={this.onFileDrop}
         style={{position: 'relative'}}
       >
+        {/* Ghosted watermark (paneStyle.watermark, e.g. "TOP SECRET") — reads
+            as background: faint, diagonal, centered, mouse-transparent. Drawn
+            over the canvas because xterm paints an opaque background. */}
+        {((this.props as any).watermark || (this.props as any).watermarkImage) && (
+          <div
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 5,
+              pointerEvents: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              overflow: 'hidden'
+            }}
+          >
+            {(this.props as any).watermarkImage && (
+              <img
+                alt=""
+                src={(() => {
+                  const w = (this.props as any).watermarkImage as string;
+                  // file paths become file:// URLs; data:/http(s) pass through.
+                  return /^([a-z]+:)?\/\//i.test(w) || w.startsWith('data:')
+                    ? w
+                    : `file:///${w.replace(/\\/g, '/')}`;
+                })()}
+                style={{
+                  position: 'absolute',
+                  maxWidth: '62%',
+                  maxHeight: '62%',
+                  opacity: (this.props as any).watermarkOpacity ?? 0.08,
+                  userSelect: 'none'
+                }}
+              />
+            )}
+            {(this.props as any).watermark && <span
+              style={{
+                transform: 'rotate(-28deg)',
+                fontFamily: 'var(--font-sans)',
+                fontWeight: 900,
+                fontSize: 'clamp(28px, 12cqw, 160px)',
+                letterSpacing: '0.18em',
+                whiteSpace: 'nowrap',
+                color: (this.props as any).watermarkColor || 'rgba(255, 140, 0, 0.10)',
+                userSelect: 'none'
+              }}
+            >
+              {(this.props as any).watermark}
+            </span>}
+          </div>
+        )}
         {/* CRT scan-line overlay (paneStyle.scanlines) — pure cosmetics: sits
             above the terminal canvas, ignores the mouse, costs no layout. */}
         {(this.props as any).scanlines && (

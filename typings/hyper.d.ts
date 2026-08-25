@@ -409,6 +409,14 @@ export type TermProps = {
   bellSound: string | null;
   /** Per-pane style flag (style_apply): CRT scan-line overlay on this pane. */
   scanlines?: boolean;
+  /** Per-pane style (style_apply): ghosted diagonal watermark text (e.g. "TOP SECRET"). */
+  watermark?: string;
+  /** Watermark color (any CSS color); default a faint classification orange. */
+  watermarkColor?: string;
+  /** Ghosted watermark IMAGE — file path, data: URI, or URL. Drawn centered, faded. */
+  watermarkImage?: string;
+  /** Opacity for the image watermark (0..1, default 0.08). */
+  watermarkOpacity?: number;
   bellSoundURL: string | null;
   borderColor: string;
   cleared: boolean;
