@@ -1502,14 +1502,23 @@ export default class Term extends React.PureComponent<
   };
 
   isTerminalBusy = () => {
+    // A picker pane never runs anything — it must be closable (and browsable)
+    // at any time, whatever stale text its hidden buffer holds.
+    if ((this.props as any).sessionProfile === 'picker') return false;
     // OSC shell integration is authoritative when it reports a running command.
     if (this.props.shellState && this.props.shellState.state !== 'idle') return true;
-    // Otherwise fall back to the screen heuristic. This is the case that matters
-    // for an ssh profile: the LOCAL shell integration went idle before ssh took
-    // over, so shellState says "idle" even though the pane is running a program
-    // on the remote host. It's about the shell running SOMETHING, not about being
-    // remote — so honor activeProgram even when shellState exists. Keeps the path
-    // bar / dir picker locked while a foreground program (ssh TUI, vim, …) is up.
+    // Alt-screen is authoritative too, and passes through ssh (remote vim/less/
+    // htop own the terminal even while the local+remote OSC chain reads idle).
+    if (this.term?.buffer?.active?.type === 'alternate') return true;
+    // The screen-text sniffer (activeProgram) is a last-resort heuristic and it
+    // false-positives: stale transcript text ("claude" in the last lines plus a
+    // ❯ — which is also the PROMPT glyph) read an idle shell as busy, making
+    // close-confirm warnings fire "randomly". When shell integration
+    // AFFIRMATIVELY says idle and we're in the normal buffer, trust it over the
+    // sniffer. (Remote Ink agents still read busy via the OSC chain: their
+    // command-running state passes through ssh like the prompt marks do.)
+    if (this.props.shellState && this.props.shellState.state === 'idle') return false;
+    // No integration at all (cmd.exe, bare containers): the sniffer is all we have.
     return !!this.state.activeProgram;
   };
 
