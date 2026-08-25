@@ -18,7 +18,11 @@ jobs:
         os:
           - macos-latest
           - ubuntu-latest
-          - windows-latest
+          # Pinned to windows-2022 (VS 2022). windows-latest moved to an image
+          # with VS 18, which node-gyp can't detect → native rebuild
+          # (native-process-working-directory) fails in install-app-deps.
+          # (Same pin as build.yml / nightly.yml.)
+          - windows-2022
       fail-fast: false
     steps:
       - name: Checkout
@@ -152,8 +156,15 @@ jobs:
           sudo apt install libarchive-tools
       - name: Compile
         run: yarn run build
+      # ubuntu-latest (24.04) dropped the `qemu` metapackage and binfmt-support
+      # that arm-runner-action@v2.5.2 relied on — preinstall the split packages
+      # the action actually needs.
+      - name: Install qemu binfmt deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
       - name: rebuild node-pty
-        uses: pguyot/arm-runner-action@v2.5.2
+        uses: pguyot/arm-runner-action@v2.6.5
         with:
           image_additional_mb: 2000
           base_image: ${{ matrix.image }}

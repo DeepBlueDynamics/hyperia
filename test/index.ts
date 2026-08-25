@@ -14,15 +14,21 @@ test.before(async () => {
 
   switch (process.platform) {
     case 'linux':
-      pathToBinary = path.join(__dirname, '../dist/linux-unpacked/hyper');
+      pathToBinary = path.join(__dirname, '../dist/linux-unpacked/hyperia');
       break;
 
-    case 'darwin':
-      pathToBinary = path.join(__dirname, '../dist/mac/Hyper.app/Contents/MacOS/Hyper');
+    case 'darwin': {
+      // electron-builder's output dir varies by arch (mac / mac-arm64 /
+      // mac-universal) — CI runners have moved to arm64, so probe them all.
+      const candidates = ['mac', 'mac-arm64', 'mac-universal'].map((dir) =>
+        path.join(__dirname, `../dist/${dir}/Hyperia.app/Contents/MacOS/Hyperia`)
+      );
+      pathToBinary = candidates.find((p) => fs.existsSync(p)) ?? candidates[0];
       break;
+    }
 
     case 'win32':
-      pathToBinary = path.join(__dirname, '../dist/win-unpacked/Hyper.exe');
+      pathToBinary = path.join(__dirname, '../dist/win-unpacked/Hyperia.exe');
       break;
 
     default:
@@ -45,7 +51,8 @@ test.after(async () => {
     )
     .then((img) => Buffer.from(img || '', 'base64'))
     .then(async (imageBuffer) => {
-      await fs.writeFile(`dist/tmp/${process.platform}_test.png`, imageBuffer);
+      // outputFile (not writeFile): dist/tmp doesn't exist on a fresh build.
+      await fs.outputFile(`dist/tmp/${process.platform}_test.png`, imageBuffer);
     });
   await app.close();
 });
