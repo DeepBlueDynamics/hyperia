@@ -36,7 +36,10 @@ test.before(async () => {
   }
 
   app = await _electron.launch({
-    executablePath: pathToBinary
+    executablePath: pathToBinary,
+    // GitHub runners can't use Chromium's setuid sandbox from an unpacked
+    // build dir — without this the packaged binary dies at launch on Linux.
+    args: process.platform === 'linux' ? ['--no-sandbox'] : []
   });
   await app.firstWindow();
   await new Promise((resolve) => setTimeout(resolve, 5000));
