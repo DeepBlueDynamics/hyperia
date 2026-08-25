@@ -759,6 +759,25 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'RenamePane': {
+      // Rename ONE pane's stable codename (shellName) — unlike 'Rename', which
+      // renames the whole tab. The renderer updates its store; its layout sync
+      // then re-affirms the name to the sidecar. We also push SessionName
+      // immediately so terminal_status is right without waiting for a sync.
+      const uid = msg.uid as string;
+      const name = msg.name as string;
+      const tracked = trackedSessions.get(uid);
+      if (tracked && name) {
+        const win = getHyperiaWindowById(tracked.windowId);
+        if (win) win.rpc.emit('session rename pane', {uid, name});
+        send({type: 'SessionName', uid, name});
+        sendResult(seq, JSON.stringify({ok: true, pane: uid, name}));
+      } else {
+        sendResult(seq, tracked ? 'name required' : `No session: ${uid}`);
+      }
+      break;
+    }
+
     case 'AgentStatus': {
       // Resolve sessionUid: use explicit uid, or resolve from pane index, or fall back to first session
       let sessionUid = msg.sessionUid as string | undefined;

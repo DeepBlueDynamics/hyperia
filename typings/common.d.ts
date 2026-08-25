@@ -132,6 +132,7 @@ export type RendererEvents = {
   'pane copy files done': {uid: string; ok: boolean; dir: string; count: number; names?: string[]; error?: string};
   ready: never;
   'session rename': {uid: string; name: string};
+  'session rename pane': {uid: string; name: string};
   'session set active': {uid: string};
   'web-pane-click': {uid: string; text?: string; selector?: string};
   'web-pane-read': {uid: string};

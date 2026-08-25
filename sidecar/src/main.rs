@@ -2657,6 +2657,40 @@ async fn post_rename_tab(
 ) -> (StatusCode, String) {
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let name = parsed["name"].as_str().unwrap_or("").to_string();
+    if name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name required".into());
+    }
+    // PANE rename: with `pane` set, change that pane's stable codename (the
+    // handle agents address it by) instead of the tab name. Lets a container
+    // agent re-badge its own pane after a session resume so the crew's names
+    // match what their transcripts believe.
+    if let Some(pane) = parsed["pane"].as_str() {
+        let uid = match state
+            .bridge
+            .resolve_pane_uid(
+                parsed["window"].as_u64().map(|v| v as u32),
+                parsed["tab"].as_str(),
+                Some(pane),
+            )
+            .await
+        {
+            Some(u) => u,
+            None => return (StatusCode::NOT_FOUND, "No pane at that address".into()),
+        };
+        // Update locally so terminal_status is right immediately; Electron's
+        // RenamePane echo + the renderer's layout sync re-affirm it.
+        {
+            let mut sessions = state.bridge.sessions().await;
+            if let Some(info) = sessions.get_mut(&uid) {
+                info.shell_name = name.clone();
+            }
+        }
+        let cmd = serde_json::json!({"type": "RenamePane", "uid": uid, "name": name});
+        return match state.bridge.send_command(cmd).await {
+            Ok(r) => (StatusCode::OK, r),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+        };
+    }
     let session_uid = match state
         .bridge
         .resolve_tab_uid(

@@ -9,6 +9,7 @@ import {
   SESSION_SET_ACTIVE,
   SESSION_CLEAR_ACTIVE,
   SESSION_SET_TAB_NAME,
+  SESSION_PANE_RENAME,
   SESSION_RESIZE,
   SESSION_SET_XTERM_TITLE,
   SESSION_SET_CWD,
@@ -394,6 +395,17 @@ const reducer: ISessionReducer = (state = initialState, action) => {
 
     case SESSION_SET_TAB_NAME:
       return state.setIn(['sessions', action.uid, 'tabName'], action.tabName);
+
+    case SESSION_PANE_RENAME: {
+      // Rename the pane's stable codename. Also clear any manual title so the
+      // new name actually displays (band label precedence: manual/OSC title
+      // beats shellName).
+      const a = action as any;
+      if (!state.sessions[a.uid]) return state;
+      return state
+        .setIn(['sessions', a.uid, 'shellName'], a.name)
+        .setIn(['sessions', a.uid, 'manualTitle'], false);
+    }
 
     case SESSION_RESIZE:
       return state.setIn(

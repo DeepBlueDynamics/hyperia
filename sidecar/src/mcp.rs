@@ -406,12 +406,19 @@ pub struct NewTabRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RenameTabRequest {
-    /// New name for the tab
+    /// New name for the tab (or for the pane, when `pane` is set).
     pub name: String,
     /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
-    /// Current tab name to rename. Omit for active tab.
+    /// Current tab name to rename. Omit for active tab. When `pane` is set this
+    /// only scopes the pane lookup.
     pub tab: Option<String>,
+    /// Rename a PANE instead of the tab: its current name or paneId (full UUID
+    /// or 4+ char prefix). Changes the pane's stable codename — the handle
+    /// other tools and agents address it by. An in-pane/container agent can
+    /// rename its OWN pane this way (e.g. after `n8 resume`, re-badge the pane
+    /// with the name its resumed transcript believes it has).
+    pub pane: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -1456,12 +1463,13 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Rename a tab. Changes the display name that appears in the tab bar and in terminal_status.")]
+    #[tool(description = "Rename a tab — or a single PANE when `pane` is given. A pane rename changes its stable codename (the handle terminal_status reports and other tools address it by); use it after resuming a session so the pane matches the name the agent's transcript believes it has — an in-pane agent can rename its own pane.")]
     async fn terminal_rename(
         &self,
         Parameters(req): Parameters<RenameTabRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let body = serde_json::json!({"window": req.window, "tab": req.tab, "name": req.name});
+        let body =
+            serde_json::json!({"window": req.window, "tab": req.tab, "pane": req.pane, "name": req.name});
         let resp = self.post_json("/api/pane/rename", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }

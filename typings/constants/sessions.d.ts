@@ -15,6 +15,7 @@ export const SESSION_SEARCH = 'SESSION_SEARCH';
 export const SESSION_SET_DESCRIPTION = 'SESSION_SET_DESCRIPTION';
 export const SESSION_SET_SHELL_STATE = 'SESSION_SET_SHELL_STATE';
 export const SESSION_SET_BUSY = 'SESSION_SET_BUSY';
+export const SESSION_PANE_RENAME = 'SESSION_PANE_RENAME';
 
 export interface SessionAddAction {
   type: typeof SESSION_ADD;
@@ -111,7 +112,14 @@ export interface SessionSetBusyAction {
   busy: boolean;
 }
 
+export interface SessionPaneRenameAction {
+  type: typeof SESSION_PANE_RENAME;
+  uid: string;
+  name: string;
+}
+
 export type SessionActions =
+  | SessionPaneRenameAction
   | SessionAddAction
   | SessionResizeAction
   | SessionRequestAction

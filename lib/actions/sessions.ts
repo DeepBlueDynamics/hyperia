@@ -16,7 +16,8 @@ import {
   SESSION_SET_DESCRIPTION,
   SESSION_SET_CWD,
   SESSION_SET_SHELL_STATE,
-  SESSION_SET_BUSY
+  SESSION_SET_BUSY,
+  SESSION_PANE_RENAME
 } from '../../typings/constants/sessions';
 import {TERM_GROUP_SET_TAB_NAME} from '../../typings/constants/term-groups';
 import type {HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
@@ -238,6 +239,17 @@ export function setSessionDescription(uid: string, description: string) {
       tabName: ''
     });
   };
+}
+
+// Rename a PANE's stable codename (shellName — the handle agents address it
+// by and terminal_status reports). Driven by the sidecar's pane-rename API;
+// the layout sync pushes the new name back to main/sidecar automatically.
+export function renamePaneShell(uid: string, name: string) {
+  return {
+    type: SESSION_PANE_RENAME,
+    uid,
+    name
+  } as any;
 }
 
 // Sets the tab name on the root term group (the sole source of truth).

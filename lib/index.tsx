@@ -135,6 +135,13 @@ rpc.on('session rename', ({uid, name}: {uid: string; name: string}) => {
   store_.dispatch(sessionActions.setSessionTabName(uid, name, false) as any);
 });
 
+// Pane-level rename (the codename agents address the pane by) — from the
+// sidecar's pane-rename API, e.g. a container agent re-badging its own pane
+// after a session resume so it can be found and reattached by its old name.
+rpc.on('session rename pane', ({uid, name}: {uid: string; name: string}) => {
+  store_.dispatch(sessionActions.renamePaneShell(uid, name) as any);
+});
+
 rpc.on('session cwd', ({uid, cwd}: {uid: string; cwd: string}) => {
   store_.dispatch(sessionActions.setSessionCwd(uid, cwd));
 });
