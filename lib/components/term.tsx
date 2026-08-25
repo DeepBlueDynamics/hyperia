@@ -356,6 +356,11 @@ export default class Term extends React.PureComponent<
       const txt =
         e.dataTransfer.getData('application/x-hyperia-pane') || e.dataTransfer.getData('text/plain');
       if (txt) this.props.onData(txt);
+      // A drop is a direct human gesture on THIS pane — focus it so the next
+      // keystroke (usually Enter to send the dropped handle) lands here.
+      // Human-initiated, so it doesn't violate focus-never-steal.
+      (this.props as any).onActive?.();
+      this.focus();
       return;
     }
     if (!this.isFileDrag(e) || !this.canAcceptFileDrop()) return;
