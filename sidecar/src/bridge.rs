@@ -227,6 +227,13 @@ struct BridgeInner {
     /// Key = requester label (one pending create per requester, matching the
     /// create-consent dedupe).
     held_creates: Mutex<HashMap<String, serde_json::Value>>,
+    /// Create-consent decisions that arrived while the agent's request was
+    /// STILL inside its inline wait — the human clicked before the 202/hold
+    /// landed, so there was no held command to execute and no durable grant
+    /// for the wait's authorize_create poll to see: the fast click used to
+    /// cost the full 8s AND silently drop the command. (allow, when);
+    /// consumed by the enforce_create poll, stale entries ignored.
+    resolved_creates: Mutex<HashMap<String, (bool, std::time::Instant)>>,
     /// Capped, edge-triggered self idle-callbacks: when a pane goes running->idle,
     /// deliver the stored keys to it. Watched + fired by the idle-monitor task.
     idle_callbacks: Mutex<Vec<IdleCallback>>,
@@ -274,6 +281,7 @@ impl Bridge {
                 app_foreground: Mutex::new(true),
                 held_actions: Mutex::new(HashMap::new()),
                 held_creates: Mutex::new(HashMap::new()),
+                resolved_creates: Mutex::new(HashMap::new()),
                 idle_callbacks: Mutex::new(Vec::new()),
                 liveness: Mutex::new(HashMap::new()),
                 pulses: Mutex::new(load_pulses()),
@@ -567,6 +575,26 @@ impl Bridge {
     /// when the human resolves the create-consent prompt.
     pub async fn take_create(&self, requester_label: &str) -> Option<serde_json::Value> {
         self.inner.held_creates.lock().await.remove(requester_label)
+    }
+
+    /// Record the human's create decision for a requester whose command was NOT
+    /// held yet — they clicked before the agent's inline wait gave up. The
+    /// agent's in-flight enforce_create poll consumes it within 500ms.
+    pub async fn resolve_create_early(&self, requester_label: &str, allow: bool) {
+        self.inner
+            .resolved_creates
+            .lock()
+            .await
+            .insert(requester_label.to_string(), (allow, std::time::Instant::now()));
+    }
+
+    /// Consume a fresh (<60s) early create decision for this requester.
+    pub async fn take_resolved_create(&self, requester_label: &str) -> Option<bool> {
+        let mut m = self.inner.resolved_creates.lock().await;
+        match m.remove(requester_label) {
+            Some((allow, t)) if t.elapsed().as_secs() < 60 => Some(allow),
+            _ => None,
+        }
     }
 
     /// Arm a one-shot (capped) idle callback for a pane — the caller's OWN pane.

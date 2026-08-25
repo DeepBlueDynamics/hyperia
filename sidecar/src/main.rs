@@ -1418,6 +1418,21 @@ async fn enforce_create(
             // instead of returning a bare 202 the agent has to chase.
             for _ in 0..16 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                // A FAST click resolves the REQUEST one-shot without necessarily
+                // minting a durable grant — authorize_create alone never saw it,
+                // so an immediate approval used to burn this whole 8s window and
+                // then silently DROP the command (the decision handler had
+                // already consumed the approval before the hold landed).
+                if let Some(allow) = state.bridge.take_resolved_create(&id.label()).await {
+                    if allow {
+                        return Ok(());
+                    }
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        "Creating panes/tabs was denied by the user. Don't retry — ask the user directly."
+                            .to_string(),
+                    ));
+                }
                 match state.bridge.authorize_create(&id).await {
                     AuthDecision::Allow | AuthDecision::RefuseHome => return Ok(()),
                     AuthDecision::Denied => {
@@ -1701,9 +1716,16 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
                                 state.bridge.perms().stamp_owner(&pane, &req.requester).await;
                             }
                         }
+                    } else {
+                        // Nothing held: the human clicked BEFORE the agent's
+                        // inline wait gave up (fast approval). Park the decision
+                        // for that in-flight wait to consume — it executes the
+                        // create itself within 500ms. Without this, a fast click
+                        // cost the whole 8s window and dropped the command.
+                        state.bridge.resolve_create_early(&req.requester, true).await;
                     }
-                } else {
-                    let _ = state.bridge.take_create(&req.requester).await;
+                } else if state.bridge.take_create(&req.requester).await.is_none() {
+                    state.bridge.resolve_create_early(&req.requester, false).await;
                 }
             }
             let _ = state
