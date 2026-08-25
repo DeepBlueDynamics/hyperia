@@ -1,5 +1,3 @@
-// eslint-disable-next-line eslint-comments/disable-enable-pair
-/* eslint-disable @typescript-eslint/no-unsafe-return */
 const valsCache = new WeakMap();
 
 export function values(imm: Record<string, any>) {

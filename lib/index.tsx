@@ -6,24 +6,25 @@ import '@tabler/icons-webfont/dist/tabler-icons.css';
 import {webFrame} from 'electron';
 import React from 'react';
 
+import Color from 'color';
 import {createRoot} from 'react-dom/client';
 import {Provider} from 'react-redux';
 
 import type {configOptions} from '../typings/config';
 
 import {loadConfig, reloadConfig} from './actions/config';
+import {closeTab} from './actions/header';
 import init from './actions/index';
 import {addNotificationMessage} from './actions/notifications';
-import {closeTab} from './actions/header';
 import * as sessionActions from './actions/sessions';
 import * as termGroupActions from './actions/term-groups';
 import * as uiActions from './actions/ui';
 import * as updaterActions from './actions/updater';
 import AgentToast from './components/agent-toast';
-import ToastStack, {pushToast} from './components/toast-stack';
-import ConsentModal from './components/consent-modal';
 import CloseConfirmModal, {showCloseConfirm} from './components/close-confirm-modal';
+import ConsentModal from './components/consent-modal';
 import {activeTerminals} from './components/term';
+import ToastStack, {pushToast} from './components/toast-stack';
 import WebPaneDialog, {showWebPaneDialog} from './components/web-pane-dialog';
 import HyperContainer from './containers/hyper';
 import * as permissionsBus from './permissions-bus';
@@ -135,13 +136,89 @@ rpc.on('session rename', ({uid, name}: {uid: string; name: string}) => {
   store_.dispatch(sessionActions.setSessionTabName(uid, name, false) as any);
 });
 
+// Pane-level rename (the codename agents address the pane by) — from the
+// sidecar's pane-rename API, e.g. a container agent re-badging its own pane
+// after a session resume so it can be found and reattached by its old name.
+rpc.on('session rename pane', ({uid, name}: {uid: string; name: string}) => {
+  store_.dispatch(sessionActions.renamePaneShell(uid, name));
+});
+
+// Per-pane style application (style_apply tool) — appearance overrides for one
+// pane, merged over profile/global config in term-group. null clears.
+//
+// The payload is agent-authored (style_create stores arbitrary JSON), so it is
+// SANITIZED here — the one gate every sender passes through. A bad value must
+// degrade to "that key is ignored", never reach getTermOptions/xterm where a
+// throw inside a React commit takes the whole pane tree down (the blank-pane
+// incident of 2026-08-25).
+const PANE_STYLE_COLOR_KEYS = new Set([
+  'backgroundColor',
+  'foregroundColor',
+  'cursorColor',
+  'cursorAccentColor',
+  'selectionColor',
+  'borderColor',
+  'watermarkColor'
+]);
+const PANE_STYLE_NUMBER_KEYS = new Set(['fontSize', 'lineHeight', 'letterSpacing', 'watermarkOpacity']);
+const PANE_STYLE_STRING_KEYS = new Set([
+  'fontFamily',
+  'fontWeight',
+  'fontWeightBold',
+  'cursorShape',
+  'padding',
+  'watermark',
+  'watermarkImage'
+]);
+const PANE_STYLE_BOOL_KEYS = new Set(['cursorBlink', 'scanlines']);
+
+const isParseableColor = (v: unknown): boolean => {
+  if (typeof v !== 'string' || !v.trim()) return false;
+  try {
+    // The same parser getTermOptions/Color() uses downstream — if this throws
+    // here, it would have thrown there.
+    Color(v);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const sanitizePaneStyle = (style: Record<string, any> | null): Record<string, any> | null => {
+  if (style === null || typeof style !== 'object' || Array.isArray(style)) return null;
+  const out: Record<string, any> = {};
+  for (const [key, value] of Object.entries(style)) {
+    if (PANE_STYLE_COLOR_KEYS.has(key) && isParseableColor(value)) out[key] = value;
+    else if (PANE_STYLE_NUMBER_KEYS.has(key) && typeof value === 'number' && isFinite(value)) out[key] = value;
+    else if (PANE_STYLE_STRING_KEYS.has(key) && typeof value === 'string') out[key] = value;
+    else if (PANE_STYLE_BOOL_KEYS.has(key) && typeof value === 'boolean') out[key] = value;
+    else if (key === 'colors' && value && typeof value === 'object' && !Array.isArray(value)) {
+      const colors: Record<string, string> = {};
+      for (const [ck, cv] of Object.entries(value)) {
+        if (isParseableColor(cv)) colors[ck] = cv as string;
+      }
+      if (Object.keys(colors).length) out.colors = colors;
+    } else {
+      console.warn(`pane style: dropped invalid override ${key}=${JSON.stringify(value)}`);
+    }
+  }
+  return Object.keys(out).length ? out : null;
+};
+
+rpc.on('pane style', ({uid, style}: {uid: string; style: Record<string, any> | null}) => {
+  store_.dispatch(sessionActions.setPaneStyle(uid, sanitizePaneStyle(style)));
+});
+
 rpc.on('session cwd', ({uid, cwd}: {uid: string; cwd: string}) => {
   store_.dispatch(sessionActions.setSessionCwd(uid, cwd));
 });
 
-rpc.on('session shellstate', ({uid, shellState}: {uid: string; shellState: { state: 'idle' | 'busy'; lastExit?: number; command?: string }}) => {
-  store_.dispatch(sessionActions.setSessionShellState(uid, shellState));
-});
+rpc.on(
+  'session shellstate',
+  ({uid, shellState}: {uid: string; shellState: {state: 'idle' | 'busy'; lastExit?: number; command?: string}}) => {
+    store_.dispatch(sessionActions.setSessionShellState(uid, shellState));
+  }
+);
 
 // #148: the user confirmed (native dialog in main) closing a tab with active
 // panes — re-enter closeTab with confirmed=true to skip the guard and close.
@@ -158,7 +235,7 @@ rpc.on(
   'pane copy files done',
   (r: {uid: string; ok: boolean; dir: string; count: number; names?: string[]; error?: string}) => {
     if (r.ok) {
-      const what = r.names && r.names.length ? r.names.join(', ') : `${r.count} item(s)`;
+      const what = r.names?.length ? r.names.join(', ') : `${r.count} item(s)`;
       pushToast(`Copied ${what} → ${r.dir}`);
     } else {
       pushToast(`Couldn't copy to ${r.dir}${r.error ? `: ${r.error}` : ''}`, {kind: 'error'});
@@ -276,11 +353,27 @@ rpc.on('termgroup add req', ({activeUid, profile, isAgentInitiated}) => {
 });
 
 rpc.on('split request horizontal', ({activeUid, profile, url, splitPlacement, isAgentInitiated}) => {
-  store_.dispatch(termGroupActions.requestHorizontalSplit(activeUid ?? undefined, profile ?? undefined, url, splitPlacement, isAgentInitiated));
+  store_.dispatch(
+    termGroupActions.requestHorizontalSplit(
+      activeUid ?? undefined,
+      profile ?? undefined,
+      url,
+      splitPlacement,
+      isAgentInitiated
+    )
+  );
 });
 
 rpc.on('split request vertical', ({activeUid, profile, url, splitPlacement, isAgentInitiated}) => {
-  store_.dispatch(termGroupActions.requestVerticalSplit(activeUid ?? undefined, profile ?? undefined, url, splitPlacement, isAgentInitiated));
+  store_.dispatch(
+    termGroupActions.requestVerticalSplit(
+      activeUid ?? undefined,
+      profile ?? undefined,
+      url,
+      splitPlacement,
+      isAgentInitiated
+    )
+  );
 });
 
 rpc.on('clone request vertical', () => {
@@ -469,7 +562,7 @@ function collectPaneLayout(
     const customTitle = session ? session.title : '';
     const title = shellName ? shellName : (customTitle || shellType);
     const active = group.sessionUid === state.sessions.activeUid;
-    return [{uid: group.sessionUid, splitLabel: '', isWeb: false, isAi: false, title, shellName, active, busy: !!(session as any)?.busy}];
+    return [{uid: group.sessionUid, splitLabel: '', isWeb: false, isAi: false, title, shellName, active, busy: !!(session)?.busy}];
   }
   if (group?.webUrl !== undefined && group?.webUrl !== null) {
     const isAi = group.webUrl.startsWith('ai://');
@@ -504,7 +597,7 @@ function collectPaneLayout(
       const customTitle = session ? session.title : '';
       const title = shellName ? shellName : (customTitle || shellType);
       const active = g.sessionUid === state.sessions.activeUid;
-      return [{uid: g.sessionUid as string, isWeb: false, isAi: false, title, shellName, active, busy: !!(session as any)?.busy}];
+      return [{uid: g.sessionUid as string, isWeb: false, isAi: false, title, shellName, active, busy: !!(session)?.busy}];
     }
     if (g.webUrl !== undefined && g.webUrl !== null) {
       const isAi = g.webUrl.startsWith('ai://');
@@ -581,7 +674,7 @@ function calcBspLayout(
 let lastLayoutSignature = '';
 store_.subscribe(() => {
   const state = store_.getState();
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+
   const rootGroups = getRootGroups(state as any);
   const tabs = rootGroups.map((rootGroup: any, order: number) => {
     const bspResults: Array<{uid: string; x: number; y: number; width: number; height: number}> = [];
@@ -624,10 +717,13 @@ root.render(
 // #148: main asks us to confirm a window/tab/quit close in-app. ACK immediately
 // (so main cancels its native-dialog fallback), show the styled modal, then
 // reply with the user's choice.
-rpc.on('close-confirm', (req: {id: number; scope: 'window' | 'quit' | 'tab'; names: string[]; tabCount?: number; paneCount?: number}) => {
-  rpc.emit('close-confirm-ack', {id: req.id});
-  showCloseConfirm({...req, answer: (ok: boolean) => rpc.emit('close-confirm-reply', {id: req.id, ok})});
-});
+rpc.on(
+  'close-confirm',
+  (req: {id: number; scope: 'window' | 'quit' | 'tab'; names: string[]; tabCount?: number; paneCount?: number}) => {
+    rpc.emit('close-confirm-ack', {id: req.id});
+    showCloseConfirm({...req, answer: (ok: boolean) => rpc.emit('close-confirm-reply', {id: req.id, ok})});
+  }
+);
 
 rpc.on('reload', () => {
   plugins.reload();
@@ -635,10 +731,22 @@ rpc.on('reload', () => {
 
 rpc.on(
   'split web pane req',
-  ({activeUid, url, direction, isAgentInitiated}: {activeUid?: string | null; url?: string; direction?: 'HORIZONTAL' | 'VERTICAL'; isAgentInitiated?: boolean}) => {
+  ({
+    activeUid,
+    url,
+    direction,
+    isAgentInitiated
+  }: {
+    activeUid?: string | null;
+    url?: string;
+    direction?: 'HORIZONTAL' | 'VERTICAL';
+    isAgentInitiated?: boolean;
+  }) => {
     if (url) {
       const full = toNavigableUrl(url);
-      store_.dispatch(termGroupActions.splitWebPane(activeUid ?? undefined, full, direction ?? 'HORIZONTAL', isAgentInitiated) as any);
+      store_.dispatch(
+        termGroupActions.splitWebPane(activeUid ?? undefined, full, direction ?? 'HORIZONTAL', isAgentInitiated) as any
+      );
     }
   }
 );
@@ -649,9 +757,7 @@ const isHyperiaShellUrl = (u: string): boolean => {
   try {
     const parsed = new URL(u);
     const localHost =
-      parsed.hostname === 'localhost' ||
-      parsed.hostname === '127.0.0.1' ||
-      parsed.hostname === 'hyperia.local';
+      parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === 'hyperia.local';
     return localHost && parsed.pathname.startsWith('/shell');
   } catch {
     return false;

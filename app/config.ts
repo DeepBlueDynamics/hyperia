@@ -3,10 +3,9 @@ import {existsSync, readFileSync} from 'fs';
 import {app} from 'electron';
 
 import chokidar from 'chokidar';
+import defaultShell from 'default-shell';
 
 import type {parsedConfig, configOptions} from '../typings/config';
-
-import defaultShell from 'default-shell';
 
 import {detectProfiles, pickDefaultProfile} from './config/detect';
 import {_import, getDefaultConfig} from './config/import';

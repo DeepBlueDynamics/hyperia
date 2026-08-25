@@ -1,4 +1,5 @@
 import React from 'react';
+
 import {useSelector} from 'react-redux';
 
 import {
@@ -183,7 +184,8 @@ export default function ConsentModal(): React.ReactElement | null {
             <span style={{color: 'var(--text-secondary, #9a9aa2)'}}> wants to control </span>
             <b>{paneName}</b>
             <span style={{color: 'var(--text-secondary, #9a9aa2)'}}>
-              {' '}— its tab is flashing 🔔. Approving runs the command it’s holding.
+              {' '}
+              — its tab is flashing 🔔. Approving runs the command it’s holding.
             </span>
             {req.purpose ? (
               <div

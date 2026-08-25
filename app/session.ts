@@ -1,9 +1,10 @@
 import {randomBytes} from 'crypto';
-import {app} from 'electron';
 import {EventEmitter} from 'events';
 import {copyFileSync, existsSync, mkdirSync, writeFileSync} from 'fs';
-import {dirname, join, resolve} from 'path';
+import {join, resolve} from 'path';
 import {StringDecoder} from 'string_decoder';
+
+import {app} from 'electron';
 
 import defaultShell from 'default-shell';
 import type {IPty, IWindowsPtyForkOptions, spawn as npSpawn} from 'node-pty';
@@ -11,7 +12,6 @@ import osLocale from 'os-locale';
 import shellEnv from 'shell-env';
 
 import * as config from './config';
-import {cliScriptPath} from './config/paths';
 import {productName, version} from './package.json';
 import {getDecoratedEnv} from './plugins';
 import {getFallBackShellConfig} from './utils/shell-fallback';
@@ -143,7 +143,7 @@ export default class Session extends EventEmitter {
       this.ended = false;
       return;
     }
-    this.shellState = { state: 'idle' };
+    this.shellState = {state: 'idle'};
 
     const profileCfg = config.getProfileConfig(profile);
     const envFromConfig = profileCfg.env || {};
@@ -154,7 +154,7 @@ export default class Session extends EventEmitter {
       typeof (profileCfg as any).command === 'string' ? (profileCfg as any).command.trim() : '';
     const defaultShellArgs = ['--login'];
 
-    let shell = _shell || defaultShell;
+    const shell = _shell || defaultShell;
     let shellArgs = _shellArgs ? [..._shellArgs] : defaultShellArgs;
 
     // Mint this pane's identity token and inject it so an in-pane agent can
@@ -164,8 +164,7 @@ export default class Session extends EventEmitter {
     // nemesis8 wiring a container agent): the MCP endpoint and this pane's uid.
     const hyperiaPort = process.env.HYPERIA_PORT || '9800';
 
-    const cleanEnv =
-      process.env['APPIMAGE'] && process.env['APPDIR'] ? shellEnv.sync(shell) : process.env;
+    const cleanEnv = process.env['APPIMAGE'] && process.env['APPDIR'] ? shellEnv.sync(shell) : process.env;
     const baseEnv: Record<string, string> = {
       ...cleanEnv,
       LANG: `${osLocale.sync().replace(/-/, '_')}.UTF-8`,
@@ -185,7 +184,7 @@ export default class Session extends EventEmitter {
     const integrationDir = join(app.getPath('userData'), 'shell-integration');
     const ctlDir = join(app.getPath('userData'), 'panes', uid);
 
-    mkdirSync(ctlDir, { recursive: true });
+    mkdirSync(ctlDir, {recursive: true});
 
     // Flipped true once a base-shell `command` is woven into a shell's startup,
     // so the non-integrated fallback below doesn't also run it.
@@ -193,7 +192,7 @@ export default class Session extends EventEmitter {
 
     if (shellIntegrationEnabled) {
       try {
-        mkdirSync(integrationDir, { recursive: true });
+        mkdirSync(integrationDir, {recursive: true});
         const integrationFiles = ['hyperia.bash', 'hyperia.fish', 'hyperia.ps1', 'hyperia.zsh'];
         for (const file of integrationFiles) {
           const srcPath = join(staticIntegrationDir, file);
@@ -210,7 +209,8 @@ export default class Session extends EventEmitter {
       const isBash = shellLower.endsWith('bash') || shellLower.endsWith('bash.exe');
       const isZsh = shellLower.endsWith('zsh') || shellLower.endsWith('zsh.exe');
       const isFish = shellLower.endsWith('fish') || shellLower.endsWith('fish.exe');
-      const isPwsh = shellLower.endsWith('pwsh') || shellLower.endsWith('pwsh.exe') || shellLower.endsWith('powershell.exe');
+      const isPwsh =
+        shellLower.endsWith('pwsh') || shellLower.endsWith('pwsh.exe') || shellLower.endsWith('powershell.exe');
       const isWsl = shellLower.endsWith('wsl') || shellLower.endsWith('wsl.exe');
 
       let finalIntegrationDir = integrationDir;
@@ -227,11 +227,13 @@ export default class Session extends EventEmitter {
 
       if (isZsh) {
         const zdotdir = join(ctlDir, 'zdotdir');
-        mkdirSync(zdotdir, { recursive: true });
+        mkdirSync(zdotdir, {recursive: true});
         const oldZdotdir = baseEnv.ZDOTDIR || process.env.HOME || '';
         baseEnv.OLD_ZDOTDIR = process.platform === 'win32' ? oldZdotdir.replace(/\\/g, '/') : oldZdotdir;
         baseEnv.ZDOTDIR = process.platform === 'win32' ? zdotdir.replace(/\\/g, '/') : zdotdir;
-        writeFileSync(join(zdotdir, '.zshrc'), `
+        writeFileSync(
+          join(zdotdir, '.zshrc'),
+          `
 if [ -f "$OLD_ZDOTDIR/.zshrc" ]; then
   ZDOTDIR="$OLD_ZDOTDIR"
   source "$OLD_ZDOTDIR/.zshrc"
@@ -244,11 +246,14 @@ fi
 if [ -f "$HYPERIA_INTEGRATION_DIR/hyperia.zsh" ]; then
   source "$HYPERIA_INTEGRATION_DIR/hyperia.zsh"
 fi
-${startupCmd ? startupCmd + '\n' : ''}`);
+${startupCmd ? startupCmd + '\n' : ''}`
+        );
         if (startupCmd) startupInjected = true;
       } else if (isBash) {
         const bashrcPath = join(ctlDir, 'bashrc');
-        writeFileSync(bashrcPath, `
+        writeFileSync(
+          bashrcPath,
+          `
 if [ -f /etc/bash.bashrc ]; then
   source /etc/bash.bashrc
 fi
@@ -258,12 +263,16 @@ fi
 if [ -f "$HYPERIA_INTEGRATION_DIR/hyperia.bash" ]; then
   source "$HYPERIA_INTEGRATION_DIR/hyperia.bash"
 fi
-${startupCmd ? startupCmd + '\n' : ''}`);
+${startupCmd ? startupCmd + '\n' : ''}`
+        );
         if (startupCmd) startupInjected = true;
         shellArgs = ['--rcfile', process.platform === 'win32' ? bashrcPath.replace(/\\/g, '/') : bashrcPath];
       } else if (isFish) {
         const fishScript = join(integrationDir, 'hyperia.fish');
-        shellArgs = ['--init-command', `source "${process.platform === 'win32' ? fishScript.replace(/\\/g, '/') : fishScript}"${startupCmd ? '; ' + startupCmd : ''}`].concat(_shellArgs || []);
+        shellArgs = [
+          '--init-command',
+          `source "${process.platform === 'win32' ? fishScript.replace(/\\/g, '/') : fishScript}"${startupCmd ? '; ' + startupCmd : ''}`
+        ].concat(_shellArgs || []);
         if (startupCmd) startupInjected = true;
       } else if (isPwsh) {
         const ps1 = join(integrationDir, 'hyperia.ps1');
@@ -283,7 +292,9 @@ ${startupCmd ? startupCmd + '\n' : ''}`);
       } else if (isWsl) {
         // Write the bashrc file on the Windows side
         const bashrcPath = join(ctlDir, 'bashrc');
-        writeFileSync(bashrcPath, `
+        writeFileSync(
+          bashrcPath,
+          `
 if [ -f /etc/bash.bashrc ]; then
   source /etc/bash.bashrc
 fi
@@ -293,11 +304,21 @@ fi
 if [ -f "$HYPERIA_INTEGRATION_DIR/hyperia.bash" ]; then
   source "$HYPERIA_INTEGRATION_DIR/hyperia.bash"
 fi
-`);
+`
+        );
         // Share variables and translate paths from Windows to WSL via WSLENV /p flag
         const wslenv = process.env.WSLENV || '';
-        const vars = ['HYPERIA_SHELL_INTEGRATION', 'HYPERIA_INTEGRATION_DIR/p', 'HYPERIA_CTL_DIR/p', 'HYPERIA_AGENT_TOKEN', 'HYPERIA_MCP_URL', 'HYPERIA_PANE'];
-        baseEnv.WSLENV = Array.from(new Set(wslenv.split(':').concat(vars))).filter(Boolean).join(':');
+        const vars = [
+          'HYPERIA_SHELL_INTEGRATION',
+          'HYPERIA_INTEGRATION_DIR/p',
+          'HYPERIA_CTL_DIR/p',
+          'HYPERIA_AGENT_TOKEN',
+          'HYPERIA_MCP_URL',
+          'HYPERIA_PANE'
+        ];
+        baseEnv.WSLENV = Array.from(new Set(wslenv.split(':').concat(vars)))
+          .filter(Boolean)
+          .join(':');
 
         const distroArgs = _shellArgs ? [..._shellArgs] : [];
         shellArgs = distroArgs.concat(['--', 'bash', '-c', 'exec bash --rcfile "$HYPERIA_CTL_DIR/bashrc" -i']);
@@ -455,12 +476,15 @@ fi
           this.shellState = {
             state: this.shellState?.state || 'idle',
             lastExit: this.shellState?.lastExit,
-            app: appPath || cmd || name ? {
-              name,
-              path: appPath,
-              cmdline: cmd,
-              pid: pid || 0
-            } : undefined
+            app:
+              appPath || cmd || name
+                ? {
+                    name,
+                    path: appPath,
+                    cmdline: cmd,
+                    pid: pid || 0
+                  }
+                : undefined
           };
           this.emit('shellstate', this.shellState);
         }

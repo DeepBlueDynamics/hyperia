@@ -447,6 +447,10 @@ struct TabPane {
     h: f32,
     cols: u16,
     rows: u16,
+    /// Stable friendly codename ("Brave Skink 🥐") — layout-stable, never
+    /// shadowed by OSC titles. Label monitors with THIS.
+    name: String,
+    /// Volatile display title (OSC title, falls back to the codename).
     title: String,
     state: String,
 }
@@ -455,9 +459,9 @@ fn tab_pane_json(p: &TabPane, tab_w: u32, tab_h: u32) -> serde_json::Value {
     if p.is_web {
         let px = (((p.w as f64) / 100.0) * tab_w as f64).round().max(16.0) as u32;
         let py = (((p.h as f64) / 100.0) * tab_h as f64).round().max(16.0) as u32;
-        json!({"paneId":p.uid,"type":"web","x":p.x,"y":p.y,"w":p.w,"h":p.h,"px":px,"py":py,"title":p.title,"state":p.state})
+        json!({"paneId":p.uid,"type":"web","x":p.x,"y":p.y,"w":p.w,"h":p.h,"px":px,"py":py,"name":p.name,"title":p.title,"state":p.state})
     } else {
-        json!({"paneId":p.uid,"type":"terminal","x":p.x,"y":p.y,"w":p.w,"h":p.h,"cols":p.cols,"rows":p.rows,"title":p.title,"state":p.state})
+        json!({"paneId":p.uid,"type":"terminal","x":p.x,"y":p.y,"w":p.w,"h":p.h,"cols":p.cols,"rows":p.rows,"name":p.name,"title":p.title,"state":p.state})
     }
 }
 
@@ -555,6 +559,7 @@ async fn tab_loop(socket: WebSocket, bridge: Bridge, tab_key: String, fps: u64, 
                             is_web,
                             x: s.bsp_x, y: s.bsp_y, w: s.bsp_w, h: s.bsp_h,
                             cols: s.cols, rows: s.rows,
+                            name: s.shell_name.clone(),
                             title: if s.title.is_empty() { s.shell_name.clone() } else { s.title.clone() },
                             state: s.shell_state.clone(),
                         });

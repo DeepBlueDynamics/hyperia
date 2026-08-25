@@ -1,5 +1,3 @@
-// eslint-disable-next-line eslint-comments/disable-enable-pair
-/* eslint-disable @typescript-eslint/no-unsafe-return */
 import ChildProcess from 'child_process';
 import pathModule from 'path';
 
@@ -80,7 +78,6 @@ function exposeDecorated<P extends Record<string, any>>(
     onRef = (decorated_: any) => {
       if (this.props.onDecorated) {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
           this.props.onDecorated(decorated_);
         } catch (e) {
           notify('Plugin error', `Error occurred. Check Developer Tools for details`, {error: e});
@@ -207,7 +204,6 @@ const clearModulesCache = () => {
   // trigger unload hooks
   modules.forEach((mod) => {
     if (mod.onRendererUnload) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       mod.onRendererUnload(window);
     }
   });
@@ -372,7 +368,6 @@ const loadModules = () => {
       }
 
       if (mod.onRendererWindow) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         mod.onRendererWindow(window);
       }
       console.log(`Plugin ${pluginName} (${pluginVersion}) loaded.`);
@@ -413,7 +408,6 @@ function getProps(name: keyof typeof propsDecorators, props: any, ...fnArgs: any
     }
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       ret_ = fn(...fnArgs, props_);
     } catch (err) {
       notify('Plugin error', `${fn._pluginName}: Error occurred in \`${name}\`. Check Developer Tools for details.`, {
@@ -473,7 +467,6 @@ export function connect<stateProps extends {}, dispatchProps>(
           let ret_;
 
           try {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
             ret_ = fn(state, ret);
           } catch (err) {
             notify(
@@ -499,7 +492,6 @@ export function connect<stateProps extends {}, dispatchProps>(
           let ret_;
 
           try {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
             ret_ = fn(dispatch, ret);
           } catch (err) {
             notify(
@@ -535,14 +527,12 @@ const decorateReducer: {
 } = <T extends keyof typeof reducersDecorators>(name: T, fn: any) => {
   const reducers = reducersDecorators[name];
   return (state: any, action: any) => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     let state_ = fn(state, action);
 
     reducers.forEach((pluginReducer: any) => {
       let state__;
 
       try {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         state__ = pluginReducer(state_, action);
       } catch (err) {
         notify('Plugin error', `${fn._pluginName}: Error occurred in \`${name}\`. Check Developer Tools for details.`, {

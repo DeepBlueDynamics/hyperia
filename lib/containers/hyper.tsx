@@ -81,7 +81,6 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
 
   const attachKeyListeners = async () => {
     if (!mousetrap.current) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       mousetrap.current = new (Mousetrap as any)(window, true);
       mousetrap.current!.stopCallback = () => {
         // All events should be intercepted even if focus is in an input/textarea

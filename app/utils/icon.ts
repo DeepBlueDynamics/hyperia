@@ -1,6 +1,8 @@
 import {existsSync, readFileSync, writeFileSync} from 'fs';
 import {dirname, join} from 'path';
+
 import {nativeImage} from 'electron';
+
 import {icon, cfgPath} from '../config/paths';
 
 let cachedWindowIcon: Electron.NativeImage | undefined | null = null;
@@ -8,7 +10,11 @@ let cachedWindowIcon: Electron.NativeImage | undefined | null = null;
 export function getAppIcon(): Electron.NativeImage | string {
   if (cachedWindowIcon === null) {
     cachedWindowIcon = undefined;
-    const dbg: string[] = [`[icon] ts=${Date.now()}`, `[icon] icon path = ${icon}`, `[icon] icon exists = ${existsSync(icon)}`];
+    const dbg: string[] = [
+      `[icon] ts=${Date.now()}`,
+      `[icon] icon path = ${icon}`,
+      `[icon] icon exists = ${existsSync(icon)}`
+    ];
     try {
       const img = nativeImage.createFromPath(icon);
       dbg.push(`[icon] createFromPath: empty=${img.isEmpty()} size=${JSON.stringify(img.getSize())}`);

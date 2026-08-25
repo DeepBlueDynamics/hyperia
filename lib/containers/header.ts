@@ -1,6 +1,5 @@
 import {createSelector} from 'reselect';
 
-import {TERM_GROUP_SET_WEB_NAME} from '../../typings/constants/term-groups';
 import type {HyperState, HyperDispatch, ITab} from '../../typings/hyper';
 import {closeTab, changeTab, maximize, openHamburgerMenu, unmaximize, minimize, close} from '../actions/header';
 import {setSessionTabName} from '../actions/sessions';

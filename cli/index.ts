@@ -27,11 +27,19 @@ const assertPluginName = (pluginName: string) => {
 };
 
 const checkConfig = () => {
-  if (api.exists()) {
+  // api.exists() can THROW (legacy config path predates the fork) — `hyperia
+  // list` used to die with a raw ENOENT stack instead of this message.
+  let ok = false;
+  try {
+    ok = api.exists();
+  } catch {
+    ok = false;
+  }
+  if (ok) {
     return true;
   }
-  let msg = chalk.red(`Error! Config file not found: ${api.configPath}\n`);
-  msg += 'Please launch Hyper and retry.';
+  let msg = chalk.red(`Error! Plugin config not found: ${api.configPath}\n`);
+  msg += 'The legacy plugin manager is unconfigured on this machine.';
   console.error(msg);
   process.exit(1);
 };
@@ -250,9 +258,8 @@ const main = (argv: string[]) => {
   const child = spawn(process.execPath, args_, options);
 
   if (flags.verbose) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     child.stdout?.on('data', (data) => console.log(data.toString('utf8')));
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+
     child.stderr?.on('data', (data) => console.error(data.toString('utf8')));
   }
   if (flags.verbose) {
@@ -266,22 +273,55 @@ function eventuallyExit(code: number) {
   setTimeout(() => process.exit(code), 100);
 }
 
-// Hyperia MCP client commands (epic #122, C1/C2): talk to the running sidecar
-// over HTTP instead of launching the app. Intercept before the legacy `args`
-// flow so the plugin commands and the bare-launch behaviour are untouched.
-const mcpCmd = process.argv[2];
-if (mcpCmd && MCP_COMMANDS.has(mcpCmd)) {
-  runMcpCli(process.argv.slice(2))
+// The Hyperia MCP CLI (epic #122) is the FRONT DOOR: bare `hyperia`, --help,
+// and unknown commands all land on its help. Before this, they fell into the
+// inherited Hyper flow — bare `hyperia` silently launched the GUI, --help
+// showed ONLY the npm plugin manager, and `hyperia list` crashed on Hyper's
+// pre-fork config path — so the working CLI was undiscoverable.
+//   hyperia status|run|call|...   → MCP CLI against the running sidecar
+//   hyperia launch [dir]          → start the app (the old bare default)
+//   hyperia plugins <cmd>         → legacy Hyper plugin manager
+//   hyperia version               → app version
+// Legacy-codepage Windows consoles render our UTF-8 output (pane-name emojis,
+// tree glyphs) as mojibake ("≡ƒªä"). Flip the console to UTF-8 up front; a
+// per-console setting, harmless when already 65001 (Windows Terminal default).
+if (process.platform === 'win32') {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('child_process').spawnSync('cmd', ['/c', 'chcp', '65001'], {stdio: 'ignore'});
+  } catch {
+    /* cosmetic only */
+  }
+}
+
+const runMcp = (argv: string[]) =>
+  runMcpCli(argv)
     .then((code) => process.exit(code))
     .catch((err) => {
-      console.error(err && err.stack ? err.stack : err);
+      console.error(err?.stack ? err.stack : err);
       process.exit(1);
     });
-} else {
-  main(process.argv)
+const runLegacy = (argv: string[]) =>
+  main(argv)
     .then(() => eventuallyExit(0))
     .catch((err) => {
       console.error(err.stack ? err.stack : err);
       eventuallyExit(1);
     });
+
+const cmd = process.argv[2];
+if (cmd && MCP_COMMANDS.has(cmd)) {
+  void runMcp(process.argv.slice(2));
+} else if (cmd === 'launch') {
+  void runLegacy([...process.argv.slice(0, 2), ...process.argv.slice(3)]);
+} else if (cmd === 'plugins') {
+  void runLegacy([...process.argv.slice(0, 2), ...process.argv.slice(3)]);
+} else if (cmd === 'version') {
+  console.log(version);
+  process.exit(0);
+} else if (!cmd || cmd === '--help' || cmd === '-h') {
+  void runMcp(['help']);
+} else {
+  console.error(chalk.red(`Unknown command: ${cmd}\n`));
+  void runMcp(['help']);
 }

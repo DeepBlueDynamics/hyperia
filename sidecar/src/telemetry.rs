@@ -11,19 +11,26 @@ use serde::{Deserialize, Serialize};
 // Event types
 // ---------------------------------------------------------------------------
 
+// Liberal-in-what-we-accept: every variant carries lowercase/short aliases so a
+// producer sending "in"/"Out"/"rx"/"write" parses instead of 400ing (an exact-
+// casing mismatch caused a 7.5k-reject storm from the n8 pusher on 2026-08-20 —
+// never again). Serialization stays canonical.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum TelemetryEvent {
+    #[serde(alias = "fileop", alias = "file_op", alias = "file")]
     FileOp {
         path: String,
         op: FileOp,
         bytes: Option<u64>,
     },
+    #[serde(alias = "network", alias = "net")]
     Network {
         direction: NetDirection,
         host: String,
         bytes: u64,
     },
+    #[serde(alias = "tokens", alias = "token")]
     Tokens {
         input: u64,
         output: u64,
@@ -34,16 +41,23 @@ pub enum TelemetryEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FileOp {
+    #[serde(alias = "create")]
     Create,
+    #[serde(alias = "write")]
     Write,
+    #[serde(alias = "delete")]
     Delete,
+    #[serde(alias = "rename")]
     Rename,
+    #[serde(alias = "read")]
     Read,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NetDirection {
+    #[serde(alias = "In", alias = "in", alias = "inbound", alias = "rx", alias = "Rx", alias = "RX")]
     Inbound,
+    #[serde(alias = "Out", alias = "out", alias = "outbound", alias = "tx", alias = "Tx", alias = "TX")]
     Outbound,
 }
 
@@ -98,8 +112,22 @@ impl PaneMetrics {
                 self.tokens_cache += cache;
             }
         }
+        // Bounded per-pane history (was unbounded — leak).
+        if self.events.len() >= 100 {
+            self.events.remove(0);
+        }
         self.events.push(event);
     }
+}
+
+/// One event with the context the LIVE STREAM needs: when + which pane.
+/// (Per-pane `events` vectors lack both, so the window rollup couldn't build
+/// an ordered cross-pane feed — the dashboard's stream card sat empty.)
+#[derive(Debug, Clone)]
+pub struct RecordedEvent {
+    pub ts_ms: u64,
+    pub pane_uid: String,
+    pub event: TelemetryEvent,
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +139,14 @@ pub struct WindowMetrics {
     /// Pane UID → metrics
     pub panes: HashMap<String, PaneMetrics>,
     pub enabled: bool,
+    /// Cross-pane recent-events ring (cap 200) feeding the live stream.
+    #[serde(skip)]
+    pub recent: std::collections::VecDeque<RecordedEvent>,
+    /// FileOp-only ring (cap 300). Kept separate because the Network tick flood
+    /// evicts rare FileOps from `recent` within minutes — the dashboard's file
+    /// matrix reads this and survives page reloads.
+    #[serde(skip)]
+    pub recent_files: std::collections::VecDeque<RecordedEvent>,
 }
 
 #[derive(Clone)]
@@ -124,6 +160,8 @@ impl TelemetryStore {
             inner: Arc::new(Mutex::new(WindowMetrics {
                 panes: HashMap::new(),
                 enabled: true,
+                recent: std::collections::VecDeque::new(),
+                recent_files: std::collections::VecDeque::new(),
             })),
         }
     }
@@ -133,6 +171,29 @@ impl TelemetryStore {
         let mut store = self.inner.lock().unwrap();
         if !store.enabled {
             return;
+        }
+        // Feed the cross-pane live-stream ring (with time + pane context).
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        if store.recent.len() >= 200 {
+            store.recent.pop_front();
+        }
+        store.recent.push_back(RecordedEvent {
+            ts_ms,
+            pane_uid: pane_uid.to_string(),
+            event: event.clone(),
+        });
+        if matches!(event, TelemetryEvent::FileOp { .. }) {
+            if store.recent_files.len() >= 300 {
+                store.recent_files.pop_front();
+            }
+            store.recent_files.push_back(RecordedEvent {
+                ts_ms,
+                pane_uid: pane_uid.to_string(),
+                event: event.clone(),
+            });
         }
         store
             .panes
@@ -167,6 +228,8 @@ impl TelemetryStore {
     pub fn reset(&self) {
         let mut store = self.inner.lock().unwrap();
         store.panes.clear();
+        store.recent.clear();
+        store.recent_files.clear();
     }
 
     /// JSON snapshot at requested level.
@@ -195,8 +258,44 @@ impl TelemetryStore {
                     agg.tokens_in += pm.tokens_in;
                     agg.tokens_out += pm.tokens_out;
                     agg.tokens_cache += pm.tokens_cache;
+                    // Hosts were never merged — window-level net_hosts sat empty.
+                    for h in &pm.net_hosts {
+                        if !h.is_empty() && !agg.net_hosts.contains(h) {
+                            agg.net_hosts.push(h.clone());
+                        }
+                    }
                 }
-                serde_json::to_value(&agg).unwrap_or(serde_json::json!({}))
+                let mut out = serde_json::to_value(&agg).unwrap_or(serde_json::json!({}));
+                // Live stream: the cross-pane ring, flattened with ts + pane_uid.
+                let events: Vec<serde_json::Value> = store
+                    .recent
+                    .iter()
+                    .map(|re| {
+                        let mut ev = serde_json::to_value(&re.event).unwrap_or(serde_json::json!({}));
+                        if let Some(obj) = ev.as_object_mut() {
+                            obj.insert("ts".into(), serde_json::json!(re.ts_ms));
+                            obj.insert("pane_uid".into(), serde_json::json!(re.pane_uid));
+                        }
+                        ev
+                    })
+                    .collect();
+                let file_events: Vec<serde_json::Value> = store
+                    .recent_files
+                    .iter()
+                    .map(|re| {
+                        let mut ev = serde_json::to_value(&re.event).unwrap_or(serde_json::json!({}));
+                        if let Some(obj) = ev.as_object_mut() {
+                            obj.insert("ts".into(), serde_json::json!(re.ts_ms));
+                            obj.insert("pane_uid".into(), serde_json::json!(re.pane_uid));
+                        }
+                        ev
+                    })
+                    .collect();
+                if let Some(obj) = out.as_object_mut() {
+                    obj.insert("events".into(), serde_json::Value::Array(events));
+                    obj.insert("file_events".into(), serde_json::Value::Array(file_events));
+                }
+                out
             }
             _ => serde_json::json!({"error": "level must be 'pane' or 'window'"}),
         }

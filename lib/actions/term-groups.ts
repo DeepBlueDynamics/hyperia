@@ -19,7 +19,13 @@ import findBySession, {countPathHorizontalStacks} from '../utils/term-groups';
 import {setActiveSession, ptyExitSession, userExitSession} from './sessions';
 
 function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
-  return (_activeUid: string | undefined, _profile: string | undefined, url?: string, splitPlacement?: 'BEFORE' | 'AFTER', isAgentInitiated?: boolean) =>
+  return (
+      _activeUid: string | undefined,
+      _profile: string | undefined,
+      url?: string,
+      splitPlacement?: 'BEFORE' | 'AFTER',
+      isAgentInitiated?: boolean
+    ) =>
     (dispatch: HyperDispatch, getState: () => HyperState): void => {
       const {sessions, termGroups} = getState();
       let activeUid = _activeUid;
@@ -48,19 +54,21 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
       dispatch({
         type: SESSION_REQUEST,
         effect: () => {
-          const {ui, sessions, termGroups} = getState();
-          let activeUid = _activeUid;
-          if (!activeUid) {
-            if (termGroups.activeTermGroup) {
-              activeUid = termGroups.activeTermGroup;
-            } else if (termGroups.activeRootGroup) {
-              activeUid =
-                termGroups.activeSessions[termGroups.activeRootGroup] || termGroups.activeRootGroup || undefined;
+          const {ui, sessions: currentSessions, termGroups: currentTermGroups} = getState();
+          let currentActiveUid = _activeUid;
+          if (!currentActiveUid) {
+            if (currentTermGroups.activeTermGroup) {
+              currentActiveUid = currentTermGroups.activeTermGroup;
+            } else if (currentTermGroups.activeRootGroup) {
+              currentActiveUid =
+                currentTermGroups.activeSessions[currentTermGroups.activeRootGroup] ||
+                currentTermGroups.activeRootGroup ||
+                undefined;
             } else {
-              activeUid = sessions.activeUid || undefined;
+              currentActiveUid = currentSessions.activeUid || undefined;
             }
           }
-          const activeSession = activeUid ? sessions.sessions[activeUid] : null;
+          const activeSession = currentActiveUid ? currentSessions.sessions[currentActiveUid] : null;
           const cwd = (activeSession && activeSession.cwd) || ui.cwd;
           // UI-initiated splits ALWAYS show the pane-type PICKER — you pick what
           // goes in the new pane (both directions, any source). An explicit
@@ -70,7 +78,7 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
           rpc.emit('new', {
             splitDirection: direction,
             cwd,
-            activeUid,
+            activeUid: currentActiveUid,
             profile,
             url,
             splitPlacement,
@@ -92,7 +100,11 @@ export function resizeTermGroup(uid: string, sizes: number[]): HyperActions {
   };
 }
 
-export function requestTermGroup(_activeUid: string | undefined, _profile: string | undefined, isAgentInitiated?: boolean) {
+export function requestTermGroup(
+  _activeUid: string | undefined,
+  _profile: string | undefined,
+  isAgentInitiated?: boolean
+) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     dispatch({
       type: TERM_GROUP_REQUEST,
@@ -252,9 +264,9 @@ export function userExitTermGroup(uid: string) {
           if (group.sessionUid) {
             dispatch(userExitSession(group.sessionUid));
           }
-          const rpc = (window as any).rpc;
-          if (rpc && typeof rpc.emit === 'function') {
-            rpc.emit('close-no-confirm');
+          const windowRpc = (window as any).rpc;
+          if (windowRpc && typeof windowRpc.emit === 'function') {
+            windowRpc.emit('close-no-confirm');
           } else {
             window.close();
           }
@@ -325,7 +337,12 @@ export function splitWebPaneBelow(activeUid: string | undefined, url: string) {
   };
 }
 
-export function splitWebPane(activeUid: string | undefined, url: string, direction: 'HORIZONTAL' | 'VERTICAL', isAgentInitiated?: boolean) {
+export function splitWebPane(
+  activeUid: string | undefined,
+  url: string,
+  direction: 'HORIZONTAL' | 'VERTICAL',
+  isAgentInitiated?: boolean
+) {
   return (dispatch: HyperDispatch) => {
     dispatch({type: 'TERM_GROUP_SPLIT_WEB', activeUid, url, splitDirection: direction, isAgentInitiated} as any);
   };

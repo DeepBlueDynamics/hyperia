@@ -11,7 +11,7 @@
 // This is a CLI tool — console output is the product.
 /* eslint no-console: 0 */
 import {mkdirSync, readFileSync, writeFileSync} from 'fs';
-import {homedir} from 'os';
+import {homedir, hostname, userInfo} from 'os';
 import {dirname, join} from 'path';
 
 import got from 'got';
@@ -68,7 +68,7 @@ function wrapNet(e: unknown): CliError {
   const msg = (e as Error)?.message || String(e);
   if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|timed ?out|getaddrinfo|ECONNRESET/i.test(msg)) {
     return new CliError(
-      `can't reach Hyperia at ${baseUrl()} (${msg}). Set HYPERIA_MCP_URL — in a container use the host gateway, e.g. http://host.docker.internal:9800.`,
+      `can't reach Hyperia at ${baseUrl()} (${msg}). Set HYPERIA_MCP_URL -- in a container use the host gateway, e.g. http://host.docker.internal:9800.`,
       3
     );
   }
@@ -184,10 +184,12 @@ function coerce(v: string): unknown {
   return v;
 }
 function firstSentence(s: string, max = 140): string {
-  const oneLine = String(s || '').replace(/\s+/g, ' ').trim();
+  const oneLine = String(s || '')
+    .replace(/\s+/g, ' ')
+    .trim();
   const dot = oneLine.indexOf('. ');
   const cut = dot > 0 ? oneLine.slice(0, dot + 1) : oneLine;
-  return cut.length > max ? `${cut.slice(0, max - 1)}…` : cut;
+  return cut.length > max ? `${cut.slice(0, max - 1)}...` : cut;
 }
 
 // ---------- commands ----------
@@ -209,7 +211,7 @@ async function cmdTools(wantJson: boolean): Promise<number> {
     console.log(`${t.name.padEnd(width)}  ${firstSentence(t.description || '')}`);
   }
   console.log(
-    `\n${tools.length} tools. \`hyperia describe <tool>\` for args · \`hyperia call <tool> '{json}'\` to invoke · add --json for machine output.`
+    `\n${tools.length} tools. \`hyperia describe <tool>\` for args | \`hyperia call <tool> '{json}'\` to invoke | add --json for machine output.`
   );
   return 0;
 }
@@ -223,7 +225,9 @@ async function cmdDescribe(tool: string | undefined, wantJson: boolean): Promise
     console.log(JSON.stringify(t, null, 2));
     return 0;
   }
-  console.log(`${t.name}\n\n${t.description || '(no description)'}\n\nInput schema:\n${JSON.stringify(t.inputSchema, null, 2)}`);
+  console.log(
+    `${t.name}\n\n${t.description || '(no description)'}\n\nInput schema:\n${JSON.stringify(t.inputSchema, null, 2)}`
+  );
   return 0;
 }
 
@@ -281,29 +285,125 @@ async function cmdWhoami(wantJson: boolean): Promise<number> {
     return body.anonymous ? 2 : 0;
   }
   if (body.anonymous) {
-    console.log('identity: anonymous — run `hyperia login` to get an identity.');
+    console.log('identity: anonymous -- run `hyperia login` to get an identity.');
     return 2;
   }
   console.log(`identity: ${body.kind} (${body.label})`);
   return 0;
 }
 
-async function cmdLogin(name: string | undefined, wantJson: boolean): Promise<number> {
-  if (process.env.HYPERIA_AGENT_TOKEN) {
-    console.error('note: HYPERIA_AGENT_TOKEN is set (in-pane identity) — it takes precedence over a saved token.');
+/** Who does the sidecar say this token is? Undefined label = anonymous/dead. */
+async function whoamiWith(token: string | undefined): Promise<string | undefined> {
+  try {
+    const res = await got(`${baseUrl()}/api/identity/whoami`, {
+      headers: token ? {Authorization: `Bearer ${token}`} : {},
+      responseType: 'json',
+      timeout: {request: 5000},
+      throwHttpErrors: false
+    });
+    const b = res.body as {anonymous?: boolean; label?: string};
+    return b && b.anonymous === false ? b.label : undefined;
+  } catch {
+    return undefined;
   }
-  const n = name || process.env.HYPERIA_CLI_NAME || `cli-${process.platform}-${process.pid}`;
+}
+
+/** Windows: persist an env var at user scope so NEW shells inherit it. */
+function injectUserEnv(key: string, value: string): boolean {
+  if (process.platform !== 'win32') return false;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const {spawnSync} = require('child_process');
+    const r = spawnSync('setx', [key, value], {stdio: 'ignore'});
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+const MCP_SETUP_HINT =
+  'If your MCP tools cannot reach Hyperia, your app may need its MCP config:\n' +
+  'run `hyperia mcp` to print the exact setup commands for your token\n' +
+  '(claude / codex / antigravity / grok), or see the README.';
+
+// `hyperia login` is the identity TROUBLESHOOTER, not just a minter: identify
+// yourself as strongly as possible — validate whatever token is already
+// present (env, then cache), announce the state, repair what is broken (mint,
+// cache, and on Windows inject the user-scope env var), and point at
+// `hyperia mcp` when the app-side MCP config is the missing piece.
+// ASCII-only output: legacy-codepage Windows consoles render UTF-8
+// punctuation as mojibake.
+async function cmdLogin(name: string | undefined, wantJson: boolean): Promise<number> {
+  const envToken = process.env.HYPERIA_AGENT_TOKEN;
+  if (envToken) {
+    const label = await whoamiWith(envToken);
+    if (label) {
+      if (wantJson) {
+        console.log(JSON.stringify({name: label, source: 'HYPERIA_AGENT_TOKEN', valid: true}, null, 2));
+        return 0;
+      }
+      console.log(
+        `already identified as "${label}" via HYPERIA_AGENT_TOKEN (your environment) -- nothing to fix.\n` +
+          `Every hyperia command authenticates automatically.\n${MCP_SETUP_HINT}`
+      );
+      return 0;
+    }
+    console.error(
+      'warning: HYPERIA_AGENT_TOKEN is set but the sidecar does NOT recognize it\n' +
+        '(stale pane token from a closed pane or an old sidecar). Minting a fresh identity.'
+    );
+  }
+
+  // No (valid) env token: try the cached CLI token before minting a new one.
+  if (!envToken) {
+    const cached = loadToken();
+    if (cached) {
+      const label = await whoamiWith(cached);
+      if (label) {
+        if (wantJson) {
+          console.log(JSON.stringify({name: label, source: cliConfigPath(), valid: true}, null, 2));
+          return 0;
+        }
+        console.log(
+          `already logged in as "${label}" (cached token at ${cliConfigPath()}) -- nothing to fix.\n` +
+            `Every hyperia command authenticates automatically.\n${MCP_SETUP_HINT}`
+        );
+        return 0;
+      }
+    }
+  }
+
+  // Mint. Default identity is STABLE per machine+user — the old pid-based
+  // default minted a brand-new identity on every login and littered agents.json.
+  let stable = 'cli';
+  try {
+    stable = `cli-${hostname()}-${userInfo().username}`.toLowerCase();
+  } catch {
+    /* keep 'cli' */
+  }
+  const n = name || process.env.HYPERIA_CLI_NAME || stable;
   const rec = await mint(n);
   saveToken(rec.token, rec.name);
+  // Repair the environment too: agents and MCP configs reference
+  // HYPERIA_AGENT_TOKEN, so when it is absent or dead, plant a working one at
+  // user scope (Windows) for every FUTURE shell. Never echo it to stdout.
+  const injected = !envToken || !(await whoamiWith(envToken)) ? injectUserEnv('HYPERIA_AGENT_TOKEN', rec.token) : false;
   if (wantJson) {
-    console.log(JSON.stringify({name: rec.name, saved: cliConfigPath()}, null, 2));
+    console.log(JSON.stringify({name: rec.name, saved: cliConfigPath(), envInjected: injected}, null, 2));
     return 0;
   }
-  // Never echo the token to stdout — just where it landed.
   console.log(
-    `logged in as "${rec.name}". Token saved to ${cliConfigPath()}.\n` +
-      'It only NAMES you — pane actions still need the human\'s consent via ' +
-      '`hyperia call request_access \'{"pane":"<id>","purpose":"..."}\'`.'
+    `logged in as "${rec.name}". Token saved to ${cliConfigPath()};\n` +
+      'every hyperia command uses it automatically from now on.\n' +
+      (injected
+        ? 'HYPERIA_AGENT_TOKEN has been set at user scope: NEW terminals inherit it\n' +
+          '(this one keeps its old environment -- restart the shell to pick it up).\n'
+        : '') +
+      'Identify yourself as fully as possible: state-changing commands\n' +
+      '(run/keys/split/rename/...) work on panes you create. Driving a pane you\n' +
+      'do NOT own asks the human first: hyperia request-access <pane> --purpose "why"\n' +
+      `${MCP_SETUP_HINT}\n` +
+      'Next: hyperia status   (the window/tab/pane tree)'
   );
   return 0;
 }
@@ -335,10 +435,12 @@ function fmtStatus(raw: string): string {
       lines.push(`  tab "${tab.name}"${tab.active ? ' (active)' : ''}`);
       for (const p of tab.panes || []) {
         const id = String(p.paneId || '').slice(0, 8);
-        const app = p.app && p.app.name ? ` ${p.app.name}` : '';
+        const app = p.app?.name ? ` ${p.app.name}` : '';
         const cwd = p.cwd ? ` cwd=${p.cwd}` : '';
         const focused = p.focused ? '  <focused>' : '';
-        lines.push(`    • ${p.name || p.title || '(pane)'}  [${id}]  ${p.state || ''} ${p.shell || ''}${app}${cwd}${focused}`);
+        lines.push(
+          `    - ${p.name || p.title || '(pane)'}  [${id}]  ${p.state || ''} ${p.shell || ''}${app}${cwd}${focused}`
+        );
       }
     }
   }
@@ -351,7 +453,10 @@ async function cmdStatus(wantJson: boolean): Promise<number> {
     console.log(JSON.stringify(result, null, 2));
     return 0;
   }
-  const text = ((result?.content as Array<{text?: string}>) || []).map((c) => c?.text ?? '').join('').trim();
+  const text = ((result?.content as Array<{text?: string}>) || [])
+    .map((c) => c?.text ?? '')
+    .join('')
+    .trim();
   console.log(fmtStatus(text));
   return 0;
 }
@@ -451,7 +556,7 @@ async function cmdDoctor(wantJson: boolean): Promise<number> {
     err = (e as Error)?.message;
   }
   const hint = !reachable
-    ? 'set HYPERIA_MCP_URL to the host — in a container use http://host.docker.internal:9800'
+    ? 'set HYPERIA_MCP_URL to the host -- in a container use http://host.docker.internal:9800'
     : identity?.anonymous
       ? 'run `hyperia login` to get an identity'
       : 'ok';
@@ -461,17 +566,60 @@ async function cmdDoctor(wantJson: boolean): Promise<number> {
     return code;
   }
   console.log(`endpoint:   ${base}`);
-  console.log(`reachable:  ${reachable ? 'yes' : `NO — ${err}`}`);
+  console.log(`reachable:  ${reachable ? 'yes' : `NO -- ${err}`}`);
   console.log(`token:      ${tokenSource}`);
-  console.log(`identity:   ${identity ? `${identity.kind} (${identity.label})${identity.anonymous ? ' — ANONYMOUS' : ''}` : 'unknown'}`);
-  console.log(`→ ${hint}`);
+  console.log(
+    `identity:   ${identity ? `${identity.kind} (${identity.label})${identity.anonymous ? ' -- ANONYMOUS' : ''}` : 'unknown'}`
+  );
+  console.log(`-> ${hint}`);
   return code;
 }
 
 // ---------- C6: guide / help ----------
+// `hyperia mcp`: print the EXACT per-app MCP setup for this machine's token +
+// endpoint — the "my agent's MCP tool isn't installed" repair path that login
+// and doctor point at. Printing the token here is deliberate (the output is
+// runnable commands); the caller asked for it.
+function cmdMcpSetup(): number {
+  const t = loadToken();
+  const base = baseUrl();
+  if (!t) {
+    console.log('no identity yet -- run `hyperia login` first, then re-run `hyperia mcp`.');
+    return 1;
+  }
+  console.log(
+    `Hyperia MCP setup -- endpoint ${base}/mcp
+These snippets contain YOUR token; treat them like a password.
+
+Environment (any app or wrapper that reads env):
+  HYPERIA_MCP_URL=${base}
+  HYPERIA_AGENT_TOKEN=${t}
+  (on Windows, \`hyperia login\` plants HYPERIA_AGENT_TOKEN at user scope;
+   NEW terminals inherit it -- restart the shell if it is missing here)
+
+claude (Claude Code):
+  claude mcp add --transport http --scope user hyperia ${base}/mcp --header "Authorization: Bearer ${t}"
+  gotchas: a PROJECT-scoped 'hyperia' entry silently SHADOWS the user scope,
+  and MCP headers load at session START -- fully restart claude after changes.
+
+codex / antigravity (agy) / grok:
+  add an MCP server named 'hyperia' in the app's MCP config with:
+    transport: http (streamable)
+    url:       ${base}/mcp
+    header:    Authorization: Bearer ${t}
+  Prefer referencing the HYPERIA_AGENT_TOKEN env var IF that app's config
+  expands variables; paste the literal only where it does not. Per-app file
+  locations are in the README's MCP section.
+
+Verify from inside the app: call the hyperia_version tool (reads work even
+anonymously; state-changing tools need the token).`
+  );
+  return 0;
+}
+
 function cmdGuide(): number {
   console.log(
-    `Hyperia CLI — drive a running Hyperia from the shell.
+    `Hyperia CLI -- drive a running Hyperia from the shell.
 
 MODEL: window > tab > pane. A pane holds a terminal (shell) OR a web view.
 Target with --window <id> --tab <name> --pane <name|id>; omit to use the focused pane.
@@ -495,6 +643,12 @@ ANYTHING (generic, mirrors the live tool catalog)
   hyperia tools                  list every tool
   hyperia describe <tool>        its arguments
   hyperia call <tool> '{json}'   invoke any tool
+
+APP + SETUP
+  hyperia mcp                    print MCP setup commands for claude/codex/agy/grok (with your token)
+  hyperia launch [dir]           start the Hyperia app
+  hyperia version                app version
+  hyperia plugins <cmd>          legacy Hyper plugin manager
 
 Add --json to any command for machine-readable output.`
   );
@@ -524,7 +678,8 @@ export const MCP_COMMANDS = new Set([
   // C5 / C6
   'doctor',
   'guide',
-  'help'
+  'help',
+  'mcp'
 ]);
 
 export async function runMcpCli(argv: string[]): Promise<number> {
@@ -570,6 +725,8 @@ export async function runMcpCli(argv: string[]): Promise<number> {
       case 'guide':
       case 'help':
         return cmdGuide();
+      case 'mcp':
+        return cmdMcpSetup();
       default:
         console.error(`unknown hyperia command: ${cmd}`);
         return 1;

@@ -45,7 +45,6 @@ export function initTray() {
         win.show();
         win.focus();
       } else {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         (app as any).createWindow?.();
       }
     });
@@ -78,8 +77,12 @@ function reconnectStreamDeck() {
     let binaryPath: string | null = null;
     const exeName = isWin ? 'deck-mcp.exe' : 'deck-mcp';
 
-    // Find binary
+    // Find binary. ~/.hyperia/bin is the STABLE location — the dev-tree paths
+    // below only resolve when running from a repo checkout (yarn start), so on
+    // an installed build the reconnect silently no-opped ("seems not to work").
+    const stablePath = join(app.getPath('home'), '.hyperia', 'bin', exeName);
     const paths = [
+      stablePath,
       resolve(app.getAppPath(), 'tools/deck-mcp/target/release', exeName),
       resolve(app.getAppPath(), 'tools/deck-mcp/target/debug', exeName),
       resolve(app.getAppPath(), '../tools/deck-mcp/target/release', exeName),
@@ -96,7 +99,13 @@ function reconnectStreamDeck() {
     }
 
     if (!binaryPath) {
+      // Fail VISIBLY — a console.warn in the packaged app is invisible, and the
+      // human's only symptom was "reconnect seems not to work".
       console.warn('[tray] Stream Deck daemon binary not found');
+      new Notification({
+        title: 'Stream Deck reconnect failed',
+        body: `deck-mcp not found. Put ${exeName} in ${dirname(stablePath)} (or run from a repo checkout).`
+      }).show();
       return;
     }
 
@@ -135,7 +144,6 @@ function reconnectStreamDeck() {
 }
 
 function getWindow(): Electron.BrowserWindow | null {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call
   return (app as any).getLastFocusedWindow?.() || null;
 }
 
@@ -154,7 +162,6 @@ function updateTrayMenu() {
           win.show();
           win.focus();
         } else {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-call
           (app as any).createWindow?.();
         }
       }
@@ -179,7 +186,6 @@ function updateTrayMenu() {
     {
       label: 'New Window',
       click: () => {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         (app as any).createWindow?.();
       }
     },

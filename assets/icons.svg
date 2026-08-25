@@ -14,31 +14,20 @@
       <title>minimize window</title>
       <rect width="10" height="1" y="4.5" fill="currentColor"/>
     </symbol>
+    <!-- Window-control glyphs are used cross-document (use xlink:href=
+         "./renderer/assets/icons.svg#..."). Inside that external-sprite shadow
+         tree, mask="url(#id)" and nested use refs resolve against the HOST
+         document and silently render NOTHING — which made the maximize button
+         invisible on Linux (the only platform that draws these). Keep every
+         symbol a plain self-contained shape. -->
     <symbol id="maximize-window" viewBox="0 0 10 10">
       <title>maximize window</title>
-      <defs>
-        <polygon id="maximize-window-a" points="0 0 10 0 10 10 0 10"/>
-        <mask id="maximize-window-b" width="10" height="10" x="0" y="0">
-          <use xlink:href="#maximize-window-a"/>
-        </mask>
-      </defs>
-      <g fill="none" fill-rule="evenodd">
-        <polygon fill="none" points="0 0 10 0 10 10 0 10"/>
-        <use stroke="currentColor" stroke-width="2" mask="url(#maximize-window-b)" xlink:href="#maximize-window-a"/>
-      </g>
+      <rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor"/>
     </symbol>
     <symbol id="restore-window" viewBox="0 0 10.2 10.2">
       <title>restore window</title>
-      <defs>
-        <mask id="restore-window-b" width="10.2" height="10.2" x="0" y="0">
-          <use xlink:href="#restore-window-a"/>
-        </mask>
-      </defs>
-      <g fill="none" fill-rule="evenodd">
-        <path fill="currentColor"
-              d='M2.1,0v2H0v8.1h8.2v-2h2V0H2.1z M7.2,9.2H1.1V3h6.1V9.2z M9.2,7.1h-1V2H3.1V1h6.1V7.1z' />
-        <use stroke="currentColor" xlink:href="#restore-window-a"/>
-      </g>
+      <path fill="currentColor"
+            d='M2.1,0v2H0v8.1h8.2v-2h2V0H2.1z M7.2,9.2H1.1V3h6.1V9.2z M9.2,7.1h-1V2H3.1V1h6.1V7.1z' />
     </symbol>
     <symbol id="close-window" viewBox="0 0 10 10">
       <title>close window</title>

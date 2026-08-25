@@ -295,7 +295,8 @@ pub struct SplitRequest {
     /// pane. ALWAYS pass this to target a specific pane: splitting does NOT depend on UI focus when set.
     pub pane: Option<String>,
     /// If set, the new split opens a WEB PANE at this URL (an embedded browser, no shell/PTY) instead of a
-    /// terminal. The `profile`/`command` fields are ignored in that case. e.g. "https://news.ycombinator.com".
+    /// terminal — THE way to place a web page beside an existing pane in the same tab. `profile`/`command`
+    /// are ignored in that case. e.g. "https://news.ycombinator.com".
     pub url: Option<String>,
 }
 
@@ -405,12 +406,19 @@ pub struct NewTabRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RenameTabRequest {
-    /// New name for the tab
+    /// New name for the tab (or for the pane, when `pane` is set).
     pub name: String,
     /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
-    /// Current tab name to rename. Omit for active tab.
+    /// Current tab name to rename. Omit for active tab. When `pane` is set this
+    /// only scopes the pane lookup.
     pub tab: Option<String>,
+    /// Rename a PANE instead of the tab: its current name or paneId (full UUID
+    /// or 4+ char prefix). Changes the pane's stable codename — the handle
+    /// other tools and agents address it by. An in-pane/container agent can
+    /// rename its OWN pane this way (e.g. after `n8 resume`, re-badge the pane
+    /// with the name its resumed transcript believes it has).
+    pub pane: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -467,6 +475,17 @@ pub struct TabImageRequest {
 pub struct OpenWebPaneRequest {
     /// Full URL to open (e.g. "https://localhost:3000" or "https://example.com")
     pub url: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RenderRequest {
+    /// Path to a markdown file on disk. The rendered tab LIVE-RELOADS ~1.5s
+    /// after the file changes — edit the file to update the analysis in place.
+    pub path: Option<String>,
+    /// Inline markdown content (used when `path` is omitted). Static — no live reload.
+    pub content: Option<String>,
+    /// Tab/document title. Defaults to the file name.
+    pub title: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -536,6 +555,20 @@ pub struct StyleCreateRequest {
 pub struct StyleDeleteRequest {
     /// Name of the style to delete
     pub name: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct StyleApplyRequest {
+    /// Style name from style_list. 'default' or 'none' clears the pane back to
+    /// its profile/global appearance.
+    pub name: String,
+    /// Window ID of the target pane — the `id` field from terminal_status.
+    pub window: Option<u32>,
+    /// Tab name of the target pane.
+    pub tab: Option<String>,
+    /// Target pane — name or paneId (from terminal_status). An explicit target
+    /// is required; this never defaults to the human's focused pane.
+    pub pane: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -1289,7 +1322,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Split a pane into two. Returns the new pane's stable paneId UUID. Direction: 'horizontal' (top/bottom) or 'vertical' (left/right, default). Pass window/tab/pane to split a SPECIFIC pane (recommended — splitting that pane does not depend on UI focus); omit them to split the focused pane. The new split is a SHELL by default — pick which shell with `profile`, and optionally run a startup `command` in it. To instead open a WEB PANE (embedded browser) in the new split, pass `url` (profile/command are then ignored). If no profile is specified, the shell defaults to the 'default' profile. PREFER this over terminal_new_tab for one-off commands/diagnostics — it stays next to the active work and doesn't steal focus; terminal_close it when you're done to restore the layout.")]
+    #[tool(description = "Split a pane into two — a SHELL by default, or a WEB PANE (embedded browser) when you pass `url`. This is the ONLY way to put a web page side-by-side with a terminal in the same tab (open_web_pane always creates a separate dedicated tab instead). Returns the new pane's stable paneId UUID. Direction: 'horizontal' (top/bottom) or 'vertical' (left/right, default). Pass window/tab/pane to split a SPECIFIC pane (recommended — splitting that pane does not depend on UI focus); omit them to split the focused pane. For a shell split, pick which shell with `profile` (defaults to the 'default' profile) and optionally run a startup `command` in it; when `url` is set, profile/command are ignored. PREFER this over terminal_new_tab for one-off commands/diagnostics — it stays next to the active work and doesn't steal focus; terminal_close it when you're done to restore the layout.")]
     async fn terminal_split(
         &self,
         Parameters(req): Parameters<SplitRequest>,
@@ -1318,7 +1351,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Schedule a SELF-poke: the next time YOUR OWN pane goes idle (you finish what you're doing), Hyperia delivers `keys` back to you. The safe way to keep yourself moving when you'd otherwise stall — edge-triggered (fires once per running->idle transition, NOT in a loop), capped (max_fires, default 1), and expiring (<=1h). Only works from inside a Hyperia pane (you have a HYPERIA_AGENT_TOKEN env var); an external agent has no pane to target — use pane_pulse_set for another pane.")]
+    #[tool(description = "Schedule a SELF-poke: the next time YOUR OWN pane goes idle (you finish what you're doing), Hyperia delivers `keys` back to you. The safe way to keep yourself moving when you'd otherwise stall — edge-triggered (fires once per running->idle transition, NOT in a loop), capped (max_fires, default 1), expiring (<=1h), and throttled (min 60s between fires; sustained hot re-arming gets warned, then suspended for 1h). ONE callback per pane: registering again REPLACES the existing one — callbacks never stack, so re-arming does not add pokes. To CANCEL a pending poke: pane_pulse_clear with its cb_ id, or re-arm with max_lifetime_secs=1. Only works from inside a Hyperia pane (you have a HYPERIA_AGENT_TOKEN env var); an external agent has no pane to target — use pane_pulse_set for another pane.")]
     async fn pane_on_idle(
         &self,
         Parameters(req): Parameters<OnIdleRequest>,
@@ -1379,7 +1412,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Clear a pane pulse — by its id, or by addressing the pane (window/tab/pane).")]
+    #[tool(description = "Clear a pane pulse OR a pane_on_idle callback — by its id (pulse_N or cb_N), or by addressing the pane (window/tab/pane), which clears everything armed on it.")]
     async fn pane_pulse_clear(
         &self,
         Parameters(req): Parameters<PulseClearRequest>,
@@ -1444,12 +1477,13 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Rename a tab. Changes the display name that appears in the tab bar and in terminal_status.")]
+    #[tool(description = "Rename a tab — or a single PANE when `pane` is given. A pane rename changes its stable codename (the handle terminal_status reports and other tools address it by); use it after resuming a session so the pane matches the name the agent's transcript believes it has — an in-pane agent can rename its own pane.")]
     async fn terminal_rename(
         &self,
         Parameters(req): Parameters<RenameTabRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let body = serde_json::json!({"window": req.window, "tab": req.tab, "name": req.name});
+        let body =
+            serde_json::json!({"window": req.window, "tab": req.tab, "pane": req.pane, "name": req.name});
         let resp = self.post_json("/api/pane/rename", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
@@ -1507,7 +1541,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Open a URL in a new dedicated web pane tab inside Hyperia. Opens an embedded browser tab alongside your terminal tabs — does NOT replace or overlay any existing terminal. Pass a full URL (https://...). Use this to show docs, dashboards, localhost servers, or any web content.")]
+    #[tool(description = "Open a URL in its own SEPARATE web-pane tab inside Hyperia. This tool ALWAYS creates a new dedicated browser tab alongside your terminal tabs — never a split; it does NOT replace or overlay any existing terminal. To put a web page NEXT TO an existing pane in the SAME tab, use terminal_split with `url` instead. Pass a full URL (https://...). Use this for web content that deserves its own tab: docs, dashboards, localhost servers.")]
     async fn open_web_pane(
         &self,
         Parameters(req): Parameters<OpenWebPaneRequest>,
@@ -1515,6 +1549,22 @@ impl HyperiaMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let resp = self
             .post_json_as("/api/web-pane", &serde_json::json!({"url": req.url}), forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Render a markdown document into a NEW Hyperia tab for the human. Supports full markdown (tables, task lists, strikethrough, footnotes) PLUS a highlight extension for joint human+agent analysis: ==text== marks a passage yellow; =={red}text== uses a named color (yellow, red, green, blue, purple, orange, pink, cyan); =={#7af}text== uses any hex color. Highlights inside code blocks/spans are left literal. Pass `path` for a markdown FILE — the tab LIVE-RELOADS ~1.5s after the file changes, so you can keep editing highlights into the file and the human sees them appear in place (ideal for marking up a doc while discussing it). Pass `content` for a one-shot inline render. The tab opens in the BACKGROUND (never steals the human's view); tell them it's there.")]
+    async fn render(
+        &self,
+        Parameters(req): Parameters<RenderRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let resp = self
+            .post_json_as(
+                "/api/render",
+                &serde_json::json!({"path": req.path, "content": req.content, "title": req.title}),
+                forwarded_auth(&ctx).as_deref(),
+            )
             .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
@@ -1774,7 +1824,7 @@ impl HyperiaMcp {
         }
     }
 
-    #[tool(description = "Get a persistent Hyperia identity token for an EXTERNAL agent — one NOT running inside a Hyperia pane, so it has no HYPERIA_AGENT_TOKEN in its environment. Call this the moment a state-changing tool returns 'No identity': it mints (or returns) a persistent hyp_agent_… token. Then set your MCP client's Authorization header to 'Bearer <that token>' and reconnect — after which terminal_run / terminal_keys / terminal_split / request_access etc. work. Read-only/monitoring tools never needed it. The token persists in ~/.hyperia/agents.json across restarts; minting the same name again returns the same token. DOES NOT HELP in-pane agents (you cannot inject a token into your own running connection — fix your MCP config's Authorization header and restart) or containerized agents (the container is ephemeral — fix the host orchestrator's config instead); the 'No identity' refusal text spells out both.")]
+    #[tool(description = "Get a persistent Hyperia identity token — call this the moment a state-changing tool returns 'No identity' (reads never needed one). Mints (or returns) a persistent hyp_agent_… token; the same name always returns the same token, and it survives restarts in ~/.hyperia/agents.json. The reply tells you how to use it IMMEDIATELY — the sidecar honors it on direct HTTP calls to its /api/... routes right away, no restart — and the exact `claude mcp add` command to hand your human so future sessions are born with it. Only your CURRENT MCP connection's header stays frozen until the session restarts; use the direct-HTTP path in the meantime.")]
     async fn request_token(
         &self,
         Parameters(req): Parameters<RequestTokenRequest>,
@@ -1831,8 +1881,8 @@ impl HyperiaMcp {
             },
             {
                 "name": "styles",
-                "description": "Create, list, and delete reusable visual styles for panes.",
-                "tools": ["style_list", "style_create", "style_delete"]
+                "description": "Reusable visual styles for panes: create/list/delete named appearance override sets and apply one to a specific pane live.",
+                "tools": ["style_list", "style_create", "style_apply", "style_delete"]
             },
             {
                 "name": "telemetry",
@@ -1885,6 +1935,45 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
+    /// Styles are config WRITES — identified callers only (reads stay open).
+    /// Returns Err(refusal text) for anonymous/unrecognized callers.
+    async fn require_style_identity(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+    ) -> Result<(), CallToolResult> {
+        let auth = forwarded_auth(ctx);
+        let who = self
+            .get_as("/api/identity/whoami", auth.as_deref())
+            .await
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+        let anonymous = who.map(|w| w["anonymous"].as_bool().unwrap_or(true)).unwrap_or(true);
+        if anonymous {
+            return Err(CallToolResult::success(vec![Content::text(
+                "Style changes require identity (they write shared config). Run request_token, wire the Bearer token into your MCP client, and retry. style_list works without identity.",
+            )]));
+        }
+        Ok(())
+    }
+
+    #[tool(description = "Apply a named style's appearance overrides to ONE pane, live (colors, fontSize, padding, ...). Pass name plus window/tab/pane — an explicit pane target is required. Applying to a pane you don't own asks the human for consent. name 'default' (or 'none') clears the pane back to its profile/global appearance. Create styles with style_create; see docs/configuration.md.")]
+    async fn style_apply(
+        &self,
+        Parameters(req): Parameters<StyleApplyRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({
+            "name": req.name,
+            "window": req.window,
+            "tab": req.tab,
+            "pane": req.pane,
+        });
+        let resp = self
+            .post_json_as("/api/styles/apply", &body, forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
     #[tool(description = "List all styles in the Hyperia config.")]
     async fn style_list(&self) -> Result<CallToolResult, ErrorData> {
         let cfg = self.read_config().await?;
@@ -1901,11 +1990,15 @@ impl HyperiaMcp {
         )]))
     }
 
-    #[tool(description = "Create or clone a style. Optionally clone from an existing style and apply overrides.")]
+    #[tool(description = "Create or clone a style — a named, reusable set of appearance overrides (e.g. {\"backgroundColor\": \"#1a1a2e\", \"fontSize\": 16}; any appearance key from docs/configuration.md). Apply to a pane with style_apply. Requires identity.")]
     async fn style_create(
         &self,
         Parameters(req): Parameters<StyleCreateRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        if let Err(refusal) = self.require_style_identity(&ctx).await {
+            return Ok(refusal);
+        }
         let mut cfg = self.read_config().await?;
         let styles = cfg["config"]["styles"]
             .as_array()
@@ -1929,8 +2022,22 @@ impl HyperiaMcp {
         };
 
         if let Some(overrides) = req.overrides {
-            if let Some(obj) = overrides.as_object() {
-                for (k, v) in obj {
+            // MCP clients routinely stringify untyped object params — unwrap a
+            // stringified object, and REFUSE anything that still isn't an
+            // object. Silently storing an empty style here is exactly how
+            // "style_apply does nothing" happened: create succeeded, config
+            // was {}, and the apply faithfully painted nothing.
+            let overrides = coerce_json_string(overrides);
+            let obj = match overrides.as_object() {
+                Some(o) => o.clone(),
+                None => {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "Error: overrides must be a JSON object (e.g. {\"backgroundColor\": \"#1a1a2e\"}). Got a non-object value — the style was NOT created.",
+                    )]))
+                }
+            };
+            {
+                for (k, v) in &obj {
                     config.insert(k.clone(), v.clone());
                 }
             }
@@ -1957,11 +2064,15 @@ impl HyperiaMcp {
         )]))
     }
 
-    #[tool(description = "Delete a style by name. Cannot delete the 'default' style.")]
+    #[tool(description = "Delete a style by name. Cannot delete the 'default' style. Requires identity.")]
     async fn style_delete(
         &self,
         Parameters(req): Parameters<StyleDeleteRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        if let Err(refusal) = self.require_style_identity(&ctx).await {
+            return Ok(refusal);
+        }
         if req.name == "default" {
             return Ok(CallToolResult::success(vec![Content::text(
                 "Cannot delete the 'default' style",
@@ -2028,7 +2139,15 @@ impl HyperiaMcp {
         // config.profiles as the string "[{...}]" instead of an array crashes
         // the app's config loader. Unwrap a stringified array/object to the real
         // structure before writing.
-        let value = coerce_json_string(req.value.clone());
+        let mut value = coerce_json_string(req.value.clone());
+        // Some MCP clients stringify an untyped null param, so the literal
+        // string "null" arrives instead of JSON null — and we once stored it
+        // verbatim (an unparseable "null" backgroundColor crashed the app's
+        // color parser with an error dialog). Nobody stores the string "null"
+        // on purpose: treat it as key removal, same as real null.
+        if value == serde_json::Value::String("null".into()) {
+            value = serde_json::Value::Null;
+        }
         match set_path(&mut cfg, &req.path, value.clone()) {
             Ok(()) => {
                 self.write_config(&cfg).await?;
@@ -2177,12 +2296,18 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "Record a telemetry event (file op, network, tokens) for a pane.")]
+    #[tool(description = "Record a telemetry event (file op, network, tokens) for a pane. `event` is an object like {\"kind\":\"Tokens\",\"input\":120,\"output\":40,\"cache\":0,\"model\":\"...\"} — kinds: Tokens, Network (direction: Inbound|Outbound, host, bytes), FileOp (op: Create|Write|Delete|Rename, path, bytes?).")]
     async fn telemetry_record(
         &self,
         Parameters(req): Parameters<TelemetryEventRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut body = req.event.clone();
+        // Some MCP clients deliver the untyped `event` param as a JSON STRING —
+        // parse it back to an object instead of forwarding a useless string.
+        let mut body = match &req.event {
+            serde_json::Value::String(s) => serde_json::from_str::<serde_json::Value>(s)
+                .map_err(|e| ErrorData::invalid_params(format!("event is a string that isn't valid JSON: {e}"), None))?,
+            v => v.clone(),
+        };
         if let Some(obj) = body.as_object_mut() {
             obj.insert("pane_uid".into(), serde_json::json!(req.pane_uid));
         }

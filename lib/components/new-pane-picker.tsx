@@ -276,20 +276,6 @@ const pickerEnterBadgeStyle: React.CSSProperties = {
   cursor: 'pointer',
   flexShrink: 0
 };
-// Small hotkey chip ("W" / "S" / "A") next to each section label — same look
-// as the inline enter badge, sized down to fit the label column.
-const pickerKeyHintStyle: React.CSSProperties = {
-  fontFamily: 'var(--font-mono)',
-  fontSize: '9px',
-  fontWeight: 600,
-  padding: '1px var(--space-4)',
-  border: '0.5px solid var(--border-neutral)',
-  borderRadius: 'var(--radius-3)',
-  color: 'var(--text-tertiary)',
-  userSelect: 'none',
-  lineHeight: '1.2',
-  flexShrink: 0
-};
 const pickerDropdownStyle: React.CSSProperties = {
   position: 'absolute',
   top: 'calc(100% + var(--space-4))',
@@ -321,9 +307,7 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
   private filteredItems(): ComboItem[] {
     const q = this.state.text.trim().toLowerCase();
     if (!this.state.dirty || !q) return this.props.items;
-    return this.props.items.filter(
-      (it) => it.label.toLowerCase().includes(q) || it.key.toLowerCase().includes(q)
-    );
+    return this.props.items.filter((it) => it.label.toLowerCase().includes(q) || it.key.toLowerCase().includes(q));
   }
 
   // Show the "create new …" fallback only when the user has typed something
@@ -388,7 +372,10 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
 
     return (
       <div style={pickerRowStyle}>
-        <div style={{...pickerLabelStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-4)'}} title={keyHintTitle}>
+        <div
+          style={{...pickerLabelStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-4)'}}
+          title={keyHintTitle}
+        >
           <span>{label}</span>
         </div>
 
@@ -799,6 +786,16 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     this.newWithProfile(name);
   };
 
+  // Dashboard link: swap THIS picker pane into the sidecar-served /dashboard —
+  // same exit + setWebPaneUrl pattern the guide (W) uses.
+  private openDashboardPane = () => {
+    const {groupUid, uid, setWebPaneUrl} = this.props;
+    if (!setWebPaneUrl || !groupUid) return;
+    const port = process.env.HYPERIA_PORT || '9800';
+    rpc.emit('exit', {uid});
+    setWebPaneUrl(groupUid, `http://localhost:${port}/dashboard`);
+  };
+
   // Hyperia Agent always gets its OWN tab (labeled "Hyperia Agent"; focuses
   // the existing one if open) — routed through the shared 'open web pane req'
   // handler in lib/index.tsx. The picker pane closes itself. Remembered under
@@ -924,7 +921,9 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                     {entry.name}
                   </span>
                   {installed && (
-                    <span style={{fontSize: '10px', color: 'var(--success-text, #3fb950)', fontFamily: 'var(--font-sans)'}}>
+                    <span
+                      style={{fontSize: '10px', color: 'var(--success-text, #3fb950)', fontFamily: 'var(--font-sans)'}}
+                    >
                       ✓ installed
                     </span>
                   )}
@@ -984,7 +983,6 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             );
           })}
         </div>
-
       </div>
     );
   }
@@ -1015,17 +1013,18 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     });
   }
 
-  // Default shell: configured defaultProfile → remembered last-used → first
-  // shell. The CONFIGURED default wins over the last-used shell — setting a
-  // default profile (e.g. PowerShell 7) must stick, so merely having last
-  // launched another profile (e.g. an SSH-into-a-box shell) can't quietly
-  // become what a new pane opens. Last-used is only a fallback when no valid
-  // default is configured.
+  // Default shell: remembered LAST-USED → configured defaultProfile → first
+  // shell. The shell you last launched is what the picker pre-fills and what
+  // S/Enter opens — "new pane = what I was just working in". The configured
+  // default is only the seed before any shell has ever been picked. (This
+  // deliberately reverses the old configured-default-wins rule: with an
+  // SSH-into-a-box profile as the configured default, every picker kept
+  // preselecting the server no matter what you'd just chosen.)
   private resolveDefaultShell(shellItems: ComboItem[]): ComboItem | undefined {
     const {defaultProfile} = this.props;
     return (
-      (defaultProfile && shellItems.find((i) => i.key === defaultProfile)) ||
       (this.state.lastUsedShell && shellItems.find((i) => i.key === this.state.lastUsedShell)) ||
+      (defaultProfile && shellItems.find((i) => i.key === defaultProfile)) ||
       shellItems[0]
     );
   }
@@ -1076,7 +1075,9 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     // "installed" yet. It lives in the install view with a configure flow
     // (launchHyperiaShell kept for that flow to reuse).
     // Custom agents the user saved (kind 'agent').
-    for (const p of profileList.filter((p: any) => p.kind === 'agent' && profileFitsPlatform(p))) {
+    for (const p of profileList.filter(
+      (agentProfile: any) => agentProfile.kind === 'agent' && profileFitsPlatform(agentProfile)
+    )) {
       agentItems.push({
         key: p.name,
         label: p.name,
@@ -1096,8 +1097,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     const shellDefaultText = defaultShellItem ? defaultShellItem.label : '';
 
     const agentItems = this.buildAgentItems();
-    const rememberedAgentItem =
-      this.state.lastUsedAgent && agentItems.find((i) => i.key === this.state.lastUsedAgent);
+    const rememberedAgentItem = this.state.lastUsedAgent && agentItems.find((i) => i.key === this.state.lastUsedAgent);
     const defaultAgentItem = rememberedAgentItem || agentItems[0];
     const agentDefaultText = defaultAgentItem ? defaultAgentItem.label : '';
 
@@ -1133,8 +1133,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         onMouseDown={(e) => {
           this.props.onActivate?.();
           const t = e.target as HTMLElement | null;
-          const typing =
-            !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+          const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
           if (!e.defaultPrevented && !typing) this.rootRef.current?.focus({preventScroll: true});
         }}
         onContextMenu={(e) => {
@@ -1170,7 +1169,10 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
           {/* New Webpane row — "New Webpane" label left of the URL box, same
               width/shape as the shell + agent rows below it. */}
           <div style={pickerRowStyle}>
-            <div style={{...pickerLabelStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-4)'}} title="Press W — open the Hyperia guide">
+            <div
+              style={{...pickerLabelStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-4)'}}
+              title="Press W — open the Hyperia guide"
+            >
               <span>New Webpane</span>
             </div>
             <div style={{flex: 1, minWidth: 0, maxWidth: PICKER_BOX_MAX}}>
@@ -1224,10 +1226,46 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             onAdd={() => this.setState({view: 'install'})}
             isGlimmerActive={isGlimmerActive}
             keyHint="A"
-            keyHintTitle={`Press A — launch ${
-              rememberedAgentItem ? rememberedAgentItem.label : 'the Hyperia Agent'
-            }`}
+            keyHintTitle={`Press A — launch ${rememberedAgentItem ? rememberedAgentItem.label : 'the Hyperia Agent'}`}
           />
+
+          {/* Quick page links — below the pickers, above the version footer.
+              Styled to match the sidecar pages (agent config): quiet text
+              links, info accent, no chrome. */}
+          <div
+            style={{
+              ...pickerRowStyle,
+              justifyContent: 'center',
+              gap: 'var(--space-8)',
+              marginTop: 'var(--space-8)'
+            }}
+          >
+            <span
+              onClick={this.openDashboardPane}
+              title="Open the Hyperia dashboard in this pane"
+              style={{
+                fontSize: '11px',
+                fontFamily: 'var(--font-sans)',
+                color: 'var(--info-text)',
+                cursor: 'pointer'
+              }}
+            >
+              Dashboard
+            </span>
+            <span style={{fontSize: '11px', color: 'var(--text-tertiary)'}}>·</span>
+            <span
+              onClick={this.launchHyperiaShell}
+              title="Open the Hyperia Agent tab"
+              style={{
+                fontSize: '11px',
+                fontFamily: 'var(--font-sans)',
+                color: 'var(--info-text)',
+                cursor: 'pointer'
+              }}
+            >
+              Hyperia Agent
+            </span>
+          </div>
 
           {/* Footer — running version + self-update command. Like the install
               view, [run] opens a shell with the command TYPED but not
@@ -1246,9 +1284,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                 {currentVersion ? `Hyperia v${normalizeVersion(currentVersion)}` : 'Hyperia'}
               </span>
               {upToDate ? (
-                <span
-                  style={{fontSize: '10px', color: 'var(--success-text, #3fb950)', fontFamily: 'var(--font-sans)'}}
-                >
+                <span style={{fontSize: '10px', color: 'var(--success-text, #3fb950)', fontFamily: 'var(--font-sans)'}}>
                   ✓ up to date
                 </span>
               ) : latestVersion ? (
@@ -1265,10 +1301,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                 {updateCopied ? 'copied ✓' : 'copy'}
               </span>
               {upToDate ? (
-                <span
-                  title="Already up to date"
-                  style={{...pickerEnterBadgeStyle, cursor: 'default', opacity: 0.45}}
-                >
+                <span title="Already up to date" style={{...pickerEnterBadgeStyle, cursor: 'default', opacity: 0.45}}>
                   run
                 </span>
               ) : (

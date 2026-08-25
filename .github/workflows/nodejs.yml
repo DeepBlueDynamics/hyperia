@@ -18,7 +18,11 @@ jobs:
         os:
           - macos-latest
           - ubuntu-latest
-          - windows-latest
+          # Pinned to windows-2022 (VS 2022). windows-latest moved to an image
+          # with VS 18, which node-gyp can't detect → native rebuild
+          # (native-process-working-directory) fails in install-app-deps.
+          # (Same pin as build.yml / nightly.yml.)
+          - windows-2022
       fail-fast: false
     steps:
       - name: Checkout
@@ -39,7 +43,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-yarn-
       - name: Install
-        run: yarn install
+        # --network-timeout: yarn v1's 30s socket default keeps tripping
+        # ESOCKETTIMEDOUT on big tarballs from the Windows runner.
+        run: yarn install --network-timeout 300000
         env:
           npm_config_node_gyp: ${{ github.workspace }}${{ runner.os == 'Windows' && '\node_modules\node-gyp\bin\node-gyp.js' || '/node_modules/node-gyp/bin/node-gyp.js' }}
       - name: Install libarchive-tools
@@ -147,13 +153,20 @@ jobs:
             ${{ runner.os }}-yarn-
       - name: Install
         run: |
-          yarn install
+          yarn install --network-timeout 300000
           sudo apt update
           sudo apt install libarchive-tools
       - name: Compile
         run: yarn run build
+      # ubuntu-latest (24.04) dropped the `qemu` metapackage and binfmt-support
+      # that arm-runner-action@v2.5.2 relied on — preinstall the split packages
+      # the action actually needs.
+      - name: Install qemu binfmt deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
       - name: rebuild node-pty
-        uses: pguyot/arm-runner-action@v2.5.2
+        uses: pguyot/arm-runner-action@v2.6.5
         with:
           image_additional_mb: 2000
           base_image: ${{ matrix.image }}
@@ -169,13 +182,9 @@ jobs:
       - name: chown node-pty
         run: |
           sudo chown -R $USER:$USER target/node_modules/node-pty
-      - name: Prepare v8 snapshot
-        if: matrix.name == 'armv7l'
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt update
-          sudo apt install -y libglib2.0-0:i386 libexpat1:i386 libgcc-s1:i386
-          npm_config_arch=armv7l yarn run v8-snapshot:arch
+      # (The old "Prepare v8 snapshot" armv7l step is gone: the
+      # v8-snapshot:arch script no longer exists and nothing in the builder
+      # configs consumes a snapshot blob.)
       - name: Build
         run: yarn run electron-builder -l deb rpm AppImage pacman --${{ matrix.name }} -c electron-builder-linux-ci.json
         env:

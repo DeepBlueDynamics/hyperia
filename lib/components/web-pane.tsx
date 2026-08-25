@@ -10,14 +10,7 @@ import {subscribePermsOverlay} from '../permissions-bus';
 import rpc from '../rpc';
 import {toNavigableUrl} from '../utils/navigable-url';
 import {countPathHorizontalStacks} from '../utils/term-groups';
-import {
-  getSecurityState,
-  normalizeUrlKey,
-  stripUrlQuery,
-  faviconForUrl,
-  isOAuthUrl,
-  isValidUrl
-} from '../utils/web-pane-helpers';
+import {getSecurityState, normalizeUrlKey, stripUrlQuery, isOAuthUrl, isValidUrl} from '../utils/web-pane-helpers';
 import {clickFnStr, ghostMouseFnStr} from '../utils/webview-scripts';
 
 import {AskAiView} from './ask-ai-view';
@@ -134,6 +127,11 @@ interface WebPaneState {
   zoomFactor: number;
   // Which collapsed history roots (e.g. all "google.com/maps" URLs) are expanded.
   expandedHistoryRoots: {[key: string]: boolean};
+  // Paused HTTP-auth challenge (401/407) from the native view — the request
+  // waits on this custom credential toast (Electron has no stock dialog).
+  authRequest: {id: string; host: string; port: number; realm: string; scheme: string; isProxy: boolean} | null;
+  authUser: string;
+  authPass: string;
 }
 
 // net error codes where the site couldn't be reached → fall back to a DDG search:
@@ -306,7 +304,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       findActive: 0,
       findTotal: 0,
       zoomFactor: 1,
-      expandedHistoryRoots: {}
+      expandedHistoryRoots: {},
+      authRequest: null,
+      authUser: '',
+      authPass: ''
     };
   }
 
@@ -333,14 +334,18 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       // an inactive tab is parked at left:-9999em (still has size), so the rect
       // check alone can't detect it.
       const inViewport = this.state.onScreen !== false;
-      const overlayHidden = this.state.isUrlNavigatorOpen || this.state.findOpen || this.state.headerHover || this.state.permOverlay;
+      const overlayHidden =
+        this.state.isUrlNavigatorOpen ||
+        this.state.findOpen ||
+        this.state.headerHover ||
+        this.state.permOverlay ||
+        !!this.state.authRequest;
       const showable = hasSize && inViewport && !this.state.error;
       const visible = showable && !overlayHidden;
       // Freeze (capture a still) ONLY when hiding an on-screen pane for a DOM
       // overlay — a tab-switch hide is off-screen and needs no capture.
       const freeze = showable && overlayHidden;
       try {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         ipcRenderer.send('web-pane:set-bounds', {
           uid: this.props.groupUid,
           bounds: {x: rect.left, y: rect.top, width: rect.width, height: rect.height},
@@ -354,7 +359,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   };
 
   reloadWebview = (hard: boolean) => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     ipcRenderer.send('web-pane:nav', {
       uid: this.props.groupUid,
       action: hard ? 'reloadIgnoringCache' : 'reload'
@@ -367,7 +371,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     const u = this.state.activeUrl || this.props.url || this.state.urlInputVal || '';
     if (/^https?:\/\//i.test(u)) {
       try {
-        shell.openExternal(u);
+        void shell.openExternal(u);
       } catch (err) {
         console.error('openExternal failed:', err);
       }
@@ -378,10 +382,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   // REJECT on failure — so callers can keep the old executeJavaScript
   // .then/.catch shape. Replaces the removed <webview>.executeJavaScript.
   execInPage = async (code: string): Promise<any> => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     const res = await ipcRenderer.invoke('web-pane:execute-js', {uid: this.props.groupUid, code});
-    if (res && res.ok) return res.result;
-    throw new Error((res && res.error) || 'execute-js failed');
+    if (res?.ok) return res.result;
+    throw new Error(res?.error || 'execute-js failed');
   };
 
   // Sample the page's background color so the pane ground matches it (avoids the
@@ -425,7 +428,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         this.props.onSetUrl?.(targetUrl);
       }
     } else {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       ipcRenderer.send('web-pane:nav', {uid: this.props.groupUid, action: 'back'});
     }
   };
@@ -441,7 +443,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         this.props.onSetUrl?.(targetUrl);
       }
     } else {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       ipcRenderer.send('web-pane:nav', {uid: this.props.groupUid, action: 'forward'});
     }
   };
@@ -494,7 +495,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     // appeared to do nothing.
     if (!targetUrl.startsWith('ai://')) {
       const full = /^[a-z]+:\/\//i.test(targetUrl) ? targetUrl : 'https://' + targetUrl;
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+
       ipcRenderer.send('web-pane:nav', {uid: this.props.groupUid, action: 'load', url: full});
     }
   };
@@ -1021,14 +1022,11 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       const wasNative = this.isNativeWeb(prevProps.url);
       const isNative = this.isNativeWeb(this.props.url);
       if (isNative && !wasNative) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         ipcRenderer.send('web-pane:create', {uid: this.props.groupUid, url: this.props.url});
         this.reportBounds();
       } else if (isNative && wasNative) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         ipcRenderer.send('web-pane:nav', {uid: this.props.groupUid, action: 'load', url: this.props.url});
       } else if (!isNative && wasNative) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         ipcRenderer.send('web-pane:destroy', {uid: this.props.groupUid});
       }
 
@@ -1079,7 +1077,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       prevState.findOpen !== this.state.findOpen ||
       prevState.error !== this.state.error ||
       prevState.headerHover !== this.state.headerHover ||
-      prevState.permOverlay !== this.state.permOverlay
+      prevState.permOverlay !== this.state.permOverlay ||
+      prevState.authRequest !== this.state.authRequest
     ) {
       this.reportBounds();
     }
@@ -1094,7 +1093,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       // focusing a re-keyed group), it rebuilds — fixing the blank
       // Hyperia Agent tab you couldn't even right-click.
       if (this.isNativeWeb()) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         ipcRenderer.send('web-pane:create', {uid: this.props.groupUid, url: this.props.url});
         requestAnimationFrame(() => this.reportBounds());
       }
@@ -1166,7 +1164,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     // Check if AI is configured
     try {
-      /* eslint-disable @typescript-eslint/no-unsafe-call */
       ipcRenderer
         .invoke('has-agent-token')
         .then((configured: boolean) => {
@@ -1175,7 +1172,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         .catch((err: any) => {
           console.warn('Failed to check AI config:', err);
         });
-      /* eslint-enable @typescript-eslint/no-unsafe-call */
     } catch (err) {
       console.warn('IPC invoke error for has-agent-token:', err);
     }
@@ -1185,7 +1181,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     // We (1) ask main to create it, (2) push its geometry, and (3) subscribe to the
     // web-pane:* state pushes that replace the old <webview> DOM events.
     if (this.isNativeWeb()) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       ipcRenderer.send('web-pane:create', {uid: this.props.groupUid, url: this.props.url});
       // First bounds push after the layout has painted this frame.
       requestAnimationFrame(() => this.reportBounds());
@@ -1265,11 +1260,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         // On failure: drop the bad entry, and DDG-fallback an unresolved host.
         if (failUrl) {
           this.removeHistoryEntry('url', failUrl);
-          if (
-            failCode != null &&
-            DDG_RESOLVE_FAIL.has(failCode) &&
-            !/duckduckgo\.com\/\?q=/i.test(failUrl)
-          ) {
+          if (failCode != null && DDG_RESOLVE_FAIL.has(failCode) && !/duckduckgo\.com\/\?q=/i.test(failUrl)) {
             const q = failUrl.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/+$/, '');
             this.navigateWebview('https://duckduckgo.com/?q=' + encodeURIComponent(q));
           }
@@ -1299,15 +1290,17 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       if (!payload || payload.uid !== this.props.groupUid) return;
       // Slim scrollbars, but only as a DEFAULT the page can override: prepend a
       // <style> at the very top of <head> so the page's own scrollbar rules win.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      void ipcRenderer.invoke('web-pane:execute-js', {
-        uid: this.props.groupUid,
-        code:
-          "(function(){try{var ID='__hyperia_slim_sb__';if(document.getElementById(ID))return;" +
-          "var s=document.createElement('style');s.id=ID;" +
-          "s.textContent='::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(128,128,128,.45);border-radius:6px}::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,.7)}';" +
-          'var h=document.head||document.documentElement;h.insertBefore(s,h.firstChild);}catch(e){}})()'
-      }).catch(() => {});
+
+      void ipcRenderer
+        .invoke('web-pane:execute-js', {
+          uid: this.props.groupUid,
+          code:
+            "(function(){try{var ID='__hyperia_slim_sb__';if(document.getElementById(ID))return;" +
+            "var s=document.createElement('style');s.id=ID;" +
+            "s.textContent='::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(128,128,128,.45);border-radius:6px}::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,.7)}';" +
+            'var h=document.head||document.documentElement;h.insertBefore(s,h.firstChild);}catch(e){}})()'
+        })
+        .catch(() => {});
       this.probePageBgColor();
       // In-page input concerns (zoom shortcuts, OAuth redirect bail-out, focus →
       // pane activation) are wired on the native webContents in
@@ -1377,10 +1370,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
     // target="_blank" / window.open in the page → the manager routes it here
     // (keyed by pane uid) so we split a new web pane BELOW this one.
-    this._openSplitHandler = (
-      _e: any,
-      payload: {uid: string; url: string; direction?: 'HORIZONTAL' | 'VERTICAL'}
-    ) => {
+    this._openSplitHandler = (_e: any, payload: {uid: string; url: string; direction?: 'HORIZONTAL' | 'VERTICAL'}) => {
       if (payload?.uid !== this.props.groupUid || !payload.url) return;
       this.props.onSplitWebPane?.(payload.url, payload.direction === 'VERTICAL' ? 'VERTICAL' : 'HORIZONTAL');
     };
@@ -1406,6 +1396,22 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       this.setState({frozenShot: payload.shot});
     };
     ipcRenderer.on('web-pane:frozen', this._frozenHandler);
+
+    // HTTP-auth challenge from the native view → raise the credential toast.
+    // A newer challenge replaces a stale one (the old paused request is
+    // cancelled so its callback isn't leaked in main).
+    this._authHandler = (_e: any, payload: any) => {
+      if (!payload || payload.uid !== this.props.groupUid) return;
+      const prev = this.state.authRequest;
+      if (prev && prev.id !== payload.id) {
+        ipcRenderer.send('web-pane:auth-response', {id: prev.id, cancel: true});
+      }
+      this.setState({authRequest: payload as WebPaneState['authRequest'], authUser: '', authPass: ''}, () => {
+        requestAnimationFrame(() => this.authUserRef.current?.focus());
+      });
+    };
+
+    ipcRenderer.on('web-pane:auth-request', this._authHandler);
 
     this._clickHandler = (data: {uid: string; text?: string; selector?: string}) => {
       if (data.uid !== this.props.groupUid) return;
@@ -1558,6 +1564,14 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (this._frozenHandler) {
       ipcRenderer.removeListener('web-pane:frozen', this._frozenHandler);
     }
+    if (this._authHandler) {
+      ipcRenderer.removeListener('web-pane:auth-request', this._authHandler);
+    }
+    // A challenge still up when the pane goes away → cancel it so main doesn't
+    // hold the paused request's callback forever.
+    if (this.state.authRequest) {
+      ipcRenderer.send('web-pane:auth-response', {id: this.state.authRequest.id, cancel: true});
+    }
     if (this._reloadHandler) {
       rpc.removeListener('web-pane-reload', this._reloadHandler);
     }
@@ -1575,7 +1589,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     }
 
     // Tear down the native view + its state listeners.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+
     ipcRenderer.send('web-pane:destroy', {uid: this.props.groupUid});
     if (this._stateHandler) ipcRenderer.removeListener('web-pane:state', this._stateHandler);
     if (this._foundHandler) ipcRenderer.removeListener('web-pane:found-in-page', this._foundHandler);
@@ -1685,7 +1699,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   setZoom = (factor: number) => {
     const clamped = Math.max(0.5, Math.min(3.0, Math.round(factor * 10) / 10));
     this.setState({zoomFactor: clamped});
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+
     ipcRenderer.send('web-pane:zoom', {uid: this.props.groupUid, factor: clamped});
   };
 
@@ -1705,6 +1719,153 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   };
 
   _reloadHandler: ((uid: string) => void) | null = null;
+  _authHandler: ((e: any, payload: any) => void) | null = null;
+  authUserRef = React.createRef<HTMLInputElement>();
+
+  // ── HTTP-auth credential toast ───────────────────────────────────────────
+  submitAuth = (): void => {
+    const req = this.state.authRequest;
+    if (!req) return;
+
+    ipcRenderer.send('web-pane:auth-response', {
+      id: req.id,
+      username: this.state.authUser,
+      password: this.state.authPass
+    });
+    this.setState({authRequest: null, authUser: '', authPass: ''});
+  };
+
+  cancelAuth = (): void => {
+    const req = this.state.authRequest;
+    if (!req) return;
+
+    ipcRenderer.send('web-pane:auth-response', {id: req.id, cancel: true});
+    this.setState({authRequest: null, authUser: '', authPass: ''});
+  };
+
+  // The credential toast for a paused HTTP-auth challenge. Rendered inside the
+  // pane body OVER the frozen still — the native view is freeze-swapped out
+  // while a challenge is up (overlayHidden), so this DOM is actually visible.
+  renderAuthToast(): JSX.Element | null {
+    const ar = this.state.authRequest;
+    if (!ar) return null;
+    const port = ar.port && ar.port !== 80 && ar.port !== 443 ? `:${ar.port}` : '';
+    const plainHttp = ar.scheme === 'basic' && !ar.isProxy && !/^https/i.test(this.state.activeUrl || '');
+    const subtitle =
+      (ar.realm ? `"${ar.realm}" · ${ar.scheme} auth` : `${ar.scheme} auth`) +
+      (plainHttp ? ' · sent unencrypted (http)' : '');
+    const inputStyle: React.CSSProperties = {
+      display: 'block',
+      width: '100%',
+      boxSizing: 'border-box',
+      padding: '6px 8px',
+      background: 'var(--bg-secondary, rgba(255,255,255,0.06))',
+      border: '1px solid var(--border-neutral)',
+      borderRadius: 'var(--radius-4)',
+      color: 'var(--text-primary)',
+      fontSize: '13px',
+      outline: 'none'
+    };
+    return (
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'center',
+          paddingTop: '48px',
+          background: 'rgba(0, 0, 0, 0.45)',
+          zIndex: 20
+        }}
+        onMouseDown={(e) => {
+          // Backdrop click = cancel (matches consent-toast snooze feel).
+          if (e.target === e.currentTarget) this.cancelAuth();
+        }}
+      >
+        <div
+          style={{
+            background: 'var(--bg-primary)',
+            border: '1px solid var(--border-neutral)',
+            borderRadius: 'var(--radius-4)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            padding: '16px 18px',
+            width: 'min(360px, calc(100% - 32px))',
+            color: 'var(--text-primary)',
+            fontSize: '13px'
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.stopPropagation();
+              this.cancelAuth();
+            }
+          }}
+        >
+          <div style={{fontWeight: 600, marginBottom: '4px'}}>
+            {ar.isProxy ? 'Proxy sign-in' : 'Sign in'} — {ar.host}
+            {port}
+          </div>
+          <div style={{color: 'var(--text-tertiary)', fontSize: '11px', marginBottom: '12px'}}>{subtitle}</div>
+          <input
+            ref={this.authUserRef}
+            type="text"
+            placeholder="Username"
+            value={this.state.authUser}
+            onChange={(e) => this.setState({authUser: e.target.value})}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') this.submitAuth();
+            }}
+            autoComplete="off"
+            spellCheck={false}
+            style={{...inputStyle, marginBottom: '8px'}}
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={this.state.authPass}
+            onChange={(e) => this.setState({authPass: e.target.value})}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') this.submitAuth();
+            }}
+            autoComplete="off"
+            style={{...inputStyle, marginBottom: '14px'}}
+          />
+          <div style={{display: 'flex', justifyContent: 'flex-end', gap: '8px'}}>
+            <button
+              onClick={this.cancelAuth}
+              style={{
+                padding: '5px 12px',
+                background: 'transparent',
+                border: '1px solid var(--border-neutral)',
+                borderRadius: 'var(--radius-4)',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                cursor: 'pointer'
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={this.submitAuth}
+              style={{
+                padding: '5px 12px',
+                background: 'var(--accent, #4a9eff)',
+                border: '1px solid transparent',
+                borderRadius: 'var(--radius-4)',
+                color: '#fff',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              Sign in
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   _clickHandler: ((data: {uid: string; text?: string; selector?: string}) => void) | null = null;
   _readHandler: ((data: {uid: string}) => void) | null = null;
   _evalHandler: ((data: {uid: string; js: string}) => void) | null = null;
@@ -1724,27 +1885,25 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   };
 
   closeFind = (): void => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     ipcRenderer.send('web-pane:stop-find', {uid: this.props.groupUid});
     this.setState({findOpen: false, findActive: 0, findTotal: 0});
   };
 
   doFind = (text: string, forward = true): void => {
     if (!text) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       ipcRenderer.send('web-pane:stop-find', {uid: this.props.groupUid});
       this.setState({findActive: 0, findTotal: 0});
       return;
     }
     // findNext:false starts a fresh search; web-pane:found-in-page updates counts.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+
     ipcRenderer.send('web-pane:find', {uid: this.props.groupUid, text, forward, findNext: false});
   };
 
   findStep = (forward: boolean): void => {
     const text = this.state.findText;
     if (!text) return;
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+
     ipcRenderer.send('web-pane:find', {uid: this.props.groupUid, text, forward, findNext: true});
   };
 
@@ -1758,7 +1917,6 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     // e.currentTarget is null by the time the capture resolves.
     const iconEl = (e.currentTarget as HTMLElement).querySelector('i');
     try {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       const dataURL: string | null = await ipcRenderer.invoke('web-pane:capture', {uid: this.props.groupUid});
       if (!dataURL) return;
       // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -1843,7 +2001,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   // itself; the native view's in-page menu is built in app/web-pane-manager.ts).
   handleContextMenu = (e: React.MouseEvent) => {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
-    /* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
+    /* eslint-disable @typescript-eslint/no-var-requires */
     const remote = require('@electron/remote');
     const {Menu, MenuItem} = remote;
     const menu = new Menu();
@@ -1859,7 +2017,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     menu.append(new MenuItem({type: 'separator'}));
     menu.append(new MenuItem({label: 'Close Tab', click: () => this.props.onClose?.()}));
     menu.popup();
-    /* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
+    /* eslint-enable @typescript-eslint/no-var-requires */
   };
 
   handlePaneBandContextMenu = (e: React.MouseEvent) => {
@@ -1876,7 +2034,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       }
     }
 
-    /* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
+    /* eslint-disable @typescript-eslint/no-var-requires */
     const remote = require('@electron/remote');
     const {Menu, MenuItem} = remote;
     const menu = new Menu();
@@ -1996,7 +2154,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     );
 
     menu.popup();
-    /* eslint-enable @typescript-eslint/no-var-requires, @typescript-eslint/no-unsafe-call */
+    /* eslint-enable @typescript-eslint/no-var-requires */
   };
 
   render() {
@@ -2014,8 +2172,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     const splitLabel = (this.props as any).splitLabel;
     const showStrip = !!splitLabel || hasSession;
     const isAi = url && url.startsWith('ai://');
-    const getStartIdx = (termGroups: Record<string, any>, groupUid: string): number => {
-      let currentUid = groupUid;
+    const getStartIdx = (termGroups: Record<string, any>, gUid: string): number => {
+      let currentUid = gUid;
       while (termGroups[currentUid]?.parentUid) {
         currentUid = termGroups[currentUid].parentUid;
       }
@@ -2029,8 +2187,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       return hashCode(currentUid) % 9;
     };
 
-    const getPaneTint = (startIdx: number, splitLabel?: string): string => {
-      const paneIdx = splitLabel ? splitLabel.charCodeAt(0) - 97 : 0; // 'a' -> 0, 'b' -> 1...
+    const getPaneTint = (startIdx: number, paneLabel?: string): string => {
+      const paneIdx = paneLabel ? paneLabel.charCodeAt(0) - 97 : 0; // 'a' -> 0, 'b' -> 1...
       const TINTS = ['success', 'info', 'warning', 'danger'];
       return TINTS[(startIdx + paneIdx) % TINTS.length];
     };
@@ -2110,389 +2268,393 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             onMouseEnter={this.onHeaderMouseEnter}
             onMouseLeave={this.onHeaderMouseLeave}
           >
-          <PaneBand
-            ref={this.labelRef}
-            paneType={isAi ? 'ai' : 'web'}
-            paneId={this.props.groupUid}
-            tint={tint as any}
-            label={labelText}
-            paneName={labelText}
-            isSplitRightDisabled={hideSplits}
-            isSplitDownDisabled={isSplitDownDisabled || hideSplits}
-            navCluster={
-              <div
-                className="web-nav-cluster"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-2)',
-                  flexShrink: 0
-                }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                {showBack && (
-                  <span
-                    className="term_controlIcon term_tooltipTrigger"
-                    onClick={this.goBack}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      cursor: this.state.canGoBack ? 'pointer' : 'default',
-                      opacity: this.state.canGoBack ? 1 : 0.4,
-                      pointerEvents: this.state.canGoBack ? 'auto' : 'none'
-                    }}
-                  >
-                    <i className="ti ti-arrow-left" style={{fontSize: '14px'}} aria-hidden="true" />
-                    <div className="term_tooltip" style={{minWidth: '160px'}}>
-                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Back</div>
-                      <div
-                        style={{
-                          fontSize: '11px',
-                          fontFamily: 'var(--font-mono)',
-                          color: 'var(--text-secondary)',
-                          marginTop: 'var(--space-2)'
-                        }}
-                      >
-                        Alt+Left
-                      </div>
-                    </div>
-                  </span>
-                )}
-                {showForward && (
-                  <span
-                    className="term_controlIcon term_tooltipTrigger"
-                    onClick={this.goForward}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      cursor: this.state.canGoForward ? 'pointer' : 'default',
-                      opacity: this.state.canGoForward ? 1 : 0.4,
-                      pointerEvents: this.state.canGoForward ? 'auto' : 'none'
-                    }}
-                  >
-                    <i className="ti ti-arrow-right" style={{fontSize: '14px'}} aria-hidden="true" />
-                    <div className="term_tooltip" style={{minWidth: '160px'}}>
-                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Forward</div>
-                      <div
-                        style={{
-                          fontSize: '11px',
-                          fontFamily: 'var(--font-mono)',
-                          color: 'var(--text-secondary)',
-                          marginTop: 'var(--space-2)'
-                        }}
-                      >
-                        Alt+Right
-                      </div>
-                    </div>
-                  </span>
-                )}
-                <span
-                  className="term_controlIcon term_tooltipTrigger"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    this.openInExternal();
-                  }}
-                  style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
-                >
-                  <i className="ti ti-external-link" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <div className="term_tooltip" style={{minWidth: '180px'}}>
-                    <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Open in Chrome</div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontFamily: 'var(--font-mono)',
-                        color: 'var(--text-secondary)',
-                        marginTop: 'var(--space-2)'
-                      }}
-                    >
-                      System browser — bypasses bot walls
-                    </div>
-                  </div>
-                </span>
-                {showReload && (
-                  <span
-                    className="term_controlIcon term_tooltipTrigger"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      this.reloadWebview(e.shiftKey);
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <i className="ti ti-refresh" style={{fontSize: '14px'}} aria-hidden="true" />
-                    <div className="term_tooltip" style={{minWidth: '160px'}}>
-                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Reload</div>
-                      <div
-                        style={{
-                          fontSize: '11px',
-                          fontFamily: 'var(--font-mono)',
-                          color: 'var(--text-secondary)',
-                          marginTop: 'var(--space-2)'
-                        }}
-                      >
-                        Reload · F5
-                      </div>
-                    </div>
-                  </span>
-                )}
-                {showExternal && (
-                  <span
-                    className="term_controlIcon term_tooltipTrigger"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const url = this.state.activeUrl || this.props.url || '';
-                      if (url) {
-                        const {shell} = require('electron');
-                        void shell.openExternal(url);
-                      }
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <i className="ti ti-external-link" style={{fontSize: '14px'}} aria-hidden="true" />
-                    <div className="term_tooltip" style={{minWidth: '160px'}}>
-                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
-                        Open in system browser
-                      </div>
-                    </div>
-                  </span>
-                )}
-                <span
-                  className="term_controlIcon term_tooltipTrigger"
-                  onClick={this.captureScreenshot}
-                  style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
-                >
-                  <i className="ti ti-camera" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <div className="term_tooltip" style={{minWidth: '200px'}}>
-                    <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Screenshot</div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontFamily: 'var(--font-mono)',
-                        color: 'var(--text-secondary)',
-                        marginTop: 'var(--space-2)'
-                      }}
-                    >
-                      Copy to clipboard + save to ~/.hyperia/snapshots
-                    </div>
-                  </div>
-                </span>
-                {!isAi && (
-                  <span
-                    className="term_controlIcon term_tooltipTrigger"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      this.newStickyFromPage();
-                    }}
-                    style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
-                  >
-                    <i className="ti ti-note" style={{fontSize: '14px'}} aria-hidden="true" />
-                    <div className="term_tooltip" style={{minWidth: '160px'}}>
-                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
-                        New sticky from page
-                      </div>
-                      <div
-                        style={{
-                          fontSize: '11px',
-                          fontFamily: 'var(--font-mono)',
-                          color: 'var(--text-secondary)',
-                          marginTop: 'var(--space-2)'
-                        }}
-                      >
-                        Title + URL + selection/extract
-                      </div>
-                    </div>
-                  </span>
-                )}
-              </div>
-            }
-            locationBar={
-              showUrlBar ? (
+            <PaneBand
+              ref={this.labelRef}
+              paneType={isAi ? 'ai' : 'web'}
+              paneId={this.props.groupUid}
+              tint={tint as any}
+              label={labelText}
+              paneName={labelText}
+              isSplitRightDisabled={hideSplits}
+              isSplitDownDisabled={isSplitDownDisabled || hideSplits}
+              navCluster={
                 <div
-                  ref={this.urlBarRef}
-                  className="web_locationBar"
-                  onContextMenu={(e) => {
-                    // Right-click the URL bar → Copy URL (this is toolbar chrome,
-                    // not the guest page, so it's a plain renderer menu).
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const currentUrl = this.state.activeUrl || this.props.url || '';
-                    try {
-                      // eslint-disable-next-line @typescript-eslint/no-var-requires
-                      const {Menu, MenuItem} = require('@electron/remote');
-                      // eslint-disable-next-line @typescript-eslint/no-var-requires
-                      const {clipboard} = require('electron');
-                      const menu = new Menu();
-                      menu.append(
-                        new MenuItem({
-                          label: 'Copy URL',
-                          enabled: !!currentUrl,
-                          click: () => {
-                            try {
-                              clipboard.writeText(currentUrl);
-                            } catch (err) {
-                              console.error('Copy URL failed:', err);
-                            }
-                          }
-                        })
-                      );
-                      menu.popup();
-                    } catch (err) {
-                      console.error('URL bar context menu failed:', err);
-                    }
-                  }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const isOpen = !this.state.isUrlNavigatorOpen;
-                    let navigatorLeft = 8;
-                    let navigatorWidth = 320;
-                    let navigatorTop = 38;
-                    if (isOpen) {
-                      const el = this.urlBarRef.current;
-                      const wrapper = this.webWrapperRef.current;
-                      if (el && wrapper) {
-                        const rect = el.getBoundingClientRect();
-                        const parentRect = wrapper.getBoundingClientRect();
-                        navigatorLeft = rect.left - parentRect.left;
-                        navigatorTop = rect.bottom - parentRect.top + 4;
-                        const widthToUse = Math.max(rect.width, 320);
-                        navigatorWidth = widthToUse;
-                        if (navigatorLeft + widthToUse > parentRect.width) {
-                          // Right-justify and extend left
-                          navigatorLeft = rect.right - parentRect.left - widthToUse;
-                          if (navigatorLeft < 8) {
-                            navigatorLeft = 8;
-                          }
-                        }
-                      }
-                    }
-                    this.setState(
-                      {
-                        isUrlNavigatorOpen: isOpen,
-                        navigatorInputVal: '',
-                        navigatorFocusedIndex: -1,
-                        navigatorError: null,
-                        navigatorLeft,
-                        navigatorWidth,
-                        navigatorTop
-                      },
-                      () => {
-                        if (isOpen) {
-                          requestAnimationFrame(() => {
-                            if (this.navigatorInputRef.current) {
-                              this.navigatorInputRef.current.focus();
-                              this.navigatorInputRef.current.select();
-                            }
-                          });
-                        }
-                      }
-                    );
-                  }}
+                  className="web-nav-cluster"
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 'var(--space-4)',
-                    background: 'var(--bg-primary)',
-                    border: '0.5px solid var(--border-focus)',
-                    borderRadius: 'var(--radius-3)',
-                    padding: '0 var(--space-6)',
-                    height: '24px',
-                    // Fill the row. Hard floor of ~11 chars ("https://" + a few
-                    // letters); below that the whole bar is hidden (showUrlBar),
-                    // never shrunk to a sub-"https://" stub.
-                    flex: 1,
-                    minWidth: '80px',
-                    cursor: 'pointer',
-                    boxSizing: 'border-box',
-                    marginLeft: 'var(--space-4)',
-                    marginRight: 'var(--space-8)'
+                    gap: 'var(--space-2)',
+                    flexShrink: 0
                   }}
-                  title={isAi ? 'Click to view recent threads' : 'Click to navigate'}
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  {loading && url ? (
+                  {showBack && (
                     <span
+                      className="term_controlIcon term_tooltipTrigger"
+                      onClick={this.goBack}
                       style={{
-                        fontSize: '11px',
-                        display: 'inline-block',
-                        animation: 'web-pane-spin 1s linear infinite',
-                        opacity: 0.6,
-                        flexShrink: 0
+                        display: 'flex',
+                        alignItems: 'center',
+                        cursor: this.state.canGoBack ? 'pointer' : 'default',
+                        opacity: this.state.canGoBack ? 1 : 0.4,
+                        pointerEvents: this.state.canGoBack ? 'auto' : 'none'
                       }}
                     >
-                      ⟳
+                      <i className="ti ti-arrow-left" style={{fontSize: '14px'}} aria-hidden="true" />
+                      <div className="term_tooltip" style={{minWidth: '160px'}}>
+                        <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Back</div>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            fontFamily: 'var(--font-mono)',
+                            color: 'var(--text-secondary)',
+                            marginTop: 'var(--space-2)'
+                          }}
+                        >
+                          Alt+Left
+                        </div>
+                      </div>
                     </span>
-                  ) : (
-                    <i
-                      className={isAi ? 'ti ti-sparkles' : 'ti ti-world'}
+                  )}
+                  {showForward && (
+                    <span
+                      className="term_controlIcon term_tooltipTrigger"
+                      onClick={this.goForward}
                       style={{
-                        fontSize: '12px',
-                        color: isAi ? 'var(--color-ai-purple, #7F77DD)' : 'var(--info-text)',
-                        flexShrink: 0
+                        display: 'flex',
+                        alignItems: 'center',
+                        cursor: this.state.canGoForward ? 'pointer' : 'default',
+                        opacity: this.state.canGoForward ? 1 : 0.4,
+                        pointerEvents: this.state.canGoForward ? 'auto' : 'none'
                       }}
-                      aria-hidden="true"
-                    />
+                    >
+                      <i className="ti ti-arrow-right" style={{fontSize: '14px'}} aria-hidden="true" />
+                      <div className="term_tooltip" style={{minWidth: '160px'}}>
+                        <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Forward</div>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            fontFamily: 'var(--font-mono)',
+                            color: 'var(--text-secondary)',
+                            marginTop: 'var(--space-2)'
+                          }}
+                        >
+                          Alt+Right
+                        </div>
+                      </div>
+                    </span>
                   )}
                   <span
-                    style={{
-                      fontFamily: isAi ? 'var(--font-sans)' : 'var(--font-mono)',
-                      fontSize: '11px',
-                      color: 'var(--text-primary)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap'
+                    className="term_controlIcon term_tooltipTrigger"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      this.openInExternal();
                     }}
+                    style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
                   >
-                    {(() => {
-                      if (isAi) {
-                        const conversationId = url.slice(5);
-                        const conv = this.state.aiConversations.find((c) => c.id === conversationId);
-                        return conv ? conv.title : 'ask';
-                      }
-                      return this.state.activeUrl || this.props.url || 'about:blank';
-                    })()}
+                    <i className="ti ti-external-link" style={{fontSize: '14px'}} aria-hidden="true" />
+                    <div className="term_tooltip" style={{minWidth: '180px'}}>
+                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
+                        Open in Chrome
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          fontFamily: 'var(--font-mono)',
+                          color: 'var(--text-secondary)',
+                          marginTop: 'var(--space-2)'
+                        }}
+                      >
+                        System browser — bypasses bot walls
+                      </div>
+                    </div>
                   </span>
+                  {showReload && (
+                    <span
+                      className="term_controlIcon term_tooltipTrigger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        this.reloadWebview(e.shiftKey);
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <i className="ti ti-refresh" style={{fontSize: '14px'}} aria-hidden="true" />
+                      <div className="term_tooltip" style={{minWidth: '160px'}}>
+                        <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Reload</div>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            fontFamily: 'var(--font-mono)',
+                            color: 'var(--text-secondary)',
+                            marginTop: 'var(--space-2)'
+                          }}
+                        >
+                          Reload · F5
+                        </div>
+                      </div>
+                    </span>
+                  )}
+                  {showExternal && (
+                    <span
+                      className="term_controlIcon term_tooltipTrigger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const linkUrl = this.state.activeUrl || this.props.url || '';
+                        if (linkUrl) {
+                          // eslint-disable-next-line @typescript-eslint/no-var-requires
+                          const {shell: electronShell} = require('electron');
+                          void electronShell.openExternal(linkUrl);
+                        }
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <i className="ti ti-external-link" style={{fontSize: '14px'}} aria-hidden="true" />
+                      <div className="term_tooltip" style={{minWidth: '160px'}}>
+                        <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
+                          Open in system browser
+                        </div>
+                      </div>
+                    </span>
+                  )}
+                  <span
+                    className="term_controlIcon term_tooltipTrigger"
+                    onClick={(e) => {
+                      void this.captureScreenshot(e);
+                    }}
+                    style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
+                  >
+                    <i className="ti ti-camera" style={{fontSize: '14px'}} aria-hidden="true" />
+                    <div className="term_tooltip" style={{minWidth: '200px'}}>
+                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Screenshot</div>
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          fontFamily: 'var(--font-mono)',
+                          color: 'var(--text-secondary)',
+                          marginTop: 'var(--space-2)'
+                        }}
+                      >
+                        Copy to clipboard + save to ~/.hyperia/snapshots
+                      </div>
+                    </div>
+                  </span>
+                  {!isAi && (
+                    <span
+                      className="term_controlIcon term_tooltipTrigger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        this.newStickyFromPage();
+                      }}
+                      style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
+                    >
+                      <i className="ti ti-note" style={{fontSize: '14px'}} aria-hidden="true" />
+                      <div className="term_tooltip" style={{minWidth: '160px'}}>
+                        <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
+                          New sticky from page
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            fontFamily: 'var(--font-mono)',
+                            color: 'var(--text-secondary)',
+                            marginTop: 'var(--space-2)'
+                          }}
+                        >
+                          Title + URL + selection/extract
+                        </div>
+                      </div>
+                    </span>
+                  )}
                 </div>
-              ) : null
-            }
-            onSplitRight={() =>
-              rpc.emit('split request vertical', {
-                activeUid: this.props.sessionUid || this.props.groupUid,
-                profile: 'picker'
-              })
-            }
-            onSplitDown={() =>
-              rpc.emit('split request horizontal', {activeUid: this.props.sessionUid || this.props.groupUid})
-            }
-            onSplitLeft={() =>
-              rpc.emit('split request vertical', {
-                activeUid: this.props.sessionUid || this.props.groupUid,
-                splitPlacement: 'BEFORE'
-              })
-            }
-            onSplitUp={() =>
-              rpc.emit('split request horizontal', {
-                activeUid: this.props.sessionUid || this.props.groupUid,
-                splitPlacement: 'BEFORE'
-              })
-            }
-            onClose={() => {
-              if (hasSession) {
-                onClose?.();
-              } else {
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-                (this.props as any).onClosePane();
               }
-            }}
-            onContextMenu={this.handlePaneBandContextMenu}
-            onClick={this.props.onActive}
-            height={isAi ? 'normal' : 'compact'}
-          />
+              locationBar={
+                showUrlBar ? (
+                  <div
+                    ref={this.urlBarRef}
+                    className="web_locationBar"
+                    onContextMenu={(e) => {
+                      // Right-click the URL bar → Copy URL (this is toolbar chrome,
+                      // not the guest page, so it's a plain renderer menu).
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const currentUrl = this.state.activeUrl || this.props.url || '';
+                      try {
+                        // eslint-disable-next-line @typescript-eslint/no-var-requires
+                        const {Menu, MenuItem} = require('@electron/remote');
+                        // eslint-disable-next-line @typescript-eslint/no-var-requires
+                        const {clipboard} = require('electron');
+                        const menu = new Menu();
+                        menu.append(
+                          new MenuItem({
+                            label: 'Copy URL',
+                            enabled: !!currentUrl,
+                            click: () => {
+                              try {
+                                clipboard.writeText(currentUrl);
+                              } catch (err) {
+                                console.error('Copy URL failed:', err);
+                              }
+                            }
+                          })
+                        );
+                        menu.popup();
+                      } catch (err) {
+                        console.error('URL bar context menu failed:', err);
+                      }
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const isOpen = !this.state.isUrlNavigatorOpen;
+                      let navigatorLeft = 8;
+                      let navigatorWidth = 320;
+                      let navigatorTop = 38;
+                      if (isOpen) {
+                        const el = this.urlBarRef.current;
+                        const wrapper = this.webWrapperRef.current;
+                        if (el && wrapper) {
+                          const rect = el.getBoundingClientRect();
+                          const parentRect = wrapper.getBoundingClientRect();
+                          navigatorLeft = rect.left - parentRect.left;
+                          navigatorTop = rect.bottom - parentRect.top + 4;
+                          const widthToUse = Math.max(rect.width, 320);
+                          navigatorWidth = widthToUse;
+                          if (navigatorLeft + widthToUse > parentRect.width) {
+                            // Right-justify and extend left
+                            navigatorLeft = rect.right - parentRect.left - widthToUse;
+                            if (navigatorLeft < 8) {
+                              navigatorLeft = 8;
+                            }
+                          }
+                        }
+                      }
+                      this.setState(
+                        {
+                          isUrlNavigatorOpen: isOpen,
+                          navigatorInputVal: '',
+                          navigatorFocusedIndex: -1,
+                          navigatorError: null,
+                          navigatorLeft,
+                          navigatorWidth,
+                          navigatorTop
+                        },
+                        () => {
+                          if (isOpen) {
+                            requestAnimationFrame(() => {
+                              if (this.navigatorInputRef.current) {
+                                this.navigatorInputRef.current.focus();
+                                this.navigatorInputRef.current.select();
+                              }
+                            });
+                          }
+                        }
+                      );
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 'var(--space-4)',
+                      background: 'var(--bg-primary)',
+                      border: '0.5px solid var(--border-focus)',
+                      borderRadius: 'var(--radius-3)',
+                      padding: '0 var(--space-6)',
+                      height: '24px',
+                      // Fill the row. Hard floor of ~11 chars ("https://" + a few
+                      // letters); below that the whole bar is hidden (showUrlBar),
+                      // never shrunk to a sub-"https://" stub.
+                      flex: 1,
+                      minWidth: '80px',
+                      cursor: 'pointer',
+                      boxSizing: 'border-box',
+                      marginLeft: 'var(--space-4)',
+                      marginRight: 'var(--space-8)'
+                    }}
+                    title={isAi ? 'Click to view recent threads' : 'Click to navigate'}
+                  >
+                    {loading && url ? (
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          display: 'inline-block',
+                          animation: 'web-pane-spin 1s linear infinite',
+                          opacity: 0.6,
+                          flexShrink: 0
+                        }}
+                      >
+                        ⟳
+                      </span>
+                    ) : (
+                      <i
+                        className={isAi ? 'ti ti-sparkles' : 'ti ti-world'}
+                        style={{
+                          fontSize: '12px',
+                          color: isAi ? 'var(--color-ai-purple, #7F77DD)' : 'var(--info-text)',
+                          flexShrink: 0
+                        }}
+                        aria-hidden="true"
+                      />
+                    )}
+                    <span
+                      style={{
+                        fontFamily: isAi ? 'var(--font-sans)' : 'var(--font-mono)',
+                        fontSize: '11px',
+                        color: 'var(--text-primary)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      {(() => {
+                        if (isAi) {
+                          const conversationId = url.slice(5);
+                          const conv = this.state.aiConversations.find((c) => c.id === conversationId);
+                          return conv ? conv.title : 'ask';
+                        }
+                        return this.state.activeUrl || this.props.url || 'about:blank';
+                      })()}
+                    </span>
+                  </div>
+                ) : null
+              }
+              onSplitRight={() =>
+                rpc.emit('split request vertical', {
+                  activeUid: this.props.sessionUid || this.props.groupUid,
+                  profile: 'picker'
+                })
+              }
+              onSplitDown={() =>
+                rpc.emit('split request horizontal', {activeUid: this.props.sessionUid || this.props.groupUid})
+              }
+              onSplitLeft={() =>
+                rpc.emit('split request vertical', {
+                  activeUid: this.props.sessionUid || this.props.groupUid,
+                  splitPlacement: 'BEFORE'
+                })
+              }
+              onSplitUp={() =>
+                rpc.emit('split request horizontal', {
+                  activeUid: this.props.sessionUid || this.props.groupUid,
+                  splitPlacement: 'BEFORE'
+                })
+              }
+              onClose={() => {
+                if (hasSession) {
+                  onClose?.();
+                } else {
+                  (this.props as any).onClosePane();
+                }
+              }}
+              onContextMenu={this.handlePaneBandContextMenu}
+              onClick={this.props.onActive}
+              height={isAi ? 'normal' : 'compact'}
+            />
           </div>
         )}
 
@@ -2528,7 +2690,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             navigatorInputRef={this.navigatorInputRef}
             urlNavigatorRef={this.urlNavigatorRef}
             onUpdateState={(updates) => this.setState(updates)}
-            onNavigate={(url) => this.navigateWebview(url)}
+            onNavigate={(navUrl) => this.navigateWebview(navUrl)}
             onCreateConversation={(id, query) => this.createConversation(id, query)}
             onClearAllHistory={() => this.clearAllHistory()}
             onClearAllAiConversations={() => this.clearAllAiConversations()}
@@ -2814,9 +2976,17 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                   <img
                     src={this.state.frozenShot}
                     alt=""
-                    style={{position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top left'}}
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'cover',
+                      objectPosition: 'top left'
+                    }}
                   />
                 )}
+                {this.renderAuthToast()}
               </div>
             );
           })()}
@@ -3276,8 +3446,7 @@ const mapStateToProps = (state: any, ownProps: WebPaneProps) => {
     defaultProfile: state.ui.defaultProfile,
     profiles: state.ui.profiles
       ? state.ui.profiles.asMutable
-        ? // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-          state.ui.profiles.asMutable({deep: true})
+        ? state.ui.profiles.asMutable({deep: true})
         : state.ui.profiles
       : [],
     webName: termGroup ? termGroup.webName : undefined,

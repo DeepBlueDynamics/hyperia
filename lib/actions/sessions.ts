@@ -16,14 +16,16 @@ import {
   SESSION_SET_DESCRIPTION,
   SESSION_SET_CWD,
   SESSION_SET_SHELL_STATE,
-  SESSION_SET_BUSY
+  SESSION_SET_BUSY,
+  SESSION_PANE_RENAME,
+  SESSION_SET_PANE_STYLE
 } from '../../typings/constants/sessions';
 import {TERM_GROUP_SET_TAB_NAME} from '../../typings/constants/term-groups';
 import type {HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
+import {openLayout} from '../utils/layouts';
 import {keys} from '../utils/object';
 import findBySession from '../utils/term-groups';
-import {openLayout} from '../utils/layouts';
 
 export function addSession(data: Session) {
   const {
@@ -148,9 +150,7 @@ export function requestSession(profile: string | undefined) {
         // lays out into 80x24 before the first resize → whacked borders. The new
         // <Term> still fits + resizes to its exact size on mount, so this is just
         // a correct birth size, not a fixed one. (Hyper/VS Code do the same.)
-        const active = state.sessions.activeUid
-          ? state.sessions.sessions[state.sessions.activeUid]
-          : undefined;
+        const active = state.sessions.activeUid ? state.sessions.sessions[state.sessions.activeUid] : undefined;
         const cols = active?.cols ?? undefined;
         const rows = active?.rows ?? undefined;
         rpc.emit('new', {cwd, profile, cols, rows});
@@ -238,6 +238,28 @@ export function setSessionDescription(uid: string, description: string) {
       tabName: ''
     });
   };
+}
+
+// Rename a PANE's stable codename (shellName — the handle agents address it
+// by and terminal_status reports). Driven by the sidecar's pane-rename API;
+// the layout sync pushes the new name back to main/sidecar automatically.
+export function renamePaneShell(uid: string, name: string) {
+  return {
+    type: SESSION_PANE_RENAME,
+    uid,
+    name
+  } as any;
+}
+
+// Apply (or clear, style=null) a per-pane appearance override set — from the
+// sidecar's style_apply tool. term-group merges it over the profile/global
+// appearance for that pane only.
+export function setPaneStyle(uid: string, style: Record<string, any> | null) {
+  return {
+    type: SESSION_SET_PANE_STYLE,
+    uid,
+    style
+  } as any;
 }
 
 // Sets the tab name on the root term group (the sole source of truth).
@@ -345,7 +367,10 @@ export function setSessionCwd(uid: string, cwd: string): HyperActions {
   };
 }
 
-export function setSessionShellState(uid: string, shellState: { state: 'idle' | 'busy'; lastExit?: number; command?: string }): HyperActions {
+export function setSessionShellState(
+  uid: string,
+  shellState: {state: 'idle' | 'busy'; lastExit?: number; command?: string}
+): HyperActions {
   return {
     type: SESSION_SET_SHELL_STATE,
     uid,

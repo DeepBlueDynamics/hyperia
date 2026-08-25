@@ -15,6 +15,8 @@ export const SESSION_SEARCH = 'SESSION_SEARCH';
 export const SESSION_SET_DESCRIPTION = 'SESSION_SET_DESCRIPTION';
 export const SESSION_SET_SHELL_STATE = 'SESSION_SET_SHELL_STATE';
 export const SESSION_SET_BUSY = 'SESSION_SET_BUSY';
+export const SESSION_PANE_RENAME = 'SESSION_PANE_RENAME';
+export const SESSION_SET_PANE_STYLE = 'SESSION_SET_PANE_STYLE';
 
 export interface SessionAddAction {
   type: typeof SESSION_ADD;
@@ -31,7 +33,7 @@ export interface SessionAddAction {
   url?: string;
   cwd?: string;
   isNewGroup?: boolean;
-  shellState?: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
+  shellState?: {state: 'idle' | 'busy'; lastExit?: number; command?: string};
 }
 export interface SessionResizeAction {
   type: typeof SESSION_RESIZE;
@@ -102,7 +104,7 @@ export interface SessionSetDescriptionAction {
 export interface SessionSetShellStateAction {
   type: typeof SESSION_SET_SHELL_STATE;
   uid: string;
-  shellState: { state: 'idle' | 'busy'; lastExit?: number; command?: string };
+  shellState: {state: 'idle' | 'busy'; lastExit?: number; command?: string};
 }
 
 export interface SessionSetBusyAction {
@@ -111,7 +113,21 @@ export interface SessionSetBusyAction {
   busy: boolean;
 }
 
+export interface SessionPaneRenameAction {
+  type: typeof SESSION_PANE_RENAME;
+  uid: string;
+  name: string;
+}
+
+export interface SessionSetPaneStyleAction {
+  type: typeof SESSION_SET_PANE_STYLE;
+  uid: string;
+  style: Record<string, any> | null;
+}
+
 export type SessionActions =
+  | SessionPaneRenameAction
+  | SessionSetPaneStyleAction
   | SessionAddAction
   | SessionResizeAction
   | SessionRequestAction

@@ -1,12 +1,6 @@
 import {clipboard, shell, ipcRenderer, webUtils} from 'electron';
 import React from 'react';
 
-import Color from 'color';
-import isEqual from 'lodash/isEqual';
-import pickBy from 'lodash/pickBy';
-import throttle from 'lodash/throttle';
-import {Terminal} from '@xterm/xterm';
-import type {ITerminalOptions, IDisposable} from '@xterm/xterm';
 import {CanvasAddon} from '@xterm/addon-canvas';
 import {FitAddon} from '@xterm/addon-fit';
 import {ImageAddon} from '@xterm/addon-image';
@@ -16,12 +10,18 @@ import type {ISearchDecorationOptions} from '@xterm/addon-search';
 import {Unicode11Addon} from '@xterm/addon-unicode11';
 import {WebLinksAddon} from '@xterm/addon-web-links';
 import {WebglAddon} from '@xterm/addon-webgl';
+import {Terminal} from '@xterm/xterm';
+import type {ITerminalOptions, IDisposable} from '@xterm/xterm';
+import Color from 'color';
+import isEqual from 'lodash/isEqual';
+import pickBy from 'lodash/pickBy';
+import throttle from 'lodash/throttle';
 
 import type {TermProps} from '../../typings/hyper';
 import rpc from '../rpc';
 import terms from '../terms';
-import processClipboard from '../utils/paste';
 import {toNavigableUrl} from '../utils/navigable-url';
+import processClipboard from '../utils/paste';
 import {translatePath} from '../utils/path-translate';
 import {countPathHorizontalStacks} from '../utils/term-groups';
 
@@ -29,6 +29,7 @@ import FindBar from './find-bar';
 import {NewPanePicker} from './new-pane-picker';
 import {PaneBand} from './pane-band';
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const path = require('path');
 
 import '@xterm/xterm/css/xterm.css';
@@ -36,18 +37,6 @@ import '@xterm/xterm/css/xterm.css';
 export const activeTerminals = new Map<string, Term>();
 
 const isWindows = ['Windows', 'Win16', 'Win32', 'WinCE'].includes(navigator.platform) || process.platform === 'win32';
-
-// A profile's shell path reveals its OS: Windows shells use .exe / backslashes /
-// drive letters, Unix shells are absolute /paths. A config synced between
-// machines can carry a Windows profile (WSL, cmd, pwsh) onto a Mac (or vice
-// versa) — hide profiles whose shell belongs to the other platform so the
-// picker only shows shells that can actually run here.
-const profileFitsPlatform = (p: any): boolean => {
-  const shell = String(p?.config?.shell || '');
-  if (!shell) return true;
-  const looksWindows = /\.exe$|\\|^[A-Za-z]:/.test(shell);
-  return isWindows ? looksWindows : !looksWindows;
-};
 
 // map old hterm constants to xterm.js
 const CURSOR_STYLES = {
@@ -87,8 +76,16 @@ function openUrl(uri: string): void {
 }
 
 const getTermOptions = (props: TermProps): ITerminalOptions => {
-  // Set a background color only if it is opaque
-  const needTransparency = Color(props.backgroundColor).alpha() < 1;
+  // Set a background color only if it is opaque. Color() THROWS on an
+  // unparseable string — and props here can carry agent-supplied style/config
+  // values, so a bad color must mean "treat as opaque", never an exception
+  // that rides up through a React commit and blanks the pane.
+  let needTransparency = false;
+  try {
+    needTransparency = Color(props.backgroundColor).alpha() < 1;
+  } catch {
+    /* unparseable background — assume opaque */
+  }
   const backgroundColor = needTransparency ? 'rgba(0,0,0,0)' : props.backgroundColor;
 
   return {
@@ -104,7 +101,11 @@ const getTermOptions = (props: TermProps): ITerminalOptions => {
     letterSpacing: props.letterSpacing,
     allowTransparency: needTransparency,
     macOptionClickForcesSelection: props.macOptionSelectionMode === 'force',
-    windowsMode: isWindows,
+    // windowsMode only as the legacy fallback: when windowsPty is present xterm
+    // derives behaviour from the build number, and leaving windowsMode on ALSO
+    // flips Buffer.resize's grow-rows branch to "push a blank line at the
+    // bottom" instead of pulling one back out of scrollback.
+    windowsMode: isWindows && !props.windowsPty,
     ...(isWindows && props.windowsPty && {windowsPty: props.windowsPty}),
     theme: {
       foreground: props.foregroundColor,
@@ -305,6 +306,15 @@ export default class Term extends React.PureComponent<
     return !!e.dataTransfer && e.dataTransfer.types.includes('Files');
   }
 
+  // A pane-band name being dragged (see pane-band.tsx handleNameDragStart).
+  // Dropping it types the pane's handle into THIS pane as staged input — no
+  // Enter — so you can hand an agent another pane's name by dragging. Unlike
+  // file copy this is NOT busy-gated: typing into a running agent's composer
+  // is the point.
+  private isPaneLabelDrag(e: React.DragEvent): boolean {
+    return !!e.dataTransfer && e.dataTransfer.types.includes('application/x-hyperia-pane');
+  }
+
   private setDropAffordance(on: boolean) {
     const el = this.termOuterRef.current;
     if (!el) return;
@@ -313,6 +323,13 @@ export default class Term extends React.PureComponent<
   }
 
   onFileDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (this.isPaneLabelDrag(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      this.setDropAffordance(true);
+      return;
+    }
     // Only intercept when this pane is an idle shell with a known cwd. On a busy
     // pane we do NOT preventDefault, so the drop falls through to the existing
     // will-navigate path-paste (e.g. hand a running agent a file path).
@@ -324,11 +341,24 @@ export default class Term extends React.PureComponent<
   };
 
   onFileDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    if (!this.isFileDrag(e)) return;
+    if (!this.isFileDrag(e) && !this.isPaneLabelDrag(e)) return;
     this.setDropAffordance(false);
   };
 
   onFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    if (this.isPaneLabelDrag(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.setDropAffordance(false);
+      const txt = e.dataTransfer.getData('application/x-hyperia-pane') || e.dataTransfer.getData('text/plain');
+      if (txt) this.props.onData(txt);
+      // A drop is a direct human gesture on THIS pane — focus it so the next
+      // keystroke (usually Enter to send the dropped handle) lands here.
+      // Human-initiated, so it doesn't violate focus-never-steal.
+      (this.props as any).onActive?.();
+      this.focus();
+      return;
+    }
     if (!this.isFileDrag(e) || !this.canAcceptFileDrop()) return;
     e.preventDefault();
     e.stopPropagation();
@@ -386,6 +416,7 @@ export default class Term extends React.PureComponent<
       }
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const remote = require('@electron/remote');
     const {Menu, MenuItem} = remote;
     const menu = new Menu();
@@ -642,18 +673,15 @@ export default class Term extends React.PureComponent<
       this.term.loadAddon(this.fitAddon);
       this.term.loadAddon(this.searchAddon);
       this.term.loadAddon(
-        new WebLinksAddon(
-          (event, uri) => this.handleLinkActivate(event, uri),
-          {
-            // Track the hovered URL so a right-click can offer link actions.
-            hover: (_e: MouseEvent, uri: string) => {
-              this._hoveredLink = uri;
-            },
-            leave: () => {
-              this._hoveredLink = null;
-            }
+        new WebLinksAddon((event, uri) => this.handleLinkActivate(event, uri), {
+          // Track the hovered URL so a right-click can offer link actions.
+          hover: (_e: MouseEvent, uri: string) => {
+            this._hoveredLink = uri;
+          },
+          leave: () => {
+            this._hoveredLink = null;
           }
-        )
+        })
       );
       // Custom link provider for URLs that wrap across multiple rows
       this.term.registerLinkProvider({
@@ -1247,12 +1275,17 @@ export default class Term extends React.PureComponent<
   forceReflow() {
     if (!this.termWrapperRef || !this.term) return;
     try {
-      const cols = this.term.cols;
-      const rows = this.term.rows;
-      if (cols > 0 && rows > 0) {
-        this.term.resize(cols + 1, rows);
-        this.term.resize(cols, rows);
-      }
+      // Force a re-measure + full repaint WITHOUT touching the grid. This used
+      // to be a term.resize(cols+1) / resize(cols) jiggle, but every resize()
+      // fires term.onResize -> props.onResize -> pty.resize, so the jiggle
+      // shipped two ioctls of DIFFERENT width in one tick (two SIGWINCHs) and
+      // ran two xterm buffer reflows. Reflow is not symmetric — _reflowSmaller
+      // skips the cursor's line and _reflowLargerAdjustViewport pushes blank
+      // lines at the bottom — so widen-then-narrow shifts the frame by a row.
+      // Inline Ink TUIs (codex, claude-code) erase their last frame with a
+      // relative cursor-up of N lines, so that shift orphans a border row under
+      // the input box until something forces a full re-render (#extra-linefeed).
+      this.term.clearTextureAtlas();
       this.fitAddon.fit();
       this.term.refresh(0, this.term.rows - 1);
     } catch (e) {
@@ -1265,27 +1298,19 @@ export default class Term extends React.PureComponent<
       this.setState({isDirNavigatorOpen: false});
     }
 
+    // One trailing settle, not two. The 100ms + 300ms pair fired BOTH times,
+    // and each forceReflow was its own SIGWINCH the TUI had to react to.
     clearTimeout(this.resizeTimeout);
     this.resizeTimeout = setTimeout(() => {
       this.forceReflow();
-    }, 100);
-
-    clearTimeout(this.stabilizeResizeTimeout);
-    this.stabilizeResizeTimeout = setTimeout(() => {
-      this.forceReflow();
-    }, 300);
+    }, 150);
   };
 
   onWindowMove = () => {
     clearTimeout(this.resizeTimeout);
     this.resizeTimeout = setTimeout(() => {
       this.forceReflow();
-    }, 100);
-
-    clearTimeout(this.stabilizeResizeTimeout);
-    this.stabilizeResizeTimeout = setTimeout(() => {
-      this.forceReflow();
-    }, 300);
+    }, 150);
   };
 
   keyboardHandler = (e: any) => {
@@ -1355,7 +1380,8 @@ export default class Term extends React.PureComponent<
     const isCmdC = e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && e.key?.toLowerCase() === 'c';
 
     const hasActiveSelection = this.term.hasSelection();
-    const hasBufferedSelection = !hasActiveSelection && this.lastSelection && (Date.now() - this.lastSelectionTime < 1000);
+    const hasBufferedSelection =
+      !hasActiveSelection && this.lastSelection && Date.now() - this.lastSelectionTime < 1000;
 
     if (
       (isCtrlC && (hasActiveSelection || hasBufferedSelection)) ||
@@ -1406,6 +1432,7 @@ export default class Term extends React.PureComponent<
     const {cwdHistory, cwdCursor} = this.state;
     if (cwdCursor <= 0) return;
 
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const remote = require('@electron/remote');
     const {Menu, MenuItem} = remote;
     const menu = new Menu();
@@ -1433,6 +1460,7 @@ export default class Term extends React.PureComponent<
     const {cwdHistory, cwdCursor} = this.state;
     if (cwdCursor === -1 || cwdCursor >= cwdHistory.length - 1) return;
 
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const remote = require('@electron/remote');
     const {Menu, MenuItem} = remote;
     const menu = new Menu();
@@ -1476,14 +1504,23 @@ export default class Term extends React.PureComponent<
   };
 
   isTerminalBusy = () => {
+    // A picker pane never runs anything — it must be closable (and browsable)
+    // at any time, whatever stale text its hidden buffer holds.
+    if ((this.props as any).sessionProfile === 'picker') return false;
     // OSC shell integration is authoritative when it reports a running command.
     if (this.props.shellState && this.props.shellState.state !== 'idle') return true;
-    // Otherwise fall back to the screen heuristic. This is the case that matters
-    // for an ssh profile: the LOCAL shell integration went idle before ssh took
-    // over, so shellState says "idle" even though the pane is running a program
-    // on the remote host. It's about the shell running SOMETHING, not about being
-    // remote — so honor activeProgram even when shellState exists. Keeps the path
-    // bar / dir picker locked while a foreground program (ssh TUI, vim, …) is up.
+    // Alt-screen is authoritative too, and passes through ssh (remote vim/less/
+    // htop own the terminal even while the local+remote OSC chain reads idle).
+    if (this.term?.buffer?.active?.type === 'alternate') return true;
+    // The screen-text sniffer (activeProgram) is a last-resort heuristic and it
+    // false-positives: stale transcript text ("claude" in the last lines plus a
+    // ❯ — which is also the PROMPT glyph) read an idle shell as busy, making
+    // close-confirm warnings fire "randomly". When shell integration
+    // AFFIRMATIVELY says idle and we're in the normal buffer, trust it over the
+    // sniffer. (Remote Ink agents still read busy via the OSC chain: their
+    // command-running state passes through ssh like the prompt marks do.)
+    if (this.props.shellState && this.props.shellState.state === 'idle') return false;
+    // No integration at all (cmd.exe, bare containers): the sniffer is all we have.
     return !!this.state.activeProgram;
   };
 
@@ -1575,8 +1612,8 @@ export default class Term extends React.PureComponent<
     const defaultProfileName = (this.props as any).defaultProfile;
     const defaultProfile = profiles.find((p: any) => p.name === defaultProfileName) || profiles[0];
 
-    const shell = defaultProfile?.config?.shell || (process.platform === 'win32' ? 'cmd.exe' : '/bin/bash');
-    const shellLower = shell.toLowerCase();
+    const shellBin = defaultProfile?.config?.shell || (process.platform === 'win32' ? 'cmd.exe' : '/bin/bash');
+    const shellLower = shellBin.toLowerCase();
     let shellArgs: string[] = [];
     if (shellLower.includes('cmd.exe')) {
       shellArgs = ['/c', commandLine];
@@ -1591,7 +1628,7 @@ export default class Term extends React.PureComponent<
       isNewGroup: false,
       cwd: sessionCwd || (this.props as any).cwd,
       activeUid: uid,
-      shell,
+      shell: shellBin,
       shellArgs,
       groupUid
     });
@@ -1621,9 +1658,7 @@ export default class Term extends React.PureComponent<
   baseShellOptions = (): Array<{name: string; shell: string}> => {
     const seen = new Set<string>();
     return ((this.props as any).profiles || [])
-      .filter(
-        (p: any) => p?.config?.shell && !p.kind && !seen.has(p.config.shell) && seen.add(p.config.shell)
-      )
+      .filter((p: any) => p?.config?.shell && !p.kind && !seen.has(p.config.shell) && seen.add(p.config.shell))
       .map((p: any) => ({name: p.name, shell: p.config.shell as string}));
   };
 
@@ -1631,8 +1666,7 @@ export default class Term extends React.PureComponent<
   // (pwsh), then any PowerShell, else the first detected shell.
   defaultBaseShellPath = (): string => {
     const opts = this.baseShellOptions();
-    const pick =
-      opts.find((o) => /pwsh/i.test(o.shell)) || opts.find((o) => /powershell/i.test(o.shell)) || opts[0];
+    const pick = opts.find((o) => /pwsh/i.test(o.shell)) || opts.find((o) => /powershell/i.test(o.shell)) || opts[0];
     return pick?.shell || '';
   };
 
@@ -1653,8 +1687,8 @@ export default class Term extends React.PureComponent<
     if (!pName || !sPath) return;
     const args = usingBase
       ? [] // base-shell mode: the main process turns `command` into the correct
-           // per-shell startup so it composes with shell integration.
-      : this.state.shellArgs
+      : // per-shell startup so it composes with shell integration.
+        this.state.shellArgs
           .split(',')
           .map((a) => a.trim())
           .filter(Boolean);
@@ -1679,8 +1713,7 @@ export default class Term extends React.PureComponent<
     // quick-key launches it. launchShell writes the same localStorage key on a
     // manual pick; the picker re-seeds from it when the reloaded profiles arrive.
     try {
-      const lsKey =
-        this.state.customKind === 'agent' ? 'hyperia.picker.defaultAgent' : 'hyperia.picker.defaultShell';
+      const lsKey = this.state.customKind === 'agent' ? 'hyperia.picker.defaultAgent' : 'hyperia.picker.defaultShell';
       window.localStorage.setItem(lsKey, pName);
     } catch {
       /* storage unavailable */
@@ -1702,9 +1735,9 @@ export default class Term extends React.PureComponent<
 
   // Open the custom-profile modal pre-filled to EDIT an existing profile.
   openEditProfile = (kind: 'shell' | 'agent', p: any) => {
-    const cfg = (p && p.config) || {};
-    const shell: string = cfg.shell || '';
-    const base = (shell.replace(/\\/g, '/').split('/').pop() || shell).toLowerCase();
+    const cfg = p?.config || {};
+    const profileShell: string = cfg.shell || '';
+    const base = (profileShell.replace(/\\/g, '/').split('/').pop() || profileShell).toLowerCase();
     const isKnownBaseShell = /^(pwsh|powershell|cmd|bash|zsh|fish|sh|wsl)(\.exe)?$/.test(base);
     // Migrate a LEGACY direct-mode command profile — a known base shell whose
     // args were the command (e.g. shell=pwsh, args=[ssh, -i, key, host]) — into
@@ -1716,7 +1749,7 @@ export default class Term extends React.PureComponent<
       customKind: kind,
       editingOriginalName: p.name,
       profileName: p.name,
-      baseShell: useBase ? cfg.baseShell || shell : '',
+      baseShell: useBase ? cfg.baseShell || profileShell : '',
       command,
       shellPath: cfg.shell || '',
       shellArgs: (cfg.shellArgs || []).join(', '),
@@ -1796,12 +1829,12 @@ export default class Term extends React.PureComponent<
   };
 
   recordDirHistory = (p: string): void => {
-    const path = (p || '').replace(/[\\/]+$/, '').trim() || p.trim();
-    if (!path) return;
+    const dirPath = (p || '').replace(/[\\/]+$/, '').trim() || p.trim();
+    if (!dirPath) return;
     try {
-      const key = this.normDir(path);
+      const key = this.normDir(dirPath);
       const prev = this.loadDirHistory().filter((x) => this.normDir(x) !== key);
-      const next = [path, ...prev].slice(0, 30);
+      const next = [dirPath, ...prev].slice(0, 30);
       localStorage.setItem(Term.DIR_HISTORY_KEY, JSON.stringify(next));
     } catch {
       /* ignore quota / unavailable */
@@ -1876,12 +1909,12 @@ export default class Term extends React.PureComponent<
             paddingBottom: '2px'
           }}
         >
-          {items.map(({path, accent}) => (
+          {items.map(({path: itemPath, accent}) => (
             <span
-              key={path}
+              key={itemPath}
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => this.loadNavigatorDirs(path)}
-              title={accent ? `Home — ${path}` : path}
+              onClick={() => this.loadNavigatorDirs(itemPath)}
+              title={accent ? `Home — ${itemPath}` : itemPath}
               style={{
                 cursor: 'pointer',
                 // Wrap onto new lines when the pane is narrow instead of
@@ -1901,7 +1934,7 @@ export default class Term extends React.PureComponent<
                 background: accent ? 'var(--info-bg)' : 'var(--bg-primary)'
               }}
             >
-              {path}
+              {itemPath}
             </span>
           ))}
         </div>
@@ -2498,7 +2531,11 @@ export default class Term extends React.PureComponent<
             whiteSpace: 'nowrap',
             opacity: this.isTerminalBusy() ? 0.5 : 1
           }}
-          title={this.isTerminalBusy() ? "Directory change locked while process is running" : "cd to current browsed path (Ctrl+Enter)"}
+          title={
+            this.isTerminalBusy()
+              ? 'Directory change locked while process is running'
+              : 'cd to current browsed path (Ctrl+Enter)'
+          }
         >
           ctrl-enter
         </span>
@@ -2571,8 +2608,6 @@ export default class Term extends React.PureComponent<
       this.clear();
     }
 
-    const nextTermOptions = getTermOptions(this.props);
-
     if (prevProps.bell !== this.props.bell || prevProps.bellSound !== this.props.bellSound) {
       this.setBellSound(this.props.bell, this.props.bellSound);
     }
@@ -2588,13 +2623,21 @@ export default class Term extends React.PureComponent<
       }, 50);
     }
 
-    // Update only options that have changed.
-    this.term.options = pickBy(
-      nextTermOptions,
-      (value, key) => !isEqual(this.termOptions[key as keyof ITerminalOptions], value)
-    );
-
-    this.termOptions = nextTermOptions;
+    // Update only options that have changed. Hardened: a bad value here (an
+    // agent-supplied pane style, a hand-edited config) must degrade to "that
+    // update is skipped", never throw — an exception inside componentDidUpdate
+    // propagates through the React commit with no error boundary above us and
+    // unmounts the pane tree, blanking live terminals (2026-08-25 incident).
+    try {
+      const nextTermOptions = getTermOptions(this.props);
+      this.term.options = pickBy(
+        nextTermOptions,
+        (value, key) => !isEqual(this.termOptions[key as keyof ITerminalOptions], value)
+      );
+      this.termOptions = nextTermOptions;
+    } catch (error) {
+      console.error('Terminal options update failed (skipped):', error);
+    }
 
     try {
       this.term.element!.style.padding = this.props.padding;
@@ -2792,8 +2835,8 @@ export default class Term extends React.PureComponent<
       return hashCode(currentUid) % 9;
     };
 
-    const getPaneTint = (startIdx: number, splitLabel?: string): string => {
-      const paneIdx = splitLabel ? splitLabel.charCodeAt(0) - 97 : 0; // 'a' -> 0, 'b' -> 1...
+    const getPaneTint = (startIdx: number, paneLabel?: string): string => {
+      const paneIdx = paneLabel ? paneLabel.charCodeAt(0) - 97 : 0; // 'a' -> 0, 'b' -> 1...
       const TINTS = ['success', 'info', 'warning', 'danger'];
       return TINTS[(startIdx + paneIdx) % TINTS.length];
     };
@@ -2815,6 +2858,75 @@ export default class Term extends React.PureComponent<
         onDrop={this.onFileDrop}
         style={{position: 'relative'}}
       >
+        {/* Ghosted watermark (paneStyle.watermark, e.g. "TOP SECRET") — reads
+            as background: faint, diagonal, centered, mouse-transparent. Drawn
+            over the canvas because xterm paints an opaque background. */}
+        {((this.props as any).watermark || (this.props as any).watermarkImage) && (
+          <div
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 5,
+              pointerEvents: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              overflow: 'hidden'
+            }}
+          >
+            {(this.props as any).watermarkImage && (
+              <img
+                alt=""
+                src={(() => {
+                  const imgSrc = (this.props as any).watermarkImage as string;
+                  // file paths become file:// URLs; data:/http(s) pass through.
+                  return /^([a-z]+:)?\/\//i.test(imgSrc) || imgSrc.startsWith('data:')
+                    ? imgSrc
+                    : `file:///${imgSrc.replace(/\\/g, '/')}`;
+                })()}
+                style={{
+                  position: 'absolute',
+                  maxWidth: '62%',
+                  maxHeight: '62%',
+                  opacity: (this.props as any).watermarkOpacity ?? 0.08,
+                  userSelect: 'none'
+                }}
+              />
+            )}
+            {(this.props as any).watermark && (
+              <span
+                style={{
+                  transform: 'rotate(-28deg)',
+                  fontFamily: 'var(--font-sans)',
+                  fontWeight: 900,
+                  fontSize: 'clamp(28px, 12cqw, 160px)',
+                  letterSpacing: '0.18em',
+                  whiteSpace: 'nowrap',
+                  color: (this.props as any).watermarkColor || 'rgba(255, 140, 0, 0.10)',
+                  userSelect: 'none'
+                }}
+              >
+                {(this.props as any).watermark}
+              </span>
+            )}
+          </div>
+        )}
+        {/* CRT scan-line overlay (paneStyle.scanlines) — pure cosmetics: sits
+            above the terminal canvas, ignores the mouse, costs no layout. */}
+        {(this.props as any).scanlines && (
+          <div
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 6,
+              pointerEvents: 'none',
+              background:
+                'repeating-linear-gradient(to bottom, rgba(0,0,0,0.28) 0px, rgba(0,0,0,0.28) 1px, transparent 1px, transparent 3px)'
+            }}
+          />
+        )}
         {this.state.showCopied && (
           <div
             style={{
@@ -3100,8 +3212,12 @@ export default class Term extends React.PureComponent<
                 activeUid: this.props.uid
               })
             }
-            onSplitLeft={() => rpc.emit('split request vertical', {activeUid: this.props.uid, splitPlacement: 'BEFORE'})}
-            onSplitUp={() => rpc.emit('split request horizontal', {activeUid: this.props.uid, splitPlacement: 'BEFORE'})}
+            onSplitLeft={() =>
+              rpc.emit('split request vertical', {activeUid: this.props.uid, splitPlacement: 'BEFORE'})
+            }
+            onSplitUp={() =>
+              rpc.emit('split request horizontal', {activeUid: this.props.uid, splitPlacement: 'BEFORE'})
+            }
             onClose={() => {
               if (this.props.onClosePane && this.props.groupUid) {
                 this.props.onClosePane(this.props.groupUid);
@@ -3338,9 +3454,7 @@ export default class Term extends React.PureComponent<
                   how a custom shell runs e.g. `ssh …` reliably (shells only). */}
               {this.state.customKind === 'shell' && (
                 <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-                  <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>
-                    Base Shell
-                  </label>
+                  <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Base Shell</label>
                   <select
                     value={this.state.baseShell}
                     onChange={(e) => this.setState({baseShell: e.target.value})}
@@ -3392,110 +3506,112 @@ export default class Term extends React.PureComponent<
                   shell is chosen (the common case). */}
               {this.state.baseShell === '' && (
                 <>
-              {/* Shell Executable Path — pick from detected shells, or type/browse a custom one */}
-              <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-                <label
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    color: 'var(--text-secondary)'
-                  }}
-                >
-                  Shell Path
-                </label>
-                <select
-                  value={this.state.shellPath}
-                  onChange={(e) => this.setState({shellPath: e.target.value})}
-                  style={{
-                    background: 'var(--bg-primary)',
-                    border: '0.5px solid var(--border-neutral)',
-                    color: 'var(--text-primary)',
-                    borderRadius: '4px',
-                    padding: '8px 10px',
-                    fontSize: '12px'
-                  }}
-                >
-                  <option value="">Pick an existing shell… (or enter a path below)</option>
-                  {(() => {
-                    const seen = new Set<string>();
-                    return ((this.props as any).profiles || [])
-                      .filter((p: any) => p?.config?.shell && !seen.has(p.config.shell) && seen.add(p.config.shell))
-                      .map((p: any) => (
-                        <option key={p.name} value={p.config.shell}>
-                          {`${p.name} — ${p.config.shell}`}
-                        </option>
-                      ));
-                  })()}
-                </select>
-                <div style={{display: 'flex', gap: '6px'}}>
-                  <input
-                    type="text"
-                    placeholder="e.g. /bin/bash or C:\Windows\System32\cmd.exe"
-                    value={this.state.shellPath}
-                    onChange={(e) => this.setState({shellPath: e.target.value})}
-                    style={{
-                      flex: 1,
-                      background: 'var(--bg-primary)',
-                      border: '0.5px solid var(--border-neutral)',
-                      color: 'var(--text-primary)',
-                      borderRadius: '4px',
-                      padding: '8px 10px',
-                      fontSize: '12px',
-                      fontFamily: 'var(--font-mono)'
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        const res = await ipcRenderer.invoke('pick-shell-executable');
-                        if (res) this.setState({shellPath: res});
-                      } catch (err) {
-                        console.error(err);
-                      }
-                    }}
-                    style={{
-                      background: 'var(--bg-tertiary)',
-                      border: '0.5px solid var(--border-neutral)',
-                      color: 'var(--text-primary)',
-                      borderRadius: '4px',
-                      padding: '0 10px',
-                      fontSize: '12px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Browse…
-                  </button>
-                </div>
-              </div>
+                  {/* Shell Executable Path — pick from detected shells, or type/browse a custom one */}
+                  <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                    <label
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        color: 'var(--text-secondary)'
+                      }}
+                    >
+                      Shell Path
+                    </label>
+                    <select
+                      value={this.state.shellPath}
+                      onChange={(e) => this.setState({shellPath: e.target.value})}
+                      style={{
+                        background: 'var(--bg-primary)',
+                        border: '0.5px solid var(--border-neutral)',
+                        color: 'var(--text-primary)',
+                        borderRadius: '4px',
+                        padding: '8px 10px',
+                        fontSize: '12px'
+                      }}
+                    >
+                      <option value="">Pick an existing shell… (or enter a path below)</option>
+                      {(() => {
+                        const seen = new Set<string>();
+                        return ((this.props as any).profiles || [])
+                          .filter((p: any) => p?.config?.shell && !seen.has(p.config.shell) && seen.add(p.config.shell))
+                          .map((p: any) => (
+                            <option key={p.name} value={p.config.shell}>
+                              {`${p.name} — ${p.config.shell}`}
+                            </option>
+                          ));
+                      })()}
+                    </select>
+                    <div style={{display: 'flex', gap: '6px'}}>
+                      <input
+                        type="text"
+                        placeholder="e.g. /bin/bash or C:\Windows\System32\cmd.exe"
+                        value={this.state.shellPath}
+                        onChange={(e) => this.setState({shellPath: e.target.value})}
+                        style={{
+                          flex: 1,
+                          background: 'var(--bg-primary)',
+                          border: '0.5px solid var(--border-neutral)',
+                          color: 'var(--text-primary)',
+                          borderRadius: '4px',
+                          padding: '8px 10px',
+                          fontSize: '12px',
+                          fontFamily: 'var(--font-mono)'
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void (async () => {
+                            try {
+                              const res = await ipcRenderer.invoke('pick-shell-executable');
+                              if (res) this.setState({shellPath: res});
+                            } catch (err) {
+                              console.error(err);
+                            }
+                          })();
+                        }}
+                        style={{
+                          background: 'var(--bg-tertiary)',
+                          border: '0.5px solid var(--border-neutral)',
+                          color: 'var(--text-primary)',
+                          borderRadius: '4px',
+                          padding: '0 10px',
+                          fontSize: '12px',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Browse…
+                      </button>
+                    </div>
+                  </div>
 
-              {/* Shell Arguments */}
-              <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-                <label
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    color: 'var(--text-secondary)'
-                  }}
-                >
-                  Arguments (comma separated)
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. --login, -i"
-                  value={this.state.shellArgs}
-                  onChange={(e) => this.setState({shellArgs: e.target.value})}
-                  style={{
-                    background: 'var(--bg-primary)',
-                    border: '0.5px solid var(--border-neutral)',
-                    color: 'var(--text-primary)',
-                    borderRadius: '4px',
-                    padding: '8px 10px',
-                    fontSize: '12px',
-                    fontFamily: 'var(--font-mono)'
-                  }}
-                />
-              </div>
+                  {/* Shell Arguments */}
+                  <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                    <label
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        color: 'var(--text-secondary)'
+                      }}
+                    >
+                      Arguments (comma separated)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. --login, -i"
+                      value={this.state.shellArgs}
+                      onChange={(e) => this.setState({shellArgs: e.target.value})}
+                      style={{
+                        background: 'var(--bg-primary)',
+                        border: '0.5px solid var(--border-neutral)',
+                        color: 'var(--text-primary)',
+                        borderRadius: '4px',
+                        padding: '8px 10px',
+                        fontSize: '12px',
+                        fontFamily: 'var(--font-mono)'
+                      }}
+                    />
+                  </div>
                 </>
               )}
 

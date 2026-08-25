@@ -1,5 +1,3 @@
-import {existsSync} from 'fs';
-
 import React, {useState, useRef, useEffect} from 'react';
 
 import type {configOptions} from '../../typings/config';
@@ -12,7 +10,7 @@ export interface Props {
   openWebPane?: (url: string) => void;
 }
 
-const Toolbar = ({defaultProfile, profiles, openNewTab, openWebPane}: Props) => {
+const Toolbar = ({defaultProfile, openNewTab}: Props) => {
   const [profileOpen, setProfileOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -27,25 +25,7 @@ const Toolbar = ({defaultProfile, profiles, openNewTab, openWebPane}: Props) => 
     return () => document.removeEventListener('mousedown', handler);
   }, [profileOpen]);
 
-  const shellProfiles = (profiles || []).filter((p: any) => {
-    if (!p.config?.shell) return false;
-    try {
-      return existsSync(p.config.shell as string);
-    } catch {
-      return false;
-    }
-  });
-
   const handleNewTab = () => openNewTab(defaultProfile);
-  const handleNewTabContext = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setProfileOpen(!profileOpen);
-  };
-  const handleProfileSelect = (name: string) => {
-    setProfileOpen(false);
-    openNewTab(name);
-  };
   const handleNewWindow = () => {
     ipcRenderer.send('new-window');
   };

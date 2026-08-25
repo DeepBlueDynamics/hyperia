@@ -101,3 +101,5 @@ __pycache__/
 
 # deck-mcp runtime cache
 tools/deck-mcp/apps.json
+
+CLAUDE.md

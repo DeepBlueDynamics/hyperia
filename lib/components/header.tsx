@@ -39,12 +39,10 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
     }
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleMinimizeClick = () => {
     props.minimize();
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleCloseClick = () => {
     props.close();
   };
@@ -108,7 +106,11 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
                 <use xlinkHref="./renderer/assets/icons.svg#minimize-window" />
               </svg>
             </div>
-            <div className="header_winBtn" onClick={handleMaximizeClick} title={props.maximized ? 'Restore' : 'Maximize'}>
+            <div
+              className="header_winBtn"
+              onClick={handleMaximizeClick}
+              title={props.maximized ? 'Restore' : 'Maximize'}
+            >
               <svg className="header_shape">
                 <use xlinkHref={maxButtonHref} />
               </svg>

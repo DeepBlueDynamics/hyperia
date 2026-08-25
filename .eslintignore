@@ -12,3 +12,4 @@ dist
 target
 cache
 schema.json
+app/highlight.min.js

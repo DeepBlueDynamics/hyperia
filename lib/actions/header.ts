@@ -20,8 +20,8 @@ function busyPaneNames(termGroups: any, sessions: any, rootUid: string): string[
   const names: string[] = [];
   for (const leaf of leaves) {
     const sess = leaf.sessionUid ? sessions.sessions[leaf.sessionUid] : null;
-    if (sess && (sess as any).busy) {
-      names.push((sess as any).shellName || (sess as any).title || (sess as any).profile || 'a shell');
+    if (sess?.busy) {
+      names.push(sess.shellName || sess.title || sess.profile || 'a shell');
     }
   }
   return names;

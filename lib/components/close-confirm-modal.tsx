@@ -39,13 +39,10 @@ export default function CloseConfirmModal(): JSX.Element | null {
   const [req, setReq] = React.useState<CloseConfirmReq | null>(null);
   React.useEffect(() => subscribe(setReq), []);
 
-  const done = React.useCallback(
-    (ok: boolean) => {
-      if (current) current.answer(ok);
-      clearCloseConfirm();
-    },
-    []
-  );
+  const done = React.useCallback((ok: boolean) => {
+    if (current) current.answer(ok);
+    clearCloseConfirm();
+  }, []);
 
   React.useEffect(() => {
     if (!req) return;
@@ -61,8 +58,7 @@ export default function CloseConfirmModal(): JSX.Element | null {
 
   const verb = req.scope === 'quit' ? 'Quit' : req.scope === 'tab' ? 'Close tab' : 'Close window';
   const n = req.names.filter(Boolean);
-  const heading =
-    n.length > 0 ? 'Active processes still running' : req.scope === 'quit' ? 'Quit Hyperia?' : 'Close?';
+  const heading = n.length > 0 ? 'Active processes still running' : req.scope === 'quit' ? 'Quit Hyperia?' : 'Close?';
   const lead =
     n.length === 0
       ? req.tabCount && req.tabCount > 1
@@ -72,7 +68,11 @@ export default function CloseConfirmModal(): JSX.Element | null {
         ? `A pane is still running “${n[0]}”.`
         : `${n.length} panes are still running:`;
   const stopVerb =
-    req.scope === 'quit' ? 'Quitting will stop' : req.scope === 'tab' ? 'Closing this tab will stop' : 'Closing will stop';
+    req.scope === 'quit'
+      ? 'Quitting will stop'
+      : req.scope === 'tab'
+        ? 'Closing this tab will stop'
+        : 'Closing will stop';
 
   return (
     <div

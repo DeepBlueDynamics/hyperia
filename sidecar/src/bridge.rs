@@ -96,7 +96,8 @@ struct HeldAction {
 
 /// A capped, edge-triggered self-poke an agent armed for its OWN pane: when the
 /// pane next goes running->idle, deliver `keys` to it. Can't run away — it fires
-/// once per running->idle edge, at most `max_fires` times, and expires (<=1h).
+/// once per running->idle edge, at most `max_fires` times, throttled to one fire
+/// per CALLBACK_COOLDOWN_SECS, and expires (<=1h).
 #[derive(Clone)]
 struct IdleCallback {
     #[allow(dead_code)]
@@ -107,9 +108,29 @@ struct IdleCallback {
     max_fires: u32,
     fires: u32,
     running_seen: bool,
+    /// When this callback last fired — a stop-start pane (builds pause output
+    /// >=10s mid-work) produces idle edges as little as ~12s apart, which used
+    /// to burn all 5 fires in a minute, each poke typing into the composer.
+    last_fire: Option<std::time::Instant>,
     #[allow(dead_code)]
     creator: String,
 }
+
+/// Minimum seconds between two fires of the same idle callback. An edge that
+/// lands inside the cooldown is NOT consumed (running_seen stays set) — if the
+/// pane is still idle once the cooldown clears, the poke fires then.
+const CALLBACK_COOLDOWN_SECS: u64 = 60;
+
+/// Idle-poke rate escalation. The per-callback fire cap is defeated by
+/// re-arming (registering replaces the pane's callback, fires reset to 0), so
+/// the RATE is tracked per PANE across re-arms: within a rolling window the
+/// agent is first WARNED inside the poke text (told to reschedule with longer
+/// horizons), and if it keeps burning pokes it is cut off for an hour — the
+/// final poke says so, and re-arms are refused until the block clears.
+const RATE_WINDOW_SECS: u64 = 600;
+const RATE_WARN_AT: usize = 3;
+const RATE_BLOCK_AT: usize = 5;
+const RATE_BLOCK_SECS: u64 = 3600;
 
 /// Wall-clock seconds since the unix epoch (for persisted pulse timing).
 fn now_unix() -> u64 {
@@ -206,6 +227,13 @@ struct BridgeInner {
     /// Key = requester label (one pending create per requester, matching the
     /// create-consent dedupe).
     held_creates: Mutex<HashMap<String, serde_json::Value>>,
+    /// Create-consent decisions that arrived while the agent's request was
+    /// STILL inside its inline wait — the human clicked before the 202/hold
+    /// landed, so there was no held command to execute and no durable grant
+    /// for the wait's authorize_create poll to see: the fast click used to
+    /// cost the full 8s AND silently drop the command. (allow, when);
+    /// consumed by the enforce_create poll, stale entries ignored.
+    resolved_creates: Mutex<HashMap<String, (bool, std::time::Instant)>>,
     /// Capped, edge-triggered self idle-callbacks: when a pane goes running->idle,
     /// deliver the stored keys to it. Watched + fired by the idle-monitor task.
     idle_callbacks: Mutex<Vec<IdleCallback>>,
@@ -216,6 +244,12 @@ struct BridgeInner {
     /// Recurring pane pulses (the watchdog): re-inject a prompt on an interval,
     /// idle-gated or fixed. Watched + fired by the idle-monitor task.
     pulses: Mutex<Vec<Pulse>>,
+    /// Per-pane idle-poke fire history (rolling RATE_WINDOW_SECS). Lives OUTSIDE
+    /// IdleCallback because re-arming replaces the callback (fires reset to 0) —
+    /// the rate must survive re-arms to catch a re-arm loop.
+    idle_fire_log: Mutex<HashMap<String, Vec<std::time::Instant>>>,
+    /// Panes whose idle pokes are suspended for rate abuse (pane -> unblock time).
+    idle_blocked: Mutex<HashMap<String, std::time::Instant>>,
     /// Per-session output subscribers: uid → list of senders waiting for PTY bytes
     output_subs: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>,
     /// Lume-backed per-shell log store (BM25 search + pickle-to-disk).
@@ -247,9 +281,12 @@ impl Bridge {
                 app_foreground: Mutex::new(true),
                 held_actions: Mutex::new(HashMap::new()),
                 held_creates: Mutex::new(HashMap::new()),
+                resolved_creates: Mutex::new(HashMap::new()),
                 idle_callbacks: Mutex::new(Vec::new()),
                 liveness: Mutex::new(HashMap::new()),
                 pulses: Mutex::new(load_pulses()),
+                idle_fire_log: Mutex::new(HashMap::new()),
+                idle_blocked: Mutex::new(HashMap::new()),
                 output_subs: Mutex::new(HashMap::new()),
                 lume: crate::lume_store::LumeStore::new(),
                 perms: crate::perms::PermStore::default(),
@@ -540,9 +577,32 @@ impl Bridge {
         self.inner.held_creates.lock().await.remove(requester_label)
     }
 
+    /// Record the human's create decision for a requester whose command was NOT
+    /// held yet — they clicked before the agent's inline wait gave up. The
+    /// agent's in-flight enforce_create poll consumes it within 500ms.
+    pub async fn resolve_create_early(&self, requester_label: &str, allow: bool) {
+        self.inner
+            .resolved_creates
+            .lock()
+            .await
+            .insert(requester_label.to_string(), (allow, std::time::Instant::now()));
+    }
+
+    /// Consume a fresh (<60s) early create decision for this requester.
+    pub async fn take_resolved_create(&self, requester_label: &str) -> Option<bool> {
+        let mut m = self.inner.resolved_creates.lock().await;
+        match m.remove(requester_label) {
+            Some((allow, t)) if t.elapsed().as_secs() < 60 => Some(allow),
+            _ => None,
+        }
+    }
+
     /// Arm a one-shot (capped) idle callback for a pane — the caller's OWN pane.
     /// Replaces any existing callback for that pane (one per pane). Lifetime is
-    /// hard-capped at 1h and fires at 5. Returns the callback id.
+    /// hard-capped at 1h and fires at 5. Returns (new id, replaced id) so the
+    /// caller can be TOLD it replaced — an agent that saw only fresh ids
+    /// concluded callbacks stack and panicked about phantom pokes. Refuses while
+    /// the pane is rate-suspended.
     pub async fn register_idle_callback(
         &self,
         pane: &str,
@@ -550,7 +610,19 @@ impl Bridge {
         max_lifetime_secs: u64,
         max_fires: u32,
         creator: &str,
-    ) -> String {
+    ) -> Result<(String, Option<String>), String> {
+        {
+            let mut blocked = self.inner.idle_blocked.lock().await;
+            blocked.retain(|_, until| std::time::Instant::now() < *until);
+            if let Some(until) = blocked.get(pane) {
+                let mins =
+                    until.saturating_duration_since(std::time::Instant::now()).as_secs() / 60 + 1;
+                return Err(format!(
+                    "REFUSED: idle pokes for this pane are suspended (~{mins} min left) after {RATE_BLOCK_AT} fires inside {} minutes. When the block clears, schedule further out — fewer fires with a longer horizon — or use sticky_note_schedule for a timed check instead.",
+                    RATE_WINDOW_SECS / 60
+                ));
+            }
+        }
         let life = max_lifetime_secs.clamp(1, 3600);
         let fires_cap = max_fires.clamp(1, 5);
         let id = format!(
@@ -567,12 +639,14 @@ impl Bridge {
             // The caller is active right now (it just made this call), so arm as
             // if we've already seen 'running' — the NEXT idle fires.
             running_seen: true,
+            last_fire: None,
             creator: creator.to_string(),
         };
         let mut cbs = self.inner.idle_callbacks.lock().await;
+        let replaced = cbs.iter().find(|c| c.pane == pane).map(|c| c.id.clone());
         cbs.retain(|c| c.pane != pane);
         cbs.push(cb);
-        id
+        Ok((id, replaced))
     }
 
     /// Record a self-reported liveness pulse. busy=true marks the pane busy until
@@ -598,7 +672,8 @@ impl Bridge {
     }
 
     /// Register a recurring pulse on a pane. Clamps interval (>=20s) and lifetime
-    /// (<=1h). One pulse per (window,tab) — dedupe. Returns the id.
+    /// (<=1h). One pulse per PANE — re-setting the same pane replaces its pulse;
+    /// other panes in the tab keep theirs. Returns the id.
     #[allow(clippy::too_many_arguments)]
     pub async fn register_pulse(
         &self,
@@ -643,21 +718,37 @@ impl Bridge {
         };
         {
             let mut pulses = self.inner.pulses.lock().await;
-            pulses.retain(|x| !(x.window == window && x.tab == tab));
+            // Replace only a pulse on THIS pane: same live uid, or same
+            // (window, tab, display name) — the restart-stable identity a dead
+            // pane's pulse re-binds through. Other panes' pulses are kept.
+            pulses.retain(|x| {
+                !(x.pane == pane
+                    || (x.window == window && x.tab == tab && x.target_label == target_label))
+            });
             pulses.push(p);
         }
         self.persist_pulses().await;
         id
     }
 
-    /// Clear pulses by id or by (current) target pane uid. Returns how many removed.
+    /// Clear pulses AND idle callbacks by id (pulse_N / cb_N) or by (current)
+    /// target pane uid. Returns how many removed. Accepting cb_ ids matters:
+    /// an agent trying to kill its pane_on_idle pokes reaches for
+    /// pane_pulse_clear first (observed live) — a cleared:0 dead-end left it
+    /// convinced the pokes were uncancellable.
     pub async fn clear_pulse(&self, id_or_pane: &str) -> usize {
+        let cleared_cbs = {
+            let mut cbs = self.inner.idle_callbacks.lock().await;
+            let before = cbs.len();
+            cbs.retain(|c| c.id != id_or_pane && c.pane != id_or_pane);
+            before - cbs.len()
+        };
         let n = {
             let mut pulses = self.inner.pulses.lock().await;
             let before = pulses.len();
             pulses.retain(|p| p.id != id_or_pane && p.pane != id_or_pane);
             before - pulses.len()
-        };
+        } + cleared_cbs;
         if n > 0 {
             self.persist_pulses().await;
         }
@@ -756,6 +847,14 @@ impl Bridge {
             .get(uid)
             .map(|s| s.shell_name.clone())
             .filter(|n| !n.is_empty())
+    }
+
+    /// True when no renderer windows are registered (no live sessions at all).
+    /// Used by the zero-window recovery path: consent prompts render inside a
+    /// Hyperia window, so with none open a create-consent request can never be
+    /// approved and would deadlock (bug_1a03461105e).
+    pub async fn has_no_windows(&self) -> bool {
+        self.inner.sessions.lock().await.is_empty()
     }
 
     /// The (window_id, tab_name) a pane lives in — for restart-stable pulse
@@ -858,14 +957,60 @@ impl Bridge {
         // Idle callbacks — edge-triggered (running->idle), one fire per edge.
         {
             let mut cbs = self.inner.idle_callbacks.lock().await;
+            let mut fire_log = self.inner.idle_fire_log.lock().await;
+            let mut blocked = self.inner.idle_blocked.lock().await;
+            blocked.retain(|_, until| now < *until);
             for c in cbs.iter_mut() {
                 match kinds.get(&c.pane).map(|s| s.as_str()).unwrap_or("unknown") {
                     "running" => c.running_seen = true,
                     "idle" => {
-                        if c.running_seen {
-                            to_fire.push((c.pane.clone(), c.keys.clone(), None, true));
-                            c.fires += 1;
+                        if blocked.contains_key(&c.pane) {
+                            continue; // suspended — the block notice already said why
+                        }
+                        // Throttle: an edge inside the cooldown is deferred, not
+                        // consumed — running_seen stays set, so a pane that is
+                        // STILL idle once the cooldown clears gets its poke then.
+                        let cooled = c
+                            .last_fire
+                            .map(|t| t.elapsed().as_secs() >= CALLBACK_COOLDOWN_SECS)
+                            .unwrap_or(true);
+                        if c.running_seen && cooled {
+                            // Rate escalation across re-arms: warn inside the poke,
+                            // then suspend the pane's idle pokes for an hour.
+                            let log = fire_log.entry(c.pane.clone()).or_default();
+                            log.retain(|t| t.elapsed().as_secs() < RATE_WINDOW_SECS);
+                            log.push(now);
+                            let n = log.len();
+                            if n >= RATE_BLOCK_AT {
+                                blocked.insert(
+                                    c.pane.clone(),
+                                    now + std::time::Duration::from_secs(RATE_BLOCK_SECS),
+                                );
+                                to_fire.push((
+                                    c.pane.clone(),
+                                    format!(
+                                        "[Hyperia] Idle pokes for this pane hit {n} in {} minutes and are now SUSPENDED for 1 hour — this is the last one, and pane_on_idle re-arms will be refused until the block clears. When you are back, schedule further out instead of re-arming in a loop: fewer pokes with a longer horizon, or sticky_note_schedule for a timed reminder.",
+                                        RATE_WINDOW_SECS / 60
+                                    ),
+                                    None,
+                                    true,
+                                ));
+                                c.fires = c.max_fires; // consumed — retain() drops it below
+                            } else {
+                                let keys = if n >= RATE_WARN_AT {
+                                    format!(
+                                        "{}\n[Hyperia rate warning] This is idle poke {n} in {} minutes for this pane. Reschedule instead of re-arming hot — a longer horizon, fewer fires, or sticky_note_schedule — because at {RATE_BLOCK_AT} pokes in the window, idle pokes are cut off for 1 hour.",
+                                        c.keys,
+                                        RATE_WINDOW_SECS / 60
+                                    )
+                                } else {
+                                    c.keys.clone()
+                                };
+                                to_fire.push((c.pane.clone(), keys, None, true));
+                                c.fires += 1;
+                            }
                             c.running_seen = false;
+                            c.last_fire = Some(now);
                         }
                     }
                     _ => {}
@@ -1700,10 +1845,16 @@ impl Bridge {
                         tab_active,
                         pane_active,
                         screen: ScreenBuffer::new(rows, cols, 1000),
-                        bsp_x: 0.0,
-                        bsp_y: 0.0,
-                        bsp_w: 100.0,
-                        bsp_h: 100.0,
+                        // Honor the rect carried IN the register message (main
+                        // sends the tracked session's current BSP). Hardcoding
+                        // defaults here left any pane that (re)registered
+                        // without a subsequent layout CHANGE stuck at
+                        // 0,0,100x100 — tab-stream clients then stacked those
+                        // panes over the whole monitor ("panes not appearing").
+                        bsp_x: msg["bsp"]["x"].as_f64().unwrap_or(0.0) as f32,
+                        bsp_y: msg["bsp"]["y"].as_f64().unwrap_or(0.0) as f32,
+                        bsp_w: msg["bsp"]["width"].as_f64().unwrap_or(100.0) as f32,
+                        bsp_h: msg["bsp"]["height"].as_f64().unwrap_or(100.0) as f32,
                         cwd: String::new(),
                         last_user_activity: None,
                         last_output_at: None,

@@ -148,17 +148,19 @@ const splitGroup = (state: ITermState, action: SessionAddAction) => {
         sessionUid: '',
         webUrl: undefined,
         direction: splitDirection,
-        children: (action as any).splitPlacement === 'BEFORE'
-          ? [newSession.uid, existingSession.uid]
-          : [existingSession.uid, newSession.uid]
+        children:
+          (action as any).splitPlacement === 'BEFORE'
+            ? [newSession.uid, existingSession.uid]
+            : [existingSession.uid, newSession.uid]
       })
     );
   }
 
   const {children} = parentGroup;
-  const index = (action as any).splitPlacement === 'BEFORE'
-    ? children.indexOf(activeGroup.uid)
-    : children.indexOf(activeGroup.uid) + 1;
+  const index =
+    (action as any).splitPlacement === 'BEFORE'
+      ? children.indexOf(activeGroup.uid)
+      : children.indexOf(activeGroup.uid) + 1;
   const newChildren = [...children.slice(0, index).asMutable(), newSession.uid, ...children.slice(index).asMutable()];
   state = state.setIn(
     ['termGroups', parentGroup.uid],
@@ -362,13 +364,9 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
         webUrl: act.profile === 'Web Pane' ? act.url || '' : undefined
       });
 
-      state = state
-        .setIn(['termGroups', uid], termGroup)
-        .setIn(['activeSessions', uid], act.uid);
+      state = state.setIn(['termGroups', uid], termGroup).setIn(['activeSessions', uid], act.uid);
       if (!act.isAgentInitiated) {
-        state = state
-          .set('activeRootGroup', uid)
-          .set('activeTermGroup', uid);
+        state = state.set('activeRootGroup', uid).set('activeTermGroup', uid);
       }
       return state;
     }
@@ -403,7 +401,7 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       return state.setIn(['termGroups', uid, 'webUrl'], url);
     }
     case TERM_GROUP_ADD_WEB_TAB: {
-      const {url, name, isAgentInitiated} = act as any;
+      const {url, name, isAgentInitiated} = act;
       const uid = uuidv4();
       const termGroup = TermGroup({uid});
       let nextState = state

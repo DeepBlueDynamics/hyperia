@@ -6,14 +6,12 @@
 // Agent input is deferred while the user is actively typing/interacting
 // with a session. Per-session queues drain once the user goes idle.
 
-import {app} from 'electron';
-import type {BrowserWindow} from 'electron';
+import {app, BrowserWindow} from 'electron';
 
 import isDev from 'electron-is-dev';
 import WebSocket from 'ws';
 
 import {getProfiles, getConfig} from './config';
-import {capturePaneJpeg} from './web-pane-manager';
 import type Session from './session';
 import {
   createStickyNote,
@@ -23,6 +21,7 @@ import {
   scheduleSticky,
   unscheduleSticky
 } from './sticky';
+import {capturePaneJpeg} from './web-pane-manager';
 
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
@@ -128,7 +127,9 @@ function connect() {
     try {
       const winList: BrowserWindow[] = Array.from((app as any).getWindows?.() || []);
       for (const w of winList) updateWindowBounds(w);
-    } catch { /* best-effort */ }
+    } catch {
+      /* best-effort */
+    }
     startHeartbeat();
   });
 
@@ -266,7 +267,10 @@ function enqueueOrWrite(uid: string, keys: string, seq: number | undefined, inte
     const last = pending?.[pending.length - 1];
     if (last) {
       last.keys += keys;
-      sendResult(seq, 'queued: Enter appended to your pending message for this pane — both deliver when the human goes idle.');
+      sendResult(
+        seq,
+        'queued: Enter appended to your pending message for this pane — both deliver when the human goes idle.'
+      );
     } else {
       sendResult(
         seq,
@@ -348,12 +352,10 @@ function drainQueues() {
 // ---------------------------------------------------------------------------
 
 function getFocusedHyperiaWindow(): BrowserWindow | null {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call
   return (app as any).getLastFocusedWindow?.() || null;
 }
 
 function getHyperiaWindowById(windowId: number): BrowserWindow | null {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument
   const windows: BrowserWindow[] = Array.from((app as any).getWindows?.() || []);
   return windows.find((win) => win.id === windowId) || null;
 }
@@ -402,7 +404,6 @@ function handleCommand(msg: Record<string, unknown>) {
     }
 
     case 'SaveLayoutState': {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       const windows: any[] = Array.from((app as any).getWindows?.() || []);
       if (windows.length > 0) {
         for (const w of windows) {
@@ -456,7 +457,7 @@ function handleCommand(msg: Record<string, unknown>) {
       }));
       // Per-window OS pixel size so the agent can answer "how big is the window"
       // and resize relative to it (terminal_set_window_size).
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+
       const winList: BrowserWindow[] = Array.from((app as any).getWindows?.() || []);
       const windowSizes = winList.map((w) => {
         const b = w.getBounds();
@@ -688,9 +689,18 @@ function handleCommand(msg: Record<string, unknown>) {
     }
 
     case 'NewWindow': {
-      const createWin = (app as any).createWindow as (() => void) | undefined;
+      const createWin = (app as any).createWindow as
+        | ((fn?: (win: any) => void, options?: {size?: [number, number]}, profileName?: string) => void)
+        | undefined;
       if (createWin) {
-        createWin();
+        if (msg.firstWindow) {
+          // Agent-created FIRST window (none were open — the zero-window
+          // recovery path): land on the new-pane picker so the human chooses
+          // what runs, instead of spawning the default shell.
+          createWin((win: any) => win.rpc.emit('termgroup add req', {profile: 'picker'}));
+        } else {
+          createWin();
+        }
         sendResult(seq, 'ok');
       } else {
         sendResult(seq, 'createWindow not available');
@@ -751,6 +761,42 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'ApplyStyle': {
+      // Apply (or clear, style=null) a per-pane appearance override set. The
+      // renderer stores it on the session; term-group merges it over the
+      // profile/global appearance when building that pane's terminal props.
+      const uid = msg.uid as string;
+      const style = msg.style ?? null;
+      const tracked = trackedSessions.get(uid);
+      if (tracked) {
+        const win = getHyperiaWindowById(tracked.windowId);
+        if (win) win.rpc.emit('pane style', {uid, style});
+        sendResult(seq, JSON.stringify({ok: true, pane: uid}));
+      } else {
+        sendResult(seq, `No session: ${uid}`);
+      }
+      break;
+    }
+
+    case 'RenamePane': {
+      // Rename ONE pane's stable codename (shellName) — unlike 'Rename', which
+      // renames the whole tab. The renderer updates its store; its layout sync
+      // then re-affirms the name to the sidecar. We also push SessionName
+      // immediately so terminal_status is right without waiting for a sync.
+      const uid = msg.uid as string;
+      const name = msg.name as string;
+      const tracked = trackedSessions.get(uid);
+      if (tracked && name) {
+        const win = getHyperiaWindowById(tracked.windowId);
+        if (win) win.rpc.emit('session rename pane', {uid, name});
+        send({type: 'SessionName', uid, name});
+        sendResult(seq, JSON.stringify({ok: true, pane: uid, name}));
+      } else {
+        sendResult(seq, tracked ? 'name required' : `No session: ${uid}`);
+      }
+      break;
+    }
+
     case 'AgentStatus': {
       // Resolve sessionUid: use explicit uid, or resolve from pane index, or fall back to first session
       let sessionUid = msg.sessionUid as string | undefined;
@@ -777,9 +823,8 @@ function handleCommand(msg: Record<string, unknown>) {
         humanPercent: msg.humanPercent as number | undefined
       };
       // Broadcast to all windows
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+
       for (const win of (app as any).getWindows?.() || []) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
         win.rpc?.emit('agent status', statusData);
       }
       // Fallback: try focused window
@@ -807,9 +852,9 @@ function handleCommand(msg: Record<string, unknown>) {
           keyCode,
           modifiers
         } as any;
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+
         win.webContents.sendInputEvent({...eventBase, type: 'keyDown'});
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+
         win.webContents.sendInputEvent({...eventBase, type: 'keyUp'});
         sendResult(seq, 'ok');
       } else {
@@ -1251,7 +1296,15 @@ export function updateSessionActive(uid: string, windowId: number) {
 
   tracked.paneActive = true;
   focusedWindowId = windowId;
-  notifyUserActivity(uid);
+  // Activation is NOT typing. Count it as human activity only when the OS
+  // window actually has focus — re-activations fired while the human is in a
+  // browser or another app (focus juggling, tab/layout sync, web-pane
+  // handoffs) were stamping panes "human occupied" and locking agents out of
+  // panes nobody was in. Real keystrokes stamp via the 'data' handler anyway.
+  const win = BrowserWindow.fromId(windowId);
+  if (win && !win.isDestroyed() && win.isFocused()) {
+    notifyUserActivity(uid);
+  }
   send({type: 'SessionActive', uid, windowId});
 }
 
@@ -1468,16 +1521,18 @@ export function executeSessionCd(
   path: string,
   sidecarState?: 'idle' | 'running',
   bypassUserActiveCheck = false
-): { applied?: boolean; queued?: boolean; refused?: boolean; reason?: string } {
+): {applied?: boolean; queued?: boolean; refused?: boolean; reason?: string} {
   const tracked = trackedSessions.get(uid);
   if (!tracked) {
-    return { refused: true, reason: `No session: ${uid}` };
+    return {refused: true, reason: `No session: ${uid}`};
   }
 
   if (tracked.session.shellState) {
     // Shell integration is active!
     try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const fs = require('fs');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const pathMod = require('path');
       const ctlDir = pathMod.join(app.getPath('userData'), 'panes', uid);
       const cdFilePath = pathMod.join(ctlDir, 'cd');
@@ -1490,14 +1545,14 @@ export function executeSessionCd(
       const userActive = isUserActive(uid);
       if (isIdle && (bypassUserActiveCheck || !userActive)) {
         tracked.session.write('\r');
-        return { applied: true };
+        return {applied: true};
       } else if (isIdle) {
-        return { queued: true, reason: 'human active' };
+        return {queued: true, reason: 'human active'};
       } else {
-        return { queued: true, reason: 'foreground app running' };
+        return {queued: true, reason: 'foreground app running'};
       }
     } catch (err: any) {
-      return { refused: true, reason: err.message };
+      return {refused: true, reason: err.message};
     }
   } else {
     // Fallback mechanism (no shell integration)
@@ -1518,7 +1573,7 @@ export function executeSessionCd(
     // pane without shell integration — isIdle is false, so we queue, never write.
     if (isIdle && (bypassUserActiveCheck || !userActive)) {
       tracked.session.write(keys);
-      return { applied: true };
+      return {applied: true};
     } else {
       let queue = agentQueues.get(uid);
       if (!queue) {
@@ -1526,11 +1581,11 @@ export function executeSessionCd(
         agentQueues.set(uid, queue);
       }
       if (queue.length >= MAX_QUEUE_DEPTH) {
-        return { refused: true, reason: 'Queue full' };
+        return {refused: true, reason: 'Queue full'};
       } else {
-        queue.push({ keys, seq: undefined });
+        queue.push({keys, seq: undefined});
         ensureDrainTimer();
-        return { queued: true, reason: 'foreground app running or human active' };
+        return {queued: true, reason: 'foreground app running or human active'};
       }
     }
   }

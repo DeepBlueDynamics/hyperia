@@ -1,62 +1,209 @@
 # Configuration
 
-Configuration lives at `~/.hyperia/hyperia.json`. Edit it directly, or let the app and agent write to it. All keys are under a top-level `config` object.
+Configuration lives at **`~/.hyperia/hyperia.json`**. All settings sit under a top-level `config` object; the file may also carry top-level `plugins`, `localPlugins`, and `keymaps` keys. The typed source of truth is `typings/config.d.ts` (schema: `app/config/schema.json`).
 
-## Example
+## How to change any setting (start here)
 
-```json
-{
-  "config": {
-    "agent": { "provider": "anthropic", "model": "claude-sonnet-4-6" },
-    "providers": {
-      "anthropic": { "token": "sk-ant-...", "endpoint": "https://api.anthropic.com" },
-      "openai":    { "token": "sk-...",      "endpoint": "https://api.openai.com" },
-      "gemini":    { "token": "..." },
-      "ollama":    { "endpoint": "http://localhost:11434", "token": "" }
-    },
-    "defaultProfile": "PowerShell 7.5.5",
-    "profiles": [
-      { "name": "My Agent", "kind": "agent",
-        "config": { "shell": "cmd.exe", "shellArgs": ["/c", "claude"], "env": {} } }
-    ],
-    "stickyFontSize": 14,
+Three equivalent ways — pick by where you are:
 
-    "fontSize": 16,
-    "fontFamily": "Menlo, Consolas, monospace",
-    "cursorShape": "BEAM"
-  }
-}
+1. **MCP tool** (agents inside or outside Hyperia):
+   ```
+   settings_set  {"path": "config.fontSize", "value": 14}
+   settings_get  {"path": "config.fontSize"}        // read one value
+   settings_get  {"path": ""}                        // dump the whole config
+   ```
+   Paths are dot-separated from the file root, so every setting below is `config.<key>` (nested: `config.colors.red`, `config.lockout.duration_secs`). Intermediate objects are created as needed; pass `null` to delete a key.
+
+2. **CLI** (any terminal, after `hyperia login`):
+   ```
+   hyperia call settings_set '{"path":"config.cursorShape","value":"BLOCK"}'
+   hyperia call settings_get '{"path":"config.colors"}'
+   ```
+
+3. **Edit the file** — change `~/.hyperia/hyperia.json` with any editor; the app watches it.
+
+**When changes apply:** most settings — colors, fonts, cursor, padding, CSS — hot-reload into the running app within a couple of seconds; no restart. Settings that need a full app restart: `webGLRenderer`, `useConpty`, `webLinksActivationKey`, `useExternalSidecar`, `updateChannel`, and `shell`/`shellArgs` for *already-open* panes (new panes pick them up immediately).
+
+**Consent:** `settings_set` is a state-changing, capability-gated call — an agent's first write may raise a consent prompt for the human. Reads never do.
+
+## Changing colors
+
+The terminal's 16-color ANSI palette is the `colors` map. Every key takes any CSS color (`#hex`, `rgb()`, `hsl()`, …):
+
+```
+black    red    green    yellow    blue    magenta    cyan    white
+lightBlack  lightRed  lightGreen  lightYellow  lightBlue  lightMagenta  lightCyan  lightWhite
 ```
 
-## The agent
+One color:
+
+```
+settings_set {"path": "config.colors.red", "value": "#ff5c57"}
+```
+
+Whole palette at once:
+
+```
+settings_set {"path": "config.colors", "value": {"black": "#000000", "red": "#ff5c57", "green": "#5af78e", "yellow": "#f3f99d", "blue": "#57c7ff", "magenta": "#ff6ac1", "cyan": "#9aedfe", "white": "#f1f1f0", "lightBlack": "#686868", "lightRed": "#ff5c57", "lightGreen": "#5af78e", "lightYellow": "#f3f99d", "lightBlue": "#57c7ff", "lightMagenta": "#ff6ac1", "lightCyan": "#9aedfe", "lightWhite": "#eff0eb"}}
+```
+
+The non-palette color settings:
+
+| Key | What it colors |
+|-----|----------------|
+| `backgroundColor` | terminal background (opacity only on macOS) |
+| `foregroundColor` | default text |
+| `cursorColor` | cursor background |
+| `cursorAccentColor` | text under a BLOCK cursor |
+| `selectionColor` | selected text |
+| `borderColor` | window + tab borders |
+
+All hot-reload. Colors can also be overridden **per profile** (see below) so, e.g., an SSH profile can run red.
+
+## Full settings reference
+
+### Text & font
+
+| Key | Type / values | Notes |
+|-----|---------------|-------|
+| `fontSize` | number (px) | all tabs |
+| `fontFamily` | string | with fallbacks, e.g. `"Menlo, Consolas, monospace"` |
+| `fontWeight` / `fontWeightBold` | `'normal'`/`'bold'`/`'100'..'900'` | normal vs bold glyphs |
+| `lineHeight` / `letterSpacing` | number (relative) | |
+| `disableLigatures` | boolean | `false` allows font ligatures |
+| `uiFontFamily` | string | chrome/UI font (not terminal text) |
+| `stickyFontSize` | number | sticky-note text size |
+
+### Cursor
+
+| Key | Type / values |
+|-----|---------------|
+| `cursorShape` | `'BEAM'` \| `'UNDERLINE'` \| `'BLOCK'` |
+| `cursorBlink` | boolean |
+| `cursorColor` / `cursorAccentColor` | CSS color |
+
+### Terminal behavior
+
+| Key | Type / values | Notes |
+|-----|---------------|-------|
+| `scrollback` | number | lines of history kept per pane |
+| `copyOnSelect` | boolean | selection auto-copies |
+| `quickEdit` | boolean | right-click copies/pastes (Windows default; disables context menu) |
+| `macOptionSelectionMode` | `'vertical'` \| `'force'` | Option-drag column select vs forced selection |
+| `disableMouseReporting` | boolean | kill mouse tracking entirely |
+| `bell` | `'SOUND'` \| `false` | with `bellSound` (base64) / `bellSoundURL` (file path) overrides |
+| `imageSupport` | boolean | Sixel + iTerm2 inline images |
+| `screenReaderMode` | boolean | NVDA etc. |
+| `webLinksActivationKey` | `'ctrl'`/`'alt'`/`'meta'`/`'shift'`/`''` | modifier to click links (restart needed) |
+| `sessionLogging` | boolean | per-tab logs into `~/.hyperia/logs/` |
+| `preserveCWD` | boolean | splits/tabs inherit the working directory |
+
+### Shell & session
+
+| Key | Type | Notes |
+|-----|------|-------|
+| `shell` | string (path) | root default; empty = login shell |
+| `shellArgs` | string[] | default `['--login']`; drop it on Windows |
+| `env` | object | extra environment variables |
+| `workingDirectory` | string (absolute) | startup directory |
+| `defaultProfile` | string | profile for first-ever picks — note the new-pane picker pre-fills your **last-used** shell, not this |
+| `profiles` | array | see Shell profiles below |
+| `shellIntegration` | boolean | OSC shell integration (prompt/command marks) |
+| `useConpty` | boolean | Windows ConPTY (restart needed) |
+
+### Window & UI
+
+| Key | Type / values | Notes |
+|-----|---------------|-------|
+| `windowSize` | `[width, height]` | initial size in px |
+| `padding` | string (CSS shorthand) | terminal padding |
+| `showWindowControls` | `true`/`false`/`'left'`/`''` | min/max/close buttons (Win/Linux) |
+| `showHamburgerMenu` | boolean/`''` | Linux menu button |
+| `css` / `termCSS` | string | raw CSS injected into the window / the terminal |
+| `webGLRenderer` | boolean | `false` = canvas (slower, supports transparency; restart needed) |
+| `modifierKeys` | `{altIsMeta, cmdIsMeta}` | |
+| `styleTheme` | object | saved pane-style theme (see `style_*` tools) |
+
+### Web panes
+
+| Key | Values | Notes |
+|-----|--------|-------|
+| `webPaneLinkTarget` | `'tab'` (default) \| `'split-right'` \| `'split-down'` | where `target="_blank"` links open (OAuth pop-ups always use the system browser) |
+| `webPaneFocusOnNavigate` | boolean (default `false`) | `false` = an agent navigating a web pane never drags your view to it |
+
+### Updates & platform
+
+| Key | Values |
+|-----|--------|
+| `updateChannel` | `'stable'` \| `'canary'` |
+| `disableAutoUpdates` | boolean |
+| `autoUpdatePlugins` | boolean or interval string (`'1d'`, `'2h'`) |
+| `defaultSSHApp` | boolean — register as ssh:// handler |
+| `useExternalSidecar` | boolean — connect to an externally-managed sidecar on 9800 instead of spawning one (also `HYPERIA_USE_EXTERNAL_SIDECAR` env; see `deploy/`) |
+
+### Hyperia-specific blocks
+
+| Key | Shape | What it does |
+|-----|-------|--------------|
+| `agent` | `{provider, model}` | the built-in Ghost agent's brain — provider is `anthropic`/`openai`/`gemini`/`ollama` |
+| `providers` | `{<name>: {token, endpoint?}}` | API keys per provider (`ollama` needs no token) |
+| `lockout` | `{enabled?: bool, duration_secs?: number}` | how long after a human keystroke agent writes to that pane stay queued (default enabled, 15s; `enabled: false` disables the guard) |
+| `maximus` | `{disabled: bool, ...}` | the local output-compression/extraction layer (`disabled: true` = raw passthrough; model override via `maximus_model` / `MAXIMUS_MODEL`) |
+| `tts` | `{recipient?: string}` | callsign spoken summaries address (default `"base"`) |
+
+## The agent (Ghost)
 
 The built-in **Ghost** agent picks its model from the `agent` block plus a matching `providers` entry:
 
 - `agent.provider` — one of `anthropic`, `openai`, `gemini`, `ollama`.
 - `agent.model` — the model id for that provider (e.g. `claude-sonnet-4-6`).
-- `providers.<name>.token` — the API key for that provider (`ollama` needs none).
-- `providers.<name>.endpoint` — optional override of the provider's base URL.
+- `providers.<name>.token` — the API key (`ollama` needs none).
+- `providers.<name>.endpoint` — optional base-URL override.
 
-If no usable frontier provider/token is configured, the Ghost falls back to a local **Ollama** model (`gemma2:9b`). The legacy top-level keys `agentToken` / `agentModel` are still read and migrated, but the `agent` + `providers` shape above is the source of truth.
+With no usable frontier provider/token, the Ghost falls back to local Ollama (`gemma2:9b`). Legacy top-level `agentToken`/`agentModel` are still migrated, but `agent` + `providers` is the source of truth.
 
-> **Ferricula** (optional external memory) is not configured here — it's resolved from the `FERRICULA_URL` environment variable (default `http://localhost:8765`) and is a no-op when unreachable. See [memory.md](memory.md).
+> **Ferricula** (optional external memory) is not configured here — it resolves from the `FERRICULA_URL` env var (default `http://localhost:8765`) and is a no-op when unreachable. See [memory.md](memory.md).
 
 ## Shell profiles
 
-`profiles` are the shells/agents offered in the new-pane Chooser. They are **auto-detected** at startup (PowerShell, CMD, Git Bash, and each installed WSL distro on Windows; zsh/bash/fish on Unix; plus Claude Code / Nemesis8 if present) and merged with any you add. Each profile:
+`profiles` are the shells/agents offered in the new-pane Chooser. They are **auto-detected** at startup (PowerShell, CMD, Git Bash, each WSL distro on Windows; zsh/bash/fish on Unix; plus Claude Code / Nemesis8 if present) and merged with yours. Each profile:
 
 ```json
 { "name": "Label", "kind": "shell" | "agent",
-  "config": { "shell": "<path>", "shellArgs": ["..."], "env": { } } }
+  "config": { "shell": "<path>", "shellArgs": ["..."], "command": "ssh somewhere", "env": {} } }
 ```
 
-- `kind` distinguishes user-added **custom** profiles (`shell` or `agent`) from auto-detected ones. Custom agent profiles appear under "pick an agent" in the Chooser; you can right-click a custom profile to delete it.
-- `defaultProfile` names the profile used for new panes.
+- `config` accepts **any appearance/behavior key from the reference above** as a per-profile override (colors, fontSize, padding, …) — root config is the default, the profile wins for its panes.
+- `command` runs after the shell starts (e.g. `ssh nemesis`); `baseShell` records what it runs inside.
+- `pathTranslate` (`{kind: 'identity'|'wsl'|'docker-mount', hostPrefix, containerPrefix}`) maps host paths for WSL/container shells.
+- `kind` marks user-added custom profiles (`shell` or `agent`); custom agent profiles appear under "pick an agent" in the Chooser.
+- `defaultProfile` names the fallback for first-ever picks; the picker otherwise remembers your last-used shell.
 
-## Terminal appearance
+## Pane styles (color a single pane, live)
 
-Standard terminal keys are inherited from Hyper and still apply: `fontSize`, `fontFamily`, `cursorShape` (`BEAM` / `BLOCK` / `UNDERLINE`), colors, and `css` / `termCSS` overrides. `stickyFontSize` controls sticky-note text size.
+Styles are **named, reusable sets of appearance overrides** stored in `config.styles[]`, applied to individual panes at runtime. The full agent flow:
+
+```
+style_create {"name": "alert", "overrides": {"backgroundColor": "#2a0a0a", "colors": {"red": "#ff5c57"}, "fontSize": 15}}
+style_list   {}                                              // ["alert", ...]
+style_apply  {"name": "alert", "pane": "Brilliant Peacock"}  // that pane recolors live
+style_apply  {"name": "default", "pane": "Brilliant Peacock"} // clear back to normal
+style_delete {"name": "alert"}
+```
+
+- Overrides accept **any appearance key from the reference above** (colors, `backgroundColor`, `foregroundColor`, cursor keys, `fontSize`, `fontFamily`, weights, `lineHeight`, `letterSpacing`, `padding`, `selectionColor`, `borderColor`). Partial `colors` maps merge key-by-key. Plus the style-only overlay keys: `"scanlines": true` (CRT scan lines), `"watermark": "TOP SECRET"` + `"watermarkColor"` (ghosted diagonal text), and `"watermarkImage"` (path/data:/URL) + `"watermarkOpacity"` (ghosted centered image).
+- `style_apply` requires an **explicit pane target** (name or paneId — it never defaults to the human's focused pane) and applies live, no restart.
+- **Gating:** creating/deleting styles requires an identity (they write shared config); applying to a pane you don't own raises the human's consent prompt, like any pane write. `style_list` is a free read.
+- Applied styles are runtime state — they last for the pane's life and don't persist across app restarts (the style definitions themselves do).
+- Styles layer on top: pane style > profile `config` > root config.
 
 ## Keyboard shortcuts
 
-Keymaps are defined per-platform in `app/keymaps/{darwin,linux,win32}.json` — edit those to rebind. Common defaults: new tab, close tab, next/previous tab, split pane, and the right-click menus on a tab (rename / close / change profile) and on the terminal (Ask Hyperia / copy / paste). Consult the keymap file for your platform for the authoritative list.
+Two layers:
+
+- **User overrides** — the top-level `keymaps` object in `hyperia.json`: `{"window:devtools": "cmd+alt+o"}`. This is the right place for personal rebinds.
+- **Defaults** — per-platform in `app/keymaps/{darwin,linux,win32}.json` (authoritative list of bindable command names).
+
+## Plugins (legacy)
+
+Top-level `plugins` / `localPlugins` arrays install Hyper-ecosystem npm plugins (`hyperia plugins <cmd>` manages them). Largely inherited machinery — most Hyperia capability ships in the app itself.

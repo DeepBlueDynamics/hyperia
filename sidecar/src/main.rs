@@ -9,6 +9,7 @@ mod doors;
 mod identity;
 mod fsnav;
 mod ghost;
+mod render;
 mod logs;
 mod mcp;
 /// Agent-facing prose, keyed and per-locale — see `messages/mod.rs`.
@@ -64,10 +65,11 @@ struct Args {
 }
 
 #[derive(Clone)]
-struct AppState {
-    bridge: Bridge,
+pub(crate) struct AppState {
+    pub(crate) bridge: Bridge,
     log_buffer: logs::LogBuffer,
     telemetry: telemetry::TelemetryStore,
+    pub(crate) render: render::RenderStore,
 }
 
 // ---------------------------------------------------------------------------
@@ -353,10 +355,13 @@ async fn post_tts(
         // `spoken` echoes the EXACT transcript delivered to the user (frame
         // included) so callers can see the wrapper already carries the
         // callsigns + "Over and out" and don't add their own radio phrases.
-        Ok(secs) => Json(serde_json::json!({
-            "ok": true, "duration_secs": secs, "caller": caller, "recipient": recipient,
-            "spoken": spoken
-        })),
+        Ok(secs) => {
+            dashboard::mark_tts_spoke();
+            Json(serde_json::json!({
+                "ok": true, "duration_secs": secs, "caller": caller, "recipient": recipient,
+                "spoken": spoken
+            }))
+        }
         Err(e) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
     }
 }
@@ -1378,41 +1383,67 @@ async fn enforce_create(
         )),
         AuthDecision::NeedConsent => {
             let label = id.label();
-            // Raise the create-consent toast once; a retry while one is already
-            // pending skips re-raising and resumes waiting below.
-            if !state.bridge.perms().has_pending_create(&label).await {
-                let focus = state.bridge.focused_pane().await.unwrap_or_default();
-                let requester_pane = match &id {
-                    CallerIdentity::Pane { pane, .. } => pane.clone(),
-                    _ => String::new(),
-                };
-                let req = state
-                    .bridge
-                    .perms()
-                    .create_request(&label, &requester_pane, &focus, action, "")
-                    .await;
-                let requester_name = requester_display_name(&state, &id)
-                    .await
-                    .unwrap_or_else(|| req.requester.clone());
-                consent_log::record_request(
-                    &req.id, &req.requester, &requester_name, id.kind(),
-                    &req.action, &req.target_pane, &req.purpose,
-                );
-                let _ = state
-                    .bridge
-                    .notify(serde_json::json!({
-                        "type": "AgentToast",
-                        "id": req.id,
-                        "requester": req.requester,
-                        "requesterName": requester_name,
-                        "action": req.action,
-                    }))
-                    .await;
-            }
+            // Reuse the pending request if one exists (dedupe), but ALWAYS
+            // (re-)notify the toast: the renderer's prompt collapses after 45s,
+            // and the old silent-resume meant a retry could never bring it back
+            // — the human stood at the window with nothing to click while the
+            // agent waited forever. Re-notify is idempotent renderer-side
+            // (setToast by id revives a collapsed pill into the full prompt).
+            let req = match state.bridge.perms().pending_create_for(&label).await {
+                Some(existing) => existing,
+                None => {
+                    let focus = state.bridge.focused_pane().await.unwrap_or_default();
+                    let requester_pane = match &id {
+                        CallerIdentity::Pane { pane, .. } => pane.clone(),
+                        _ => String::new(),
+                    };
+                    let fresh = state
+                        .bridge
+                        .perms()
+                        .create_request(&label, &requester_pane, &focus, action, "")
+                        .await;
+                    let requester_name = requester_display_name(&state, &id)
+                        .await
+                        .unwrap_or_else(|| fresh.requester.clone());
+                    consent_log::record_request(
+                        &fresh.id, &fresh.requester, &requester_name, id.kind(),
+                        &fresh.action, &fresh.target_pane, &fresh.purpose,
+                    );
+                    fresh
+                }
+            };
+            let requester_name = requester_display_name(&state, &id)
+                .await
+                .unwrap_or_else(|| req.requester.clone());
+            let _ = state
+                .bridge
+                .notify(serde_json::json!({
+                    "type": "AgentToast",
+                    "id": req.id,
+                    "requester": req.requester,
+                    "requesterName": requester_name,
+                    "action": req.action,
+                }))
+                .await;
             // Wait for the human's decision so the create COMPLETES on approval
             // instead of returning a bare 202 the agent has to chase.
             for _ in 0..16 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                // A FAST click resolves the REQUEST one-shot without necessarily
+                // minting a durable grant — authorize_create alone never saw it,
+                // so an immediate approval used to burn this whole 8s window and
+                // then silently DROP the command (the decision handler had
+                // already consumed the approval before the hold landed).
+                if let Some(allow) = state.bridge.take_resolved_create(&id.label()).await {
+                    if allow {
+                        return Ok(());
+                    }
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        "Creating panes/tabs was denied by the user. Don't retry — ask the user directly."
+                            .to_string(),
+                    ));
+                }
                 match state.bridge.authorize_create(&id).await {
                     AuthDecision::Allow | AuthDecision::RefuseHome => return Ok(()),
                     AuthDecision::Denied => {
@@ -1696,9 +1727,16 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
                                 state.bridge.perms().stamp_owner(&pane, &req.requester).await;
                             }
                         }
+                    } else {
+                        // Nothing held: the human clicked BEFORE the agent's
+                        // inline wait gave up (fast approval). Park the decision
+                        // for that in-flight wait to consume — it executes the
+                        // create itself within 500ms. Without this, a fast click
+                        // cost the whole 8s window and dropped the command.
+                        state.bridge.resolve_create_early(&req.requester, true).await;
                     }
-                } else {
-                    let _ = state.bridge.take_create(&req.requester).await;
+                } else if state.bridge.take_create(&req.requester).await.is_none() {
+                    state.bridge.resolve_create_early(&req.requester, false).await;
                 }
             }
             let _ = state
@@ -1747,16 +1785,28 @@ async fn post_pane_on_idle(
     }
     let life = parsed["max_lifetime_secs"].as_u64().unwrap_or(900);
     let max_fires = parsed["max_fires"].as_u64().unwrap_or(1) as u32;
-    let cb_id = state
+    let (cb_id, replaced) = match state
         .bridge
         .register_idle_callback(&pane, &keys, life, max_fires, &id.label())
-        .await;
+        .await
+    {
+        Ok(v) => v,
+        Err(msg) => return (StatusCode::TOO_MANY_REQUESTS, msg),
+    };
+    // Say the load-bearing things OUT LOUD: replace semantics (fresh ids made
+    // an agent believe callbacks stack) and the cancel path (its absence made
+    // the same agent believe pokes were uncancellable).
+    let replaced_note = replaced
+        .map(|r| format!(" This REPLACED this pane's previous callback ({r}) — ONE callback per pane, they never stack."))
+        .unwrap_or_default();
     (
         StatusCode::OK,
         serde_json::json!({
             "ok": true,
             "id": cb_id,
-            "message": "Armed. The next time this pane goes idle, the prompt is delivered to it (edge-triggered, capped, expires within 1h)."
+            "message": format!(
+                "Armed. The next time this pane goes idle, the prompt is delivered to it (edge-triggered, capped, expires within 1h, min 60s between fires).{replaced_note} To CANCEL: pane_pulse_clear with this id, or re-arm with max_lifetime_secs=1."
+            )
         })
         .to_string(),
     )
@@ -1875,7 +1925,21 @@ async fn post_pulse_clear(
         }
     };
     let n = state.bridge.clear_pulse(&key).await;
-    (StatusCode::OK, serde_json::json!({"ok": true, "cleared": n}).to_string())
+    // cleared:0 with a bare ok:true read as "success, nothing to see" and sent
+    // an agent to the conclusion that pokes are uncancellable. Say what was
+    // searched and what a valid handle looks like.
+    let body = if n == 0 {
+        serde_json::json!({
+            "ok": true,
+            "cleared": 0,
+            "message": format!(
+                "Nothing matched '{key}'. This clears BOTH pulses (ids pulse_N) and pane_on_idle callbacks (ids cb_N), by id or by pane uid. Check pane_pulse_status for pulses; an idle callback may already have fired out or expired."
+            )
+        })
+    } else {
+        serde_json::json!({"ok": true, "cleared": n})
+    };
+    (StatusCode::OK, body.to_string())
 }
 
 /// Pause/resume a pulse by id.
@@ -2038,6 +2102,81 @@ async fn post_perm_check(State(state): State<AppState>, body: String) -> (Status
     // Tab-aware, identical to real enforcement (authorize_drive) — no divergence.
     let allowed = state.bridge.grant_allows(requester, target).await;
     (StatusCode::OK, serde_json::json!({"allowed": allowed}).to_string())
+}
+
+/// POST /api/styles/apply — apply a named style's overrides to ONE pane's
+/// appearance, live. Drive-gated like every pane write (own pane free; another
+/// pane raises the human's consent prompt). name "" / "default" / "none"
+/// clears the pane back to its profile/global appearance.
+async fn post_style_apply(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    if !(parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "No pane addressed. style apply will NOT default to the focused pane — pass window/tab/pane.".into(),
+        );
+    }
+    let uid = match state
+        .bridge
+        .resolve_pane_uid(
+            parsed["window"].as_u64().map(|v| v as u32),
+            parsed["tab"].as_str(),
+            parsed["pane"].as_str(),
+        )
+        .await
+    {
+        Some(u) => u,
+        None => return (StatusCode::NOT_FOUND, "No pane at that window/tab/pane address".into()),
+    };
+    if let Err(resp) = enforce_drive(&state, &headers, &uid).await {
+        return resp;
+    }
+    let name = parsed["name"].as_str().unwrap_or("").trim().to_string();
+    let clearing = name.is_empty() || name == "default" || name == "none";
+    let style_config = if clearing {
+        serde_json::Value::Null
+    } else {
+        let cfg_path = crate::util::shared_config_path()
+            .unwrap_or_else(|| std::path::PathBuf::from(".").join("hyperia.json"));
+        let cfg: serde_json::Value = match std::fs::read_to_string(&cfg_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+        {
+            Some(v) => v,
+            None => return (StatusCode::INTERNAL_SERVER_ERROR, "Could not read hyperia.json".into()),
+        };
+        match cfg["config"]["styles"]
+            .as_array()
+            .and_then(|a| a.iter().find(|s| s["name"].as_str() == Some(name.as_str())))
+            .map(|s| s["config"].clone())
+        {
+            Some(c) if c.is_object() => c,
+            _ => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    format!("Unknown style '{name}'. `style_list` shows the styles; `style_create` makes one."),
+                )
+            }
+        }
+    };
+    let cmd = serde_json::json!({"type": "ApplyStyle", "uid": uid, "style": style_config});
+    match state.bridge.send_command(cmd).await {
+        Ok(r) => (
+            StatusCode::OK,
+            serde_json::json!({
+                "ok": true,
+                "pane": uid,
+                "style": if clearing { serde_json::Value::Null } else { serde_json::Value::String(name) },
+                "applied": r
+            })
+            .to_string(),
+        ),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
 }
 
 async fn post_cd(
@@ -2305,10 +2444,18 @@ async fn get_where_pane(
 }
 
 async fn post_new_window(State(state): State<AppState>, headers: HeaderMap) -> (StatusCode, String) {
-    if let Err(resp) = enforce_create(&state, &headers, "create_window").await {
-        return resp;
+    // Zero-window recovery: the create-consent prompt renders INSIDE a Hyperia
+    // window, so with none open the approval can never be shown and the request
+    // deadlocks (bug_1a03461105e). There is also no focus to steal. Auto-allow
+    // the FIRST window; Electron opens it on the new-pane picker instead of
+    // spawning a default shell nobody asked for.
+    let first_window = state.bridge.has_no_windows().await;
+    if !first_window {
+        if let Err(resp) = enforce_create(&state, &headers, "create_window").await {
+            return resp;
+        }
     }
-    let cmd = serde_json::json!({"type": "NewWindow"});
+    let cmd = serde_json::json!({"type": "NewWindow", "firstWindow": first_window});
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
@@ -2353,6 +2500,63 @@ async fn post_open_web_pane(
     let cmd = serde_json::json!({"type": "OpenWebPane", "url": url});
     match state.bridge.send_command(cmd).await {
         Ok(r) => (StatusCode::OK, r),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+/// POST /api/render {path?|content?, title?} — register a markdown document
+/// (with the ==highlight== extension) and open its LIVE render page in a new
+/// web-pane tab. Backs the `render` MCP tool. Same create_web consent + held-
+/// create semantics as open_web_pane.
+async fn post_render(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let path = parsed["path"].as_str().unwrap_or("").trim().to_string();
+    let content = parsed["content"].as_str().unwrap_or("").to_string();
+    if path.is_empty() && content.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Provide `path` (a markdown file on disk — live-reloads on change) or `content` (inline markdown)".into(),
+        );
+    }
+    let source = if !path.is_empty() {
+        let pb = std::path::PathBuf::from(&path);
+        if !pb.is_file() {
+            return (StatusCode::NOT_FOUND, format!("No such file: {path}"));
+        }
+        render::RenderSource::File(pb)
+    } else {
+        render::RenderSource::Inline(content)
+    };
+    let title = parsed["title"]
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            std::path::Path::new(&path)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Rendered document".into())
+        });
+    let id = state.render.insert(render::RenderDoc { title, source }).await;
+    let port = std::env::var("HYPERIA_PORT").unwrap_or_else(|_| "9800".into());
+    let url = format!("http://localhost:{port}/render/{id}");
+    let cmd = serde_json::json!({"type": "OpenWebPane", "url": url});
+    if let Err(resp) = enforce_create(&state, &headers, "create_web").await {
+        if resp.0 == StatusCode::ACCEPTED {
+            let caller = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+            state.bridge.hold_create(&caller.label(), cmd).await;
+        }
+        return resp;
+    }
+    match state.bridge.send_command(cmd).await {
+        Ok(_) => (
+            StatusCode::OK,
+            serde_json::json!({"ok": true, "id": id, "url": url, "note": "opened in a new background tab; file-backed docs live-reload ~1.5s after the file changes"}).to_string(),
+        ),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
@@ -2528,6 +2732,40 @@ async fn post_rename_tab(
 ) -> (StatusCode, String) {
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let name = parsed["name"].as_str().unwrap_or("").to_string();
+    if name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "name required".into());
+    }
+    // PANE rename: with `pane` set, change that pane's stable codename (the
+    // handle agents address it by) instead of the tab name. Lets a container
+    // agent re-badge its own pane after a session resume so the crew's names
+    // match what their transcripts believe.
+    if let Some(pane) = parsed["pane"].as_str() {
+        let uid = match state
+            .bridge
+            .resolve_pane_uid(
+                parsed["window"].as_u64().map(|v| v as u32),
+                parsed["tab"].as_str(),
+                Some(pane),
+            )
+            .await
+        {
+            Some(u) => u,
+            None => return (StatusCode::NOT_FOUND, "No pane at that address".into()),
+        };
+        // Update locally so terminal_status is right immediately; Electron's
+        // RenamePane echo + the renderer's layout sync re-affirm it.
+        {
+            let mut sessions = state.bridge.sessions().await;
+            if let Some(info) = sessions.get_mut(&uid) {
+                info.shell_name = name.clone();
+            }
+        }
+        let cmd = serde_json::json!({"type": "RenamePane", "uid": uid, "name": name});
+        return match state.bridge.send_command(cmd).await {
+            Ok(r) => (StatusCode::OK, r),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+        };
+    }
     let session_uid = match state
         .bridge
         .resolve_tab_uid(
@@ -3280,7 +3518,7 @@ async fn main() -> anyhow::Result<()> {
     let bridge = Bridge::new();
     let telem = telemetry::TelemetryStore::new();
     let dash_state = dashboard::DashboardState::new(telem.clone());
-    let state = AppState { bridge, log_buffer, telemetry: telem };
+    let state = AppState { bridge, log_buffer, telemetry: telem, render: render::RenderStore::new() };
     // Grab lume handles before `state` is moved into the router below.
     let lume_for_flush = state.bridge.lume();
     let lume_for_shutdown = state.bridge.lume();
@@ -3322,6 +3560,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pulse/status", axum::routing::get(get_pulse_status))
         .route("/api/type-and-collect", axum::routing::post(post_type_and_collect))
         .route("/api/pane/split", axum::routing::post(post_split))
+        .route("/render/{id}", axum::routing::get(render::get_render_page))
+        .route("/api/render", axum::routing::post(post_render))
+        .route("/api/render/{id}/version", axum::routing::get(render::get_render_version))
         .route("/api/pane/focus", axum::routing::post(post_focus))
         .route("/api/perms/request-access", axum::routing::post(post_request_access))
         .route("/api/perms/request", axum::routing::post(post_perm_request))
@@ -3339,6 +3580,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/identity/agents", axum::routing::get(get_identity_agents))
         .route("/api/pane/close", axum::routing::post(post_close))
         .route("/api/pane/cd", axum::routing::post(post_cd))
+        .route("/api/styles/apply", axum::routing::post(post_style_apply))
         .route("/api/pane/new", axum::routing::post(post_new_tab))
         .route("/api/window/new", axum::routing::post(post_new_window))
         .route("/api/window/size", axum::routing::post(post_window_size))
@@ -3366,6 +3608,8 @@ async fn main() -> anyhow::Result<()> {
     // Dashboard routes with their own state
     let dash_routes = axum::Router::new()
         .route("/dashboard", axum::routing::get(dashboard::get_dashboard))
+        .route("/api/dashboard/version", axum::routing::get(dashboard::get_dashboard_version))
+        .route("/api/maximus/toggle", axum::routing::post(dashboard::post_maximus_toggle))
         .route("/api/telemetry/snapshot", axum::routing::get(dashboard::get_telemetry_snapshot))
         .route("/api/telemetry/toggle", axum::routing::post(dashboard::post_telemetry_toggle))
         .route("/api/telemetry/reset", axum::routing::post(dashboard::post_telemetry_reset))

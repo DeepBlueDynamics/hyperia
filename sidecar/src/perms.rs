@@ -289,11 +289,20 @@ impl PermStore {
     /// Is there already a pending CREATE prompt for this requester? (Create
     /// requests' target_pane is a varying focus hint, so dedupe by action.)
     pub async fn has_pending_create(&self, requester: &str) -> bool {
+        self.pending_create_for(requester).await.is_some()
+    }
+
+    /// The pending CREATE request for this requester, if any — used to RE-RAISE
+    /// its toast on retry (the renderer's toast collapses after 45s, so a
+    /// silent dedupe left the human with nothing to click while the agent
+    /// waited forever).
+    pub async fn pending_create_for(&self, requester: &str) -> Option<PermRequest> {
         self.pending
             .lock()
             .await
             .values()
-            .any(|r| r.requester == requester && r.action.starts_with("create"))
+            .find(|r| r.requester == requester && r.action.starts_with("create"))
+            .cloned()
     }
 
     /// Did the user recently deny this (requester, pane)? Cooldown-limited

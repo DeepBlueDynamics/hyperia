@@ -190,6 +190,20 @@ export type ToastRequest = {
 const toasts = new Map<string, ToastRequest>(); // id → request
 const toastListeners = new Set<(reqs: ToastRequest[]) => void>();
 
+// Toasts whose 45s prompt elapsed unanswered. They collapse into a pill (same
+// contract as per-pane `expired` requests) instead of being DELETED — before
+// this, a create prompt that fired while the human was away simply vanished,
+// the sidecar kept its pending request, retries deduped against it silently,
+// and the human stood at the window saying "I see no approval" while the
+// agent waited forever.
+const expiredToasts = new Map<string, ToastRequest>();
+const expiredToastListeners = new Set<(reqs: ToastRequest[]) => void>();
+
+function emitExpiredToasts(): void {
+  const list = Array.from(expiredToasts.values());
+  expiredToastListeners.forEach((cb) => cb(list));
+}
+
 function emitToasts(): void {
   const list = Array.from(toasts.values());
   toastListeners.forEach((cb) => cb(list));
@@ -199,11 +213,37 @@ function emitToasts(): void {
 const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
 export function setToast(req: ToastRequest): void {
   if (!req.id) return;
+  if (expiredToasts.delete(req.id)) emitExpiredToasts();
   toasts.set(req.id, req);
   const prev = toastTimers.get(req.id);
   if (prev) clearTimeout(prev);
-  toastTimers.set(req.id, setTimeout(() => clearToast(req.id), OVERLAY_TTL_MS));
+  toastTimers.set(
+    req.id,
+    setTimeout(() => expireToast(req.id), OVERLAY_TTL_MS)
+  );
   emitToasts();
+}
+
+/** The toast timed out unanswered — collapse it to the pending pill. */
+export function expireToast(id: string): void {
+  const req = toasts.get(id);
+  if (!req) return;
+  const t = toastTimers.get(id);
+  if (t) {
+    clearTimeout(t);
+    toastTimers.delete(id);
+  }
+  toasts.delete(id);
+  expiredToasts.set(id, req);
+  emitToasts();
+  emitExpiredToasts();
+}
+
+/** Re-open the full toast for a collapsed (expired) create request. */
+export function reviveToast(id: string): void {
+  const req = expiredToasts.get(id);
+  if (!req) return;
+  setToast(req);
 }
 
 export function clearToast(id: string): void {
@@ -212,6 +252,7 @@ export function clearToast(id: string): void {
     clearTimeout(t);
     toastTimers.delete(id);
   }
+  if (expiredToasts.delete(id)) emitExpiredToasts();
   if (toasts.delete(id)) emitToasts();
 }
 
@@ -220,5 +261,14 @@ export function subscribeToasts(cb: (reqs: ToastRequest[]) => void): () => void 
   cb(Array.from(toasts.values()));
   return () => {
     toastListeners.delete(cb);
+  };
+}
+
+/** Subscribe to collapsed (expired but still pending) create toasts. */
+export function subscribeExpiredToasts(cb: (reqs: ToastRequest[]) => void): () => void {
+  expiredToastListeners.add(cb);
+  cb(Array.from(expiredToasts.values()));
+  return () => {
+    expiredToastListeners.delete(cb);
   };
 }

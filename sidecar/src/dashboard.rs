@@ -152,11 +152,86 @@ impl DashboardState {
 // Route handlers
 // ---------------------------------------------------------------------------
 
-/// GET /dashboard — serves the self-contained HTML dashboard
-pub async fn get_dashboard(State(state): State<DashboardState>) -> Html<String> {
-    let widgets = state.widgets.lock().unwrap().clone();
-    let widgets_json = serde_json::to_string(&widgets).unwrap_or_else(|_| "[]".into());
-    Html(dashboard_html(&widgets_json))
+/// Embedded seed page — written to disk on first serve, then DISK WINS. Editing
+/// `~/.hyperia/dashboard/index.html` updates the live page (~1.5s reload poll)
+/// with no rebuild/reinstall (plan/dashboard-live.md).
+const DASHBOARD_SEED: &str = include_str!("../static/dashboard.html");
+
+/// Kokoro's last successful TTS utterance (epoch ms; 0 = never this session).
+pub static LAST_TTS_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Stamp "Kokoro just spoke" — called from the /api/tts handler.
+pub fn mark_tts_spoke() {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    LAST_TTS_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn dirs_home() -> std::path::PathBuf {
+    std::env::var("USERPROFILE")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+fn dashboard_disk_path() -> std::path::PathBuf {
+    dirs_home().join(".hyperia").join("dashboard").join("index.html")
+}
+
+/// GET /dashboard — disk-first: serve ~/.hyperia/dashboard/index.html when
+/// present (seeding it from the embedded page on first run), embedded otherwise.
+pub async fn get_dashboard(State(_state): State<DashboardState>) -> Html<String> {
+    let disk = dashboard_disk_path();
+    if !disk.is_file() {
+        if let Some(dir) = disk.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&disk, DASHBOARD_SEED);
+    }
+    match std::fs::read_to_string(&disk) {
+        Ok(page) => Html(page),
+        Err(_) => Html(DASHBOARD_SEED.to_string()),
+    }
+}
+
+/// GET /api/dashboard/version — mtime of the disk page; the page polls this and
+/// reloads itself when it changes (the live-edit loop).
+pub async fn get_dashboard_version() -> (StatusCode, String) {
+    let v = std::fs::metadata(dashboard_disk_path())
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    (StatusCode::OK, format!("{{\"v\":\"{v}\"}}"))
+}
+
+/// POST /api/maximus/toggle — flip config.maximus.disabled in the shared config
+/// and persist. Backs the header-bar Maximus toggle on the dashboard.
+pub async fn post_maximus_toggle() -> (StatusCode, String) {
+    let path = match crate::util::shared_config_path() {
+        Some(p) => p,
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, r#"{"error":"no config path"}"#.into()),
+    };
+    let mut cfg: serde_json::Value = match std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+    {
+        Some(v) => v,
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, r#"{"error":"config unreadable"}"#.into()),
+    };
+    let was_disabled = cfg["config"]["maximus"]["disabled"].as_bool().unwrap_or(false);
+    if !cfg["config"]["maximus"].is_object() {
+        cfg["config"]["maximus"] = serde_json::json!({});
+    }
+    cfg["config"]["maximus"]["disabled"] = serde_json::json!(!was_disabled);
+    if let Err(e) = crate::util::write_json_file_atomic(&path, &cfg) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!(r#"{{"error":"write config: {e}"}}"#));
+    }
+    (StatusCode::OK, format!(r#"{{"ok":true,"enabled":{}}}"#, was_disabled))
 }
 
 /// GET /api/telemetry/snapshot?level=window|pane&uid=optional
@@ -349,8 +424,19 @@ async fn get_status_data(client: &reqwest::Client) -> serde_json::Value {
         }
     }
 
-    // Transcription probe
-    let transcription_base = "http://localhost:8767";
+    // Transcription probe — target comes from CONFIG, not a hardcoded localhost
+    // assumption (the actual service may run on another box, e.g. nemesis).
+    // Unconfigured -> honest "not configured" instead of a scary "offline".
+    let transcription_cfg = raw_cfg["config"]["agent"]["services"]["transcription"].clone();
+    let transcription_configured = transcription_cfg.is_object();
+    let transcription_base = if transcription_configured {
+        let host = transcription_cfg["host"].as_str().unwrap_or("localhost").to_string();
+        let port = transcription_cfg["port"].as_u64().unwrap_or(8767);
+        format!("http://{host}:{port}")
+    } else {
+        "http://localhost:8767".to_string()
+    };
+    let transcription_base = transcription_base.as_str();
     let mut transcription_reachable = false;
     let mut transcription_model = "None".to_string();
     let mut transcription_model_loaded = false;
@@ -385,10 +471,49 @@ async fn get_status_data(client: &reqwest::Client) -> serde_json::Value {
     };
 
     let vram = crate::ghost::gpu::get_gpu_vram_gb();
+    let vram_used = crate::ghost::gpu::get_gpu_vram_used_gb();
+
+    // Built-in (in-process) services — invisible to port probes, real all the same.
+    let kokoro_dir = dirs_home().join(".hyperia").join("kokoro");
+    let kokoro_present = kokoro_dir.is_dir()
+        && std::fs::read_dir(&kokoro_dir).map(|mut d| d.next().is_some()).unwrap_or(false);
+    let last_spoke = LAST_TTS_MS.load(std::sync::atomic::Ordering::Relaxed);
+    let maximus_model = raw_cfg["config"]["maximus"]["model"]
+        .as_str()
+        .unwrap_or(crate::models::COMPRESSOR_DEFAULT_MODEL)
+        .to_string();
+
+    // Sailfish (local inference) — configured via agent.services.sailfish.port.
+    let sailfish_port = raw_cfg["config"]["agent"]["services"]["sailfish"]["port"].as_u64();
+    let sailfish_reachable = match sailfish_port {
+        Some(p) => client
+            .get(format!("http://localhost:{p}/v1/models"))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false),
+        None => false,
+    };
 
     serde_json::json!({
         "level": level,
         "vram_gb": vram,
+        "vram_used_gb": vram_used,
+        "version": env!("CARGO_PKG_VERSION"),
+        "dashboard_source": if dashboard_disk_path().is_file() { "disk" } else { "embedded" },
+        "kokoro": {
+            "model_present": kokoro_present,
+            "last_spoke_ms": if last_spoke > 0 { serde_json::json!(last_spoke) } else { serde_json::Value::Null },
+        },
+        "maximus": {
+            "enabled": !ollama_disabled,
+            "model": maximus_model,
+        },
+        "sailfish": {
+            "configured": sailfish_port.is_some(),
+            "port": sailfish_port,
+            "reachable": sailfish_reachable,
+        },
         "agent": {
             "provider": active_provider,
             "model": active_model,
@@ -410,6 +535,8 @@ async fn get_status_data(client: &reqwest::Client) -> serde_json::Value {
             "memory_count": ferricula_memory_count,
         },
         "transcription": {
+            "configured": transcription_configured,
+            "target": transcription_base,
             "reachable": transcription_reachable,
             "base_url": transcription_base,
             "model": transcription_model,
@@ -424,6 +551,9 @@ async fn get_status_data(client: &reqwest::Client) -> serde_json::Value {
 // Redesigned self-contained HTML dashboard
 // ---------------------------------------------------------------------------
 
+// Superseded by the disk-first static/dashboard.html seed — kept temporarily
+// for reference during the transition; delete in a cleanup pass.
+#[allow(dead_code)]
 fn dashboard_html(initial_widgets_json: &str) -> String {
     let raw_html = r##"<!DOCTYPE html>
 <html lang="en">

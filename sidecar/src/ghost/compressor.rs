@@ -101,7 +101,10 @@ impl ContextCompressor {
     pub fn new(ollama_url: &str, model: &str) -> Self {
         ContextCompressor {
             client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(20))
+                // 90s: a ~25KB extraction prompt takes ~15s on gemma4:e4b and
+                // the pipeline makes 2-3 calls — the old 20s cap strangled
+                // every real tab-snapshot extraction into "pipeline failed".
+                .timeout(std::time::Duration::from_secs(90))
                 .build()
                 .unwrap_or_default(),
             ollama_url: ollama_url.trim_end_matches('/').to_string(),
@@ -342,7 +345,7 @@ impl ContextCompressor {
                         chars_out: chars_in,
                         source: MaximusSource::Learned(lp.content_type),
                     },
-                    None => MaximusMeta::passthrough(chars_in, "ollama unavailable"),
+                    None => MaximusMeta::passthrough(chars_in, "extraction failed"),
                 };
                 self.store_last(&meta).await;
                 MaximusResult { content: content.to_string(), meta }
@@ -386,15 +389,24 @@ impl ContextCompressor {
     pub fn format_annotation(meta: &MaximusMeta, focus_used: bool, raw_used: bool) -> String {
         match &meta.source {
             MaximusSource::Raw => "[tokenmax:raw]\n".to_string(),
-            MaximusSource::Passthrough => {
-                if meta.strategy == "below threshold" {
-                    String::new()
-                } else {
-                    "[tokenmax:passthrough — Ollama unavailable, full output shown]\n\
-                     [hints: start Ollama with `ollama serve` to enable tokenmax]\n"
+            // Tell the TRUTH about why we passed through — the old blanket
+            // "Ollama unavailable" masked config-disabled and per-call
+            // extraction failures alike, sending debuggers to the wrong place.
+            MaximusSource::Passthrough => match meta.strategy.as_str() {
+                "below threshold" => String::new(),
+                "maximus disabled" => {
+                    "[tokenmax:off — disabled via config.maximus.disabled]\n".to_string()
+                }
+                "extraction failed" => {
+                    "[tokenmax:passthrough — extraction failed, full output shown]\n\
+                     [hints: see `maximus:` lines in the sidecar log — model load, timeout, or Ollama error]\n"
                         .to_string()
                 }
-            }
+                reason => format!(
+                    "[tokenmax:passthrough — {reason}, full output shown]\n\
+                     [hints: start Ollama with `ollama serve` to enable tokenmax]\n"
+                ),
+            },
             MaximusSource::Learned(name) => {
                 format!(
                     "[tokenmax type={} pattern={} src=learned|offline {}→{}chars]\n\

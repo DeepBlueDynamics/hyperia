@@ -71,6 +71,10 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       );
     }
     const termRef = this.props.terms[uid];
+    // Per-pane style overrides (style_apply): a session-scoped set of
+    // appearance keys that wins over the profile/global values for THIS pane
+    // only. Colors merge key-by-key so a style can recolor just `red`.
+    const st: Record<string, any> = (session as any).paneStyle || {};
     const props = getTermProps(uid, this.props, {
       splitLabel: splitLabel || '',
       isTermActive: uid === this.props.activeSession,
@@ -78,23 +82,28 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       fitAddon: termRef ? termRef.fitAddon : null,
       searchAddon: termRef ? termRef.searchAddon : null,
       scrollback: this.props.scrollback,
-      backgroundColor: this.props.backgroundColor,
-      foregroundColor: this.props.foregroundColor,
-      colors: this.props.colors,
-      cursorBlink: this.props.cursorBlink,
-      cursorShape: this.props.cursorShape,
-      cursorColor: this.props.cursorColor,
-      cursorAccentColor: this.props.cursorAccentColor,
-      fontSize: this.props.fontSize,
-      fontFamily: this.props.fontFamily,
+      scanlines: !!st.scanlines,
+      watermark: typeof st.watermark === 'string' ? st.watermark : undefined,
+      watermarkColor: typeof st.watermarkColor === 'string' ? st.watermarkColor : undefined,
+      watermarkImage: typeof st.watermarkImage === 'string' ? st.watermarkImage : undefined,
+      watermarkOpacity: typeof st.watermarkOpacity === 'number' ? st.watermarkOpacity : undefined,
+      backgroundColor: st.backgroundColor ?? this.props.backgroundColor,
+      foregroundColor: st.foregroundColor ?? this.props.foregroundColor,
+      colors: st.colors ? {...(this.props.colors as any), ...st.colors} : this.props.colors,
+      cursorBlink: st.cursorBlink ?? this.props.cursorBlink,
+      cursorShape: st.cursorShape ?? this.props.cursorShape,
+      cursorColor: st.cursorColor ?? this.props.cursorColor,
+      cursorAccentColor: st.cursorAccentColor ?? this.props.cursorAccentColor,
+      fontSize: st.fontSize ?? this.props.fontSize,
+      fontFamily: st.fontFamily ?? this.props.fontFamily,
       uiFontFamily: this.props.uiFontFamily,
       fontSmoothing: this.props.fontSmoothing,
-      fontWeight: this.props.fontWeight,
-      fontWeightBold: this.props.fontWeightBold,
-      lineHeight: this.props.lineHeight,
-      letterSpacing: this.props.letterSpacing,
+      fontWeight: st.fontWeight ?? this.props.fontWeight,
+      fontWeightBold: st.fontWeightBold ?? this.props.fontWeightBold,
+      lineHeight: st.lineHeight ?? this.props.lineHeight,
+      letterSpacing: st.letterSpacing ?? this.props.letterSpacing,
       modifierKeys: this.props.modifierKeys,
-      padding: this.props.padding,
+      padding: st.padding ?? this.props.padding,
       cleared: session.cleared,
       search: session.search,
       cols: session.cols,
@@ -115,8 +124,8 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       onOpenSearch: this.bind(this.props.onOpenSearch, null, uid),
       onCloseSearch: this.bind(this.props.onCloseSearch, null, uid),
       onContextMenu: this.bind(this.props.onContextMenu, null, uid),
-      borderColor: this.props.borderColor,
-      selectionColor: this.props.selectionColor,
+      borderColor: st.borderColor ?? this.props.borderColor,
+      selectionColor: st.selectionColor ?? this.props.selectionColor,
       quickEdit: this.props.quickEdit,
       webGLRenderer: this.props.webGLRenderer,
       webLinksActivationKey: this.props.webLinksActivationKey,
@@ -167,7 +176,6 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
   render() {
     const {childGroups, termGroup} = this.props;
     const splitOffset = ((this.props as any).splitOffset as number) || 0;
-    const isRoot = !(this.props as any).splitLabel && !splitOffset;
 
     if ((termGroup as any).webUrl !== undefined && (termGroup as any).webUrl !== null) {
       const label = ((this.props as any).splitLabel as string | undefined) || 'a';
@@ -197,8 +205,6 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       );
     }
 
-    // Count total leaves to decide if we need labels at all
-    const totalLeaves = this.countLeaves(termGroup);
     const needLabels = true;
 
     let offset = splitOffset;
