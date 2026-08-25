@@ -1383,37 +1383,48 @@ async fn enforce_create(
         )),
         AuthDecision::NeedConsent => {
             let label = id.label();
-            // Raise the create-consent toast once; a retry while one is already
-            // pending skips re-raising and resumes waiting below.
-            if !state.bridge.perms().has_pending_create(&label).await {
-                let focus = state.bridge.focused_pane().await.unwrap_or_default();
-                let requester_pane = match &id {
-                    CallerIdentity::Pane { pane, .. } => pane.clone(),
-                    _ => String::new(),
-                };
-                let req = state
-                    .bridge
-                    .perms()
-                    .create_request(&label, &requester_pane, &focus, action, "")
-                    .await;
-                let requester_name = requester_display_name(&state, &id)
-                    .await
-                    .unwrap_or_else(|| req.requester.clone());
-                consent_log::record_request(
-                    &req.id, &req.requester, &requester_name, id.kind(),
-                    &req.action, &req.target_pane, &req.purpose,
-                );
-                let _ = state
-                    .bridge
-                    .notify(serde_json::json!({
-                        "type": "AgentToast",
-                        "id": req.id,
-                        "requester": req.requester,
-                        "requesterName": requester_name,
-                        "action": req.action,
-                    }))
-                    .await;
-            }
+            // Reuse the pending request if one exists (dedupe), but ALWAYS
+            // (re-)notify the toast: the renderer's prompt collapses after 45s,
+            // and the old silent-resume meant a retry could never bring it back
+            // — the human stood at the window with nothing to click while the
+            // agent waited forever. Re-notify is idempotent renderer-side
+            // (setToast by id revives a collapsed pill into the full prompt).
+            let req = match state.bridge.perms().pending_create_for(&label).await {
+                Some(existing) => existing,
+                None => {
+                    let focus = state.bridge.focused_pane().await.unwrap_or_default();
+                    let requester_pane = match &id {
+                        CallerIdentity::Pane { pane, .. } => pane.clone(),
+                        _ => String::new(),
+                    };
+                    let fresh = state
+                        .bridge
+                        .perms()
+                        .create_request(&label, &requester_pane, &focus, action, "")
+                        .await;
+                    let requester_name = requester_display_name(&state, &id)
+                        .await
+                        .unwrap_or_else(|| fresh.requester.clone());
+                    consent_log::record_request(
+                        &fresh.id, &fresh.requester, &requester_name, id.kind(),
+                        &fresh.action, &fresh.target_pane, &fresh.purpose,
+                    );
+                    fresh
+                }
+            };
+            let requester_name = requester_display_name(&state, &id)
+                .await
+                .unwrap_or_else(|| req.requester.clone());
+            let _ = state
+                .bridge
+                .notify(serde_json::json!({
+                    "type": "AgentToast",
+                    "id": req.id,
+                    "requester": req.requester,
+                    "requesterName": requester_name,
+                    "action": req.action,
+                }))
+                .await;
             // Wait for the human's decision so the create COMPLETES on approval
             // instead of returning a bare 202 the agent has to chase.
             for _ in 0..16 {

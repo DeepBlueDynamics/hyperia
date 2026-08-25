@@ -1,6 +1,6 @@
 import React from 'react';
 
-import {subscribeToasts, clearToast, type ToastRequest} from '../permissions-bus';
+import {subscribeToasts, subscribeExpiredToasts, reviveToast, clearToast, type ToastRequest} from '../permissions-bus';
 
 // action → full verb phrase for the prompt ("wants to <phrase>").
 const CREATE_SURFACE: Record<string, string> = {
@@ -64,8 +64,53 @@ const denyBtn: React.CSSProperties = {
 // these can't live in a pane band — they stack top-center over everything.
 export default function AgentToast(): React.ReactElement | null {
   const [reqs, setReqs] = React.useState<ToastRequest[]>([]);
+  const [expired, setExpired] = React.useState<ToastRequest[]>([]);
   React.useEffect(() => subscribeToasts(setReqs), []);
-  if (!reqs.length) return null;
+  React.useEffect(() => subscribeExpiredToasts(setExpired), []);
+  if (!reqs.length) {
+    // Unanswered toasts collapse to a persistent pill (mirrors the per-pane
+    // consent pill) instead of vanishing — the request is STILL pending
+    // sidecar-side, and the agent is still waiting on it. Click to re-open.
+    // Parked below the consent pill's spot so the two never overlap.
+    if (!expired.length) return null;
+    const first = expired[0];
+    return (
+      <div
+        onClick={() => reviveToast(first.id)}
+        title="Click to review"
+        style={{
+          position: 'fixed',
+          top: 48,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 99998,
+          ['WebkitAppRegion' as any]: 'no-drag',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '6px 14px',
+          borderRadius: '999px',
+          border: '1px solid var(--accent-primary, #6ea8fe)',
+          background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',
+          color: 'var(--text-primary, #e8e8ea)',
+          fontFamily: 'var(--font-sans)',
+          fontSize: '12px',
+          fontWeight: 500,
+          cursor: 'pointer',
+          boxShadow: '0 6px 20px rgba(0,0,0,0.45)',
+          animation: 'hyToastPill 2.4s ease-in-out infinite'
+        }}
+      >
+        <style>{`@keyframes hyToastPill{0%,100%{box-shadow:0 6px 20px rgba(0,0,0,0.45)}50%{box-shadow:0 0 14px 2px var(--accent-primary, #6ea8fe)}}`}</style>
+        <span style={{fontSize: '14px', lineHeight: 1}}>🤖</span>
+        <span>
+          {expired.length === 1
+            ? `${first.requesterName || first.requester} is waiting to ${actionPhrase(first.action)} — click to review`
+            : `${expired.length} agent requests waiting — click to review`}
+        </span>
+      </div>
+    );
+  }
   return (
     <div
       style={{
