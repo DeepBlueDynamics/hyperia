@@ -64,6 +64,13 @@ interface WebPaneEntry {
 // Keyed by pane uid (unique across windows).
 const panes = new Map<string, WebPaneEntry>();
 
+// Paused HTTP-auth challenges (wc 'login' events) awaiting the human's answer
+// from the credential toast. Keyed by a one-shot id; the callback resumes (or
+// fails) the paused network request. Credentials pass through Chromium's HTTP
+// auth cache only — never logged, never persisted by us.
+let authSeq = 0;
+const pendingAuth = new Map<string, (username?: string, password?: string) => void>();
+
 // Windows where every native web-pane view is force-hidden regardless of the
 // renderer's desired visibility. Native WebContentsViews always paint ABOVE the
 // renderer DOM, so a DOM overlay (the close-confirm modal) would be occluded by
@@ -297,6 +304,28 @@ function wireWebContents(initialUid: string, wc: WebContents) {
       {label: 'Search Stickys', click: () => void ipcMain.emit('search-stickies')}
     );
     Menu.buildFromTemplate(items).popup({window: entry.win});
+  });
+  // HTTP auth challenge (Basic/Digest 401, proxy 407). Electron ships NO stock
+  // credentials dialog — unhandled, the request simply dies and the site looks
+  // broken. Park the Chromium callback and raise a credential toast in the
+  // pane's DOM chrome; the request stays paused until the human answers.
+  // Chromium caches accepted credentials in the session's HTTP auth cache, so
+  // a realm prompts once per app run, not per request.
+  wc.on('login', (event, details, authInfo, callback) => {
+    event.preventDefault();
+    const uid = u();
+    const id = `auth_${++authSeq}`;
+    pendingAuth.set(id, callback);
+    entrySend(uid, 'web-pane:auth-request', {
+      uid,
+      id,
+      host: authInfo.host || '',
+      port: authInfo.port || 0,
+      realm: authInfo.realm || '',
+      scheme: authInfo.scheme || 'basic',
+      isProxy: !!authInfo.isProxy,
+      url: details.url || ''
+    });
   });
   // OAuth that navigates the MAIN frame (not a popup) → punt to the system
   // browser, same as the old <webview> path.
@@ -619,6 +648,23 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
   });
 
   ipcMain.on('web-pane:destroy', (_e, {uid}: {uid: string}) => destroyPane(uid));
+
+  // Answer (or cancel) a paused HTTP-auth challenge. Cancel resumes the request
+  // with no credentials — the page falls through to the server's 401 body.
+  ipcMain.on(
+    'web-pane:auth-response',
+    (_e, {id, username, password, cancel}: {id: string; username?: string; password?: string; cancel?: boolean}) => {
+      const cb = pendingAuth.get(id);
+      if (!cb) return;
+      pendingAuth.delete(id);
+      try {
+        if (cancel) cb();
+        else cb(String(username ?? ''), String(password ?? ''));
+      } catch {
+        // webContents died while the toast was up — nothing left to resume.
+      }
+    }
+  );
 
   ipcMain.on('web-pane:nav', (_e, {uid, action, url}: {uid: string; action: string; url?: string}) => {
     const wc = wcOf(uid);

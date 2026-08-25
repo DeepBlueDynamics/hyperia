@@ -134,6 +134,11 @@ interface WebPaneState {
   zoomFactor: number;
   // Which collapsed history roots (e.g. all "google.com/maps" URLs) are expanded.
   expandedHistoryRoots: {[key: string]: boolean};
+  // Paused HTTP-auth challenge (401/407) from the native view — the request
+  // waits on this custom credential toast (Electron has no stock dialog).
+  authRequest: {id: string; host: string; port: number; realm: string; scheme: string; isProxy: boolean} | null;
+  authUser: string;
+  authPass: string;
 }
 
 // net error codes where the site couldn't be reached → fall back to a DDG search:
@@ -306,7 +311,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       findActive: 0,
       findTotal: 0,
       zoomFactor: 1,
-      expandedHistoryRoots: {}
+      expandedHistoryRoots: {},
+      authRequest: null,
+      authUser: '',
+      authPass: ''
     };
   }
 
@@ -333,7 +341,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       // an inactive tab is parked at left:-9999em (still has size), so the rect
       // check alone can't detect it.
       const inViewport = this.state.onScreen !== false;
-      const overlayHidden = this.state.isUrlNavigatorOpen || this.state.findOpen || this.state.headerHover || this.state.permOverlay;
+      const overlayHidden =
+        this.state.isUrlNavigatorOpen ||
+        this.state.findOpen ||
+        this.state.headerHover ||
+        this.state.permOverlay ||
+        !!this.state.authRequest;
       const showable = hasSize && inViewport && !this.state.error;
       const visible = showable && !overlayHidden;
       // Freeze (capture a still) ONLY when hiding an on-screen pane for a DOM
@@ -1079,7 +1092,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       prevState.findOpen !== this.state.findOpen ||
       prevState.error !== this.state.error ||
       prevState.headerHover !== this.state.headerHover ||
-      prevState.permOverlay !== this.state.permOverlay
+      prevState.permOverlay !== this.state.permOverlay ||
+      prevState.authRequest !== this.state.authRequest
     ) {
       this.reportBounds();
     }
@@ -1407,6 +1421,23 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     };
     ipcRenderer.on('web-pane:frozen', this._frozenHandler);
 
+    // HTTP-auth challenge from the native view → raise the credential toast.
+    // A newer challenge replaces a stale one (the old paused request is
+    // cancelled so its callback isn't leaked in main).
+    this._authHandler = (_e: any, payload: any) => {
+      if (!payload || payload.uid !== this.props.groupUid) return;
+      const prev = this.state.authRequest;
+      if (prev && prev.id !== payload.id) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+        ipcRenderer.send('web-pane:auth-response', {id: prev.id, cancel: true});
+      }
+      this.setState({authRequest: payload as WebPaneState['authRequest'], authUser: '', authPass: ''}, () => {
+        requestAnimationFrame(() => this.authUserRef.current?.focus());
+      });
+    };
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    ipcRenderer.on('web-pane:auth-request', this._authHandler);
+
     this._clickHandler = (data: {uid: string; text?: string; selector?: string}) => {
       if (data.uid !== this.props.groupUid) return;
       let code: string | null = null;
@@ -1558,6 +1589,16 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (this._frozenHandler) {
       ipcRenderer.removeListener('web-pane:frozen', this._frozenHandler);
     }
+    if (this._authHandler) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      ipcRenderer.removeListener('web-pane:auth-request', this._authHandler);
+    }
+    // A challenge still up when the pane goes away → cancel it so main doesn't
+    // hold the paused request's callback forever.
+    if (this.state.authRequest) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      ipcRenderer.send('web-pane:auth-response', {id: this.state.authRequest.id, cancel: true});
+    }
     if (this._reloadHandler) {
       rpc.removeListener('web-pane-reload', this._reloadHandler);
     }
@@ -1705,6 +1746,153 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   };
 
   _reloadHandler: ((uid: string) => void) | null = null;
+  _authHandler: ((e: any, payload: any) => void) | null = null;
+  authUserRef = React.createRef<HTMLInputElement>();
+
+  // ── HTTP-auth credential toast ───────────────────────────────────────────
+  submitAuth = (): void => {
+    const req = this.state.authRequest;
+    if (!req) return;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    ipcRenderer.send('web-pane:auth-response', {
+      id: req.id,
+      username: this.state.authUser,
+      password: this.state.authPass
+    });
+    this.setState({authRequest: null, authUser: '', authPass: ''});
+  };
+
+  cancelAuth = (): void => {
+    const req = this.state.authRequest;
+    if (!req) return;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+    ipcRenderer.send('web-pane:auth-response', {id: req.id, cancel: true});
+    this.setState({authRequest: null, authUser: '', authPass: ''});
+  };
+
+  // The credential toast for a paused HTTP-auth challenge. Rendered inside the
+  // pane body OVER the frozen still — the native view is freeze-swapped out
+  // while a challenge is up (overlayHidden), so this DOM is actually visible.
+  renderAuthToast(): JSX.Element | null {
+    const ar = this.state.authRequest;
+    if (!ar) return null;
+    const port = ar.port && ar.port !== 80 && ar.port !== 443 ? `:${ar.port}` : '';
+    const plainHttp = ar.scheme === 'basic' && !ar.isProxy && !/^https/i.test(this.state.activeUrl || '');
+    const subtitle =
+      (ar.realm ? `"${ar.realm}" · ${ar.scheme} auth` : `${ar.scheme} auth`) +
+      (plainHttp ? ' · sent unencrypted (http)' : '');
+    const inputStyle: React.CSSProperties = {
+      display: 'block',
+      width: '100%',
+      boxSizing: 'border-box',
+      padding: '6px 8px',
+      background: 'var(--bg-secondary, rgba(255,255,255,0.06))',
+      border: '1px solid var(--border-neutral)',
+      borderRadius: 'var(--radius-4)',
+      color: 'var(--text-primary)',
+      fontSize: '13px',
+      outline: 'none'
+    };
+    return (
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'center',
+          paddingTop: '48px',
+          background: 'rgba(0, 0, 0, 0.45)',
+          zIndex: 20
+        }}
+        onMouseDown={(e) => {
+          // Backdrop click = cancel (matches consent-toast snooze feel).
+          if (e.target === e.currentTarget) this.cancelAuth();
+        }}
+      >
+        <div
+          style={{
+            background: 'var(--bg-primary)',
+            border: '1px solid var(--border-neutral)',
+            borderRadius: 'var(--radius-4)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            padding: '16px 18px',
+            width: 'min(360px, calc(100% - 32px))',
+            color: 'var(--text-primary)',
+            fontSize: '13px'
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.stopPropagation();
+              this.cancelAuth();
+            }
+          }}
+        >
+          <div style={{fontWeight: 600, marginBottom: '4px'}}>
+            {ar.isProxy ? 'Proxy sign-in' : 'Sign in'} — {ar.host}
+            {port}
+          </div>
+          <div style={{color: 'var(--text-tertiary)', fontSize: '11px', marginBottom: '12px'}}>{subtitle}</div>
+          <input
+            ref={this.authUserRef}
+            type="text"
+            placeholder="Username"
+            value={this.state.authUser}
+            onChange={(e) => this.setState({authUser: e.target.value})}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') this.submitAuth();
+            }}
+            autoComplete="off"
+            spellCheck={false}
+            style={{...inputStyle, marginBottom: '8px'}}
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={this.state.authPass}
+            onChange={(e) => this.setState({authPass: e.target.value})}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') this.submitAuth();
+            }}
+            autoComplete="off"
+            style={{...inputStyle, marginBottom: '14px'}}
+          />
+          <div style={{display: 'flex', justifyContent: 'flex-end', gap: '8px'}}>
+            <button
+              onClick={this.cancelAuth}
+              style={{
+                padding: '5px 12px',
+                background: 'transparent',
+                border: '1px solid var(--border-neutral)',
+                borderRadius: 'var(--radius-4)',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                cursor: 'pointer'
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={this.submitAuth}
+              style={{
+                padding: '5px 12px',
+                background: 'var(--accent, #4a9eff)',
+                border: '1px solid transparent',
+                borderRadius: 'var(--radius-4)',
+                color: '#fff',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              Sign in
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   _clickHandler: ((data: {uid: string; text?: string; selector?: string}) => void) | null = null;
   _readHandler: ((data: {uid: string}) => void) | null = null;
   _evalHandler: ((data: {uid: string; js: string}) => void) | null = null;
@@ -2817,6 +3005,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                     style={{position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top left'}}
                   />
                 )}
+                {this.renderAuthToast()}
               </div>
             );
           })()}
