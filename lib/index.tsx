@@ -6,6 +6,7 @@ import '@tabler/icons-webfont/dist/tabler-icons.css';
 import {webFrame} from 'electron';
 import React from 'react';
 
+import Color from 'color';
 import {createRoot} from 'react-dom/client';
 import {Provider} from 'react-redux';
 
@@ -144,8 +145,68 @@ rpc.on('session rename pane', ({uid, name}: {uid: string; name: string}) => {
 
 // Per-pane style application (style_apply tool) — appearance overrides for one
 // pane, merged over profile/global config in term-group. null clears.
+//
+// The payload is agent-authored (style_create stores arbitrary JSON), so it is
+// SANITIZED here — the one gate every sender passes through. A bad value must
+// degrade to "that key is ignored", never reach getTermOptions/xterm where a
+// throw inside a React commit takes the whole pane tree down (the blank-pane
+// incident of 2026-08-25).
+const PANE_STYLE_COLOR_KEYS = new Set([
+  'backgroundColor',
+  'foregroundColor',
+  'cursorColor',
+  'cursorAccentColor',
+  'selectionColor',
+  'borderColor',
+  'watermarkColor'
+]);
+const PANE_STYLE_NUMBER_KEYS = new Set(['fontSize', 'lineHeight', 'letterSpacing', 'watermarkOpacity']);
+const PANE_STYLE_STRING_KEYS = new Set([
+  'fontFamily',
+  'fontWeight',
+  'fontWeightBold',
+  'cursorShape',
+  'padding',
+  'watermark',
+  'watermarkImage'
+]);
+const PANE_STYLE_BOOL_KEYS = new Set(['cursorBlink', 'scanlines']);
+
+const isParseableColor = (v: unknown): boolean => {
+  if (typeof v !== 'string' || !v.trim()) return false;
+  try {
+    // The same parser getTermOptions/Color() uses downstream — if this throws
+    // here, it would have thrown there.
+    Color(v);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const sanitizePaneStyle = (style: Record<string, any> | null): Record<string, any> | null => {
+  if (style === null || typeof style !== 'object' || Array.isArray(style)) return null;
+  const out: Record<string, any> = {};
+  for (const [key, value] of Object.entries(style)) {
+    if (PANE_STYLE_COLOR_KEYS.has(key) && isParseableColor(value)) out[key] = value;
+    else if (PANE_STYLE_NUMBER_KEYS.has(key) && typeof value === 'number' && isFinite(value)) out[key] = value;
+    else if (PANE_STYLE_STRING_KEYS.has(key) && typeof value === 'string') out[key] = value;
+    else if (PANE_STYLE_BOOL_KEYS.has(key) && typeof value === 'boolean') out[key] = value;
+    else if (key === 'colors' && value && typeof value === 'object' && !Array.isArray(value)) {
+      const colors: Record<string, string> = {};
+      for (const [ck, cv] of Object.entries(value)) {
+        if (isParseableColor(cv)) colors[ck] = cv as string;
+      }
+      if (Object.keys(colors).length) out.colors = colors;
+    } else {
+      console.warn(`pane style: dropped invalid override ${key}=${JSON.stringify(value)}`);
+    }
+  }
+  return Object.keys(out).length ? out : null;
+};
+
 rpc.on('pane style', ({uid, style}: {uid: string; style: Record<string, any> | null}) => {
-  store_.dispatch(sessionActions.setPaneStyle(uid, style));
+  store_.dispatch(sessionActions.setPaneStyle(uid, sanitizePaneStyle(style)));
 });
 
 rpc.on('session cwd', ({uid, cwd}: {uid: string; cwd: string}) => {

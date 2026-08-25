@@ -76,8 +76,16 @@ function openUrl(uri: string): void {
 }
 
 const getTermOptions = (props: TermProps): ITerminalOptions => {
-  // Set a background color only if it is opaque
-  const needTransparency = Color(props.backgroundColor).alpha() < 1;
+  // Set a background color only if it is opaque. Color() THROWS on an
+  // unparseable string — and props here can carry agent-supplied style/config
+  // values, so a bad color must mean "treat as opaque", never an exception
+  // that rides up through a React commit and blanks the pane.
+  let needTransparency = false;
+  try {
+    needTransparency = Color(props.backgroundColor).alpha() < 1;
+  } catch {
+    /* unparseable background — assume opaque */
+  }
   const backgroundColor = needTransparency ? 'rgba(0,0,0,0)' : props.backgroundColor;
 
   return {
@@ -2600,8 +2608,6 @@ export default class Term extends React.PureComponent<
       this.clear();
     }
 
-    const nextTermOptions = getTermOptions(this.props);
-
     if (prevProps.bell !== this.props.bell || prevProps.bellSound !== this.props.bellSound) {
       this.setBellSound(this.props.bell, this.props.bellSound);
     }
@@ -2617,13 +2623,21 @@ export default class Term extends React.PureComponent<
       }, 50);
     }
 
-    // Update only options that have changed.
-    this.term.options = pickBy(
-      nextTermOptions,
-      (value, key) => !isEqual(this.termOptions[key as keyof ITerminalOptions], value)
-    );
-
-    this.termOptions = nextTermOptions;
+    // Update only options that have changed. Hardened: a bad value here (an
+    // agent-supplied pane style, a hand-edited config) must degrade to "that
+    // update is skipped", never throw — an exception inside componentDidUpdate
+    // propagates through the React commit with no error boundary above us and
+    // unmounts the pane tree, blanking live terminals (2026-08-25 incident).
+    try {
+      const nextTermOptions = getTermOptions(this.props);
+      this.term.options = pickBy(
+        nextTermOptions,
+        (value, key) => !isEqual(this.termOptions[key as keyof ITerminalOptions], value)
+      );
+      this.termOptions = nextTermOptions;
+    } catch (error) {
+      console.error('Terminal options update failed (skipped):', error);
+    }
 
     try {
       this.term.element!.style.padding = this.props.padding;

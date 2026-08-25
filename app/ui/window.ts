@@ -1,4 +1,5 @@
-import {existsSync, readFileSync, writeFileSync, cpSync, statSync} from 'fs';
+import {existsSync, readFileSync, writeFileSync, cpSync, statSync, appendFileSync, mkdirSync} from 'fs';
+import {homedir} from 'os';
 import {isAbsolute, join, normalize, sep, basename, extname} from 'path';
 import {URL, fileURLToPath} from 'url';
 
@@ -127,6 +128,24 @@ function configureWebPaneSession(sess: Electron.Session) {
 // is empty or its binary is missing — otherwise node-pty throws "File not found"
 // and that UNCAUGHT exception crashes the whole main process (e.g. an agent
 // splitting a pane with no/invalid profile, /api/pane/split with no shell).
+// Persist renderer error-level console lines to ~/.hyperia/logs/
+// renderer-errors.log. On an installed build main's stdout goes nowhere, so
+// without this a renderer-side failure (a throw during a React commit, a lost
+// canvas) leaves no trace to diagnose. Best-effort and capped per process run
+// so an error loop can't grow the file unbounded.
+let rendererErrorLogWrites = 0;
+function appendRendererErrorLog(line: string): void {
+  if (rendererErrorLogWrites >= 500) return;
+  rendererErrorLogWrites++;
+  try {
+    const dir = join(homedir(), '.hyperia', 'logs');
+    mkdirSync(dir, {recursive: true});
+    appendFileSync(join(dir, 'renderer-errors.log'), `${new Date().toISOString()} ${line}\n`);
+  } catch {
+    /* logging must never throw */
+  }
+}
+
 function fallbackShell(): string {
   if (process.platform === 'win32') {
     const candidates = [
@@ -233,13 +252,19 @@ export function newWindow(
   // Log renderer console output to main process (all levels)
   window.webContents.on('console-message', (_ev, level, message, line, sourceId) => {
     const tag = `[renderer] ${message} (${sourceId}:${line})`;
-    if (level >= 3) console.error(tag);
-    else if (level >= 2) console.warn(tag);
+    if (level >= 3) {
+      console.error(tag);
+      // Persist renderer ERRORS to disk — on an installed build main's stdout
+      // goes nowhere, which made the 2026-08-25 blank-pane incident
+      // undiagnosable after the fact. Best-effort append, never throws.
+      appendRendererErrorLog(tag);
+    } else if (level >= 2) console.warn(tag);
     else if (level >= 1) console.log(tag);
     else isDev && console.log(tag);
   });
   window.webContents.on('render-process-gone', (_ev, details) => {
     console.error('[renderer] Process gone:', details.reason);
+    appendRendererErrorLog(`Process gone: ${details.reason}`);
   });
 
   window.uid = classOpts.uid;
