@@ -1025,17 +1025,18 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     });
   }
 
-  // Default shell: configured defaultProfile → remembered last-used → first
-  // shell. The CONFIGURED default wins over the last-used shell — setting a
-  // default profile (e.g. PowerShell 7) must stick, so merely having last
-  // launched another profile (e.g. an SSH-into-a-box shell) can't quietly
-  // become what a new pane opens. Last-used is only a fallback when no valid
-  // default is configured.
+  // Default shell: remembered LAST-USED → configured defaultProfile → first
+  // shell. The shell you last launched is what the picker pre-fills and what
+  // S/Enter opens — "new pane = what I was just working in". The configured
+  // default is only the seed before any shell has ever been picked. (This
+  // deliberately reverses the old configured-default-wins rule: with an
+  // SSH-into-a-box profile as the configured default, every picker kept
+  // preselecting the server no matter what you'd just chosen.)
   private resolveDefaultShell(shellItems: ComboItem[]): ComboItem | undefined {
     const {defaultProfile} = this.props;
     return (
-      (defaultProfile && shellItems.find((i) => i.key === defaultProfile)) ||
       (this.state.lastUsedShell && shellItems.find((i) => i.key === this.state.lastUsedShell)) ||
+      (defaultProfile && shellItems.find((i) => i.key === defaultProfile)) ||
       shellItems[0]
     );
   }
