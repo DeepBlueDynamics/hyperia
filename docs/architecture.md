@@ -10,8 +10,8 @@ Electron (UI + PTY sessions, sticky windows, web panes)
     │── WebSocket bridge ──▶ hyperia-sidecar (Rust, :9800)
                                   │
                                   ├── HTTP API (terminal, notes, telemetry, ghost, fsnav)
-                                  ├── MCP server — streamable HTTP at /mcp (56 tools)
-                                  ├── Ghost agent (streaming, tool loop, multi-provider)
+                                  ├── MCP server — streamable HTTP at /mcp (72 tools)
+                                  ├── Built-in agent harness (streaming, tool loop, multi-provider)
                                   │     ├── provider: anthropic / openai / gemini / ollama
                                   │     ├── compressor (Maximus — Ollama output filtering)
                                   │     └── ferricula client (OPTIONAL external recall)
@@ -40,7 +40,7 @@ Rust process (`hyperia-sidecar`) started by the Electron app on port `9800`.
 |--------|---------------|
 | `main.rs` | Axum HTTP server, route registration, app state; mounts the MCP service at `/mcp` |
 | `bridge.rs` | WebSocket connection to Electron, command dispatch |
-| `mcp.rs` | MCP server (rmcp) exposing 56 tools over **streamable HTTP** |
+| `mcp.rs` | MCP server (rmcp) exposing 72 tools over **streamable HTTP** |
 | `lume_store.rs` | Local BM25 index over per-shell logs + sticky notes |
 | `screen.rs` / `snapshot_image.rs` | Terminal screen reads + screenshot/PNG capture |
 | `telemetry.rs` / `dashboard.rs` | Per-pane metrics + dashboard routes |

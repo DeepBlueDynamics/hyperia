@@ -1,4 +1,4 @@
-# Getting Started
+# Developing Hyperia
 
 Hyperia is an Electron terminal emulator paired with a Rust sidecar. This guide covers building from source, first launch, and connecting an agent.
 
@@ -39,28 +39,18 @@ For production/release builds (installers, code signing, nightly), see [building
 
 ## First launch
 
-On first run Hyperia casts a one-time splash, then opens a terminal. The built-in **Ghost** agent ("Ask Hyperia" / right-click menu) needs a provider configured to be useful:
+On first run Hyperia casts a one-time splash, then opens a terminal. The built-in agent harness ("Ask Hyperia" / right-click menu) needs a provider configured to be useful:
 
 - **Frontier** — set an API key for `anthropic` (or `openai` / `gemini`) under `providers` in `~/.hyperia/hyperia.json`, and an `agent.provider` / `agent.model`.
-- **Local** — point it at a local Ollama; with nothing else configured the Ghost falls back to local Ollama (`gemma2:9b`).
+- **Local** — point it at a local Ollama; with nothing else configured it falls back to local Ollama (`gemma2:9b`).
 
 See [configuration.md](configuration.md) for the full config shape and [ghost-agent.md](ghost-agent.md) for the built-in agent.
 
 ## Connect an agent (MCP over HTTP)
 
-While Hyperia is running, the sidecar exposes its MCP server over **streamable HTTP**:
+While Hyperia is running, the sidecar exposes its MCP server over **streamable HTTP** at `${HYPERIA_MCP_URL:-http://localhost:9800/mcp}`.
 
-```
-http://localhost:9800/mcp
-```
-
-Point any MCP client at that URL — no API key, no local binary path. For example, with Claude Code:
-
-```bash
-claude mcp add --transport http hyperia http://localhost:9800/mcp
-```
-
-Setup for Claude Code, OpenAI Codex, and Google Antigravity is in the [README](../README.md#connect-an-agent-mcp-over-http); the full catalog of 56 tools is in [mcp-tools.md](mcp-tools.md).
+Read operations work anonymously, while write/mutation operations require `HYPERIA_AGENT_TOKEN` (automatically injected inside Hyperia terminal panes). For client setup (Claude Code, OpenAI Codex, Grok, Google Antigravity), run `hyperia mcp` or see the [README](../README.md#connect-an-agent-mcp-over-http). The full catalog of tools is documented in [mcp-tools.md](mcp-tools.md).
 
 ## Where things live
 

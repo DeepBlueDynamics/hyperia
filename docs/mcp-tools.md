@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Hyperia's sidecar exposes its tool surface over the **MCP streamable-HTTP transport** at `http://localhost:9800/mcp` (Hyperia must be running). There are **72 tools**. For client setup (Claude Code, Codex, Antigravity, Grok), run `hyperia mcp` for ready-to-paste commands, or see the [README](../README.md#connect-an-agent-mcp-over-http).
+Hyperia's sidecar exposes its tool surface over the **MCP streamable-HTTP transport** at `${HYPERIA_MCP_URL:-http://localhost:9800/mcp}` (Hyperia must be running). For client setup (Claude Code, OpenAI Codex, Grok, Google Antigravity), run `hyperia mcp` for ready-to-paste commands, or see the [README](../README.md#connect-an-agent-mcp-over-http).
 
 This reference mirrors the `#[tool]` definitions in `sidecar/src/mcp.rs` — the code is the source of truth; verify against the live catalog with `hyperia tools`.
 
@@ -9,6 +9,12 @@ This reference mirrors the `#[tool]` definitions in `sidecar/src/mcp.rs` — the
 Sessions are organized as **windows > tabs > panes**. Most tools accept optional `window` (id from `terminal_status` — not 0-based; the first window is typically `id=1`), `tab` (name), and `pane` parameters. The `pane` field accepts a pane's friendly name (e.g. `"Brilliant Peacock"`) or its `paneId` from `terminal_status` (full UUID or a 4+ character prefix). Omit all three to target the focused window's active pane.
 
 **Output filtering (Maximus).** `terminal_run`, `terminal_screen`, and `tab_snapshot` accept `focus="<topic>"` to return only the relevant slice of output (filtered by a local Ollama model), and `raw=true` to bypass the filter and get the full text.
+
+## Discovery
+
+| Tool | Description |
+|------|-------------|
+| `skills` | List Hyperia's higher-level capability areas and the tools that perform each — call this first to orient. |
 
 ## Identity & consent
 
@@ -41,6 +47,12 @@ Reads work anonymously; state-changing tools need an identity (`Authorization: B
 | `terminal_where_pane` | Describe the spatial relationship between two panes. |
 | `terminal_flush_state` | Flush the current workspace layout (windows/tabs/splits/web panes) to `hyperia.json`. |
 | `terminal_ui_key` | Send a keyboard event to the renderer UI layer (Escape, etc.) instead of the PTY. |
+
+## Editing
+
+| Tool | Description |
+|------|-------------|
+| `apply_text_edits` | Grapheme-safe, transactional range-based file editor (Aegis-Edit). |
 
 ## Pulse & liveness (agent coordination)
 
@@ -138,15 +150,3 @@ A **pulse** is a recurring prompt the sidecar re-submits into a pane on its own 
 | `telemetry_record` | Record a telemetry event (file op / network / tokens) for a pane. |
 | `telemetry_reset` | Clear telemetry counters. |
 | `dashboard_widgets` | Configure the dashboard widget layout (`http://localhost:9800/dashboard`). |
-
-## Editing
-
-| Tool | Description |
-|------|-------------|
-| `apply_text_edits` | Grapheme-safe, transactional range-based file editor (Aegis-Edit). |
-
-## Discovery
-
-| Tool | Description |
-|------|-------------|
-| `skills` | List Hyperia's higher-level capability areas and the tools that perform each — call this first to orient. |
