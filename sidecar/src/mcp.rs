@@ -559,8 +559,8 @@ pub struct StyleDeleteRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct AudioPlayRequest {
-    /// Base64-encoded WAV file (PCM16 or float32, mono/stereo, 8-48kHz). Use
-    /// this OR pcm_base64, not both.
+    /// Base64-encoded audio FILE — WAV, MP3, FLAC, or OGG (mono/stereo,
+    /// 8-48kHz; the field name is historical). Use this OR pcm_base64.
     pub wav_base64: Option<String>,
     /// Base64-encoded raw PCM samples (pair with format/rate/channels).
     pub pcm_base64: Option<String>,
@@ -1839,7 +1839,7 @@ impl HyperiaMcp {
         }
     }
 
-    #[tool(description = "Play a sound clip ALOUD on the host machine's speakers. For SPEECH use hyperia_spoken_summary instead — it's simpler, needs no consent, and frames your callsign. This tool is for actual audio: chimes, alerts, generated sound, recordings. Send a base64 WAV (wav_base64: PCM16 or float32, mono/stereo, 8-48kHz, max 120s) or raw base64 PCM (pcm_base64 + format/rate/channels). First use raises a consent prompt for the human ('<you> wants to play audio') — the grant then persists for your identity. Playback is attributed with your callsign in a toast; the host can mute all agent audio. If denied, request_access with pane \"__audio__\" re-prompts. For CONTINUOUS audio use audio_stream_open instead.")]
+    #[tool(description = "Play a sound clip ALOUD on the host machine's speakers. For SPEECH use hyperia_spoken_summary instead — it's simpler, needs no consent, and frames your callsign. This tool is for actual audio: chimes, alerts, generated sound, recordings. Send a base64 audio file (wav_base64: WAV, MP3, FLAC, or OGG — mono/stereo, 8-48kHz, max 120s decoded) or raw base64 PCM (pcm_base64 + format/rate/channels). First use raises a consent prompt for the human ('<you> wants to play audio') — the grant then persists for your identity. Playback is attributed with your callsign in a toast; the host can mute all agent audio. If denied, request_access with pane \"__audio__\" re-prompts. For CONTINUOUS audio use audio_stream_open instead.")]
     async fn audio_play(
         &self,
         Parameters(req): Parameters<AudioPlayRequest>,

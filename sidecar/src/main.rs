@@ -433,7 +433,7 @@ async fn post_audio_play(
                 if let Some(wav) = req.wav_base64.as_deref() {
                     b64.decode(wav)
                         .map_err(|e| format!("wav_base64: {e}"))
-                        .and_then(|bytes| audio::parse_wav(&bytes))
+                        .and_then(|bytes| audio::decode_any(&bytes))
                 } else if let Some(pcm) = req.pcm_base64.as_deref() {
                     let spec = audio::StreamSpec::from_json(&serde_json::json!({
                         "format": req.format.as_deref().unwrap_or("s16le"),
@@ -454,7 +454,7 @@ async fn post_audio_play(
             Err(e) => Err(format!("bad JSON body: {e}")),
         }
     } else {
-        audio::parse_wav(&body)
+        audio::decode_any(&body)
     };
     let (spec, samples) = match parsed {
         Ok(v) => v,

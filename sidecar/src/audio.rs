@@ -157,6 +157,36 @@ pub fn parse_wav(bytes: &[u8]) -> Result<(StreamSpec, Vec<f32>), String> {
     Ok((spec, decode_frame(&spec, data)))
 }
 
+/// Decode any common audio container to (spec, samples): our fast WAV path
+/// first, then rodio's symphonia Decoder — which is already compiled in via
+/// the playback stack and handles MP3, FLAC, OGG/Vorbis, and AAC/M4A.
+#[cfg(feature = "tts")]
+pub fn decode_any(bytes: &[u8]) -> Result<(StreamSpec, Vec<f32>), String> {
+    if let Ok(parsed) = parse_wav(bytes) {
+        return Ok(parsed);
+    }
+    use rodio::Source as _;
+    let cursor = std::io::Cursor::new(bytes.to_vec());
+    let decoder = rodio::Decoder::new(cursor)
+        .map_err(|e| format!("undecodable audio ({e}) — send WAV, MP3, FLAC, or OGG (or raw PCM via pcm_base64)"))?;
+    let channels = decoder.channels().get();
+    let rate = decoder.sample_rate().get();
+    if !(1..=2).contains(&channels) {
+        return Err(format!("{channels}-channel audio isn't supported — downmix to mono or stereo"));
+    }
+    if !(8000..=48000).contains(&rate) {
+        return Err(format!("sample rate {rate} outside 8000-48000 — resample first"));
+    }
+    let samples: Vec<f32> = decoder.collect();
+    if samples.is_empty() {
+        return Err("decoded to zero samples".into());
+    }
+    Ok((
+        StreamSpec {format: PcmFormat::F32le, rate, channels},
+        samples,
+    ))
+}
+
 #[cfg(feature = "tts")]
 mod player {
     use super::StreamSpec;

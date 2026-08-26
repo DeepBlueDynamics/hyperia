@@ -100,7 +100,7 @@ A **pulse** is a recurring prompt the sidecar re-submits into a pane on its own 
 |------|-------------|
 | `render` | Render a markdown document (file path or inline) into a new Hyperia tab — supports `==highlight==` markup and live-reloads when the file changes. |
 | `hyperia_spoken_summary` | Speak a short summary aloud via fully-local Kokoro TTS, framed as a radio transmission from your callsign. Ungated — the frame is self-attributing. |
-| `audio_play` | Play a sound clip on the host speakers (base64 WAV or raw PCM, max 120s). For speech use `hyperia_spoken_summary`. First use raises a consent prompt (`__audio__` grant, persists per identity); playback is attributed with your callsign; the host can mute. |
+| `audio_play` | Play a sound clip on the host speakers (base64 WAV/MP3/FLAC/OGG or raw PCM, max 120s). For speech use `hyperia_spoken_summary`. First use raises a consent prompt (`__audio__` grant, persists per identity); playback is attributed with your callsign; the host can mute. |
 | `audio_stream_open` | Consent-check + connection info for CONTINUOUS audio: returns the `ws://…/ws/audio` URL and wire protocol (Bearer auth, one JSON hello `{format, rate, channels}`, then raw PCM binary frames paced to realtime; server reports `{muted}` / `{dropped}`). |
 
 ## Snapshots & observability
