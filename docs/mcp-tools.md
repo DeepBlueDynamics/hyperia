@@ -72,7 +72,7 @@ A **pulse** is a recurring prompt the sidecar re-submits into a pane on its own 
 
 | Tool | Description |
 |------|-------------|
-| `open_web_pane` | Open a URL in its own **separate** web-pane tab (never a split — use `terminal_split` with `url` for side-by-side). |
+| `open_web_pane` | Open a URL in its own **separate** web-pane tab (never a split — use `terminal_split` with `url` for side-by-side). Reply includes the new pane's `paneId` — save it and address web_pane_* calls with it (the tab opens in the background, so no-address defaults won't find it). |
 | `web_pane_content` | Read the current page as clean reader-mode markdown. |
 | `web_pane_eval` | Run JavaScript in a web pane and return the result. |
 | `web_pane_mouse` | Move/click at pixel coordinates, with a visible ghost cursor. |

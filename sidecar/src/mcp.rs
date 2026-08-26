@@ -1556,7 +1556,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Open a URL in its own SEPARATE web-pane tab inside Hyperia. This tool ALWAYS creates a new dedicated browser tab alongside your terminal tabs — never a split; it does NOT replace or overlay any existing terminal. To put a web page NEXT TO an existing pane in the SAME tab, use terminal_split with `url` instead. Pass a full URL (https://...). Use this for web content that deserves its own tab: docs, dashboards, localhost servers.")]
+    #[tool(description = "Open a URL in its own SEPARATE web-pane tab inside Hyperia. This tool ALWAYS creates a new dedicated browser tab alongside your terminal tabs — never a split; it does NOT replace or overlay any existing terminal. To put a web page NEXT TO an existing pane in the SAME tab, use terminal_split with `url` instead. Pass a full URL (https://...). Use this for web content that deserves its own tab: docs, dashboards, localhost servers. The reply includes the new pane's `paneId` — SAVE IT and pass it as `pane` to web_pane_content / web_pane_eval / terminal_web_click (the new tab opens in the BACKGROUND and is NOT the active pane, so calling those with no address will not find it).")]
     async fn open_web_pane(
         &self,
         Parameters(req): Parameters<OpenWebPaneRequest>,

@@ -1580,6 +1580,126 @@ impl Bridge {
         }
     }
 
+    /// Resolve an address to a WEB pane's uid, with agent-grade errors. Unlike
+    /// resolve_pane_uid this (a) never silently targets a terminal for a
+    /// web-only op — that used to make the renderer go silent and the call
+    /// time out ("Timeout waiting for page content"); (b) matches names
+    /// GLOBALLY when the tab-scoped pass misses (web panes usually live in
+    /// their own background tab, not the active one); (c) with no address at
+    /// all, targets the unique web pane when exactly one is open.
+    pub async fn resolve_web_pane_uid(
+        &self,
+        window: Option<u32>,
+        tab: Option<&str>,
+        pane: Option<&str>,
+    ) -> Result<String, String> {
+        fn is_web(info: &SessionInfo) -> bool {
+            info.name == "web"
+        }
+        fn list_webs(webs: &[(String, String, String)]) -> String {
+            webs.iter()
+                .map(|(uid, name, url)| format!("\"{}\" (paneId {}, {})", name, &uid[..uid.len().min(8)], url))
+                .collect::<Vec<_>>()
+                .join("; ")
+        }
+        // Standard resolver first (paneId/prefix short-circuit, tab-scoped
+        // names, active-pane default) — but only accept its answer if the
+        // pane is actually a web pane.
+        if let Some(uid) = self.resolve_pane_uid(window, tab, pane).await {
+            let sessions = self.inner.sessions.lock().await;
+            if sessions.get(&uid).map(is_web).unwrap_or(false) {
+                return Ok(uid);
+            }
+        }
+        let webs: Vec<(String, String, String)> = {
+            let sessions = self.inner.sessions.lock().await;
+            sessions
+                .iter()
+                .filter(|(_, i)| is_web(i))
+                .map(|(uid, i)| (uid.clone(), i.shell_name.clone(), i.cwd.clone()))
+                .collect()
+        };
+        if webs.is_empty() {
+            return Err(
+                "No web panes are open anywhere. open_web_pane first — its reply includes the paneId to use here."
+                    .into(),
+            );
+        }
+        if let Some(label) = pane {
+            let sessions = self.inner.sessions.lock().await;
+            let mut hits = webs.iter().filter(|(uid, name, _)| {
+                uid == label
+                    || (label.len() >= 4 && uid.starts_with(label))
+                    || name_matches(name, label)
+                    || sessions.get(uid).map(|i| name_matches(&i.title, label)).unwrap_or(false)
+            });
+            if let Some((uid, _, _)) = hits.next() {
+                if hits.next().is_none() {
+                    return Ok(uid.clone());
+                }
+                return Err(format!(
+                    "'{label}' matches more than one web pane — use a paneId. Open web panes: {}",
+                    list_webs(&webs)
+                ));
+            }
+            return Err(format!(
+                "No web pane matches '{label}'. Open web panes: {}",
+                list_webs(&webs)
+            ));
+        }
+        if webs.len() == 1 {
+            return Ok(webs[0].0.clone());
+        }
+        Err(format!(
+            "No pane addressed and the active pane isn't a web pane — pass pane=<paneId>. Open web panes: {}",
+            list_webs(&webs)
+        ))
+    }
+
+    /// Snapshot of current web-pane uids (for spotting a NEW one after open).
+    pub async fn web_pane_uids(&self) -> std::collections::HashSet<String> {
+        self.inner
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, i)| i.name == "web")
+            .map(|(uid, _)| uid.clone())
+            .collect()
+    }
+
+    /// Wait (bounded) for a web pane that wasn't in `before` to register —
+    /// the renderer creates the pane asynchronously after an OpenWebPane
+    /// command, so the uid only exists once the layout sync lands (~1s).
+    /// Prefers a new pane whose url matches; falls back to any new web pane.
+    pub async fn await_new_web_pane(
+        &self,
+        before: &std::collections::HashSet<String>,
+        url: &str,
+        timeout_ms: u64,
+    ) -> Option<(String, String)> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        let mut fallback: Option<(String, String)> = None;
+        loop {
+            {
+                let sessions = self.inner.sessions.lock().await;
+                for (uid, info) in sessions.iter().filter(|(_, i)| i.name == "web") {
+                    if before.contains(uid) {
+                        continue;
+                    }
+                    if info.cwd == url {
+                        return Some((uid.clone(), info.shell_name.clone()));
+                    }
+                    fallback = Some((uid.clone(), info.shell_name.clone()));
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return fallback;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    }
+
     /// Resolve a window/tab address to the first pane's session uid in that tab.
     pub async fn resolve_tab_uid(&self, window: Option<u32>, tab: Option<&str>) -> Option<String> {
         self.resolve_pane_uid(window, tab, None).await

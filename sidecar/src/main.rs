@@ -2833,8 +2833,30 @@ async fn post_open_web_pane(
         _ => return (StatusCode::BAD_REQUEST, "url is required".into()),
     };
     let cmd = serde_json::json!({"type": "OpenWebPane", "url": url});
+    // The renderer creates the pane asynchronously — snapshot existing web
+    // panes first, then wait for the NEW one to register so the reply can
+    // carry its paneId. Without this, agents had no handle to address the
+    // pane they just opened (the empty-{} → wrong-pane → timeout trap).
+    let before = state.bridge.web_pane_uids().await;
     match state.bridge.send_command(cmd).await {
-        Ok(r) => (StatusCode::OK, r),
+        Ok(_) => match state.bridge.await_new_web_pane(&before, &url, 4000).await {
+            Some((pane_id, name)) => (
+                StatusCode::OK,
+                serde_json::json!({
+                    "ok": true, "paneId": pane_id, "name": name, "url": url,
+                    "note": "address this pane by paneId in web_pane_content / web_pane_eval / terminal_web_click"
+                })
+                .to_string(),
+            ),
+            None => (
+                StatusCode::OK,
+                serde_json::json!({
+                    "ok": true, "paneId": serde_json::Value::Null, "url": url,
+                    "note": "pane is still opening — find it in terminal_status in a moment (shell == \"web\")"
+                })
+                .to_string(),
+            ),
+        },
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
@@ -2887,11 +2909,22 @@ async fn post_render(
         }
         return resp;
     }
+    let before = state.bridge.web_pane_uids().await;
     match state.bridge.send_command(cmd).await {
-        Ok(_) => (
-            StatusCode::OK,
-            serde_json::json!({"ok": true, "id": id, "url": url, "note": "opened in a new background tab; file-backed docs live-reload ~1.5s after the file changes"}).to_string(),
-        ),
+        Ok(_) => {
+            // Same paneId handoff as open_web_pane — the render tab is a web
+            // pane, and agents want to web_pane_content it later.
+            let pane_id = state
+                .bridge
+                .await_new_web_pane(&before, &url, 4000)
+                .await
+                .map(|(uid, _)| serde_json::Value::String(uid))
+                .unwrap_or(serde_json::Value::Null);
+            (
+                StatusCode::OK,
+                serde_json::json!({"ok": true, "id": id, "paneId": pane_id, "url": url, "note": "opened in a new background tab; file-backed docs live-reload ~1.5s after the file changes"}).to_string(),
+            )
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
@@ -2906,13 +2939,11 @@ async fn post_web_pane_reload(
     }
     let uid = match state
         .bridge
-        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .resolve_web_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
         .await
     {
-        Some(u) => u,
-        None => {
-            return (StatusCode::NOT_FOUND, "No web pane found at that address".into());
-        }
+        Ok(u) => u,
+        Err(msg) => return (StatusCode::NOT_FOUND, msg),
     };
     let cmd = serde_json::json!({"type": "WebPaneReload", "uid": uid});
     match state.bridge.send_command(cmd).await {
@@ -2931,13 +2962,11 @@ async fn post_web_pane_content(
     }
     let uid = match state
         .bridge
-        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .resolve_web_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
         .await
     {
-        Some(u) => u,
-        None => {
-            return (StatusCode::NOT_FOUND, "No web pane found at that address".into());
-        }
+        Ok(u) => u,
+        Err(msg) => return (StatusCode::NOT_FOUND, msg),
     };
     let cmd = serde_json::json!({"type": "WebPaneContent", "uid": uid});
     let raw = match state.bridge.send_command(cmd).await {
@@ -2982,13 +3011,11 @@ async fn post_web_pane_click(
 
     let uid = match state
         .bridge
-        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .resolve_web_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
         .await
     {
-        Some(u) => u,
-        None => {
-            return (StatusCode::NOT_FOUND, "No web pane found at that address".into());
-        }
+        Ok(u) => u,
+        Err(msg) => return (StatusCode::NOT_FOUND, msg),
     };
 
     let cmd = serde_json::json!({
@@ -3020,11 +3047,11 @@ async fn post_web_pane_eval(
     }
     let uid = match state
         .bridge
-        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .resolve_web_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
         .await
     {
-        Some(u) => u,
-        None => return (StatusCode::NOT_FOUND, "No web pane found at that address".into()),
+        Ok(u) => u,
+        Err(msg) => return (StatusCode::NOT_FOUND, msg),
     };
     let cmd = serde_json::json!({"type": "WebPaneEval", "uid": uid, "js": js});
     match state.bridge.send_command(cmd).await {
@@ -3048,11 +3075,11 @@ async fn post_web_pane_mouse(
     let action = parsed["action"].as_str().unwrap_or("move").to_string();
     let uid = match state
         .bridge
-        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
+        .resolve_web_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
         .await
     {
-        Some(u) => u,
-        None => return (StatusCode::NOT_FOUND, "No web pane found at that address".into()),
+        Ok(u) => u,
+        Err(msg) => return (StatusCode::NOT_FOUND, msg),
     };
     let cmd = serde_json::json!({"type": "WebPaneMouse", "uid": uid, "x": x, "y": y, "action": action});
     match state.bridge.send_command(cmd).await {
