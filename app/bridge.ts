@@ -604,9 +604,14 @@ function handleCommand(msg: Record<string, unknown>) {
     }
 
     case 'AudioNotice': {
-      // An agent started playing audio (epic #162) — attribution toast in
-      // every window: sound is never anonymous.
-      const payload = {name: (msg.name as string) || 'An agent'};
+      // Agent audio attribution (epic #162): active:true raises the toast,
+      // the paired active:false (same id) dismisses it when playback ends —
+      // the notice lives exactly as long as the sound.
+      const payload = {
+        id: String(msg.id ?? ''),
+        name: (msg.name as string) || 'An agent',
+        active: msg.active !== false
+      };
       for (const w of (app as any).getWindows?.() || []) {
         if (w?.rpc) w.rpc.emit('audio notice', payload);
       }

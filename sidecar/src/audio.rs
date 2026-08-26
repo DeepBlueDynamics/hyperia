@@ -23,6 +23,14 @@ pub static MUTED: AtomicBool = AtomicBool::new(false);
 /// Live stream count, capped by `max_streams()`.
 pub static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
+/// Monotonic id for attribution notices, so the app can pair each
+/// "playing audio" toast with the end event that dismisses it.
+static NOTICE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub fn next_notice_id() -> u64 {
+    NOTICE_SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
 pub const DEFAULT_MAX_STREAMS: usize = 4;
 
 /// `config.audio.enabled` (default true) / `config.audio.maxStreams`.
@@ -264,8 +272,13 @@ pub async fn ws_loop(
     let _ = socket.send(send_json(serde_json::json!({"ok": true}))).await;
 
     // Attribution: sound is never anonymous — toast the callsign in the app.
+    // The toast STAYS UP for the life of the stream; the end notice below
+    // (paired by id) dismisses it.
+    let notice_id = next_notice_id();
     let _ = bridge
-        .notify(serde_json::json!({"type": "AudioNotice", "name": caller_name}))
+        .notify(serde_json::json!({
+            "type": "AudioNotice", "id": notice_id, "name": caller_name, "active": true
+        }))
         .await;
 
     // Backlog accounting: appended-seconds vs wall-clock. If the agent runs
@@ -319,6 +332,10 @@ pub async fn ws_loop(
             _ => {}
         }
     }
+    // Stream over — take the attribution toast down.
+    let _ = bridge
+        .notify(serde_json::json!({"type": "AudioNotice", "id": notice_id, "active": false}))
+        .await;
     // player + _slot drop here: the playback thread drains what's queued and
     // releases the device; the stream slot frees for the next caller.
 }

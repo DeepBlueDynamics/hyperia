@@ -24,7 +24,7 @@ import AgentToast from './components/agent-toast';
 import CloseConfirmModal, {showCloseConfirm} from './components/close-confirm-modal';
 import ConsentModal from './components/consent-modal';
 import {activeTerminals} from './components/term';
-import ToastStack, {pushToast} from './components/toast-stack';
+import ToastStack, {pushToast, pushStickyToast, dismissStickyToast} from './components/toast-stack';
 import WebPaneDialog, {showWebPaneDialog} from './components/web-pane-dialog';
 import HyperContainer from './containers/hyper';
 import * as permissionsBus from './permissions-bus';
@@ -284,10 +284,13 @@ rpc.on('agent toast', (req) => {
   permissionsBus.setToast(req);
 });
 
-// Agent audio attribution (epic #162): sound is never anonymous — every
-// stream/clip start toasts the callsign.
-rpc.on('audio notice', ({name}: {name: string}) => {
-  pushToast(`🔊 ${name} is playing audio`, {ttlMs: 8000});
+// Agent audio attribution (epic #162): sound is never anonymous — the toast
+// goes up when playback starts and STAYS up until the paired end notice
+// (same id) arrives, so the notice lives exactly as long as the sound.
+rpc.on('audio notice', ({id, name, active}: {id: string; name: string; active: boolean}) => {
+  const key = `audio-${id}`;
+  if (active) pushStickyToast(key, `🔊 ${name} is playing audio`);
+  else dismissStickyToast(key);
 });
 
 rpc.on('termgroup close req', () => {

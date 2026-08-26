@@ -19,10 +19,13 @@ interface ToastItem {
   text: string;
   kind: 'info' | 'error';
   ttlMs: number;
+  /** Present on sticky toasts — the caller-owned identity used to update/dismiss. */
+  stickyKey?: string;
 }
 
 let nextToastId = 1;
 let pushImpl: ((t: Omit<ToastItem, 'id'>) => void) | null = null;
+let dismissStickyImpl: ((key: string) => void) | null = null;
 
 export function pushToast(text: string, opts?: ToastOptions): void {
   pushImpl?.({
@@ -32,12 +35,36 @@ export function pushToast(text: string, opts?: ToastOptions): void {
   });
 }
 
+// Sticky toast: stays up until dismissStickyToast(key) — for ongoing activity
+// ("🔊 X is playing audio"). Same key updates the text in place. A 10-minute
+// safety TTL backs it so a lost end-event can't pin a toast forever; the ×
+// still dismisses manually.
+const STICKY_SAFETY_TTL_MS = 10 * 60 * 1000;
+
+export function pushStickyToast(key: string, text: string, opts?: Pick<ToastOptions, 'kind'>): void {
+  pushImpl?.({
+    text,
+    kind: opts?.kind ?? 'info',
+    ttlMs: STICKY_SAFETY_TTL_MS,
+    stickyKey: key
+  });
+}
+
+export function dismissStickyToast(key: string): void {
+  dismissStickyImpl?.(key);
+}
+
 const EXIT_MS = 180;
 
 export default function ToastStack(): React.ReactElement | null {
   const [toasts, setToasts] = React.useState<ToastItem[]>([]);
   const [leaving, setLeaving] = React.useState<ReadonlySet<number>>(new Set());
   const timers = React.useRef(new Map<number, ReturnType<typeof setTimeout>>());
+
+  // stickyKey → toast id, tracked outside React state so push/dismiss can
+  // resolve keys synchronously (a flag inside a setState updater is not
+  // reliable under React 18 batching).
+  const stickyIds = React.useRef(new Map<string, number>());
 
   const remove = React.useCallback((id: number) => {
     setToasts((s) => s.filter((t) => t.id !== id));
@@ -46,6 +73,9 @@ export default function ToastStack(): React.ReactElement | null {
       n.delete(id);
       return n;
     });
+    for (const [key, tid] of stickyIds.current) {
+      if (tid === id) stickyIds.current.delete(key);
+    }
   }, []);
 
   // Exit in two steps: mark leaving (plays the collapse animation), then drop.
@@ -62,16 +92,32 @@ export default function ToastStack(): React.ReactElement | null {
 
   React.useEffect(() => {
     pushImpl = (t) => {
+      // Sticky upsert: same key updates the existing toast's text in place
+      // (timer untouched) instead of stacking a duplicate.
+      const existing = t.stickyKey ? stickyIds.current.get(t.stickyKey) : undefined;
+      if (existing !== undefined) {
+        setToasts((s) => s.map((x) => (x.id === existing ? {...x, text: t.text, kind: t.kind} : x)));
+        return;
+      }
       const id = nextToastId++;
+      if (t.stickyKey) stickyIds.current.set(t.stickyKey, id);
       setToasts((s) => [...s, {...t, id}]);
       timers.current.set(
         id,
         setTimeout(() => beginDismiss(id), t.ttlMs)
       );
     };
+    dismissStickyImpl = (key) => {
+      const id = stickyIds.current.get(key);
+      if (id !== undefined) {
+        stickyIds.current.delete(key);
+        beginDismiss(id);
+      }
+    };
     const pending = timers.current;
     return () => {
       pushImpl = null;
+      dismissStickyImpl = null;
       pending.forEach((t) => clearTimeout(t));
       pending.clear();
     };

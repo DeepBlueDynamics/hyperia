@@ -475,12 +475,18 @@ async fn post_audio_play(
         Ok(p) => p,
         Err(e) => return (StatusCode::SERVICE_UNAVAILABLE, e),
     };
+    // Attribution toast stays up for the clip's duration; the end notice
+    // (paired by id) dismisses it once playback has drained.
+    let notice_id = audio::next_notice_id();
     let _ = state
         .bridge
-        .notify(serde_json::json!({"type": "AudioNotice", "name": name}))
+        .notify(serde_json::json!({
+            "type": "AudioNotice", "id": notice_id, "name": name, "active": true
+        }))
         .await;
     // Feed in ~0.5s chunks, then hold the slot until the clip has drained.
     let chunk = (spec.rate as usize * spec.channels as usize) / 2;
+    let bridge = state.bridge.clone();
     tokio::spawn(async move {
         for c in samples.chunks(chunk.max(1)) {
             if !player.send(c.to_vec()) {
@@ -489,6 +495,9 @@ async fn post_audio_play(
         }
         drop(player);
         tokio::time::sleep(std::time::Duration::from_secs_f64(secs + 0.5)).await;
+        let _ = bridge
+            .notify(serde_json::json!({"type": "AudioNotice", "id": notice_id, "active": false}))
+            .await;
         drop(slot);
     });
     (
