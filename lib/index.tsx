@@ -658,17 +658,35 @@ function calcBspLayout(
     if (children[0]) calcBspLayout(termGroups[children[0]] as Record<string, any>, termGroups, x, y, w, h, results);
     return;
   }
-  const ratio: number = (node.sizes?.[0] as number) ?? 0.5;
+  // Same-direction splits APPEND children to one group (n-ary tree — see
+  // splitGroup in reducers/term-groups.ts), so walk ALL children with their
+  // sizes. The old binary walker silently dropped children[2..]: those panes
+  // never got a rect and the sidecar served its [0,0,100x100] fallback —
+  // "Hyperia is reporting this layout wrong" from the 3dterminal stream
+  // consumers. Sizes are normalized; the last child takes the remainder so
+  // rounding never leaves a gap.
   // direction: "HORIZONTAL" = top/bottom split, "VERTICAL" = left/right split (Hyper convention)
-  if (node.direction === 'HORIZONTAL') {
-    const topH = Math.round(h * ratio);
-    calcBspLayout(termGroups[children[0]] as Record<string, any>, termGroups, x, y, w, topH, results);
-    calcBspLayout(termGroups[children[1]] as Record<string, any>, termGroups, x, y + topH, w, h - topH, results);
-  } else {
-    const leftW = Math.round(w * ratio);
-    calcBspLayout(termGroups[children[0]] as Record<string, any>, termGroups, x, y, leftW, h, results);
-    calcBspLayout(termGroups[children[1]] as Record<string, any>, termGroups, x + leftW, y, w - leftW, h, results);
-  }
+  const even = 1 / children.length;
+  const rawSizes: number[] =
+    Array.isArray(node.sizes) && node.sizes.length === children.length
+      ? (node.sizes as number[])
+      : children.map(() => even);
+  const total = rawSizes.reduce((sum, s) => sum + (typeof s === 'number' && s > 0 ? s : even), 0) || 1;
+  let offset = 0;
+  children.forEach((childUid, i) => {
+    const frac = (typeof rawSizes[i] === 'number' && rawSizes[i] > 0 ? rawSizes[i] : even) / total;
+    const child = termGroups[childUid] as Record<string, any>;
+    const last = i === children.length - 1;
+    if (node.direction === 'HORIZONTAL') {
+      const hh = last ? h - offset : Math.round(h * frac);
+      calcBspLayout(child, termGroups, x, y + offset, w, hh, results);
+      offset += hh;
+    } else {
+      const ww = last ? w - offset : Math.round(w * frac);
+      calcBspLayout(child, termGroups, x + offset, y, ww, h, results);
+      offset += ww;
+    }
+  });
 }
 
 let lastLayoutSignature = '';
