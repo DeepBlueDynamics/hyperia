@@ -118,7 +118,6 @@ import {initSticky} from './sticky';
 import {SYSTEM_TOKEN} from './system-token';
 import {newWindow} from './ui/window';
 import {installCLI} from './utils/cli-install';
-import {getAppIcon} from './utils/icon';
 import * as windowUtils from './utils/window-utils';
 import {restoreFor} from './window-state';
 
@@ -170,120 +169,6 @@ import {restoreFor} from './window-state';
 }
 
 const windowSet = new Set<BrowserWindow>([]);
-
-// Splash screen — shown ONCE per installed version. The first launch after an
-// install/update casts the splash; a marker in the config dir then suppresses it
-// on every subsequent launch (on any platform). Returns true exactly once per
-// version, and only if the marker was persisted (so a write failure can't make
-// the splash reappear every launch).
-function shouldShowSplashOnce(): boolean {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const {cfgDir} = require('./config/paths');
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const fs = require('fs');
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const path = require('path');
-    const stateFile = path.join(cfgDir, 'splash-state.json');
-    const version = app.getVersion();
-    try {
-      const stored = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-      if (stored && stored.version === version) return false; // already shown for this install
-    } catch {
-      /* no state file yet — first launch for this install */
-    }
-    // Mark BEFORE showing so a crash mid-splash can't re-trigger it forever.
-    fs.writeFileSync(stateFile, JSON.stringify({version}), 'utf8');
-    return true;
-  } catch {
-    return false; // can't persist the marker → don't risk showing it every launch
-  }
-}
-
-function _showSplash(
-  winBounds: {x: number; y: number; width: number; height: number},
-  mainWin: BrowserWindow
-): Promise<void> {
-  return new Promise((resolve_) => {
-    const splash = new BrowserWindow({
-      x: winBounds.x,
-      y: winBounds.y,
-      width: winBounds.width,
-      height: winBounds.height,
-      frame: false,
-      transparent: true,
-      resizable: false,
-      skipTaskbar: true,
-      backgroundColor: '#00000000',
-      alwaysOnTop: true,
-      icon: getAppIcon(),
-      title: 'Hyperia',
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        preload: resolve(__dirname, 'splash-preload.js')
-      }
-    });
-
-    void splash.loadFile(resolve(isDev ? __dirname : app.getAppPath(), 'splash.html'));
-
-    // If the user clicks away to another app while the splash is up, stop
-    // floating over their window: drop always-on-top so the splash falls behind
-    // the app they focused, and remember NOT to steal focus back on reveal.
-    let userSwitchedAway = false;
-    splash.on('blur', () => {
-      userSwitchedAway = true;
-      try {
-        if (!splash.isDestroyed()) splash.setAlwaysOnTop(false);
-      } catch {
-        /* already gone */
-      }
-    });
-
-    // Signal splash as soon as main window content loads
-    mainWin.webContents.once('did-finish-load', () => {
-      if (!splash.isDestroyed()) {
-        splash.webContents.send('app-ready');
-      }
-    });
-
-    let resolved = false;
-    const done = () => {
-      if (resolved) return;
-      resolved = true;
-      if (!splash.isDestroyed()) {
-        let opacity = 1;
-        const fadeInterval = setInterval(() => {
-          opacity -= 0.15;
-          if (opacity <= 0 || splash.isDestroyed()) {
-            clearInterval(fadeInterval);
-            if (!splash.isDestroyed()) {
-              splash.destroy();
-            }
-            // Show main window after splash is gone. If the user switched to
-            // another app during the splash, reveal it WITHOUT stealing focus
-            // (never pop over the app they're now using).
-            if (!mainWin.isDestroyed() && !mainWin.isVisible()) {
-              if (userSwitchedAway) mainWin.showInactive();
-              else mainWin.show();
-            }
-          } else {
-            try {
-              splash.setOpacity(opacity);
-            } catch {
-              /* already gone */
-            }
-          }
-        }, 30);
-      }
-      resolve_();
-    };
-
-    ipcMain.once('splash-done', done);
-    // Failsafe: close after 8 seconds max
-    setTimeout(done, 8000);
-  });
-}
 
 // --- Sidecar process (Rust agent engine, MCP) ---
 let sidecarProcess: ChildProcess | null = null;
@@ -543,6 +428,28 @@ if (!gotLock) {
   process.exit(0); // belt-and-suspenders: nothing below may run in the loser
 }
 app.on('second-instance', () => {
+  // Stale-instance handover: a second launch right after an update usually
+  // means WE are the old binary — the installer replaced the files on disk
+  // under this running process (tray keep-alive outlives windows), we still
+  // hold the single-instance lock, and any window WE open now renders as a
+  // black frameless rectangle (our renderer assets are gone). Re-read the
+  // on-disk version; if it isn't ours, honor the user's launch: relaunch
+  // (spawns the NEW binary) and exit to release the lock.
+  try {
+    const diskPkg = JSON.parse(
+      require('fs').readFileSync(require('path').join(app.getAppPath(), 'package.json'), 'utf8')
+    ) as {version?: string};
+    if (diskPkg?.version && diskPkg.version !== app.getVersion()) {
+      console.log(
+        `[update] on-disk v${diskPkg.version} != running v${app.getVersion()} — handing over to the new binary`
+      );
+      app.relaunch();
+      app.exit(0);
+      return;
+    }
+  } catch {
+    /* unreadable (mid-install?) — fall through to normal behavior */
+  }
   const win = (app as any).getLastFocusedWindow?.();
   if (win) {
     if (win.isMinimized()) win.restore();
@@ -709,21 +616,16 @@ app.on('ready', () => {
       // Create the terminal window (starts hidden in production)
       const firstWin = createWindow();
 
-      // Splash only on the first launch after an install/update (once per
-      // version, any platform). _showSplash fades out and reveals the main
-      // window itself; otherwise just show the window when its content loads.
-      if (shouldShowSplashOnce()) {
-        firstWin.show();
-        void _showSplash(firstWin.getBounds(), firstWin);
-      } else {
-        firstWin.webContents.once('did-finish-load', () => {
-          if (!firstWin.isDestroyed() && !firstWin.isVisible()) firstWin.show();
-        });
-        // Failsafe in case did-finish-load doesn't fire.
-        setTimeout(() => {
-          if (!firstWin.isDestroyed() && !firstWin.isVisible()) firstWin.show();
-        }, 2000);
-      }
+      // Show the window when its content loads. (The once-per-version update
+      // splash was removed — it added a confusing extra window to first-boot
+      // and nobody missed it.)
+      firstWin.webContents.once('did-finish-load', () => {
+        if (!firstWin.isDestroyed() && !firstWin.isVisible()) firstWin.show();
+      });
+      // Failsafe in case did-finish-load doesn't fire.
+      setTimeout(() => {
+        if (!firstWin.isDestroyed() && !firstWin.isVisible()) firstWin.show();
+      }, 2000);
 
       // expose to plugins
       app.createWindow = createWindow;
