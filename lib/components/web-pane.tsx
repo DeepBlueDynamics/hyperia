@@ -1,4 +1,4 @@
-import {shell} from 'electron';
+import {shell, webFrame} from 'electron';
 import React from 'react';
 
 import {connect} from 'react-redux';
@@ -346,9 +346,21 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       // overlay — a tab-switch hide is off-screen and needs no capture.
       const freeze = showable && overlayHidden;
       try {
+        // getBoundingClientRect is CSS pixels; setBounds on the native view
+        // wants window DIPs. They differ exactly by the page zoom — Linux
+        // boots at webFrame.setZoomFactor(1.2) (see lib/index.tsx), which
+        // painted every web pane up-and-left of its pane by 1/6th (the
+        // "weird offset" Ubuntu bug). Scale by the LIVE zoom so UI zoom
+        // stays correct everywhere.
+        const zoom = webFrame.getZoomFactor() || 1;
         ipcRenderer.send('web-pane:set-bounds', {
           uid: this.props.groupUid,
-          bounds: {x: rect.left, y: rect.top, width: rect.width, height: rect.height},
+          bounds: {
+            x: rect.left * zoom,
+            y: rect.top * zoom,
+            width: rect.width * zoom,
+            height: rect.height * zoom
+          },
           visible,
           freeze
         });
