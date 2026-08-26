@@ -558,6 +558,21 @@ pub struct StyleDeleteRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct AudioPlayRequest {
+    /// Base64-encoded WAV file (PCM16 or float32, mono/stereo, 8-48kHz). Use
+    /// this OR pcm_base64, not both.
+    pub wav_base64: Option<String>,
+    /// Base64-encoded raw PCM samples (pair with format/rate/channels).
+    pub pcm_base64: Option<String>,
+    /// PCM sample format for pcm_base64: "s16le" (default) or "f32le".
+    pub format: Option<String>,
+    /// Sample rate for pcm_base64 (8000-48000, default 24000).
+    pub rate: Option<u32>,
+    /// Channel count for pcm_base64 (1-2, default 1).
+    pub channels: Option<u16>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct StyleApplyRequest {
     /// Style name from style_list. 'default' or 'none' clears the pane back to
     /// its profile/global appearance.
@@ -1822,6 +1837,55 @@ impl HyperiaMcp {
             let err = v["error"].as_str().unwrap_or("unknown error");
             Err(ErrorData::internal_error(format!("TTS failed: {err}"), None))
         }
+    }
+
+    #[tool(description = "Play a sound clip ALOUD on the host machine's speakers. For SPEECH use hyperia_spoken_summary instead — it's simpler, needs no consent, and frames your callsign. This tool is for actual audio: chimes, alerts, generated sound, recordings. Send a base64 WAV (wav_base64: PCM16 or float32, mono/stereo, 8-48kHz, max 120s) or raw base64 PCM (pcm_base64 + format/rate/channels). First use raises a consent prompt for the human ('<you> wants to play audio') — the grant then persists for your identity. Playback is attributed with your callsign in a toast; the host can mute all agent audio. If denied, request_access with pane \"__audio__\" re-prompts. For CONTINUOUS audio use audio_stream_open instead.")]
+    async fn audio_play(
+        &self,
+        Parameters(req): Parameters<AudioPlayRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if req.wav_base64.is_none() && req.pcm_base64.is_none() {
+            return Err(ErrorData::invalid_params(
+                "pass wav_base64 (a base64 WAV file) or pcm_base64 (+ format/rate/channels)",
+                None,
+            ));
+        }
+        let body = serde_json::json!({
+            "wav_base64": req.wav_base64,
+            "pcm_base64": req.pcm_base64,
+            "format": req.format,
+            "rate": req.rate,
+            "channels": req.channels,
+        });
+        let mut rb = self
+            .client
+            .post(format!("{}/api/audio/play", self.base_url))
+            .timeout(std::time::Duration::from_secs(60))
+            .json(&body);
+        if let Some(a) = forwarded_auth(&ctx) {
+            rb = rb.header(reqwest::header::AUTHORIZATION, a);
+        }
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("audio request failed: {e}"), None))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("audio response error: {e}"), None))?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(description = "Open the door for CONTINUOUS audio streaming to the host's speakers (for one-shot clips use audio_play; for speech use hyperia_spoken_summary). This runs the consent check now (first use prompts the human; the grant persists) and returns the WebSocket URL + wire protocol: connect with your Bearer token (Authorization header or ?token=), send ONE JSON hello frame {\"format\":\"s16le\",\"rate\":24000,\"channels\":1}, then binary frames of raw PCM paced to realtime (a backlog over ~0.6s is dropped and you'll get {\"dropped\":n}). Server sends {\"ok\":true} after the hello and {\"muted\":true/false} when the host mutes/unmutes agent audio. Closing the socket ends the stream cleanly.")]
+    async fn audio_stream_open(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let resp = self
+            .post_json_as("/api/audio/probe", &serde_json::json!({}), forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
     #[tool(description = "Get a persistent Hyperia identity token — call this the moment a state-changing tool returns 'No identity' (reads never needed one). Mints (or returns) a persistent hyp_agent_… token; the same name always returns the same token, and it survives restarts in ~/.hyperia/agents.json. The reply tells you how to use it IMMEDIATELY — the sidecar honors it on direct HTTP calls to its /api/... routes right away, no restart — and the exact `claude mcp add` command to hand your human so future sessions are born with it. Only your CURRENT MCP connection's header stays frozen until the session restarts; use the direct-HTTP path in the meantime.")]

@@ -1,5 +1,6 @@
 #![allow(dead_code, unused_imports, unused_variables)]
 
+mod audio;
 mod audit;
 mod bridge;
 mod bugs;
@@ -364,6 +365,233 @@ async fn post_tts(
         }
         Err(e) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
     }
+}
+
+// ── Agent audio endpoints (epic #162) ──────────────────────────────────────
+// Raw PCM/clip playback on the host, consent-gated via enforce_audio (the
+// `__audio__` sentinel). Feature-gated on `tts` — that feature owns rodio.
+
+#[derive(Deserialize)]
+#[cfg_attr(not(feature = "tts"), allow(dead_code))]
+struct AudioPlayJson {
+    /// Base64 WAV file (PCM16 or float32, mono/stereo, 8-48kHz).
+    #[serde(default)]
+    wav_base64: Option<String>,
+    /// Base64 raw PCM; requires format/rate/channels.
+    #[serde(default)]
+    pcm_base64: Option<String>,
+    #[serde(default)]
+    format: Option<String>,
+    #[serde(default)]
+    rate: Option<u32>,
+    #[serde(default)]
+    channels: Option<u16>,
+}
+
+#[derive(Deserialize)]
+struct AudioMuteRequest {
+    muted: bool,
+}
+
+#[cfg(not(feature = "tts"))]
+async fn post_audio_play(_body: axum::body::Bytes) -> (StatusCode, String) {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        "audio requires the tts feature (rodio) — this build has no audio output".to_string(),
+    )
+}
+
+#[cfg(feature = "tts")]
+async fn post_audio_play(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> (StatusCode, String) {
+    if !audio::audio_enabled() {
+        return (StatusCode::FORBIDDEN, "audio is disabled (config.audio.enabled = false)".into());
+    }
+    if body.len() > 32 * 1024 * 1024 {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "clip too large (32MB cap)".into());
+    }
+    let name = match enforce_audio(&state, &headers, bearer_token(&headers).as_deref()).await {
+        Ok(n) => n,
+        Err((code, msg)) => return (code, msg),
+    };
+    if audio::MUTED.load(std::sync::atomic::Ordering::Relaxed) {
+        return (
+            StatusCode::OK,
+            serde_json::json!({"ok": false, "muted": true, "message": "audio is muted on the host — the clip was dropped"}).to_string(),
+        );
+    }
+    // Decode: JSON body (base64 WAV or raw PCM) or raw WAV bytes.
+    let looks_json = body.first() == Some(&b'{');
+    let parsed: Result<(audio::StreamSpec, Vec<f32>), String> = if looks_json {
+        match serde_json::from_slice::<AudioPlayJson>(&body) {
+            Ok(req) => {
+                use base64::Engine as _;
+                let b64 = base64::engine::general_purpose::STANDARD;
+                if let Some(wav) = req.wav_base64.as_deref() {
+                    b64.decode(wav)
+                        .map_err(|e| format!("wav_base64: {e}"))
+                        .and_then(|bytes| audio::parse_wav(&bytes))
+                } else if let Some(pcm) = req.pcm_base64.as_deref() {
+                    let spec = audio::StreamSpec::from_json(&serde_json::json!({
+                        "format": req.format.as_deref().unwrap_or("s16le"),
+                        "rate": req.rate.unwrap_or(24000),
+                        "channels": req.channels.unwrap_or(1),
+                    }));
+                    match spec {
+                        Ok(s) => b64
+                            .decode(pcm)
+                            .map_err(|e| format!("pcm_base64: {e}"))
+                            .map(|bytes| (s, audio::decode_frame(&s, &bytes))),
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    Err("JSON body needs wav_base64 or pcm_base64".into())
+                }
+            }
+            Err(e) => Err(format!("bad JSON body: {e}")),
+        }
+    } else {
+        audio::parse_wav(&body)
+    };
+    let (spec, samples) = match parsed {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, e),
+    };
+    let secs = spec.secs(samples.len());
+    if secs > 120.0 {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("clip is {secs:.0}s — one-shot clips cap at 120s; use the ws stream for longer audio"),
+        );
+    }
+    let slot = match audio::StreamSlot::claim() {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::TOO_MANY_REQUESTS, e),
+    };
+    let player = match audio::StreamPlayer::spawn(spec) {
+        Ok(p) => p,
+        Err(e) => return (StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let _ = state
+        .bridge
+        .notify(serde_json::json!({"type": "AudioNotice", "name": name}))
+        .await;
+    // Feed in ~0.5s chunks, then hold the slot until the clip has drained.
+    let chunk = (spec.rate as usize * spec.channels as usize) / 2;
+    tokio::spawn(async move {
+        for c in samples.chunks(chunk.max(1)) {
+            if !player.send(c.to_vec()) {
+                break;
+            }
+        }
+        drop(player);
+        tokio::time::sleep(std::time::Duration::from_secs_f64(secs + 0.5)).await;
+        drop(slot);
+    });
+    (
+        StatusCode::OK,
+        serde_json::json!({"ok": true, "secs": secs, "attribution": name}).to_string(),
+    )
+}
+
+/// Consent probe + connection info for the streaming path. Doing the consent
+/// here means the human prompt happens at tool time, not mid-handshake.
+async fn post_audio_probe(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, String) {
+    if !audio::audio_enabled() {
+        return (StatusCode::FORBIDDEN, "audio is disabled (config.audio.enabled = false)".into());
+    }
+    match enforce_audio(&state, &headers, bearer_token(&headers).as_deref()).await {
+        Ok(name) => {
+            let host = headers
+                .get(axum::http::header::HOST)
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or("localhost:9800");
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "ok": true,
+                    "attribution": name,
+                    "ws": format!("ws://{host}/ws/audio"),
+                    "muted": audio::MUTED.load(std::sync::atomic::Ordering::Relaxed),
+                    "protocol": {
+                        "auth": "Authorization: Bearer <token> header, or ?token=<token> query param",
+                        "hello": {"format": "s16le | f32le", "rate": "8000-48000", "channels": "1-2"},
+                        "then": "binary frames of raw PCM in the declared format; pace to realtime (>0.6s backlog is dropped)",
+                        "server_frames": "{\"ok\":true} after hello; {\"muted\":bool} on mute changes; {\"dropped\":n} when pacing is off"
+                    }
+                })
+                .to_string(),
+            )
+        }
+        Err((code, msg)) => (code, msg),
+    }
+}
+
+/// Global audio mute. Muting is the safe direction — any identified caller may
+/// set it; only the system token (the app / the human) may clear it.
+async fn post_audio_mute(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AudioMuteRequest>,
+) -> (StatusCode, String) {
+    use identity::CallerIdentity;
+    let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    let allowed = match (&id, req.muted) {
+        (CallerIdentity::Anonymous, _) => false,
+        (CallerIdentity::System, _) => true,
+        (_, true) => true,   // anyone identified may mute
+        (_, false) => false, // only the human/system unmutes
+    };
+    if !allowed {
+        return (
+            StatusCode::FORBIDDEN,
+            "muting is open to identified callers; UNmuting is the human's call (system token only)".into(),
+        );
+    }
+    audio::MUTED.store(req.muted, std::sync::atomic::Ordering::Relaxed);
+    (
+        StatusCode::OK,
+        serde_json::json!({"ok": true, "muted": req.muted}).to_string(),
+    )
+}
+
+#[cfg(not(feature = "tts"))]
+async fn ws_audio() -> (StatusCode, String) {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        "audio requires the tts feature (rodio) — this build has no audio output".to_string(),
+    )
+}
+
+#[cfg(feature = "tts")]
+async fn ws_audio(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if !audio::audio_enabled() {
+        return (StatusCode::FORBIDDEN, "audio is disabled (config.audio.enabled = false)").into_response();
+    }
+    // ws clients that can't set headers pass ?token= instead.
+    let token = bearer_token(&headers).or_else(|| params.get("token").cloned());
+    let name = match enforce_audio(&state, &headers, token.as_deref()).await {
+        Ok(n) => n,
+        Err((code, msg)) => return (code, msg).into_response(),
+    };
+    let slot = match audio::StreamSlot::claim() {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::TOO_MANY_REQUESTS, e).into_response(),
+    };
+    let bridge = state.bridge.clone();
+    ws.on_upgrade(move |socket| audio::ws_loop(socket, bridge, name, slot))
 }
 
 async fn post_client_log(
@@ -1329,6 +1557,104 @@ async fn enforce_drive_with_purpose(
                 }
             }
             Err(pending_202())
+        }
+    }
+}
+
+// ── Agent audio consent (epic #162) ────────────────────────────────────────
+// Raw audio is gated drive-style on the sentinel target `__audio__` (same
+// pattern as `__create__` for creates): grants and denials persist per
+// identity, `request_access` with pane "__audio__" re-prompts after a deny.
+// EXPLICIT CARVE-OUT: hyperia_spoken_summary (TTS) stays ungated — its radio
+// framing is already self-attributing. This gate covers raw PCM/clips only.
+
+const AUDIO_SENTINEL: &str = "__audio__";
+
+/// The caller's human-facing name for audio attribution toasts.
+async fn audio_caller_name(state: &AppState, id: &identity::CallerIdentity) -> String {
+    requester_display_name(state, id)
+        .await
+        .unwrap_or_else(|| id.label())
+}
+
+/// Enforce audio consent. On success returns the caller's display name so
+/// handlers can attribute the sound without re-resolving identity.
+async fn enforce_audio(
+    state: &AppState,
+    headers: &HeaderMap,
+    token: Option<&str>,
+) -> Result<String, (StatusCode, String)> {
+    use identity::CallerIdentity;
+    use perms::AuthDecision;
+    let id = state.bridge.resolve_caller(token).await;
+    match state.bridge.authorize_drive(&id, AUDIO_SENTINEL).await {
+        AuthDecision::Allow | AuthDecision::RefuseHome => Ok(audio_caller_name(state, &id).await),
+        AuthDecision::SoftWall => Err((
+            StatusCode::UNAUTHORIZED,
+            format!(
+                "Audio needs an identity — sound on the human's machine is never anonymous. {}",
+                identity_recovery(headers)
+            ),
+        )),
+        AuthDecision::Denied => Err((
+            StatusCode::FORBIDDEN,
+            "Audio was denied by the user. To ask again, run request_access with pane \"__audio__\" and a purpose."
+                .to_string(),
+        )),
+        AuthDecision::NeedConsent => {
+            let label = id.label();
+            if !state.bridge.perms().has_pending(&label, AUDIO_SENTINEL).await {
+                let requester_pane = match &id {
+                    CallerIdentity::Pane { pane, .. } => pane.clone(),
+                    _ => String::new(),
+                };
+                let req = state
+                    .bridge
+                    .perms()
+                    .create_request(&label, &requester_pane, AUDIO_SENTINEL, "audio", "play audio on this machine")
+                    .await;
+                let requester_name = audio_caller_name(state, &id).await;
+                consent_log::record_request(
+                    &req.id, &req.requester, &requester_name, id.kind(),
+                    &req.action, &req.target_pane, &req.purpose,
+                );
+                let _ = state
+                    .bridge
+                    .notify(serde_json::json!({
+                        "type": "PermissionRequest",
+                        "id": req.id,
+                        "requester": req.requester,
+                        "requesterName": requester_name,
+                        "requesterPane": req.requester_pane,
+                        "targetPane": req.target_pane,
+                        "purpose": req.purpose,
+                    }))
+                    .await;
+            }
+            for _ in 0..16 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                match state.bridge.authorize_drive(&id, AUDIO_SENTINEL).await {
+                    AuthDecision::Allow => return Ok(audio_caller_name(state, &id).await),
+                    AuthDecision::Denied => {
+                        return Err((
+                            StatusCode::FORBIDDEN,
+                            "Audio was denied by the user. To ask again, run request_access with pane \"__audio__\" and a purpose."
+                                .to_string(),
+                        ))
+                    }
+                    _ => {}
+                }
+            }
+            Err((
+                StatusCode::ACCEPTED,
+                serde_json::json!({
+                    "ok": false,
+                    "pending": true,
+                    "message": "The human is considering your audio request in the Hyperia approval prompt. \
+                                Wait a moment and call this again — the grant persists once approved."
+                })
+                .to_string(),
+            ))
         }
     }
 }
@@ -3542,6 +3868,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/logs", axum::routing::get(get_logs))
         .route("/api/log", axum::routing::post(post_client_log))
         .route("/api/tts", axum::routing::post(post_tts))
+        .route("/api/audio/play", axum::routing::post(post_audio_play))
+        .route("/api/audio/probe", axum::routing::post(post_audio_probe))
+        .route("/api/audio/mute", axum::routing::post(post_audio_mute))
+        .route("/ws/audio", axum::routing::get(ws_audio))
         .route("/api/status", axum::routing::get(get_status))
         .route("/api/screen", axum::routing::get(get_screen))
         .route("/api/fs/dirs", axum::routing::get(get_fs_dirs))

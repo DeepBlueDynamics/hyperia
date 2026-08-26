@@ -150,6 +150,7 @@ All hot-reload. Colors can also be overridden **per profile** (see below) so, e.
 | `lockout` | `{enabled?: bool, duration_secs?: number}` | how long after a human keystroke agent writes to that pane stay queued (default enabled, 15s; `enabled: false` disables the guard) |
 | `maximus` | `{disabled: bool, ...}` | the local output-compression/extraction layer (`disabled: true` = raw passthrough; model override via `maximus_model` / `MAXIMUS_MODEL`) |
 | `tts` | `{recipient?: string}` | callsign spoken summaries address (default `"base"`) |
+| `audio` | `{enabled?: bool, maxStreams?: number}` | agent audio playback (epic #162) — `enabled: false` refuses all agent audio (default true); `maxStreams` caps concurrent streams (default 4, 1–16). Raw audio is consent-gated per agent (the `__audio__` grant); spoken summaries stay ungated. |
 
 ## The agent (Ghost)
 

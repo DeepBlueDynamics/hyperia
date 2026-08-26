@@ -81,6 +81,8 @@ export default function ConsentModal(): React.ReactElement | null {
 
   // Resolve the target pane's friendly name (the "where") from the store.
   const paneName = useSelector((s: any) => {
+    // Sentinel targets aren't panes: __audio__ gates host audio (epic #162).
+    if (req?.targetPane === '__audio__') return '🔊 audio on this machine';
     const sess = req ? s?.sessions?.sessions?.[req.targetPane] : null;
     return (sess && (sess.shellName || sess.title)) || (req ? `pane ${req.targetPane.slice(0, 8)}` : '');
   });

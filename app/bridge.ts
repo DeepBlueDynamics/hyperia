@@ -603,6 +603,16 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'AudioNotice': {
+      // An agent started playing audio (epic #162) — attribution toast in
+      // every window: sound is never anonymous.
+      const payload = {name: (msg.name as string) || 'An agent'};
+      for (const w of (app as any).getWindows?.() || []) {
+        if (w?.rpc) w.rpc.emit('audio notice', payload);
+      }
+      break;
+    }
+
     case 'AgentToast': {
       // Create-consent prompt — a window-level toast (no target pane).
       const payload = {

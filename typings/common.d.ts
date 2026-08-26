@@ -102,6 +102,7 @@ export type MainEvents = {
   'permission request': {id: string; requester: string; requesterPane: string; targetPane: string; purpose?: string};
   'permission resolved': {targetPane: string; decision: string; id?: string};
   'agent toast': {id: string; requester: string; action: string};
+  'audio notice': {name: string};
   'tab bell': {uid: string};
   unmaximize: never;
   'web-pane-reload': string;
@@ -218,6 +219,7 @@ export type RendererEvents = {
   'permission request': {id: string; requester: string; requesterPane: string; targetPane: string; purpose?: string};
   'permission resolved': {targetPane: string; decision: string; id?: string};
   'agent toast': {id: string; requester: string; action: string};
+  'audio notice': {name: string};
   'tab bell': {uid: string};
   'windowGeometry change': {isMaximized: boolean};
   move: {bounds: {x: number; y: number}};

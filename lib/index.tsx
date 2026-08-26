@@ -284,6 +284,12 @@ rpc.on('agent toast', (req) => {
   permissionsBus.setToast(req);
 });
 
+// Agent audio attribution (epic #162): sound is never anonymous — every
+// stream/clip start toasts the callsign.
+rpc.on('audio notice', ({name}: {name: string}) => {
+  pushToast(`🔊 ${name} is playing audio`, {ttlMs: 8000});
+});
+
 rpc.on('termgroup close req', () => {
   store_.dispatch(termGroupActions.exitActiveTermGroup());
 });
