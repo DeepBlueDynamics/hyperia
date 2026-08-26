@@ -110,6 +110,22 @@ pub async fn speak(text: &str, voice: Option<&str>, speed: Option<f32>) -> Resul
         return Err(anyhow!("text is empty"));
     }
     let speed = speed.unwrap_or(1.0).clamp(0.5, 2.0);
+
+    // Second engine: ElevenLabs, when a token is around (config.tts.elevenlabs
+    // .token or ELEVENLABS_API_KEY). Synthesizes in the cloud, plays through
+    // the SAME host playback path (pcm_24000 matches our SAMPLE_RATE exactly).
+    // Kokoro stays the offline default and the fallback when the cloud call
+    // fails — spoken summaries must never go silent over a network blip.
+    // config.tts.engine forces it: "kokoro" | "elevenlabs" | "auto" (default).
+    if let Some(cfg) = eleven_cfg() {
+        match speak_eleven(&cfg, text, speed).await {
+            Ok(secs) => return Ok(secs),
+            Err(e) => {
+                tracing::warn!(target: "tts", "ElevenLabs failed ({e}) — falling back to Kokoro")
+            }
+        }
+    }
+
     let voice = resolve_voice(voice, speed);
 
     // Lowercase for synthesis: kokoro-tts's cmudict lookup is case-sensitive
@@ -161,6 +177,94 @@ pub async fn speak(text: &str, voice: Option<&str>, speed: Option<f32>) -> Resul
         .await
         .context("playback task join failed")??;
 
+    Ok(secs)
+}
+
+/// ElevenLabs settings, resolved per call (config hot-reloads). Token from
+/// `config.tts.elevenlabs.token` (or `.apiKey`) or the ELEVENLABS_API_KEY env
+/// var. `config.tts.engine = "kokoro"` opts out even with a token present.
+struct ElevenCfg {
+    token: String,
+    voice_id: String,
+    model_id: String,
+}
+
+fn eleven_cfg() -> Option<ElevenCfg> {
+    let cfg = crate::ghost::api::read_shared_config();
+    let t = &cfg["config"]["tts"];
+    let engine = t["engine"].as_str().unwrap_or("auto");
+    if engine == "kokoro" {
+        return None;
+    }
+    let token = t["elevenlabs"]["token"]
+        .as_str()
+        .or_else(|| t["elevenlabs"]["apiKey"].as_str())
+        .map(str::to_string)
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("ELEVENLABS_API_KEY").ok().filter(|s| !s.trim().is_empty()));
+    let token = match token {
+        Some(t) => t,
+        None => {
+            if engine == "elevenlabs" {
+                tracing::warn!(
+                    target: "tts",
+                    "config.tts.engine=elevenlabs but no token (config.tts.elevenlabs.token or ELEVENLABS_API_KEY) — using Kokoro"
+                );
+            }
+            return None;
+        }
+    };
+    Some(ElevenCfg {
+        token,
+        // Default voice: "Rachel", ElevenLabs' stock narrator.
+        voice_id: t["elevenlabs"]["voice"].as_str().unwrap_or("21m00Tcm4TlvDq8ikWAM").to_string(),
+        model_id: t["elevenlabs"]["model"].as_str().unwrap_or("eleven_turbo_v2_5").to_string(),
+    })
+}
+
+/// Synthesize via ElevenLabs and play on the host. Requests `pcm_24000` —
+/// raw s16le mono at exactly our SAMPLE_RATE, so the bytes go straight into
+/// the same `play_samples` path Kokoro (and agent audio) uses. Errors bubble
+/// so the caller can fall back to Kokoro.
+async fn speak_eleven(cfg: &ElevenCfg, text: &str, speed: f32) -> Result<f64> {
+    let url = format!(
+        "https://api.elevenlabs.io/v1/text-to-speech/{}?output_format=pcm_24000",
+        cfg.voice_id
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .context("build reqwest client")?;
+    let mut body = serde_json::json!({"text": text, "model_id": cfg.model_id});
+    if (speed - 1.0).abs() > f32::EPSILON {
+        // ElevenLabs supports a narrower speed band than Kokoro.
+        body["voice_settings"] = serde_json::json!({"speed": speed.clamp(0.7, 1.2)});
+    }
+    let resp = client
+        .post(&url)
+        .header("xi-api-key", &cfg.token)
+        .json(&body)
+        .send()
+        .await
+        .context("ElevenLabs request failed")?;
+    if !resp.status().is_success() {
+        let code = resp.status();
+        let msg = resp.text().await.unwrap_or_default();
+        return Err(anyhow!("ElevenLabs HTTP {code}: {}", msg.chars().take(300).collect::<String>()));
+    }
+    let bytes = resp.bytes().await.context("ElevenLabs body read failed")?;
+    let audio: Vec<f32> = bytes
+        .chunks_exact(2)
+        .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
+        .collect();
+    if audio.is_empty() {
+        return Err(anyhow!("ElevenLabs returned no audio"));
+    }
+    let secs = audio.len() as f64 / SAMPLE_RATE as f64;
+    tracing::info!(target: "tts", "elevenlabs synth {} chars -> {:.1}s audio", text.len(), secs);
+    tokio::task::spawn_blocking(move || play_samples(audio))
+        .await
+        .context("playback task join failed")??;
     Ok(secs)
 }
 
