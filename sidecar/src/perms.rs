@@ -95,26 +95,112 @@ pub struct PermStore {
     create_grants: Mutex<Vec<CreateGrant>>,
     /// Per-agent capability grants for the non-create/non-drive gated actions:
     /// identity label → set of capability names ("files", "settings", "web_eval",
-    /// "manage", ...). In-memory → reset on restart, like all grants.
+    /// "manage", ...). Persisted (perms.json) like all durable grants.
     cap_grants: Mutex<HashMap<String, std::collections::HashSet<String>>>,
     /// Master enforcement switch. ON by default — every boot comes up gated
-    /// (home-refusal / ownership / grants / consent / soft-wall). Grants reset
-    /// each start, identities persist, so agents re-earn access every session.
-    /// Runtime-toggleable for debugging; resets to ON on restart.
+    /// (home-refusal / ownership / grants / consent / soft-wall). Durable
+    /// grants + pane tokens persist across restarts (perms.json); timed and
+    /// one-shot grants stay ephemeral. Runtime-toggleable for debugging;
+    /// resets to ON on restart.
     enforce: AtomicBool,
     next_id: AtomicU64,
 }
 
+// ---------------------------------------------------------------------------
+// Persistence — pane tokens/owners and durable grants survive sidecar
+// restarts. The documented pane-token lifecycle is "stable for the pane's
+// LIFETIME, revoked when the pane closes" — panes (and their uids) survive a
+// sidecar restart via session reattach, so the old restart-wipe was the bug:
+// every restart stranded the whole container fleet on "No identity" and
+// re-consent storms. Timed and one-shot grants stay ephemeral by design;
+// denial cooldowns and the enforce switch still reset every boot.
+// ---------------------------------------------------------------------------
+
+fn perms_path() -> std::path::PathBuf {
+    crate::fsnav::home_dir().join(".hyperia").join("perms.json")
+}
+
+fn load_persisted() -> (
+    HashMap<String, String>,
+    HashMap<String, String>,
+    Vec<Grant>,
+    Vec<CreateGrant>,
+    HashMap<String, std::collections::HashSet<String>>,
+) {
+    let mut tokens = HashMap::new();
+    let mut owners = HashMap::new();
+    let mut grants = Vec::new();
+    let mut create_grants = Vec::new();
+    let mut cap_grants: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    if let Ok(data) = std::fs::read_to_string(perms_path()) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
+            if let Some(m) = v["tokens"].as_object() {
+                for (k, val) in m {
+                    if let Some(s) = val.as_str() {
+                        tokens.insert(k.clone(), s.to_string());
+                    }
+                }
+            }
+            if let Some(m) = v["owners"].as_object() {
+                for (k, val) in m {
+                    if let Some(s) = val.as_str() {
+                        owners.insert(k.clone(), s.to_string());
+                    }
+                }
+            }
+            if let Some(arr) = v["grants"].as_array() {
+                for g in arr {
+                    let (Some(requester), Some(scope), Some(pane)) =
+                        (g["requester"].as_str(), g["scope"].as_str(), g["pane"].as_str())
+                    else {
+                        continue;
+                    };
+                    grants.push(Grant {
+                        requester: requester.to_string(),
+                        scope: scope.to_string(),
+                        pane: pane.to_string(),
+                        expires_at: None,
+                    });
+                }
+            }
+            if let Some(arr) = v["create_grants"].as_array() {
+                for a in arr {
+                    if let Some(agent) = a.as_str() {
+                        create_grants.push(CreateGrant {
+                            agent: agent.to_string(),
+                            expires_at: None,
+                            once: false,
+                        });
+                    }
+                }
+            }
+            if let Some(m) = v["cap_grants"].as_object() {
+                for (agent, caps) in m {
+                    if let Some(arr) = caps.as_array() {
+                        let set: std::collections::HashSet<String> =
+                            arr.iter().filter_map(|c| c.as_str().map(String::from)).collect();
+                        if !set.is_empty() {
+                            cap_grants.insert(agent.clone(), set);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (tokens, owners, grants, create_grants, cap_grants)
+}
+
 impl Default for PermStore {
     fn default() -> Self {
+        let (tokens, owners, grants, create_grants, cap_grants) = load_persisted();
         Self {
             pending: Mutex::default(),
-            grants: Mutex::default(),
-            tokens: Mutex::default(),
-            owners: Mutex::default(),
+            grants: Mutex::new(grants),
+            tokens: Mutex::new(tokens),
+            owners: Mutex::new(owners),
             denials: Mutex::default(),
-            create_grants: Mutex::default(),
-            cap_grants: Mutex::default(),
+            create_grants: Mutex::new(create_grants),
+            cap_grants: Mutex::new(cap_grants),
             enforce: AtomicBool::new(true), // gated out of the box
             next_id: AtomicU64::default(),
         }
@@ -122,6 +208,64 @@ impl Default for PermStore {
 }
 
 impl PermStore {
+    /// Write-through persistence: durable state only (tokens, owners,
+    /// non-expiring grants). Best-effort — a failed write never breaks the
+    /// in-memory truth.
+    async fn save(&self) {
+        let tokens: serde_json::Map<String, serde_json::Value> = self
+            .tokens
+            .lock()
+            .await
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .collect();
+        let owners: serde_json::Map<String, serde_json::Value> = self
+            .owners
+            .lock()
+            .await
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .collect();
+        let grants: Vec<serde_json::Value> = self
+            .grants
+            .lock()
+            .await
+            .iter()
+            .filter(|g| g.expires_at.is_none())
+            .map(|g| serde_json::json!({"requester": g.requester, "scope": g.scope, "pane": g.pane}))
+            .collect();
+        let create_grants: Vec<serde_json::Value> = self
+            .create_grants
+            .lock()
+            .await
+            .iter()
+            .filter(|g| !g.once && g.expires_at.is_none())
+            .map(|g| serde_json::Value::String(g.agent.clone()))
+            .collect();
+        let cap_grants: serde_json::Map<String, serde_json::Value> = self
+            .cap_grants
+            .lock()
+            .await
+            .iter()
+            .map(|(agent, caps)| {
+                (
+                    agent.clone(),
+                    serde_json::Value::Array(caps.iter().map(|c| serde_json::Value::String(c.clone())).collect()),
+                )
+            })
+            .collect();
+        let doc = serde_json::json!({
+            "tokens": tokens,
+            "owners": owners,
+            "grants": grants,
+            "create_grants": create_grants,
+            "cap_grants": cap_grants,
+        });
+        if let Err(e) = crate::util::write_json_file_atomic(&perms_path(), &doc) {
+            tracing::warn!("perms persist failed: {e}");
+        }
+    }
+
     /// Register a pending request and return it (with a freshly-minted id).
     pub async fn create_request(
         &self,
@@ -194,6 +338,7 @@ impl PermStore {
             }
             // A fresh allow clears any prior denial for this pair.
             self.denials.lock().await.remove(&(req.requester.clone(), key));
+            self.save().await;
         } else {
             // Remember the "no" so the caller is told (not silently re-prompted).
             self.denials.lock().await.insert((req.requester.clone(), key), Instant::now());
@@ -213,6 +358,7 @@ impl PermStore {
             expires_at,
             once,
         });
+        self.save().await;
     }
 
     /// Grant `agent` a named capability ("files", "settings", "web_eval", ...).
@@ -226,6 +372,7 @@ impl PermStore {
             .entry(agent.to_string())
             .or_default()
             .insert(cap.to_string());
+        self.save().await;
     }
 
     /// Does `agent` hold capability `cap`?
@@ -254,8 +401,11 @@ impl PermStore {
         let mut grants = self.create_grants.lock().await;
         grants.retain(|g| g.expires_at.map_or(true, |t| t > now));
         if let Some(pos) = grants.iter().position(|g| g.agent == agent) {
-            if grants[pos].once {
+            let consumed_once = grants[pos].once;
+            if consumed_once {
                 grants.remove(pos);
+                drop(grants);
+                self.save().await;
             }
             true
         } else {
@@ -331,7 +481,9 @@ impl PermStore {
         // (CSPRNG base + best-effort sdrrand mix). 16 bytes = 128-bit token.
         let token = format!("hyp_{}", crate::util::random_token(16).await);
         // Insert, but honour a concurrent mint for the same pane (first wins).
-        self.tokens.lock().await.entry(pane.to_string()).or_insert(token).clone()
+        let out = self.tokens.lock().await.entry(pane.to_string()).or_insert(token).clone();
+        self.save().await;
+        out
     }
 
     /// Flip the master enforcement switch.
@@ -349,6 +501,7 @@ impl PermStore {
             return;
         }
         self.owners.lock().await.insert(pane.to_string(), owner.to_string());
+        self.save().await;
     }
     /// Who owns this pane, if anyone?
     pub async fn owner_of(&self, pane: &str) -> Option<String> {
@@ -364,6 +517,7 @@ impl PermStore {
             return;
         }
         self.tokens.lock().await.insert(pane.to_string(), token.to_string());
+        self.save().await;
     }
 
     /// Reverse lookup: which pane does this token identify? (For #58's header
@@ -391,6 +545,7 @@ impl PermStore {
         self.tokens.lock().await.remove(uid);
         self.owners.lock().await.remove(uid);
         self.denials.lock().await.retain(|(_, p), _| p != uid);
+        self.save().await;
     }
 
     /// JSON snapshot for debugging / the test surface.

@@ -842,8 +842,14 @@ impl HyperiaMcp {
             .unwrap_or_else(|| format!("http://127.0.0.1:{}", http_port));
         Self {
             tool_router: Self::tool_router(),
+            // Localhost hops: connect fast or fail fast, and NEVER reuse
+            // pooled connections — a stale keep-alive to ourselves after a
+            // network-state change produced instant "error sending request"
+            // on the write path (the 0.17.42 wedge: reads fine, writes dead).
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
+                .connect_timeout(std::time::Duration::from_secs(3))
+                .pool_max_idle_per_host(0)
                 .build()
                 .unwrap_or_default(),
             base_url,

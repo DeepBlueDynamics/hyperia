@@ -471,7 +471,14 @@ async fn run_loop(
     // summary (window/tab/pane counts + focused pane) instead (plan §4.3.3).
     let slim_state = doors_enabled && door_config.small;
     let http_port = std::env::var("HYPERIA_PORT").unwrap_or_else(|_| "9800".into());
-    let state_client = reqwest::Client::new();
+    // Localhost self-hop — fail fast, no pooled-connection reuse (see the
+    // 0.17.42 stale-pool wedge).
+    let state_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .pool_max_idle_per_host(0)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     if let Ok(resp) = state_client.get(format!("http://localhost:{}/api/status", http_port)).send().await {
         if let Ok(status) = resp.text().await {
             // Extract platform for an explicit OS note so the agent uses the right shell commands
