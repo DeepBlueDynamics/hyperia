@@ -558,6 +558,15 @@ pub struct StyleDeleteRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WindowImageRequest {
+    /// Window id (from terminal_status). Omit for the focused window.
+    pub window: Option<u32>,
+    /// Scale the capture down to at most this many pixels wide (default 1200,
+    /// 320-3840). Smaller = fewer tokens.
+    pub max_width: Option<u32>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct AudioPlayRequest {
     /// Base64-encoded audio FILE — WAV, MP3, FLAC, or OGG (mono/stereo,
     /// 8-48kHz; the field name is historical). Use this OR pcm_base64.
@@ -1843,6 +1852,38 @@ impl HyperiaMcp {
             let err = v["error"].as_str().unwrap_or("unknown error");
             Err(ErrorData::internal_error(format!("TTS failed: {err}"), None))
         }
+    }
+
+    #[tool(description = "Screenshot an ENTIRE Hyperia window as a real-pixels PNG — the full UI: chrome, tabs, terminals, stickies, AND native web panes (which pane-level tools can't see). Use this to SEE what the human sees: verify visual bugs, check layouts, confirm a style/theme landed. Returns the image plus its dimensions. Omit `window` for the focused window; `max_width` (default 1200) scales the capture down to save tokens. For a single pane's TEXT use terminal_screen; for the layout as labeled rectangles use tab_image.")]
+    async fn window_image(
+        &self,
+        Parameters(req): Parameters<WindowImageRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut path = format!("/api/window/image?max_width={}", req.max_width.unwrap_or(1200));
+        if let Some(w) = req.window {
+            path.push_str(&format!("&window={w}"));
+        }
+        let resp = self
+            .client
+            .get(format!("{}{}", self.base_url, path))
+            .timeout(std::time::Duration::from_secs(20))
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("capture request failed: {e}"), None))?;
+        if !resp.status().is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(ErrorData::internal_error(format!("capture failed: {msg}"), None));
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("capture read failed: {e}"), None))?;
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        Ok(CallToolResult::success(vec![
+            Content::text(format!("Window capture ({} KB PNG).", bytes.len() / 1024)),
+            Content::image(b64, "image/png".to_string()),
+        ]))
     }
 
     #[tool(description = "Play a sound clip ALOUD on the host machine's speakers. For SPEECH use hyperia_spoken_summary instead — it's simpler, needs no consent, and frames your callsign. This tool is for actual audio: chimes, alerts, generated sound, recordings. Send a base64 audio file (wav_base64: WAV, MP3, FLAC, or OGG — mono/stereo, 8-48kHz, max 120s decoded) or raw base64 PCM (pcm_base64 + format/rate/channels). First use raises a consent prompt for the human ('<you> wants to play audio') — the grant then persists for your identity. Playback is attributed with your callsign in a toast; the host can mute all agent audio. If denied, request_access with pane \"__audio__\" re-prompts. For CONTINUOUS audio use audio_stream_open instead.")]

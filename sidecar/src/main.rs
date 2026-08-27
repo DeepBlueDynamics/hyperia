@@ -204,6 +204,42 @@ async fn get_search_sticky(
 /// Render the requested tab's layout as a B&W PNG. Same data path as the MCP
 /// `tab_image` tool, exposed over HTTP so a human can open it in the browser
 /// for visual debugging. Returns image/png bytes (no JSON wrapper).
+#[derive(Deserialize)]
+struct WindowImageQuery {
+    window: Option<u32>,
+    max_width: Option<u32>,
+}
+
+/// GET /api/window/image?window=&max_width= — real-pixels PNG of an entire
+/// Hyperia window (chrome + terminals + stickies + native web panes), captured
+/// app-side via desktopCapturer. Read-class like terminal_screen.
+async fn get_window_image(
+    State(state): State<AppState>,
+    Query(q): Query<WindowImageQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let cmd = serde_json::json!({
+        "type": "CaptureWindow",
+        "windowId": q.window,
+        "maxWidth": q.max_width.unwrap_or(1200),
+    });
+    let raw = match state.bridge.send_command(cmd).await {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+    let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+    if v["ok"].as_bool() != Some(true) {
+        let err = v["error"].as_str().unwrap_or("capture failed").to_string();
+        return (StatusCode::BAD_GATEWAY, err).into_response();
+    }
+    use base64::Engine as _;
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(v["png_base64"].as_str().unwrap_or(""))
+    else {
+        return (StatusCode::BAD_GATEWAY, "bad image payload".to_string()).into_response();
+    };
+    ([(axum::http::header::CONTENT_TYPE, "image/png")], bytes).into_response()
+}
+
 async fn get_tab_image(
     State(state): State<AppState>,
     Query(q): Query<TabImageQuery>,
@@ -3912,6 +3948,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/screen", axum::routing::get(get_screen))
         .route("/api/fs/dirs", axum::routing::get(get_fs_dirs))
         .route("/api/tab/image", axum::routing::get(get_tab_image))
+        .route("/api/window/image", axum::routing::get(get_window_image))
         .route("/api/search/shell", axum::routing::get(get_search_shell))
         .route("/api/scrollback", axum::routing::get(get_scrollback))
         .route("/api/search/sticky", axum::routing::get(get_search_sticky))

@@ -618,6 +618,57 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'CaptureWindow': {
+      // Real-pixels screenshot of an ENTIRE Hyperia window — chrome, terminals,
+      // stickies, AND native WebContentsViews (web panes), which a plain
+      // webContents.capturePage would miss (they paint outside the renderer).
+      // desktopCapturer grabs the OS window itself, matched by media source id.
+      const winId = msg.windowId as number | undefined;
+      const maxW = Math.max(320, Math.min(3840, (msg.maxWidth as number) || 1200));
+      void (async () => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const {desktopCapturer, screen} = require('electron') as typeof import('electron');
+          const wins: any[] = Array.from((app as any).getWindows?.() || []);
+          const target = winId ? wins.find((w) => w.id === winId) : wins.find((w) => w.isFocused()) || wins[0];
+          if (!target || target.isDestroyed()) {
+            sendResult(seq, JSON.stringify({ok: false, error: 'no matching window'}));
+            return;
+          }
+          const b = target.getBounds();
+          const sf = screen.getDisplayMatching(b).scaleFactor || 1;
+          const scale = Math.min(1, maxW / b.width);
+          const sources = await desktopCapturer.getSources({
+            types: ['window'],
+            thumbnailSize: {
+              width: Math.round(b.width * sf * scale),
+              height: Math.round(b.height * sf * scale)
+            }
+          });
+          const mediaId = typeof target.getMediaSourceId === 'function' ? target.getMediaSourceId() : '';
+          const src = sources.find((s) => s.id === mediaId) || sources.find((s) => s.name === target.getTitle());
+          if (!src || src.thumbnail.isEmpty()) {
+            sendResult(seq, JSON.stringify({ok: false, error: 'window not found in capture sources (minimized?)'}));
+            return;
+          }
+          const size = src.thumbnail.getSize();
+          sendResult(
+            seq,
+            JSON.stringify({
+              ok: true,
+              png_base64: src.thumbnail.toPNG().toString('base64'),
+              width: size.width,
+              height: size.height,
+              windowId: target.id
+            })
+          );
+        } catch (e) {
+          sendResult(seq, JSON.stringify({ok: false, error: String(e)}));
+        }
+      })();
+      break;
+    }
+
     case 'AgentToast': {
       // Create-consent prompt — a window-level toast (no target pane).
       const payload = {

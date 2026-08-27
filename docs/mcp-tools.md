@@ -109,6 +109,7 @@ A **pulse** is a recurring prompt the sidecar re-submits into a pane on its own 
 |------|-------------|
 | `tab_snapshot` | Read every pane's screen across all windows/tabs at once. Supports `focus`/`raw`. |
 | `tab_image` | Render a schematic image of a tab's pane layout (labeled proportional rectangles). |
+| `window_image` | Real-pixels PNG screenshot of an ENTIRE Hyperia window — chrome, terminals, stickies, and native web panes. `window` (id) or focused; `max_width` (default 1200) scales down to save tokens. The way to SEE what the human sees. |
 | `shell_state` | Classify panes' states: idle (at prompt), dialog (awaiting selection), running, or empty. |
 | `shell_confirm` | Auto-handle common prompts (trust dialogs, y/n confirmations). |
 | `shell_log_search` | BM25 search across captured per-shell logs (commands + output history). |
