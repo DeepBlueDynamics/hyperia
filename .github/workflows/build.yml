@@ -53,7 +53,7 @@ jobs:
         run: npm install -g yarn
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: yarn install --frozen-lockfile --network-timeout 300000
 
       # Linux: the sidecar's TTS stack (rodio → cpal) compiles against ALSA —
       # without libasound2-dev the cargo build fails at alsa-sys.

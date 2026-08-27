@@ -55,7 +55,7 @@ jobs:
         run: npm install -g yarn
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: yarn install --frozen-lockfile --network-timeout 300000
 
       # Build sidecar — macOS uses --target so the binary lands where
       # bin/cp-sidecar.js reads from (target/<triple>/release/).
