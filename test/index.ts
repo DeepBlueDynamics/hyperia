@@ -35,13 +35,21 @@ test.before(async () => {
       throw new Error('Path to the built binary needs to be defined for this platform in test/index.js');
   }
 
+  console.log(`[e2e] launching ${pathToBinary}`);
   app = await _electron.launch({
     executablePath: pathToBinary,
     // GitHub runners can't use Chromium's setuid sandbox from an unpacked
     // build dir — without this the packaged binary dies at launch on Linux.
     args: process.platform === 'linux' ? ['--no-sandbox'] : []
   });
+  // Surface the app's OWN output — a silent launch hang (mac, since the
+  // splash removal) is undiagnosable when the main process's words are
+  // discarded. Everything it prints lands in the ava log.
+  app.process().stdout?.on('data', (d: Buffer) => console.log(`[app:out] ${String(d).trimEnd()}`));
+  app.process().stderr?.on('data', (d: Buffer) => console.log(`[app:err] ${String(d).trimEnd()}`));
+  console.log('[e2e] launched; waiting for first window');
   await app.firstWindow();
+  console.log('[e2e] first window up; settling 5s');
   await new Promise((resolve) => setTimeout(resolve, 5000));
 });
 
