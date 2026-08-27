@@ -49,6 +49,13 @@ interface WebPaneEntry {
   win: BrowserWindow;
   url: string;
   visible: boolean;
+  /// Host window's page zoom at create time (1.2 on Linux — lib/index.tsx
+  /// zooms the whole renderer there). The guest page must MATCH it or site
+  /// content renders visibly smaller than the surrounding UI ("site is 3/4
+  /// size" on Linux). Composed with userZoom on every apply.
+  baseZoom?: number;
+  /// The human's manual +/- zoom (renderer-tracked 0.5–3.0, default 1).
+  userZoom?: number;
   // Pending delayed teardown (see destroyPane) — cancelled if the pane remounts.
   destroyTimer?: ReturnType<typeof setTimeout>;
   // Last pixel rect pushed from the renderer — used to re-split when the docked
@@ -201,6 +208,8 @@ function wireWebContents(initialUid: string, wc: WebContents) {
   // via web-pane:execute-js — it can't observe the guest's dom-ready directly.
   wc.on('dom-ready', () => {
     const uid = u();
+    const entry = panes.get(uid);
+    if (entry) applyPaneZoom(entry);
     entrySend(uid, 'web-pane:dom-ready', {uid});
   });
   // The webContents 'focus' event ALSO fires for PROGRAMMATIC focus (an agent's
@@ -378,6 +387,14 @@ function wireWebContents(initialUid: string, wc: WebContents) {
   });
 }
 
+// Guest zoom = host window zoom × the human's manual zoom. Re-applied on
+// dom-ready because Chromium's per-origin zoom memory can reset it across
+// navigations.
+function applyPaneZoom(entry: WebPaneEntry) {
+  if (entry.view.webContents.isDestroyed()) return;
+  entry.view.webContents.setZoomFactor((entry.baseZoom ?? 1) * (entry.userZoom ?? 1));
+}
+
 function entrySend(uid: string, channel: string, payload: unknown) {
   const entry = panes.get(uid);
   if (!entry || entry.win.isDestroyed()) return;
@@ -439,8 +456,11 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
   view.setBackgroundColor('#ffffff');
   win.contentView.addChildView(view);
   const entry: WebPaneEntry = {view, win, url, visible: true};
+  entry.baseZoom = win.webContents.getZoomFactor() || 1;
+  entry.userZoom = 1;
   panes.set(uid, entry);
   wireWebContents(uid, view.webContents);
+  applyPaneZoom(entry);
   if (url) void view.webContents.loadURL(url).catch(() => {});
   console.log(
     `[wp] createPane BUILT fresh uid=${uid.slice(0, 8)} win=${win.id} childViews=${win.contentView.children.length}`
@@ -713,8 +733,13 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
   });
 
   ipcMain.on('web-pane:zoom', (_e, {uid, factor}: {uid: string; factor: number}) => {
-    const wc = wcOf(uid);
-    if (wc) wc.setZoomFactor(Math.max(0.5, Math.min(3, factor)));
+    const entry = panes.get(uid);
+    if (entry) {
+      // The renderer's factor is the HUMAN's zoom; compose it with the host
+      // window's base zoom (1.2 on Linux) instead of overwriting it.
+      entry.userZoom = Math.max(0.5, Math.min(3, factor));
+      applyPaneZoom(entry);
+    }
   });
 
   ipcMain.on(
