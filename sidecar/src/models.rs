@@ -64,6 +64,10 @@ pub const OLLAMA_CURATED: &[&str] = &[
     "gemma4:12b",
     "gemma4:cloud",
     "gemma4:31b-cloud",
+    // GLM 5.x — 5.3-flash released 2026-08-27 (open weights + Ollama cloud tag).
+    "glm-5.3-flash",
+    "glm-5.3-flash:cloud",
+    "glm-5.2:cloud",
     "ornith:latest",
 ];
 
