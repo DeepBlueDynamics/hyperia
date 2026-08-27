@@ -672,18 +672,12 @@ export default class Term extends React.PureComponent<
       this.term.attachCustomKeyEventHandler(this.keyboardHandler);
       this.term.loadAddon(this.fitAddon);
       this.term.loadAddon(this.searchAddon);
-      this.term.loadAddon(
-        new WebLinksAddon((event, uri) => this.handleLinkActivate(event, uri), {
-          // Track the hovered URL so a right-click can offer link actions.
-          hover: (_e: MouseEvent, uri: string) => {
-            this._hoveredLink = uri;
-          },
-          leave: () => {
-            this._hoveredLink = null;
-          }
-        })
-      );
-      // Custom link provider for URLs that wrap across multiple rows
+      // Custom link provider for URLs that wrap across multiple rows, live
+      // inside box-drawing frames, or contain balanced parens (wiki/DDG(X)).
+      // Registered BEFORE WebLinksAddon: xterm consults providers in
+      // registration order and the addon's simpler regex would otherwise
+      // shadow these links with truncated ones. The addon (loaded below)
+      // stays as a backstop for anything this provider misses.
       this.term.registerLinkProvider({
         provideLinks: (rowIndex: number, callback: (links: any[] | undefined) => void) => {
           const buffer = this.term.buffer.active;
@@ -700,21 +694,19 @@ export default class Term extends React.PureComponent<
             trimmedText: string;
             charCols: number[];
           };
-          let segments: Segment[] = [];
+          const segments: Segment[] = [];
+
+          // Box-drawing borders (Claude/agent TUI frames) that must be
+          // stripped from row edges so a URL inside a │ … │ box, or one that
+          // wraps across box rows, still reads as one clean run.
+          const isBorder = (ch: string) => /^[│┃|╎╏║]$/.test(ch);
+          const isSpace = (ch: string) => /^\s+$/.test(ch);
 
           for (let r = startRow; r <= endRow; r++) {
             const line = buffer.getLine(r);
             if (!line) continue;
 
-            // If this line is not a wrap continuation and we already started
-            // collecting, reset — wrapped runs are bounded.
-            if (r > startRow && !line.isWrapped && segments.length > 0) {
-              // If our hovered row is already in this run, stop here.
-              if (segments.some((s) => s.row === rowIndex)) break;
-              segments = [];
-            }
-
-            // Pull each cell text + its column index, dropping trailing whitespace.
+            // Pull each cell text + its column index.
             const charCols: number[] = [];
             const chars: string[] = [];
             for (let c = 0; c < line.length; c++) {
@@ -726,16 +718,38 @@ export default class Term extends React.PureComponent<
                 charCols.push(c);
               }
             }
-            // Trim trailing whitespace
-            while (chars.length > 0 && /^\s+$/.test(chars[chars.length - 1])) {
+            const dropLast = () => {
               chars.pop();
               charCols.pop();
+            };
+            const dropFirst = () => {
+              chars.shift();
+              charCols.shift();
+            };
+            // Trim: trailing spaces, then a trailing border + its padding;
+            // leading spaces, then a leading border + its padding. Agent
+            // output wraps URLs inside frames with indentation — all of that
+            // is chrome, not content.
+            while (chars.length > 0 && isSpace(chars[chars.length - 1])) dropLast();
+            if (chars.length > 0 && isBorder(chars[chars.length - 1])) {
+              dropLast();
+              while (chars.length > 0 && isSpace(chars[chars.length - 1])) dropLast();
             }
-            const trimmedText = chars.join('');
-            segments.push({row: r, trimmedText, charCols});
+            while (chars.length > 0 && isSpace(chars[0])) dropFirst();
+            if (chars.length > 0 && isBorder(chars[0])) {
+              dropFirst();
+              while (chars.length > 0 && isSpace(chars[0])) dropFirst();
+            }
+            segments.push({row: r, trimmedText: chars.join(''), charCols});
           }
 
-          // Concatenate trimmed segments — wrapped continuations join cleanly.
+          // Concatenate segments. A row joins the previous one SEAMLESSLY only
+          // when the previous combined text ends mid-URL (a URL run touching
+          // end-of-row) or xterm marks the row as a soft-wrap continuation;
+          // otherwise a newline separator keeps unrelated rows from gluing.
+          // This is what makes agent-printed wraps (real newline + indent)
+          // link correctly: "…/trump-\n    unveils-…" reads as one URL.
+          const tailUrlRegex = /https?:\/\/[^\s<>"']*$/;
           let combined = '';
           const segOffsets: {
             row: number;
@@ -743,6 +757,16 @@ export default class Term extends React.PureComponent<
             charCols: number[];
           }[] = [];
           for (const seg of segments) {
+            if (combined.length > 0) {
+              const line = buffer.getLine(seg.row);
+              const softWrapped = !!line?.isWrapped;
+              // Join only when the trailing URL fragment ends in a character
+              // that suggests continuation (-/_.=&?%~+). A URL that simply
+              // ENDS at end-of-line must NOT glue to the next bullet.
+              const tail = combined.match(tailUrlRegex);
+              const joinsUrl = !!tail && /[-/_.=&?%~+]$/.test(tail[0]) && seg.trimmedText.length > 0;
+              if (!softWrapped && !joinsUrl) combined += '\n';
+            }
             segOffsets.push({
               row: seg.row,
               offset: combined.length,
@@ -751,12 +775,36 @@ export default class Term extends React.PureComponent<
             combined += seg.trimmedText;
           }
 
-          // Match URLs
-          const urlRegex = /https?:\/\/[^\s<>'")\]}>]+/g;
+          // Match URLs. The candidate charset ALLOWS )]} — then trailing
+          // punctuation is trimmed with paren-balance awareness, so
+          // "(https://…/DDG(X))" yields "https://…/DDG(X)" instead of
+          // amputating at the first close-paren.
+          const urlRegex = /https?:\/\/[^\s<>"']+/g;
+          const trimUrl = (raw: string): string => {
+            let url = raw;
+            for (;;) {
+              const last = url[url.length - 1];
+              if (/[.,;:!?]/.test(last)) {
+                url = url.slice(0, -1);
+                continue;
+              }
+              const pairs: Record<string, string> = {')': '(', ']': '[', '}': '{'};
+              if (pairs[last]) {
+                const open = url.split(pairs[last]).length - 1;
+                const close = url.split(last).length - 1;
+                if (close > open) {
+                  url = url.slice(0, -1);
+                  continue;
+                }
+              }
+              return url;
+            }
+          };
           let match;
           const links: any[] = [];
           while ((match = urlRegex.exec(combined)) !== null) {
-            const url = match[0];
+            const url = trimUrl(match[0]);
+            if (url.length < 10) continue;
             const matchStart = match.index;
             const matchEnd = matchStart + url.length;
 
@@ -806,6 +854,17 @@ export default class Term extends React.PureComponent<
           callback(links.length > 0 ? links : undefined);
         }
       });
+      this.term.loadAddon(
+        new WebLinksAddon((event, uri) => this.handleLinkActivate(event, uri), {
+          // Track the hovered URL so a right-click can offer link actions.
+          hover: (_e: MouseEvent, uri: string) => {
+            this._hoveredLink = uri;
+          },
+          leave: () => {
+            this._hoveredLink = null;
+          }
+        })
+      );
       // OSC 52 clipboard: programs like grok, tmux, and vim/neovim copy to the
       // system clipboard via ESC ] 52 ; c ; <base64> BEL. xterm.js does NOT handle
       // OSC 52 by default, so these copies silently no-op in Hyperia even though
