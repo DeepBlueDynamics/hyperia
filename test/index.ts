@@ -18,11 +18,13 @@ test.before(async () => {
       break;
 
     case 'darwin': {
-      // electron-builder's output dir varies by arch (mac / mac-arm64 /
-      // mac-universal) — CI runners have moved to arm64, so probe them all.
-      const candidates = ['mac', 'mac-arm64', 'mac-universal'].map((dir) =>
-        path.join(__dirname, `../dist/${dir}/Hyperia.app/Contents/MacOS/Hyperia`)
-      );
+      // electron-builder emits BOTH arch dirs (mac = x64, mac-arm64) — probe
+      // HOST arch first. Launching the x64 app on an arm64 runner runs under
+      // Rosetta, whose cold-start translation hangs electron.launch past the
+      // suite timeout (the "mac E2E flake" that went solid-red).
+      const dirs =
+        process.arch === 'arm64' ? ['mac-arm64', 'mac-universal', 'mac'] : ['mac', 'mac-universal', 'mac-arm64'];
+      const candidates = dirs.map((dir) => path.join(__dirname, `../dist/${dir}/Hyperia.app/Contents/MacOS/Hyperia`));
       pathToBinary = candidates.find((p) => fs.existsSync(p)) ?? candidates[0];
       break;
     }
