@@ -439,8 +439,10 @@ app.on('second-instance', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const {readFileSync} = require('fs') as typeof import('fs');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const {join} = require('path') as typeof import('path');
-    const diskPkg = JSON.parse(readFileSync(join(app.getAppPath(), 'package.json'), 'utf8')) as {version?: string};
+    const pathModule = require('path') as typeof import('path');
+    const diskPkg = JSON.parse(
+      readFileSync(pathModule.join(app.getAppPath(), 'package.json'), 'utf8')
+    ) as {version?: string};
     if (diskPkg?.version && diskPkg.version !== app.getVersion()) {
       console.log(
         `[update] on-disk v${diskPkg.version} != running v${app.getVersion()} — handing over to the new binary`
