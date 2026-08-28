@@ -123,6 +123,58 @@ set -a && source .signing.env && set +a && npx electron-builder --config.npmRebu
 - nuts.services side: `nuts-auth` has an open `return_url` redirect;
   `nuts-tunnel` names are hijackable — known, unfixed, other repo.
 
+## File map — what to read, in what order
+
+Tier 1 — orient (read fully, ~30 min):
+- `docs/architecture.md` — the system in one page.
+- `docs/mcp-tools.md` — the agent-facing API surface (~75 tools).
+- `docs/configuration.md` — every setting; written to be agent-usable.
+- `docs/building.md` + `docs/developing.md` — build ritual, dev loop, hangs.
+- `CLAUDE.md` (repo root, untracked) — pane-control escape hatches.
+- `release-notes.md` — what shipped last and why.
+
+Tier 2 — sidecar (where agent-facing behavior lives; GREP, don't scroll):
+- `sidecar/src/mcp.rs` (~3.9k lines) — every `#[tool]` definition; grep the
+  tool name you care about.
+- `sidecar/src/main.rs` (~4.2k) — HTTP routes + the `enforce_*` consent
+  gates; the route table near the bottom is the endpoint index.
+- `sidecar/src/bridge.rs` (~2.4k) — session registry, `resolve_pane_uid`,
+  `authorize_drive/create`, screen buffers, pulse machinery.
+- `sidecar/src/perms.rs` — the consent store + perms.json persistence.
+- `sidecar/src/identity.rs` — token minting/resolution.
+- `sidecar/src/stream.rs` — `/ws/pane|pixels|wall` (Event Stream API;
+  spec in `plan/specs/EVENT_STREAM_API.md`). NOTE: `/ws/pane` is
+  unauthenticated read-WRITE — relevant to any exposure work.
+- `sidecar/src/audio.rs` + `tts.rs` — audio channel, Kokoro/ElevenLabs.
+
+Tier 3 — Electron main (the seam):
+- `app/bridge.ts` (~1.7k) — the sidecar→app command dispatcher; every
+  `case '<Cmd>'` is a capability. Layout sync (`updateSessionLayout`) here.
+- `app/index.ts` — boot order, single-instance lock + stale handover,
+  uncaught-exception guards, sidecar spawn.
+- `app/ui/window.ts` (~1.2k) — window creation, per-window rpc, layout-sync
+  intake, renderer-error logging.
+- `app/web-pane-manager.ts` — native WebContentsView web panes: bounds,
+  freeze-swap, zoom, auth toast, capture.
+
+Tier 4 — renderer (only when touching UI; the two giants punish scrolling):
+- `lib/index.tsx` — rpc handler registry, pane-style sanitizer, BSP layout
+  calc + `session layout sync` emitter. Read this one fully.
+- `lib/components/term.tsx` (~4.2k) — terminal component: xterm setup, link
+  provider, busy detection, drag/drop, watermarks. Grep by feature.
+- `lib/components/web-pane.tsx` (~3.5k) — web pane chrome: bounds reporting,
+  overlays, find, history, credential toast. Grep by feature.
+- `lib/components/term-group.tsx` — where per-pane styles merge into props.
+- `lib/permissions-bus.ts` — consent prompt/pill/toast plumbing (well-commented).
+
+Tier 5 — when relevant:
+- `.github/workflows/nodejs.yml` (PR gate) + `build.yml` (tag release).
+- `test/index.ts` — the E2E harness and its hard-won launch mechanics.
+- `plan/*.md` — epics and specs; `plan/agent-onboarding.md` — this file.
+
+Rule of thumb: docs first, then grep the tier-2/3 file that owns your
+feature. Nobody reads term.tsx top to bottom and stays sane.
+
 ## Communication with kord
 
 Lead with the outcome. Short sentences. No headers for simple answers. When
