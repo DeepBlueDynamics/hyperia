@@ -1,9 +1,11 @@
-import React, {forwardRef, useEffect, useRef, useCallback, useState} from 'react';
+import React, {forwardRef, useEffect, useMemo, useRef, useCallback, useState} from 'react';
 
 import type {TabsProps} from '../../typings/hyper';
 import rpc from '../rpc';
 import {ipcRenderer} from '../utils/ipc';
 import {decorate, getTabProps} from '../utils/plugins';
+import {dropIndexForX, reorderOffsets} from '../utils/tab-drag';
+import type {TabMetrics} from '../utils/tab-drag';
 
 import Tab_ from './tab';
 
@@ -12,9 +14,8 @@ const isMac = /Mac/.test(navigator.userAgent);
 
 const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   const {tabs = [], borderColor, onChange, onClose, onDescribe, fullScreen} = props;
-  const onMoveTab = (props as any).onMoveTab as ((fromUid: string, toIndex: number) => void) | undefined;
+  const {onMoveTab} = props;
   const listRef = useRef<HTMLUListElement>(null);
-  const dragUidRef = useRef<string | null>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
 
@@ -74,32 +75,106 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
     [updateScrollState]
   );
 
-  // Tab drag-to-reorder
-  const handleDragStart = useCallback((uid: string) => {
-    dragUidRef.current = uid;
+  // Tab drag-to-reorder.
+  //
+  // `drag.to` is the index the carried tab would land on if dropped now, so the
+  // strip can open the gap live instead of only committing on drop. It is
+  // derived from the pointer's x measured against `metricsRef` — a snapshot of
+  // the tabs' geometry taken at dragstart — and never from which tab the pointer
+  // happens to be over. That distinction matters: the tabs are being translated
+  // out of the way underneath the cursor, so hit-testing them would feed the
+  // positions we just produced back into the calculation that produced them, and
+  // the gap would oscillate between two slots.
+  const [drag, setDrag] = useState<{uid: string; from: number; to: number} | null>(null);
+  const metricsRef = useRef<TabMetrics | null>(null);
+
+  // Left edge of the list's scroll content, in viewport coordinates. Measuring
+  // against this rather than against the viewport keeps the snapshot valid if
+  // the strip is wheel-scrolled mid-drag.
+  const contentOrigin = (list: HTMLUListElement) => list.getBoundingClientRect().left - list.scrollLeft;
+
+  const measure = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return null;
+    const origin = contentOrigin(list);
+    const starts: number[] = [];
+    const widths: number[] = [];
+    list.querySelectorAll<HTMLElement>('.tab_tab').forEach((el) => {
+      const rect = el.getBoundingClientRect();
+      starts.push(rect.left - origin);
+      widths.push(rect.width);
+    });
+    return {starts, widths};
   }, []);
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
+  const indexForX = useCallback((clientX: number, from: number) => {
+    const list = listRef.current;
+    const metrics = metricsRef.current;
+    if (!list || !metrics) return from;
+    return dropIndexForX(metrics, from, clientX - contentOrigin(list));
   }, []);
 
-  const handleDrop = useCallback(
-    (targetUid: string) => {
-      const fromUid = dragUidRef.current;
-      dragUidRef.current = null;
-      if (!fromUid || fromUid === targetUid || !onMoveTab) return;
-      const targetIndex = tabs.findIndex((t) => t.uid === targetUid);
-      if (targetIndex >= 0) {
-        onMoveTab(fromUid, targetIndex);
-      }
+  const dragOffsets = useMemo(() => {
+    const metrics = metricsRef.current;
+    if (!drag || !metrics) return null;
+    return reorderOffsets(metrics, drag.from, drag.to);
+  }, [drag]);
+
+  const handleDragStart = useCallback(
+    (uid: string, index: number, e: React.DragEvent) => {
+      metricsRef.current = measure();
+      // A private type, deliberately not text/plain: nothing reads this payload
+      // (the reorder runs off `drag` state), and text/plain would make a tab
+      // released over a web pane paste the uid into whatever field is under the
+      // cursor. This mirrors the pane-band's application/x-hyperia-pane.
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('application/x-hyperia-tab', uid);
+      setDrag({uid, from: index, to: index});
     },
-    [tabs, onMoveTab]
+    [measure]
   );
 
-  const handleDragEnd = useCallback(() => {
-    dragUidRef.current = null;
+  // Bound on the <ul> rather than on each tab. .tab_dragging drops pointer-events
+  // while a drag is live, so these events are delivered straight to the list; if
+  // that ever stopped holding they would still bubble up from a tab and land
+  // here, and the result would be identical — both read the pointer's x, not the
+  // element under it.
+  const handleListDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (!drag) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const to = indexForX(e.clientX, drag.from);
+      if (to !== drag.to) {
+        setDrag({...drag, to});
+      }
+    },
+    [drag, indexForX]
+  );
+
+  const endDrag = useCallback(() => {
+    setDrag(null);
+    metricsRef.current = null;
   }, []);
+
+  const handleListDrop = useCallback(
+    (e: React.DragEvent) => {
+      if (!drag) return;
+      e.preventDefault();
+      // A tab can close on its own mid-drag — a shell exits, an agent finishes —
+      // which shifts every index the dragstart snapshot was built from. Commit
+      // only while the tab that was picked up is still where we left it.
+      if (drag.to !== drag.from && tabs[drag.from]?.uid === drag.uid) {
+        onMoveTab?.(drag.uid, drag.to);
+      }
+      // Clearing the drag in the same batch as the reorder drops .tab_dragging,
+      // and with it the transition, on the very commit that renders the new
+      // order. The transforms go to zero with no animation, so the tabs don't
+      // visibly slide back through the positions they just settled into.
+      endDrag();
+    },
+    [drag, tabs, onMoveTab, endDrag]
+  );
 
   return (
     <nav className="tabs_nav" ref={ref}>
@@ -114,6 +189,8 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         ref={listRef}
         onWheel={handleWheel}
         onScroll={updateScrollState}
+        onDragOver={handleListDragOver}
+        onDrop={handleListDrop}
         className={`tabs_list ${fullScreen && isMac ? 'tabs_fullScreen' : ''}`}
       >
         {tabs.map((tab, i) => {
@@ -156,10 +233,14 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             onSelect: onChange.bind(null, uid),
             onClose: onClose.bind(null, uid),
             onDescribe: (desc: string) => onDescribe(uid, desc),
-            onDragStart: () => handleDragStart(uid),
-            onDragOver: handleDragOver,
-            onDrop: () => handleDrop(uid),
-            onDragEnd: handleDragEnd
+            onDragStart: (e: React.DragEvent) => handleDragStart(uid, i, e),
+            // Fires on the source tab even after pointer-events are dropped, and
+            // covers the drops the <ul> never sees — released outside the strip,
+            // or cancelled with Escape.
+            onDragEnd: endDrag,
+            isDragging: drag !== null,
+            isDragSource: drag?.uid === uid,
+            dragOffset: dragOffsets?.[i] ?? 0
           });
           return <Tab key={`tab-${uid}`} {...tabProps} />;
         })}

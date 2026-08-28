@@ -1,4 +1,4 @@
-import React, {forwardRef, useState} from 'react';
+import React, {forwardRef, useRef} from 'react';
 
 import type {HeaderProps} from '../../typings/hyper';
 import {decorate, getTabsProps} from '../utils/plugins';
@@ -8,19 +8,26 @@ import Tabs_ from './tabs';
 const Tabs = decorate(Tabs_, 'Tabs');
 
 const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
-  const [headerMouseDownWindowX, setHeaderMouseDownWindowX] = useState<number>(0);
-  const [headerMouseDownWindowY, setHeaderMouseDownWindowY] = useState<number>(0);
+  // Where the window sat when the current press started, used below to swallow a
+  // tab switch that was really a titlebar drag. Refs recorded on the *capture*
+  // phase, not state set on bubble: a tab now selects on mousedown (tab.tsx), so
+  // the selection runs inside the very same mousedown that records this. State
+  // would still hold the previous press's coordinates at that point — on the
+  // first press after launch that is (0, 0), which never matches a real window
+  // position, and every tab switch would be swallowed.
+  const headerMouseDownWindowX = useRef(0);
+  const headerMouseDownWindowY = useRef(0);
 
   const onChangeIntent = (active: string) => {
-    if (window.screenX !== headerMouseDownWindowX || window.screenY !== headerMouseDownWindowY) {
+    if (window.screenX !== headerMouseDownWindowX.current || window.screenY !== headerMouseDownWindowY.current) {
       return;
     }
     props.onChangeTab(active);
   };
 
   const handleHeaderMouseDown = () => {
-    setHeaderMouseDownWindowX(window.screenX);
-    setHeaderMouseDownWindowY(window.screenY);
+    headerMouseDownWindowX.current = window.screenX;
+    headerMouseDownWindowY.current = window.screenY;
   };
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -73,7 +80,7 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
   return (
     <header
       className={`header_header ${isMac && 'header_headerRounded'}`}
-      onMouseDown={handleHeaderMouseDown}
+      onMouseDownCapture={handleHeaderMouseDown}
       onMouseUp={() => window.focusActiveTerm()}
       onDoubleClick={handleMaximizeClick}
       ref={ref}
