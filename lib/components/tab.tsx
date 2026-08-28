@@ -110,6 +110,12 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   };
 
   const startRename = () => {
+    // No renaming while pinned — unpin, rename, repin. The pinned initials are
+    // a temporary display form; keeping the editor out avoids confusing the
+    // initials for the real (unchanged) name.
+    if (props.isPinned) {
+      return;
+    }
     const currentName = pendingName ?? (tabName || description || props.text) ?? '';
     const parsed = parseTabName(currentName, isWebPane);
 
@@ -163,6 +169,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     menu.append(
       new MenuItem({
         label: 'Rename',
+        // Disabled rather than hidden while pinned, so the "unpin to rename"
+        // affordance stays discoverable.
+        enabled: !props.isPinned,
         click: () => {
           startRename();
         }
@@ -170,8 +179,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     );
 
     // Only offer the revert when the human actually typed a custom name —
-    // agent/auto tab names (manualTabName=false) shouldn't show it.
-    if (props.manualTabName || pendingName) {
+    // agent/auto tab names (manualTabName=false) shouldn't show it. It's a
+    // rename-class action, so it sits out while the tab is pinned too.
+    if ((props.manualTabName || pendingName) && !props.isPinned) {
       menu.append(
         new MenuItem({
           label: 'Use Automatic Name',
