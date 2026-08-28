@@ -481,6 +481,14 @@ rpc.on('move right req', () => {
   store_.dispatch(uiActions.moveRight());
 });
 
+rpc.on('move tab left req', () => {
+  store_.dispatch(uiActions.moveTabLeft());
+});
+
+rpc.on('move tab right req', () => {
+  store_.dispatch(uiActions.moveTabRight());
+});
+
 rpc.on('move jump req', (index) => {
   store_.dispatch(uiActions.moveTo(index));
 });

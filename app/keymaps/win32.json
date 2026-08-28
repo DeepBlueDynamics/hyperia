@@ -22,6 +22,8 @@
   "tab:prev": [
     "ctrl+shift+tab"
   ],
+  "tab:moveLeft": "ctrl+shift+pageup",
+  "tab:moveRight": "ctrl+shift+pagedown",
   "tab:jump:prefix": "ctrl",
   "pane:next": "ctrl+pageup",
   "pane:prev": "ctrl+pagedown",

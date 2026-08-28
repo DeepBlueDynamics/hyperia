@@ -51,6 +51,23 @@ const windowMenu = (
           {
             type: 'separator'
           },
+          {
+            label: 'Move Left',
+            accelerator: commandKeys['tab:moveLeft'],
+            click: (item, focusedWindow) => {
+              execCommand('tab:moveLeft', focusedWindow);
+            }
+          },
+          {
+            label: 'Move Right',
+            accelerator: commandKeys['tab:moveRight'],
+            click: (item, focusedWindow) => {
+              execCommand('tab:moveRight', focusedWindow);
+            }
+          },
+          {
+            type: 'separator'
+          },
           ...tabJump
         ]
       },

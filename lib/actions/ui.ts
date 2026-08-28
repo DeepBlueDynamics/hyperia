@@ -254,6 +254,34 @@ export function moveRight() {
   };
 }
 
+// Move the active tab itself one position left/right (wrapping at the ends),
+// reusing the drag-to-reorder reducer. Focus follows the tab — activeRootGroup
+// is untouched by TERM_GROUP_REORDER.
+function moveActiveTab(delta: -1 | 1) {
+  return (dispatch: HyperDispatch, getState: () => HyperState) => {
+    const state = getState();
+    const uid = state.termGroups.activeRootGroup;
+    if (!uid) {
+      return;
+    }
+    const groupUids = getGroupUids(state);
+    const index = groupUids.indexOf(uid);
+    if (index < 0 || groupUids.length < 2) {
+      return;
+    }
+    const toIndex = (index + delta + groupUids.length) % groupUids.length;
+    dispatch({type: 'TERM_GROUP_REORDER', fromUid: uid, toIndex} as any);
+  };
+}
+
+export function moveTabLeft() {
+  return moveActiveTab(-1);
+}
+
+export function moveTabRight() {
+  return moveActiveTab(1);
+}
+
 export function moveTo(i: number | 'last') {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     if (i === 'last') {
