@@ -24,7 +24,7 @@
   ],
   "artifactName": "${productName}-${version}-${arch}.${ext}",
   "linux": {
-    "icon": "build/icon.png",
+    "icon": "build/icons",
     "category": "TerminalEmulator",
     "target": [
       "deb",
