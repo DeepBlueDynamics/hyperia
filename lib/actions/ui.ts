@@ -256,20 +256,24 @@ export function moveRight() {
 
 // Move the active tab itself one position left/right (wrapping at the ends),
 // reusing the drag-to-reorder reducer. Focus follows the tab — activeRootGroup
-// is untouched by TERM_GROUP_REORDER.
+// is untouched by TERM_GROUP_REORDER. Pinned tabs sit in a fixed block on the
+// far left: they never move, and unpinned tabs wrap within the unpinned range.
 function moveActiveTab(delta: -1 | 1) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     const state = getState();
     const uid = state.termGroups.activeRootGroup;
-    if (!uid) {
+    if (!uid || state.termGroups.termGroups[uid]?.pinned) {
       return;
     }
-    const groupUids = getGroupUids(state);
+    const rootGroups = getRootGroups(state);
+    const groupUids = rootGroups.map((g) => g.uid);
+    const pinnedCount = rootGroups.filter((g) => g.pinned).length;
     const index = groupUids.indexOf(uid);
-    if (index < 0 || groupUids.length < 2) {
+    const unpinnedSpan = groupUids.length - pinnedCount;
+    if (index < 0 || unpinnedSpan < 2) {
       return;
     }
-    const toIndex = (index + delta + groupUids.length) % groupUids.length;
+    const toIndex = pinnedCount + ((index - pinnedCount + delta + unpinnedSpan) % unpinnedSpan);
     dispatch({type: 'TERM_GROUP_REORDER', fromUid: uid, toIndex} as any);
   };
 }

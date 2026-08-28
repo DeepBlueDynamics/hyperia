@@ -120,8 +120,16 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
     return reorderOffsets(metrics, drag.from, drag.to);
   }, [drag]);
 
+  // Pinned tabs occupy the leftmost slots and sit outside drag-to-reorder:
+  // they can't be picked up, and an unpinned tab can't drop among them.
+  const pinnedCount = useMemo(() => tabs.filter((t) => t.pinned).length, [tabs]);
+
   const handleDragStart = useCallback(
     (uid: string, index: number, e: React.DragEvent) => {
+      if (tabs[index]?.pinned) {
+        e.preventDefault();
+        return;
+      }
       metricsRef.current = measure();
       // A private type, deliberately not text/plain: nothing reads this payload
       // (the reorder runs off `drag` state), and text/plain would make a tab
@@ -131,7 +139,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
       e.dataTransfer.setData('application/x-hyperia-tab', uid);
       setDrag({uid, from: index, to: index});
     },
-    [measure]
+    [measure, tabs]
   );
 
   // Bound on the <ul>, not on each tab: whichever tab the pointer is actually
@@ -144,12 +152,12 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
       if (!drag) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      const to = indexForX(e.clientX, drag.from);
+      const to = Math.max(indexForX(e.clientX, drag.from), pinnedCount);
       if (to !== drag.to) {
         setDrag({...drag, to});
       }
     },
-    [drag, indexForX]
+    [drag, indexForX, pinnedCount]
   );
 
   const endDrag = useCallback(() => {
@@ -228,6 +236,8 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             groupTabName,
             manualTabName,
             disableTitleInheritance,
+            isPinned: !!tab.pinned,
+            onPin: () => props.onPinTab?.(uid, !tab.pinned),
             onToggleTitleInheritance: () => (props as any).onToggleTitleInheritance?.(uid),
             defaultProfile: props.defaultProfile,
             onSelect: onChange.bind(null, uid),

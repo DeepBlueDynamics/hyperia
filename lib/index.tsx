@@ -878,7 +878,8 @@ rpc.on('get-layout-state-req', () => {
         children: g.children ? g.children.asMutable() : [],
         webUrl: (g as any).webUrl,
         webName: (g as any).webName,
-        tabName: g.tabName
+        tabName: g.tabName,
+        pinned: (g as any).pinned
       };
     }
   });
