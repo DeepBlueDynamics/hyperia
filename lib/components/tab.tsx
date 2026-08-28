@@ -387,13 +387,18 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
 
         /* On while any tab in the strip is being dragged. The slide is what makes
            the reorder readable — tabs move aside to show where the drop lands.
-           pointer-events is dropped so the drag events keep hitting the <ul>: the
-           tabs are travelling under the cursor, and hit-testing them would feed
-           their moved positions back into the calculation that moved them, so
-           the gap would flip back and forth. tabs.tsx measures instead. */
+
+           Do NOT add pointer-events:none here. It looks right — the tabs are
+           sliding under the cursor, so making them transparent to hit-testing
+           seems tidy — but applying it to the drag source as dragstart fires
+           makes Chromium abort the drag immediately: you get dragstart followed
+           straight by dragend, no dragover, and tabs stop moving altogether.
+           It is also unnecessary. tabs.tsx derives the drop index from the
+           pointer's clientX against a snapshot taken at dragstart, never from
+           the element under the cursor, and its handlers sit on the <ul>, which
+           receives these events by bubbling whatever they hit first. */
         .tab_dragging {
           transition: transform 150ms cubic-bezier(0.2, 0, 0, 1);
-          pointer-events: none;
         }
 
         /* The tab being carried. The OS draws the drag image under the cursor;

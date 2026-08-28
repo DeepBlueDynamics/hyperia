@@ -134,11 +134,11 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
     [measure]
   );
 
-  // Bound on the <ul> rather than on each tab. .tab_dragging drops pointer-events
-  // while a drag is live, so these events are delivered straight to the list; if
-  // that ever stopped holding they would still bubble up from a tab and land
-  // here, and the result would be identical — both read the pointer's x, not the
-  // element under it.
+  // Bound on the <ul>, not on each tab: whichever tab the pointer is actually
+  // over, the event bubbles up to here. That is deliberate — the tabs are being
+  // translated under the cursor, and the handler must not care which one it hit,
+  // only where the pointer is. (Making the tabs pointer-events:none to force the
+  // events here directly kills the native drag outright; see tab.tsx.)
   const handleListDragOver = useCallback(
     (e: React.DragEvent) => {
       if (!drag) return;
