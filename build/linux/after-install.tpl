@@ -3,6 +3,31 @@
 # substituted by electron-builder at packaging time.
 set -e
 
+# Kill any still-running Hyperia from the previous version — including the
+# tray keep-alive agent that outlives all windows and the sidecar daemon.
+# After an upgrade those old processes run from deleted inodes: renderers
+# crash on spawn, the sidecar holds its port, and the single-instance lock
+# stops the freshly installed binary from starting. TERM first for a clean
+# shutdown, KILL only for stragglers. Best-effort: never fail the install.
+if command -v pkill >/dev/null 2>&1; then
+  pkill -TERM -f '^/opt/${productFilename}/${executable}' 2>/dev/null || true
+  pkill -TERM -f '^/opt/${productFilename}/resources/sidecar/' 2>/dev/null || true
+  for _ in 1 2 3 4 5; do
+    pgrep -f '^/opt/${productFilename}/' >/dev/null 2>&1 || break
+    sleep 1
+  done
+  pkill -KILL -f '^/opt/${productFilename}/' 2>/dev/null || true
+fi
+
+# Refresh desktop caches so the launcher/taskbar picks up the Hyperia icon
+# right away instead of showing the generic gear until the next re-login.
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+fi
+
 # Electron's SUID sandbox helper must be owned by root and mode 4755 or
 # Electron aborts at startup with:
 #   FATAL: sandbox/linux/suid/client/setuid_sandbox_host.cc:166
