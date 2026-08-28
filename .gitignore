@@ -103,3 +103,6 @@ __pycache__/
 tools/deck-mcp/apps.json
 
 CLAUDE.md
+
+# Agent-local state (memory, skills) — local notes, not repo material
+.claude/
