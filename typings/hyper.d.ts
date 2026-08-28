@@ -252,10 +252,15 @@ export type TabProps = {
   onClose: () => void;
   onSelect: () => void;
   onDescribe: (description: string) => void;
-  onDragStart?: () => void;
-  onDragOver?: (event: React.DragEvent) => void;
-  onDrop?: () => void;
+  onDragStart?: (event: React.DragEvent) => void;
   onDragEnd?: () => void;
+  // Reorder animation. `isDragging` is true on every tab while any tab in the
+  // strip is being dragged (it turns the slide transition on); `isDragSource`
+  // marks the one tab being carried; `dragOffset` is the pixel delta from the
+  // tab's resting position to the slot it currently belongs in.
+  isDragging?: boolean;
+  isDragSource?: boolean;
+  dragOffset?: number;
   text: string;
   tabName: string;
   description: string;
@@ -306,6 +311,7 @@ export type TabsProps = {
   defaultProfile: string;
   profiles: configOptions['profiles'];
   openNewTab: (profile: string) => void;
+  onMoveTab?: (fromUid: string, toIndex: number) => void;
 } & extensionProps;
 
 export type NotificationProps = {

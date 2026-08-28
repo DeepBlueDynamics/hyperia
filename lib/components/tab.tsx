@@ -54,7 +54,8 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     description,
     isWebPane,
     webUrl,
-    defaultProfile
+    defaultProfile,
+    dragOffset
   } = props;
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
@@ -70,10 +71,22 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     }
   }, [renaming]);
 
-  const handleClick = (event: React.MouseEvent) => {
-    const isLeftClick = event.nativeEvent.which === 1;
-
-    if (isLeftClick && !props.isActive) {
+  // Activate on pointer-down rather than on click. A browser tab strip puts the
+  // page on screen the instant you press a tab, so when you then drag that tab
+  // to reorder it you are looking at the page you are carrying. Selecting on
+  // release meant the whole drag happened while the *previous* tab's page was
+  // still displayed, and the page only appeared once you let go.
+  //
+  // The close button and the rename editor live inside the same <li>, and a
+  // press on either must not steal the selection.
+  const handleMouseDown = (event: React.MouseEvent) => {
+    if (event.button !== 0 || renaming) {
+      return;
+    }
+    if ((event.target as Element).closest?.('.tab_icon, .tab_renameContainer')) {
+      return;
+    }
+    if (!props.isActive) {
       props.onSelect();
     }
   };
@@ -246,18 +259,24 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     <>
       <li
         onClick={props.onClick}
+        onMouseDown={handleMouseDown}
         onContextMenu={handleContextMenu}
         draggable
         onDragStart={props.onDragStart}
-        onDragOver={props.onDragOver}
-        onDrop={props.onDrop}
         onDragEnd={props.onDragEnd}
-        style={{borderColor}}
+        style={{
+          borderColor,
+          // Slide this tab aside to open the gap the dragged tab will drop into.
+          // A transform, so it never disturbs layout or the strip's scrollWidth.
+          transform: dragOffset ? `translateX(${dragOffset}px)` : undefined
+        }}
         className={`tab_tab ${isFirst ? 'tab_first' : ''} ${isActive ? 'tab_active' : ''} ${
           isFirst && isActive ? 'tab_firstActive' : ''
         } ${hasActivity ? 'tab_hasActivity' : ''} ${hasBell && !isActive ? 'tab_attention' : ''} ${
           isWebPane ? 'tab_webPane' : ''
-        } ${isFirstRun ? 'tab_firstRun' : ''}`}
+        } ${isFirstRun ? 'tab_firstRun' : ''} ${props.isDragging ? 'tab_dragging' : ''} ${
+          props.isDragSource ? 'tab_dragSource' : ''
+        }`}
         ref={ref}
       >
         <div
@@ -272,7 +291,6 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         {props.customChildrenBefore}
         <span
           className={`tab_text ${isLast ? 'tab_textLast' : ''} ${isActive ? 'tab_textActive' : ''}`}
-          onClick={handleClick}
           onMouseUp={handleMouseUp}
         >
           {agentDotColor && (
@@ -367,8 +385,26 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           cursor: grabbing;
         }
 
-        .tab_tab[draggable]:drag-over {
-          border-left: 2px solid var(--border-focus);
+        /* On while any tab in the strip is being dragged. The slide is what makes
+           the reorder readable — tabs move aside to show where the drop lands.
+
+           Do NOT add pointer-events:none here. It looks right — the tabs are
+           sliding under the cursor, so making them transparent to hit-testing
+           seems tidy — but applying it to the drag source as dragstart fires
+           makes Chromium abort the drag immediately: you get dragstart followed
+           straight by dragend, no dragover, and tabs stop moving altogether.
+           It is also unnecessary. tabs.tsx derives the drop index from the
+           pointer's clientX against a snapshot taken at dragstart, never from
+           the element under the cursor, and its handlers sit on the <ul>, which
+           receives these events by bubbling whatever they hit first. */
+        .tab_dragging {
+          transition: transform 150ms cubic-bezier(0.2, 0, 0, 1);
+        }
+
+        /* The tab being carried. The OS draws the drag image under the cursor;
+           this is the hole it left, dimmed so it reads as a placeholder. */
+        .tab_dragSource {
+          opacity: 0.4;
         }
 
         .tab_tab:hover {
