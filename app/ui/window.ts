@@ -48,7 +48,7 @@ import {getAppIcon} from '../utils/icon';
 import {setRendererType, unsetRendererType} from '../utils/renderer-utils';
 import toElectronBackgroundColor from '../utils/to-electron-background-color';
 import {initWebPaneManager, destroyPanesForWindow, setWindowWebPanesSuppressed} from '../web-pane-manager';
-import {deliverLayoutReply} from '../workspace';
+import {deliverLayoutReply, saveLastSession} from '../workspace';
 
 import contextMenuTemplate from './contextmenu';
 
@@ -959,17 +959,30 @@ export function newWindow(
     e.preventDefault();
     isClosingAndWaitingForSave = true;
     (window as any).isClosing = true;
-    rpc.emit('get-layout-state-req', undefined);
-    // Failsafe: the close used to hang waiting for the renderer's
-    // 'layout-state-reply' — if that never arrived the window stayed open and
-    // you had to click close a SECOND time. Saving layout is best-effort; close
-    // the window regardless after a short grace period.
+    // Save the WHOLE app as the 'last-session' workspace through the sidecar's
+    // correlated pipeline (#171) — every window + geometry, not just this one.
+    // If the sidecar is unreachable, fall back to the legacy single-window
+    // savedLayoutState write (the no-requestId reply path below).
+    void saveLastSession('close').then((ok) => {
+      if (ok) {
+        if (isClosingAndWaitingForSave && !window.isDestroyed()) {
+          deleteSessions();
+          window.destroy();
+        }
+      } else {
+        rpc.emit('get-layout-state-req', undefined);
+      }
+    });
+    // Failsafe: the close used to hang waiting for the save — if it never
+    // completes the window stayed open and you had to click close a SECOND
+    // time. Saving layout is best-effort; close regardless after a grace
+    // period (capture itself is bounded at 2.5s).
     setTimeout(() => {
       if (isClosingAndWaitingForSave && !window.isDestroyed()) {
         deleteSessions();
         window.destroy();
       }
-    }, 600);
+    }, 4000);
   });
 
   rpc.on('layout-state-reply', (layoutState) => {

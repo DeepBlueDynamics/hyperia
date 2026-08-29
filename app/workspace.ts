@@ -14,13 +14,16 @@
  * are not touched here (window.ts routes them to the old writer).
  */
 import {randomBytes} from 'crypto';
-import {existsSync} from 'fs';
+import {existsSync, readFileSync, writeFileSync} from 'fs';
+import {homedir} from 'os';
+import {join} from 'path';
 
 import {app, screen} from 'electron';
 import type {BrowserWindow} from 'electron';
 
 import {v4 as uuidv4} from 'uuid';
 
+import {createStickyNote, listOpenStickyRefs, readAllNotes} from './sticky';
 import {boundsAreVisible} from './window-state';
 
 export type WindowGeometry = {
@@ -35,10 +38,14 @@ export type WindowGeometry = {
 
 export type CapturedWindow = {geometry: WindowGeometry; layout: Record<string, any>};
 
+export type StickyRefSnapshot = {id: string; x: number; y: number; width: number; height: number; open: boolean};
+
 export type CaptureResult = {
   windows: CapturedWindow[];
   /** BrowserWindow ids that never replied within the timeout. */
   missing: number[];
+  /** Open sticky notes at capture time — references + live bounds only. */
+  stickys: StickyRefSnapshot[];
 };
 
 type PendingCapture = {
@@ -117,7 +124,13 @@ const finish = (requestId: string) => {
   pending.delete(requestId);
   clearTimeout(capture.timer);
   const missing = [...capture.expected].filter((id) => !capture.collected.has(id));
-  capture.resolve({windows: [...capture.collected.values()], missing});
+  let stickys: StickyRefSnapshot[] = [];
+  try {
+    stickys = listOpenStickyRefs();
+  } catch {
+    // Sticky capture is best-effort; a workspace without sticky refs is valid.
+  }
+  capture.resolve({windows: [...capture.collected.values()], missing, stickys});
 };
 
 /**
@@ -204,7 +217,12 @@ export const annotateMissingResources = (
   return {layout: {...layout, sessions}, notices};
 };
 
-export type RestoredSummary = {created: number; notices: string[]};
+export type RestoredSummary = {
+  created: number;
+  notices: string[];
+  stickysReopened: number;
+  stickysSkipped: string[];
+};
 
 /**
  * Apply a workspace file: one NEW BrowserWindow per saved window, layout fed
@@ -213,6 +231,7 @@ export type RestoredSummary = {created: number; notices: string[]};
  */
 export const restoreWorkspace = (ws: {
   windows: Array<{geometry: any; layout: Record<string, any>}>;
+  stickys?: StickyRefSnapshot[];
 }): RestoredSummary => {
   const createWindow = (app as any).createWindow as
     | ((
@@ -250,13 +269,121 @@ export const restoreWorkspace = (ws: {
     }
     created += 1;
   }
-  return {created, notices: allNotices};
+
+  // Sticky refs: reopen notes that still exist at their saved bounds
+  // (createStickyNote loads content from notes.json and display-clamps);
+  // notes deleted since the save are skipped — preview already said so.
+  let stickysReopened = 0;
+  const stickysSkipped: string[] = [];
+  const refs = ws.stickys || [];
+  if (refs.length > 0) {
+    const known = new Set(readAllNotes().map((n) => n.id));
+    for (const ref of refs) {
+      if (!known.has(ref.id)) {
+        stickysSkipped.push(ref.id);
+        continue;
+      }
+      try {
+        createStickyNote({id: ref.id, x: ref.x, y: ref.y, width: ref.width, height: ref.height});
+        stickysReopened += 1;
+      } catch (err) {
+        stickysSkipped.push(ref.id);
+        allNotices.push(`sticky ${ref.id}: reopen failed (${String(err)})`);
+      }
+    }
+  }
+  return {created, notices: allNotices, stickysReopened, stickysSkipped};
+};
+
+// ---------------------------------------------------------------------------
+// Lifecycle: the reserved 'last-session' workspace (chunk 5: #171).
+//
+// Window close and app quit save the WHOLE app through the same correlated
+// pipeline named saves use (POST to the sidecar → CaptureWorkspace → every
+// window + geometry), replacing the legacy single-slot `savedLayoutState`
+// write — which raced across windows and saved nothing at all on quit. Boot
+// restores last-session via the normal additive restore path, giving
+// multi-window restore-on-launch (#83).
+// ---------------------------------------------------------------------------
+
+export const LAST_SESSION_NAME = 'last-session';
+
+/** Mirrors workspace.rs SCHEMA_VERSION — bump together. */
+const MAX_BOOT_SCHEMA_VERSION = 1;
+
+const sidecarPort = () => Number(process.env.HYPERIA_PORT) || 9800;
+
+export const lastSessionPath = (): string => join(homedir(), '.hyperia', 'workspaces', `${LAST_SESSION_NAME}.json`);
+
+/**
+ * Ask the sidecar to capture + save the whole app as 'last-session'.
+ * Best-effort and bounded: close/quit must never hang on a wedged sidecar.
+ * Returns false on any failure so callers can fall back to the legacy write.
+ */
+export const saveLastSession = async (reason: 'close' | 'quit', timeoutMs = 2500): Promise<boolean> => {
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeoutMs);
+    const res = await fetch(`http://127.0.0.1:${sidecarPort()}/api/workspace/save`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: LAST_SESSION_NAME, overwrite: true}),
+      signal: ctl.signal
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      console.warn(`[workspace] last-session save (${reason}) failed: HTTP ${res.status}`);
+    }
+    return res.ok;
+  } catch (err) {
+    console.warn(`[workspace] last-session save (${reason}) unreachable:`, String(err));
+    return false;
+  }
+};
+
+/**
+ * Light boot-time read of a workspace file: parse + shape check only (kind,
+ * supported schemaVersion, at least one window). Full validation lives in the
+ * sidecar; boot must not depend on it being up yet. Returns null on ANY
+ * problem — boot then falls back to a fresh window. Pure — exported for tests.
+ */
+export const readWorkspaceForBoot = (path: string): Record<string, any> | null => {
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    if (raw?.kind !== 'hyperia-workspace') return null;
+    if (typeof raw.schemaVersion !== 'number' || raw.schemaVersion > MAX_BOOT_SCHEMA_VERSION) return null;
+    if (!Array.isArray(raw.windows) || raw.windows.length === 0) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+};
+
+export const readLastSessionForBoot = (): Record<string, any> | null => readWorkspaceForBoot(lastSessionPath());
+
+/**
+ * Retire a leftover legacy `savedLayoutState` blob once a last-session
+ * restore ran — otherwise every window's init hook would ALSO apply it
+ * (double restore). Harmless if the key is absent.
+ */
+export const clearLegacySavedLayoutState = (cfgPath: string): void => {
+  try {
+    if (!existsSync(cfgPath)) return;
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    if (cfg && Object.prototype.hasOwnProperty.call(cfg, 'savedLayoutState')) {
+      delete cfg.savedLayoutState;
+      writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+      console.log('[workspace] retired legacy savedLayoutState (last-session restored instead)');
+    }
+  } catch (err) {
+    console.warn('[workspace] could not clear legacy savedLayoutState:', String(err));
+  }
 };
 
 export const captureAllWindows = (windows: BrowserWindow[], timeoutMs = 3000): Promise<CaptureResult> => {
   const live = windows.filter((w) => w && !w.isDestroyed() && (w as any).rpc);
   if (live.length === 0) {
-    return Promise.resolve({windows: [], missing: []});
+    return Promise.resolve({windows: [], missing: [], stickys: []});
   }
   const requestId = randomBytes(8).toString('hex');
   return new Promise<CaptureResult>((resolve) => {

@@ -2,7 +2,7 @@
 // Loads static sticky.html from app dir. Persists to ~/.hyperia/stickys/notes.json.
 
 import {exec} from 'child_process';
-import {readFileSync, writeFileSync, mkdirSync, watchFile, unwatchFile, existsSync} from 'fs';
+import {readFileSync, writeFileSync, mkdirSync, watchFile, unwatchFile, existsSync, renameSync} from 'fs';
 import {homedir} from 'os';
 import {join, resolve, basename, dirname} from 'path';
 
@@ -460,7 +460,12 @@ function readAllNotes(): NoteData[] {
 
 function writeAllNotes(notes: NoteData[]) {
   try {
-    writeFileSync(join(stickysDir(), 'notes.json'), JSON.stringify(notes, null, 2), 'utf8');
+    // Temp + rename so a crash mid-write can't truncate every note (the
+    // sidecar reads this file concurrently; mirrors util.rs's atomic writer).
+    const dest = join(stickysDir(), 'notes.json');
+    const tmp = `${dest}.tmp.${process.pid}.${Date.now()}`;
+    writeFileSync(tmp, JSON.stringify(notes, null, 2), 'utf8');
+    renameSync(tmp, dest);
   } catch (e) {
     console.error('Failed to write notes.json:', e);
   }
@@ -1588,3 +1593,30 @@ export function updateStickyNote(noteId: string, text: string): boolean {
 }
 
 export {createStickyNote, readAllNotes};
+
+/**
+ * Currently-open sticky notes as workspace references (epic #146 chunk 4):
+ * id + live window bounds. References only — note content stays canonical in
+ * notes.json, which workspace capture never writes.
+ */
+export function listOpenStickyRefs(): Array<{
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  open: boolean;
+}> {
+  const refs: Array<{id: string; x: number; y: number; width: number; height: number; open: boolean}> = [];
+  for (const [id, win] of stickyWindows) {
+    if (id === 'sticky-search-window' || !win || win.isDestroyed()) {
+      continue;
+    }
+    if (!getNote(id)) {
+      continue; // window without a persisted note (shouldn't happen; be safe)
+    }
+    const b = win.getBounds();
+    refs.push({id, x: b.x, y: b.y, width: b.width, height: b.height, open: true});
+  }
+  return refs;
+}

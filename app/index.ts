@@ -120,6 +120,7 @@ import {newWindow} from './ui/window';
 import {installCLI} from './utils/cli-install';
 import * as windowUtils from './utils/window-utils';
 import {restoreFor} from './window-state';
+import {saveLastSession, readLastSessionForBoot, restoreWorkspace, clearLegacySavedLayoutState} from './workspace';
 
 // Electron's DEFAULT uncaught-exception behavior is a BLOCKING modal error
 // dialog in the main process — one bad config value (an unparseable color)
@@ -619,22 +620,48 @@ app.on('ready', () => {
         return hwin;
       }
 
-      // Create the terminal window (starts hidden in production)
-      const firstWin = createWindow();
+      // expose to plugins (assigned before boot restore — restoreWorkspace
+      // creates its windows through app.createWindow)
+      app.createWindow = createWindow;
 
-      // Show the window when its content loads. (The once-per-version update
+      // Boot restore (#171/#83): when a 'last-session' workspace exists,
+      // reopen the WHOLE previous session — every window, with geometry —
+      // through the same additive restore pipeline named restores use. Any
+      // problem (no file, corrupt, future version) falls back to one fresh
+      // window; a leftover legacy savedLayoutState blob is retired so the
+      // per-window init hook can't double-restore.
+      let bootWins: BrowserWindow[] = [];
+      try {
+        const lastSession = readLastSessionForBoot();
+        if (lastSession) {
+          restoreWorkspace(lastSession as any);
+          bootWins = BrowserWindow.getAllWindows();
+          clearLegacySavedLayoutState(cfgPath);
+          console.log(`[workspace] restored last-session (${bootWins.length} window(s))`);
+        }
+      } catch (err) {
+        console.error('[workspace] last-session restore failed, opening fresh:', err);
+        bootWins = [];
+      }
+      if (bootWins.length === 0) {
+        // Create the terminal window (starts hidden in production)
+        bootWins = [createWindow()];
+      }
+
+      // Show each window when its content loads. (The once-per-version update
       // splash was removed — it added a confusing extra window to first-boot
       // and nobody missed it.)
-      firstWin.webContents.once('did-finish-load', () => {
-        if (!firstWin.isDestroyed() && !firstWin.isVisible()) firstWin.show();
-      });
+      for (const bootWin of bootWins) {
+        bootWin.webContents.once('did-finish-load', () => {
+          if (!bootWin.isDestroyed() && !bootWin.isVisible()) bootWin.show();
+        });
+      }
       // Failsafe in case did-finish-load doesn't fire.
       setTimeout(() => {
-        if (!firstWin.isDestroyed() && !firstWin.isVisible()) firstWin.show();
+        for (const bootWin of bootWins) {
+          if (!bootWin.isDestroyed() && !bootWin.isVisible()) bootWin.show();
+        }
       }, 2000);
-
-      // expose to plugins
-      app.createWindow = createWindow;
 
       // renderer can request a new window via IPC
       ipcMain.on('new-window', () => createWindow());
@@ -661,9 +688,16 @@ app.on('ready', () => {
         }
       });
 
+      let quitSaveInFlight = false;
       app.on('before-quit', (e) => {
         // Already confirmed / mid-teardown — let it proceed.
         if ((app as {isQuitting?: boolean}).isQuitting) {
+          return;
+        }
+        // A save is already running for an earlier quit gesture — hold this
+        // one; the pending save's finally() will quit for real.
+        if (quitSaveInFlight) {
+          e.preventDefault();
           return;
         }
         // #148: don't silently kill panes running a foreground command on quit
@@ -697,7 +731,15 @@ app.on('ready', () => {
           }
         };
         if (running.length === 0) {
-          teardown();
+          // Save the whole session BEFORE teardown destroys windows — quit
+          // used to save nothing at all (this early-return path predates the
+          // workspace pipeline). Bounded: a wedged sidecar can't hold the quit.
+          e.preventDefault();
+          quitSaveInFlight = true;
+          void saveLastSession('quit').finally(() => {
+            teardown();
+            app.quit();
+          });
           return;
         }
         // Busy → confirm via the focused window's in-app modal (the native-dialog
@@ -714,8 +756,11 @@ app.on('ready', () => {
         }
         void confirmFn({scope: 'quit', names: running}).then((ok) => {
           if (ok) {
-            teardown();
-            app.quit();
+            quitSaveInFlight = true;
+            void saveLastSession('quit').finally(() => {
+              teardown();
+              app.quit();
+            });
           }
           // else: user cancelled — stay open (isQuitting stays false).
         });

@@ -45,7 +45,7 @@ Reads work anonymously; state-changing tools need an identity (`Authorization: B
 | `terminal_new_window` | Open a new OS window. |
 | `terminal_set_window_size` | Resize a window to an exact content size in pixels (for consistent screenshots). |
 | `terminal_where_pane` | Describe the spatial relationship between two panes. |
-| `terminal_flush_state` | Flush the current workspace layout (windows/tabs/splits/web panes) to `hyperia.json`. |
+| `terminal_flush_state` | Flush the current app state to the reserved `last-session` workspace (what Hyperia restores on next launch). Prefer `workspace_save` for a named snapshot. |
 | `terminal_ui_key` | Send a keyboard event to the renderer UI layer (Escape, etc.) instead of the PTY. |
 
 ## Editing

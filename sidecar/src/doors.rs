@@ -264,7 +264,6 @@ pub const DOORS: &[Door] = &[
             "terminal_where_pane",
             "terminal_cd",
             "terminal_set_window_size",
-            "terminal_flush_state",
         ],
     },
     Door {
@@ -283,6 +282,10 @@ pub const DOORS: &[Door] = &[
             "workspace_restore",
             "workspace_export",
             "workspace_import",
+            // Writes the reserved 'last-session' workspace — lives here with
+            // the rest of the family since #171 (terminal_layout kept it
+            // while it still wrote the legacy hyperia.json slot).
+            "terminal_flush_state",
         ],
     },
     Door {

@@ -12,6 +12,13 @@ Produced and consumed by the `workspace_*` MCP tools and
 `hyperia workspace <save|list|preview|restore|export|import|delete|rename>`.
 The Rust source of truth is `sidecar/src/workspace.rs`.
 
+**The reserved `last-session` workspace**: closing a window or quitting the
+app writes the whole session to `~/.hyperia/workspaces/last-session.json`
+(same format, overwritten each time), and launch restores it — multi-window,
+with geometry. `terminal_flush_state` writes the same file on demand. It is an
+ordinary workspace otherwise: preview it, export it, or rename it to keep a
+session permanently.
+
 ## Top level
 
 ```jsonc

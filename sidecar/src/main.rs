@@ -2925,10 +2925,16 @@ async fn post_workspace_save(
         .as_array()
         .cloned()
         .unwrap_or_default();
+    // Open sticky notes captured alongside the windows (chunk 4: #170) —
+    // references only; note content stays canonical in stickys/notes.json.
+    let stickys: Option<Vec<workspace::StickyRef>> = snapshot
+        .get("stickys")
+        .and_then(|s| serde_json::from_value(s.clone()).ok());
     match workspace::save(
         &dir,
         &body.name,
         windows,
+        stickys,
         Some(env!("CARGO_PKG_VERSION").to_string()),
         body.overwrite,
     ) {
@@ -3010,8 +3016,24 @@ async fn post_workspace_restore(
     Json(body): Json<WorkspaceNameBody>,
 ) -> (StatusCode, String) {
     // Restoring spawns windows and PTYs — same consent bar as opening panes.
-    if let Err(resp) = enforce_create(&state, &headers, "create_window").await {
-        return resp;
+    if let Err((status, msg)) = enforce_create(&state, &headers, "create_window").await {
+        // The generic held-command message promises the command "will run
+        // AUTOMATICALLY on approval" — true for held pane writes, NOT for
+        // this route (nothing replays the HTTP request). Say what actually
+        // works: approve in Hyperia, then call restore again (durable grants
+        // persist, so the retry sails through).
+        if msg.contains("\"pending\":true") {
+            return (
+                status,
+                serde_json::json!({
+                    "ok": false,
+                    "pending": true,
+                    "message": "The human is being asked in Hyperia (a consent toast in the app). Once they approve, CALL workspace_restore AGAIN — this request is not replayed automatically. A durable grant (e.g. 'Always') makes the retry and all future restores immediate.",
+                })
+                .to_string(),
+            );
+        }
+        return (status, msg);
     }
     let dir = match workspaces_dir_or_500() {
         Ok(d) => d,
@@ -3081,20 +3103,29 @@ async fn post_workspace_export(Json(body): Json<WorkspaceExportBody>) -> (Status
         Ok(d) => d,
         Err(e) => return e,
     };
-    let dest = std::path::PathBuf::from(&body.path);
+    let mut dest = std::path::PathBuf::from(&body.path);
     if !dest.is_absolute() {
         return (
             StatusCode::BAD_REQUEST,
             "export path must be absolute (the sidecar's working directory is not yours)".to_string(),
         );
     }
+    // A trailing separator is a directory INTENT even if the dir doesn't
+    // exist yet — never turn "…/Downloads/" into a file named Downloads.
+    // (Existing directories are handled inside workspace::export.)
+    if body.path.ends_with('/') || body.path.ends_with('\\') {
+        match workspace::sanitize_name(&body.name) {
+            Ok(n) => dest = dest.join(format!("{n}.json")),
+            Err(e) => return (workspace_error_status(&e), e.to_string()),
+        }
+    }
     match workspace::export(&dir, &body.name, &dest, body.overwrite) {
-        Ok(ws) => (
+        Ok((ws, written)) => (
             StatusCode::OK,
             serde_json::json!({
                 "ok": true,
                 "name": ws.name,
-                "exportedTo": dest.to_string_lossy(),
+                "exportedTo": written.to_string_lossy(),
                 "windows": ws.windows.len(),
             })
             .to_string(),
