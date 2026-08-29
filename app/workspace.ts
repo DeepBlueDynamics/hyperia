@@ -14,7 +14,9 @@
  * are not touched here (window.ts routes them to the old writer).
  */
 import {randomBytes} from 'crypto';
-import {existsSync} from 'fs';
+import {existsSync, readFileSync, writeFileSync} from 'fs';
+import {homedir} from 'os';
+import {join} from 'path';
 
 import {app, screen} from 'electron';
 import type {BrowserWindow} from 'electron';
@@ -291,6 +293,91 @@ export const restoreWorkspace = (ws: {
     }
   }
   return {created, notices: allNotices, stickysReopened, stickysSkipped};
+};
+
+// ---------------------------------------------------------------------------
+// Lifecycle: the reserved 'last-session' workspace (chunk 5: #171).
+//
+// Window close and app quit save the WHOLE app through the same correlated
+// pipeline named saves use (POST to the sidecar → CaptureWorkspace → every
+// window + geometry), replacing the legacy single-slot `savedLayoutState`
+// write — which raced across windows and saved nothing at all on quit. Boot
+// restores last-session via the normal additive restore path, giving
+// multi-window restore-on-launch (#83).
+// ---------------------------------------------------------------------------
+
+export const LAST_SESSION_NAME = 'last-session';
+
+/** Mirrors workspace.rs SCHEMA_VERSION — bump together. */
+const MAX_BOOT_SCHEMA_VERSION = 1;
+
+const sidecarPort = () => Number(process.env.HYPERIA_PORT) || 9800;
+
+export const lastSessionPath = (): string => join(homedir(), '.hyperia', 'workspaces', `${LAST_SESSION_NAME}.json`);
+
+/**
+ * Ask the sidecar to capture + save the whole app as 'last-session'.
+ * Best-effort and bounded: close/quit must never hang on a wedged sidecar.
+ * Returns false on any failure so callers can fall back to the legacy write.
+ */
+export const saveLastSession = async (reason: 'close' | 'quit', timeoutMs = 2500): Promise<boolean> => {
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeoutMs);
+    const res = await fetch(`http://127.0.0.1:${sidecarPort()}/api/workspace/save`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: LAST_SESSION_NAME, overwrite: true}),
+      signal: ctl.signal
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      console.warn(`[workspace] last-session save (${reason}) failed: HTTP ${res.status}`);
+    }
+    return res.ok;
+  } catch (err) {
+    console.warn(`[workspace] last-session save (${reason}) unreachable:`, String(err));
+    return false;
+  }
+};
+
+/**
+ * Light boot-time read of a workspace file: parse + shape check only (kind,
+ * supported schemaVersion, at least one window). Full validation lives in the
+ * sidecar; boot must not depend on it being up yet. Returns null on ANY
+ * problem — boot then falls back to a fresh window. Pure — exported for tests.
+ */
+export const readWorkspaceForBoot = (path: string): Record<string, any> | null => {
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    if (raw?.kind !== 'hyperia-workspace') return null;
+    if (typeof raw.schemaVersion !== 'number' || raw.schemaVersion > MAX_BOOT_SCHEMA_VERSION) return null;
+    if (!Array.isArray(raw.windows) || raw.windows.length === 0) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+};
+
+export const readLastSessionForBoot = (): Record<string, any> | null => readWorkspaceForBoot(lastSessionPath());
+
+/**
+ * Retire a leftover legacy `savedLayoutState` blob once a last-session
+ * restore ran — otherwise every window's init hook would ALSO apply it
+ * (double restore). Harmless if the key is absent.
+ */
+export const clearLegacySavedLayoutState = (cfgPath: string): void => {
+  try {
+    if (!existsSync(cfgPath)) return;
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    if (cfg && Object.prototype.hasOwnProperty.call(cfg, 'savedLayoutState')) {
+      delete cfg.savedLayoutState;
+      writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+      console.log('[workspace] retired legacy savedLayoutState (last-session restored instead)');
+    }
+  } catch (err) {
+    console.warn('[workspace] could not clear legacy savedLayoutState:', String(err));
+  }
 };
 
 export const captureAllWindows = (windows: BrowserWindow[], timeoutMs = 3000): Promise<CaptureResult> => {

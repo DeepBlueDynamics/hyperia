@@ -1402,12 +1402,13 @@ impl HyperiaMcp {
         ]))
     }
 
-    #[tool(description = "Flush and save the current workspace layout state (windows, tabs, splits, terminal panes, and web panes) to the hyperia.json config file. The saved state can be resumed automatically upon the next launch of Hyperia or edited by other external tools.")]
+    #[tool(description = "Flush the current app state (every window's geometry, tabs, splits, terminal panes, and web panes) to the reserved 'last-session' workspace at ~/.hyperia/workspaces/last-session.json — the snapshot Hyperia restores on next launch. This is the same correlated capture workspace_save uses; prefer workspace_save to keep a NAMED snapshot instead.")]
     async fn terminal_flush_state(
         &self,
-        Parameters(req): Parameters<FlushRequest>,
+        Parameters(_req): Parameters<FlushRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let resp = self.post_text("/api/layout/save", "").await?;
+        let body = serde_json::json!({"name": "last-session", "overwrite": true});
+        let resp = self.post_json("/api/workspace/save", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
