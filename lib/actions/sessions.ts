@@ -23,6 +23,7 @@ import {
 import {TERM_GROUP_SET_TAB_NAME} from '../../typings/constants/term-groups';
 import type {HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
+import {getConfig} from '../utils/config';
 import {openLayout} from '../utils/layouts';
 import {keys} from '../utils/object';
 import findBySession from '../utils/term-groups';
@@ -81,7 +82,19 @@ export function addSession(data: Session) {
     // interrupted command; prefillCommand does the same for new panes (e.g. the
     // agent-install "Open in shell" — the user reviews and presses Enter).
     const prefillCommand = (data as any).prefillCommand;
-    if ((isRestore && lastCommand) || prefillCommand) {
+    // Restore re-typing is OPT-IN (config.typeRestoredCommand, default off,
+    // epic #146): the scraped command is untrusted display metadata, and a
+    // shared/imported workspace must not pre-type text into the user's shell.
+    // prefillCommand stays unconditional — it's a deliberate human action.
+    let typeRestored = false;
+    if (isRestore && lastCommand) {
+      try {
+        typeRestored = getConfig().typeRestoredCommand === true;
+      } catch {
+        typeRestored = false;
+      }
+    }
+    if (typeRestored || prefillCommand) {
       const text = prefillCommand || lastCommand;
       setTimeout(() => {
         const state = getState();

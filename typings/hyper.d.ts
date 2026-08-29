@@ -146,6 +146,8 @@ export type session = {
   shellState?: {state: 'idle' | 'busy'; lastExit?: number; command?: string};
   /** Reliable "running a foreground program" flag, published by Term (#148). */
   busy?: boolean;
+  /** Workspace-restore substitution note (missing cwd, …) — pane banner (#168). */
+  restoreNotice?: string;
 };
 
 export type sessionState = Immutable<{

@@ -2971,6 +2971,81 @@ struct WorkspaceNameBody {
     name: String,
 }
 
+/// Profile names the config file declares, or None when it lists none —
+/// Electron auto-detects shells at startup, so an empty config can't prove a
+/// profile unknown (see workspace::preview).
+fn config_profile_names() -> Option<std::collections::HashSet<String>> {
+    let cfg = util::read_shared_config().ok()?;
+    let profiles = cfg["config"]["profiles"].as_array()?;
+    let names: std::collections::HashSet<String> = profiles
+        .iter()
+        .filter_map(|p| p["name"].as_str().map(|s| s.to_string()))
+        .collect();
+    if names.is_empty() {
+        None
+    } else {
+        Some(names)
+    }
+}
+
+async fn post_workspace_preview(Json(body): Json<WorkspaceNameBody>) -> (StatusCode, String) {
+    let dir = match workspaces_dir_or_500() {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    let ws = match workspace::load_workspace(&dir, &body.name) {
+        Ok(ws) => ws,
+        Err(e) => return (workspace_error_status(&e), e.to_string()),
+    };
+    let report = workspace::preview_fs(&ws, config_profile_names().as_ref());
+    match serde_json::to_string(&report) {
+        Ok(json) => (StatusCode::OK, json),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+async fn post_workspace_restore(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<WorkspaceNameBody>,
+) -> (StatusCode, String) {
+    // Restoring spawns windows and PTYs — same consent bar as opening panes.
+    if let Err(resp) = enforce_create(&state, &headers, "create_window").await {
+        return resp;
+    }
+    let dir = match workspaces_dir_or_500() {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    let ws = match workspace::load_workspace(&dir, &body.name) {
+        Ok(ws) => ws,
+        Err(e) => return (workspace_error_status(&e), e.to_string()),
+    };
+    let report = workspace::preview_fs(&ws, config_profile_names().as_ref());
+    let ws_json = match serde_json::to_value(&ws) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let cmd = serde_json::json!({"type": "RestoreWorkspace", "workspace": ws_json});
+    match state.bridge.send_command(cmd).await {
+        Ok(raw) => {
+            let applied: serde_json::Value =
+                serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({"raw": raw}));
+            if let Some(err) = applied.get("error").and_then(|e| e.as_str()) {
+                return (StatusCode::BAD_GATEWAY, format!("restore failed: {err}"));
+            }
+            let reply = serde_json::json!({
+                "ok": true,
+                "name": ws.name,
+                "restored": applied,
+                "report": report,
+            });
+            (StatusCode::OK, reply.to_string())
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("restore failed: {e}")),
+    }
+}
+
 async fn post_workspace_delete(Json(body): Json<WorkspaceNameBody>) -> (StatusCode, String) {
     let dir = match workspaces_dir_or_500() {
         Ok(d) => d,
@@ -4144,6 +4219,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/workspace/list", axum::routing::get(get_workspace_list))
         .route("/api/workspace/delete", axum::routing::post(post_workspace_delete))
         .route("/api/workspace/rename", axum::routing::post(post_workspace_rename))
+        .route("/api/workspace/preview", axum::routing::post(post_workspace_preview))
+        .route("/api/workspace/restore", axum::routing::post(post_workspace_restore))
         .route("/api/web-pane", axum::routing::post(post_open_web_pane))
         .route("/api/web-pane/reload", axum::routing::post(post_web_pane_reload))
         .route("/api/web-pane/click", axum::routing::post(post_web_pane_click))

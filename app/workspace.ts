@@ -14,9 +14,14 @@
  * are not touched here (window.ts routes them to the old writer).
  */
 import {randomBytes} from 'crypto';
+import {existsSync} from 'fs';
 
-import {screen} from 'electron';
+import {app, screen} from 'electron';
 import type {BrowserWindow} from 'electron';
+
+import {v4 as uuidv4} from 'uuid';
+
+import {boundsAreVisible} from './window-state';
 
 export type WindowGeometry = {
   x: number;
@@ -120,6 +125,134 @@ const finish = (requestId: string) => {
  * reply or the timeout elapses (stragglers are reported in `missing`, and the
  * capture still succeeds with what arrived).
  */
+// ---------------------------------------------------------------------------
+// Restore (chunk 2: #168) — additive, into NEW windows. Live windows and their
+// PTYs are never touched; every uid in the saved layout is remapped to a fresh
+// one first, so a restore can never collide with live sessions or the orphan-
+// reattach sweep. Each new window applies its layout through the same
+// per-window init callback the boot restore uses.
+// ---------------------------------------------------------------------------
+
+/**
+ * Rewrite every session/termGroup uid in a saved layout to a fresh uuid,
+ * preserving all structure (parent links, children order, active pointers).
+ * Pure — exported for unit tests.
+ */
+export const remapUids = (layout: Record<string, any>, makeUid: () => string = uuidv4): Record<string, any> => {
+  const mapping = new Map<string, string>();
+  const fresh = (old: string): string => {
+    if (!mapping.has(old)) {
+      mapping.set(old, makeUid());
+    }
+    return mapping.get(old)!;
+  };
+  const mapMaybe = (old: unknown): unknown => (typeof old === 'string' && old ? fresh(old) : old);
+
+  const termGroups: Record<string, any> = {};
+  Object.keys(layout.termGroups || {}).forEach((uid) => {
+    const g = layout.termGroups[uid] || {};
+    termGroups[fresh(uid)] = {
+      ...g,
+      uid: fresh(uid),
+      parentUid: mapMaybe(g.parentUid),
+      sessionUid: mapMaybe(g.sessionUid),
+      children: Array.isArray(g.children) ? g.children.map((c: string) => fresh(c)) : g.children
+    };
+  });
+
+  const sessions: Record<string, any> = {};
+  Object.keys(layout.sessions || {}).forEach((uid) => {
+    const s = layout.sessions[uid] || {};
+    sessions[fresh(uid)] = {...s, uid: fresh(uid)};
+  });
+
+  const activeSessions: Record<string, any> = {};
+  Object.keys(layout.activeSessions || {}).forEach((groupUid) => {
+    activeSessions[fresh(groupUid)] = mapMaybe(layout.activeSessions[groupUid]);
+  });
+
+  return {
+    ...layout,
+    termGroups,
+    sessions,
+    activeSessions,
+    activeUid: mapMaybe(layout.activeUid),
+    activeRootGroup: mapMaybe(layout.activeRootGroup),
+    activeTermGroup: mapMaybe(layout.activeTermGroup)
+  };
+};
+
+/**
+ * Annotate sessions whose cwd no longer exists so the substitution is loud:
+ * createSession falls back to home silently, and the renderer surfaces
+ * `restoreNotice` as a banner in the pane. Pure — exported for unit tests.
+ */
+export const annotateMissingResources = (
+  layout: Record<string, any>,
+  dirExists: (cwd: string) => boolean = existsSync
+): {layout: Record<string, any>; notices: string[]} => {
+  const notices: string[] = [];
+  const sessions: Record<string, any> = {};
+  Object.keys(layout.sessions || {}).forEach((uid) => {
+    const s = {...(layout.sessions[uid] || {})};
+    if (typeof s.cwd === 'string' && s.cwd && !dirExists(s.cwd)) {
+      s.restoreNotice = `Saved directory ${s.cwd} no longer exists — opened in your home directory instead.`;
+      notices.push(`${uid}: ${s.restoreNotice}`);
+    }
+    sessions[uid] = s;
+  });
+  return {layout: {...layout, sessions}, notices};
+};
+
+export type RestoredSummary = {created: number; notices: string[]};
+
+/**
+ * Apply a workspace file: one NEW BrowserWindow per saved window, layout fed
+ * through the window's init callback (the same hook the boot restore uses).
+ * Saved geometry is display-clamped; maximize/fullscreen re-applied.
+ */
+export const restoreWorkspace = (ws: {
+  windows: Array<{geometry: any; layout: Record<string, any>}>;
+}): RestoredSummary => {
+  const createWindow = (app as any).createWindow as
+    | ((
+        fn?: (win: BrowserWindow) => void,
+        options?: {size?: [number, number]; position?: [number, number]}
+      ) => BrowserWindow)
+    | undefined;
+  if (!createWindow) {
+    throw new Error('app.createWindow not ready (app still booting?)');
+  }
+  const allNotices: string[] = [];
+  let created = 0;
+  for (const saved of ws.windows || []) {
+    const remapped = remapUids(saved.layout || {});
+    const {layout, notices} = annotateMissingResources(remapped);
+    allNotices.push(...notices);
+    const g = saved.geometry || {};
+    const size: [number, number] | undefined = g.width && g.height ? [Number(g.width), Number(g.height)] : undefined;
+    // Clamp: only honor a saved position still visible on an attached display
+    // (the saved monitor may be gone); otherwise let createWindow pick.
+    const position: [number, number] | undefined =
+      size && typeof g.x === 'number' && typeof g.y === 'number' && boundsAreVisible(g.x, g.y, size[0], size[1])
+        ? [g.x, g.y]
+        : undefined;
+    const win = createWindow(
+      (w: BrowserWindow) => {
+        (w as any).rpc.emit('restore-layout-state', layout);
+      },
+      {size, position}
+    );
+    if (g.isFullScreen) {
+      win.setFullScreen(true);
+    } else if (g.isMaximized) {
+      win.maximize();
+    }
+    created += 1;
+  }
+  return {created, notices: allNotices};
+};
+
 export const captureAllWindows = (windows: BrowserWindow[], timeoutMs = 3000): Promise<CaptureResult> => {
   const live = windows.filter((w) => w && !w.isDestroyed() && (w as any).rpc);
   if (live.length === 0) {

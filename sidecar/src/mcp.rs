@@ -836,6 +836,18 @@ pub struct WorkspaceDeleteRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WorkspacePreviewRequest {
+    /// Name of the saved workspace to preview.
+    pub name: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WorkspaceRestoreRequest {
+    /// Name of the saved workspace to restore.
+    pub name: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct WorkspaceRenameRequest {
     /// Current name of the saved workspace.
     pub from: String,
@@ -1425,6 +1437,29 @@ impl HyperiaMcp {
         Parameters(_req): Parameters<WorkspaceListRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let resp = self.get("/api/workspace/list").await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Preview what restoring a saved workspace would do WITHOUT restoring it: window/pane/web-pane counts plus an issues list — saved directories that no longer exist (restore opens those panes in home), profiles the config doesn't declare, missing stickys. Run before workspace_restore to see what would be substituted. Free read, no identity needed.")]
+    async fn workspace_preview(
+        &self,
+        Parameters(req): Parameters<WorkspacePreviewRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"name": req.name});
+        let resp = self.post_json("/api/workspace/preview", &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Restore a saved workspace into NEW windows — additive: existing windows, panes, and running sessions are never touched, and the human's focus is not stolen. Each saved window reopens at its saved geometry (display-clamped) with its tabs, splits, terminal panes (profile + cwd, falling back loudly to home/default shell when missing) and web panes. Never executes saved commands. Returns the restore report including any substitutions. Consent-gated like opening panes: may return 202 while the human is asked.")]
+    async fn workspace_restore(
+        &self,
+        Parameters(req): Parameters<WorkspaceRestoreRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"name": req.name});
+        let resp = self
+            .post_json_as("/api/workspace/restore", &body, forwarded_auth(&ctx).as_deref())
+            .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -2095,8 +2130,8 @@ impl HyperiaMcp {
             },
             {
                 "name": "workspace",
-                "description": "Named workspaces: save the whole app state (windows, tabs, splits, panes, web panes) under a name at ~/.hyperia/workspaces/, then list, rename, or delete saved workspaces.",
-                "tools": ["workspace_save", "workspace_list", "workspace_rename", "workspace_delete"]
+                "description": "Named workspaces: save the whole app state (windows, tabs, splits, panes, web panes) under a name at ~/.hyperia/workspaces/, list/rename/delete saved workspaces, preview what a restore would substitute, and restore one into new windows.",
+                "tools": ["workspace_save", "workspace_list", "workspace_rename", "workspace_delete", "workspace_preview", "workspace_restore"]
             },
             {
                 "name": "editing",

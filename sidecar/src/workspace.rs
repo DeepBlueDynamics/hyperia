@@ -376,6 +376,108 @@ pub fn rename(
     Ok(())
 }
 
+/// Load one saved workspace by name, with typed errors: `NotFound`,
+/// `Corrupt`, `WrongKind`, `NewerThanSupported`.
+pub fn load_workspace(dir: &std::path::Path, name: &str) -> Result<WorkspaceFile, WorkspaceError> {
+    let name = sanitize_name(name)?;
+    let path = file_path(dir, &name);
+    if !path.exists() {
+        return Err(WorkspaceError::NotFound(name));
+    }
+    read_and_validate(&path)
+}
+
+// ---------------------------------------------------------------------------
+// Preview (chunk 2: #168) — what would restore do, computed without touching
+// Electron. cwd existence via the injected checker (std::fs in production,
+// a closure in tests); profiles against the names the config file declares.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewIssue {
+    /// "missing-cwd" | "unknown-profile" (more kinds in later chunks).
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_uid: Option<String>,
+    pub value: String,
+    pub resolution: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewReport {
+    pub name: String,
+    pub schema_version: u32,
+    pub saved_at: String,
+    pub windows: usize,
+    pub panes: usize,
+    pub web_panes: usize,
+    pub stickys: usize,
+    pub issues: Vec<PreviewIssue>,
+}
+
+/// Compute a restore preview. `known_profiles` is the set of profile names the
+/// config declares — pass `None` when the config lists no profiles at all
+/// (Electron auto-detects shells at startup, so an empty config can't prove a
+/// profile unknown; restore still falls back loudly if one turns out missing).
+pub fn preview(
+    ws: &WorkspaceFile,
+    known_profiles: Option<&std::collections::HashSet<String>>,
+    dir_exists: impl Fn(&str) -> bool,
+) -> PreviewReport {
+    let (panes, web_panes) = count_panes(ws);
+    let mut issues = Vec::new();
+    for w in &ws.windows {
+        let sessions = match w.layout.get("sessions").and_then(|v| v.as_object()) {
+            Some(s) => s,
+            None => continue,
+        };
+        for (uid, s) in sessions {
+            if let Some(cwd) = s.get("cwd").and_then(|c| c.as_str()) {
+                if !cwd.is_empty() && !dir_exists(cwd) {
+                    issues.push(PreviewIssue {
+                        kind: "missing-cwd".into(),
+                        session_uid: Some(uid.clone()),
+                        value: cwd.to_string(),
+                        resolution: "will open in the home directory".into(),
+                    });
+                }
+            }
+            if let (Some(profiles), Some(profile)) =
+                (known_profiles, s.get("profile").and_then(|p| p.as_str()))
+            {
+                if !profile.is_empty() && !profiles.contains(profile) {
+                    issues.push(PreviewIssue {
+                        kind: "unknown-profile".into(),
+                        session_uid: Some(uid.clone()),
+                        value: profile.to_string(),
+                        resolution: "will use the default shell if unavailable".into(),
+                    });
+                }
+            }
+        }
+    }
+    PreviewReport {
+        name: ws.name.clone(),
+        schema_version: ws.schema_version,
+        saved_at: ws.saved_at.clone(),
+        windows: ws.windows.len(),
+        panes,
+        web_panes,
+        stickys: ws.stickys.as_ref().map(|s| s.len()).unwrap_or(0),
+        issues,
+    }
+}
+
+/// Production preview: cwd checks against the real filesystem.
+pub fn preview_fs(
+    ws: &WorkspaceFile,
+    known_profiles: Option<&std::collections::HashSet<String>>,
+) -> PreviewReport {
+    preview(ws, known_profiles, |cwd| std::path::Path::new(cwd).is_dir())
+}
+
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
@@ -674,6 +776,85 @@ mod tests {
         // Renaming to itself is a no-op, not an error.
         rename(&dir, "b", "b", false).unwrap();
         assert!(matches!(rename(&dir, "ghost", "x", false).unwrap_err(), WorkspaceError::NotFound(_)));
+    }
+
+    // ---- load / preview ----------------------------------------------------
+
+    #[test]
+    fn load_workspace_typed_errors() {
+        let dir = tempdir();
+        assert!(matches!(
+            load_workspace(&dir, "ghost").unwrap_err(),
+            WorkspaceError::NotFound(_)
+        ));
+        assert!(matches!(
+            load_workspace(&dir, "../evil").unwrap_err(),
+            WorkspaceError::InvalidName(_)
+        ));
+        save(&dir, "demo", vec![sample_window()], None, false).unwrap();
+        assert_eq!(load_workspace(&dir, "demo").unwrap().name, "demo");
+        std::fs::write(dir.join("trunc.json"), "{\"kind\": \"hyperia-worksp").unwrap();
+        assert!(matches!(
+            load_workspace(&dir, "trunc").unwrap_err(),
+            WorkspaceError::Corrupt(_)
+        ));
+    }
+
+    #[test]
+    fn preview_clean_workspace_has_no_issues() {
+        let ws = WorkspaceFile {
+            kind: WORKSPACE_KIND.into(),
+            schema_version: SCHEMA_VERSION,
+            name: "demo".into(),
+            saved_at: "2026-08-28T00:00:00Z".into(),
+            app_version: None,
+            windows: vec![sample_window()],
+            stickys: None,
+        };
+        let profiles: std::collections::HashSet<String> = ["zsh".to_string()].into();
+        let report = preview(&ws, Some(&profiles), |_| true);
+        assert_eq!(report.windows, 1);
+        assert_eq!(report.panes, 1);
+        assert_eq!(report.web_panes, 1);
+        assert!(report.issues.is_empty());
+    }
+
+    #[test]
+    fn preview_flags_missing_cwd_and_unknown_profile() {
+        let ws = WorkspaceFile {
+            kind: WORKSPACE_KIND.into(),
+            schema_version: SCHEMA_VERSION,
+            name: "demo".into(),
+            saved_at: "2026-08-28T00:00:00Z".into(),
+            app_version: None,
+            windows: vec![sample_window()],
+            stickys: None,
+        };
+        let profiles: std::collections::HashSet<String> = ["bash".to_string()].into();
+        let report = preview(&ws, Some(&profiles), |_| false);
+        let kinds: Vec<&str> = report.issues.iter().map(|i| i.kind.as_str()).collect();
+        assert!(kinds.contains(&"missing-cwd"));
+        assert!(kinds.contains(&"unknown-profile"));
+        let cwd_issue = report.issues.iter().find(|i| i.kind == "missing-cwd").unwrap();
+        assert_eq!(cwd_issue.value, "/home/x");
+        assert_eq!(cwd_issue.session_uid.as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn preview_skips_profile_check_without_config_profiles() {
+        // Electron auto-detects shells; an empty config can't prove a profile
+        // unknown, so None disables that check entirely.
+        let ws = WorkspaceFile {
+            kind: WORKSPACE_KIND.into(),
+            schema_version: SCHEMA_VERSION,
+            name: "demo".into(),
+            saved_at: "2026-08-28T00:00:00Z".into(),
+            app_version: None,
+            windows: vec![sample_window()],
+            stickys: None,
+        };
+        let report = preview(&ws, None, |_| true);
+        assert!(report.issues.is_empty());
     }
 
     // ---- version gates -----------------------------------------------------

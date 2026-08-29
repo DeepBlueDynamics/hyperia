@@ -526,9 +526,11 @@ async function cmdRename(pos: string[], flags: Flags, wantJson: boolean): Promis
 async function cmdWorkspace(pos: string[], flags: Flags, wantJson: boolean): Promise<number> {
   const verb = pos[0];
   const usage =
-    'usage: hyperia workspace <save|list|delete|rename> ...\n' +
+    'usage: hyperia workspace <save|list|preview|restore|delete|rename> ...\n' +
     '  workspace save <name> [--overwrite]     snapshot every window under a name\n' +
     '  workspace list                          saved workspaces, newest first\n' +
+    '  workspace preview <name>                what a restore would substitute\n' +
+    '  workspace restore <name>                reopen in NEW windows (additive)\n' +
     '  workspace delete <name>                 remove a saved workspace\n' +
     '  workspace rename <from> <to> [--overwrite]';
   switch (verb) {
@@ -569,6 +571,38 @@ async function cmdWorkspace(pos: string[], flags: Flags, wantJson: boolean): Pro
         console.log(text);
         return result?.isError ? 5 : 0;
       }
+    }
+    case 'preview': {
+      if (!pos[1]) throw new CliError('usage: hyperia workspace preview <name>');
+      if (wantJson) return invoke('workspace_preview', {name: pos[1]}, true);
+      const result = await mcp('tools/call', {name: 'workspace_preview', arguments: {name: pos[1]}});
+      const text = ((result?.content as Array<{text?: string}>) || [])
+        .map((c) => c?.text ?? '')
+        .join('\n')
+        .trim();
+      try {
+        const r: Record<string, any> = JSON.parse(text);
+        const web = r.webPanes ? ` + ${r.webPanes} web` : '';
+        console.log(
+          `${r.name}  ${r.windows} window${r.windows === 1 ? '' : 's'}, ${r.panes} pane${r.panes === 1 ? '' : 's'}${web}  (saved ${r.savedAt})`
+        );
+        const issues: Array<Record<string, any>> = r.issues || [];
+        if (issues.length === 0) {
+          console.log('everything resolves — restore will reproduce the layout exactly');
+        } else {
+          for (const i of issues) {
+            console.log(`  ! ${i.kind}: ${i.value} — ${i.resolution}`);
+          }
+        }
+        return 0;
+      } catch {
+        console.log(text);
+        return result?.isError ? 5 : 0;
+      }
+    }
+    case 'restore': {
+      if (!pos[1]) throw new CliError('usage: hyperia workspace restore <name>');
+      return invoke('workspace_restore', {name: pos[1]}, wantJson);
     }
     case 'delete': {
       if (!pos[1]) throw new CliError('usage: hyperia workspace delete <name>');
@@ -705,6 +739,8 @@ COMMON
 WORKSPACES (named layout snapshots in ~/.hyperia/workspaces/)
   hyperia workspace save <name> [--overwrite]     snapshot every window
   hyperia workspace list                          what's saved
+  hyperia workspace preview <name>                what a restore would substitute
+  hyperia workspace restore <name>                reopen in NEW windows (additive)
   hyperia workspace rename <from> <to>            rename a snapshot
   hyperia workspace delete <name>                 remove a snapshot
 

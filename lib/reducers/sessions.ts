@@ -322,7 +322,9 @@ const reducer: ISessionReducer = (state = initialState, action) => {
             // New saves keep the scraped command under annotations (epic #146);
             // old blobs had it bare.
             lastCommand: s.annotations?.lastCommand || s.lastCommand || '',
-            manualTitle: s.manualTitle || false
+            manualTitle: s.manualTitle || false,
+            // Loud placeholder note (missing cwd etc.) — shown as a pane banner.
+            restoreNotice: s.restoreNotice || undefined
           });
         });
       }

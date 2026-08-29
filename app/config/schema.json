@@ -274,6 +274,10 @@
                     "description": "custom CSS to embed in the terminal window",
                     "type": "string"
                 },
+                "typeRestoredCommand": {
+                    "description": "if `true`, a restored pane re-types (never runs) its saved last command\ninto the shell. Off by default: the scraped command is untrusted display\nmetadata, and a shared/imported workspace must not pre-type into your\nshell (epic #146).",
+                    "type": "boolean"
+                },
                 "uiFontFamily": {
                     "type": "string"
                 },
@@ -604,6 +608,10 @@
                         "termCSS": {
                             "description": "custom CSS to embed in the terminal window",
                             "type": "string"
+                        },
+                        "typeRestoredCommand": {
+                            "description": "if `true`, a restored pane re-types (never runs) its saved last command\ninto the shell. Off by default: the scraped command is untrusted display\nmetadata, and a shared/imported workspace must not pre-type into your\nshell (epic #146).",
+                            "type": "boolean"
                         },
                         "uiFontFamily": {
                             "type": "string"

@@ -135,6 +135,8 @@ Named snapshots of the whole app — every window's geometry plus its tabs, spli
 | `workspace_list` | List saved workspaces, newest first, with window/pane counts. Corrupt files show flagged `valid=false`, never hidden. |
 | `workspace_rename` | Rename a saved workspace (`overwrite` to replace a name collision). |
 | `workspace_delete` | Permanently delete a saved workspace file. |
+| `workspace_preview` | What a restore would do without doing it: counts + issues (missing directories, unknown profiles) with each substitution. Free read. |
+| `workspace_restore` | Restore a saved workspace into NEW windows — additive, never touches existing windows or steals focus; missing resources fall back loudly (pane banner + report). Never executes saved commands. Consent-gated. |
 
 ## Settings & profiles
 
