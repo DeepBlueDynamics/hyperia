@@ -452,6 +452,19 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
       spellcheck: true
     }
   });
+  // WebRTC local-IP privacy. Chrome hides your LAN/private addresses behind
+  // mDNS .local candidates by default; Electron's WebContentsView leaves the
+  // raw private IP exposed, so a page's RTCPeerConnection leaks the host's
+  // 172.x/192.168.x address even when HTTP traffic goes through a proxy
+  // (flagged by nodemaven's connection checker: "WebRTC exposed a raw LAN
+  // address"). `default_public_interface_only` binds WebRTC to the same public
+  // interface the page's HTTP exit uses — no private-IP leak — while keeping
+  // WebRTC working (unlike disable_non_proxied_udp, which breaks calls).
+  try {
+    view.webContents.setWebRTCIPHandlingPolicy('default_public_interface_only');
+  } catch {
+    /* older Electron / unsupported — non-fatal */
+  }
   // White ground avoids the black-flash-between-repaints the old <webview> hit.
   view.setBackgroundColor('#ffffff');
   win.contentView.addChildView(view);

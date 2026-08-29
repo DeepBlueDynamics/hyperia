@@ -89,6 +89,12 @@ const commands: Record<string, (focusedWindow?: BrowserWindow) => void> = {
   'tab:next': (focusedWindow) => {
     focusedWindow?.rpc?.emit('move right req');
   },
+  'tab:moveLeft': (focusedWindow) => {
+    focusedWindow?.rpc?.emit('move tab left req');
+  },
+  'tab:moveRight': (focusedWindow) => {
+    focusedWindow?.rpc?.emit('move tab right req');
+  },
   'pane:prev': (focusedWindow) => {
     focusedWindow?.rpc?.emit('prev pane req');
   },

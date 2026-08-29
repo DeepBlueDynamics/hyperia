@@ -3070,8 +3070,11 @@ export default class Term extends React.PureComponent<
                 />
               ) : (
                 <span onDoubleClick={this.handleLabelDoubleClick}>
-                  <span className="term_labelFull">{labelFull}</span>
-                  <span className="term_labelShort">{labelShort}</span>
+                  {/* Width switch lives in JS (state.paneWidth), NOT a CSS
+                      @container query: styled-jsx flattens @container blocks,
+                      leaking the narrow rules to every width — which rendered
+                      BOTH label variants glued together ("Name | zshName"). */}
+                  {w >= 380 ? labelFull : labelShort}
                 </span>
               )
             }
@@ -4166,33 +4169,13 @@ export default class Term extends React.PureComponent<
 
           .term_fit {
             position: relative;
-            container-type: inline-size;
-            container-name: pane;
           }
-
-          .term_labelFull {
-            display: inline;
-          }
-
-          .term_labelShort {
-            display: none;
-          }
-
-          @container pane (max-width: 380px) {
-            .term_labelFull {
-              display: none !important;
-            }
-            .term_labelShort {
-              display: inline !important;
-            }
-            .term_profileChip {
-              display: none !important;
-            }
-            /* The dir bar no longer collapses to an icon-only stub here — it's
-               kept floored (border + ~11 chars) by inline styles down to ~320px
-               and hidden entirely below that (showDirBar), matching the web
-               pane's URL bar. */
-          }
+          /* The full/short pane-label switch is a JS conditional on
+             state.paneWidth (see the label render) — @container queries are
+             OFF LIMITS in styled-jsx blocks: it flattens them, leaking the
+             narrow-width rules to every width. The dir bar stays floored
+             (border + ~11 chars) by inline styles down to ~320px and hidden
+             below that (showDirBar), matching the web pane's URL bar. */
         `}</style>
       </div>
     );

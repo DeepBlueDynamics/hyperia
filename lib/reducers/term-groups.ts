@@ -13,6 +13,7 @@ import {
   TERM_GROUP_ACTIVATE_WEB_TAB,
   TERM_GROUP_SET_WEB_NAME,
   TERM_GROUP_SET_TAB_NAME,
+  TERM_GROUP_SET_PINNED,
   TERM_GROUP_TOGGLE_TITLE_INHERITANCE,
   RESTORE_LAYOUT_STATE,
   TERM_GROUP_POP_OUT_PANE
@@ -333,6 +334,21 @@ const resizeGroup = (state: ITermState, uid: string, sizes: number[]) => {
   return state.setIn(['termGroups', uid, 'sizes'], sizes);
 };
 
+// Move one root group to a new index in the strip order. Ordering is the
+// termGroups map's key insertion order, so this rebuilds the map with root
+// groups in the new order, preserving child groups.
+const reorderRootGroups = (state: ITermState, rootUids: string[], fromIndex: number, toIndex: number, uid: string) => {
+  rootUids = [...rootUids];
+  rootUids.splice(fromIndex, 1);
+  rootUids.splice(toIndex, 0, uid);
+  const childUids = Object.keys(state.termGroups).filter((u) => !!state.termGroups[u].parentUid);
+  const reordered: Record<string, any> = {};
+  for (const u of [...rootUids, ...childUids]) {
+    reordered[u] = state.termGroups[u];
+  }
+  return state.set('termGroups', Immutable(reordered as any));
+};
+
 const reducer: ITermGroupReducer = (state = initialState, action) => {
   const act = action as any;
   switch (act.type) {
@@ -518,20 +534,38 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       // Get root group UIDs in current order
       const rootUids = Object.keys(state.termGroups).filter((uid) => !state.termGroups[uid].parentUid);
       const fromIndex = rootUids.indexOf(fromUid);
-      if (fromIndex < 0 || fromIndex === toIndex || toIndex < 0 || toIndex >= rootUids.length) {
+      // Pinned tabs hold the leftmost slots and sit outside reordering: a pinned
+      // tab never moves, and an unpinned tab can't land inside the pinned block.
+      if (state.termGroups[fromUid]?.pinned) {
         return state;
       }
-      // Move fromUid to toIndex
-      rootUids.splice(fromIndex, 1);
-      rootUids.splice(toIndex, 0, fromUid);
-      // Rebuild termGroups with root groups in new order, preserving child groups
-      const childUids = Object.keys(state.termGroups).filter((uid) => !!state.termGroups[uid].parentUid);
-      const newOrder = [...rootUids, ...childUids];
-      const reordered: Record<string, any> = {};
-      for (const uid of newOrder) {
-        reordered[uid] = state.termGroups[uid];
+      const pinnedCount = rootUids.filter((uid) => state.termGroups[uid].pinned).length;
+      const boundedToIndex = Math.max(toIndex, pinnedCount);
+      if (fromIndex < 0 || fromIndex === boundedToIndex || toIndex < 0 || boundedToIndex >= rootUids.length) {
+        return state;
       }
-      return state.set('termGroups', Immutable(reordered as any));
+      return reorderRootGroups(state, rootUids, fromIndex, boundedToIndex, fromUid);
+    }
+    case TERM_GROUP_SET_PINNED: {
+      const {uid, pinned} = act;
+      const group = state.termGroups[uid];
+      if (!group || group.parentUid || !!group.pinned === pinned) {
+        return state;
+      }
+      const rootUids = Object.keys(state.termGroups).filter((u) => !state.termGroups[u].parentUid);
+      const fromIndex = rootUids.indexOf(uid);
+      if (fromIndex < 0) {
+        return state;
+      }
+      state = state.setIn(['termGroups', uid, 'pinned'], pinned);
+      // Pinning appends the tab to the pinned block on the far left; unpinning
+      // drops it just right of the block (the first unpinned slot). Both land at
+      // the block boundary counted without this tab.
+      const toIndex = rootUids.filter((u) => u !== uid && state.termGroups[u].pinned).length;
+      if (fromIndex === toIndex) {
+        return state;
+      }
+      return reorderRootGroups(state, rootUids, fromIndex, toIndex, uid);
     }
     default:
       return state;

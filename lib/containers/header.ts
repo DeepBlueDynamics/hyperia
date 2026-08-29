@@ -137,7 +137,8 @@ const getTabs = createSelector(
         paneColors,
         groupTabName: groupTabName || undefined,
         manualTabName: !!t.manualTabName,
-        disableTitleInheritance: !!t.disableTitleInheritance
+        disableTitleInheritance: !!t.disableTitleInheritance,
+        pinned: !!t.pinned
       };
     })
 );
@@ -208,6 +209,10 @@ const mapDispatchToProps = (dispatch: HyperDispatch) => {
 
     onMoveTab: (fromUid: string, toIndex: number) => {
       dispatch({type: 'TERM_GROUP_REORDER', fromUid, toIndex} as any);
+    },
+
+    onPinTab: (uid: string, pinned: boolean) => {
+      dispatch({type: 'TERM_GROUP_SET_PINNED', uid, pinned} as any);
     }
   };
 };
