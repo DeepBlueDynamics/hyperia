@@ -449,7 +449,10 @@ pub fn preview(
             if let (Some(profiles), Some(profile)) =
                 (known_profiles, s.get("profile").and_then(|p| p.as_str()))
             {
-                if !profile.is_empty() && !profiles.contains(profile) {
+                // 'picker' is the internal new-pane chooser, not a config
+                // profile — a pane saved mid-choose restores as the chooser
+                // again, nothing to warn about.
+                if !profile.is_empty() && profile != "picker" && !profiles.contains(profile) {
                     issues.push(PreviewIssue {
                         kind: "unknown-profile".into(),
                         session_uid: Some(uid.clone()),
