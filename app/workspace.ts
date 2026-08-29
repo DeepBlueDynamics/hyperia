@@ -21,6 +21,7 @@ import type {BrowserWindow} from 'electron';
 
 import {v4 as uuidv4} from 'uuid';
 
+import {createStickyNote, listOpenStickyRefs, readAllNotes} from './sticky';
 import {boundsAreVisible} from './window-state';
 
 export type WindowGeometry = {
@@ -35,10 +36,14 @@ export type WindowGeometry = {
 
 export type CapturedWindow = {geometry: WindowGeometry; layout: Record<string, any>};
 
+export type StickyRefSnapshot = {id: string; x: number; y: number; width: number; height: number; open: boolean};
+
 export type CaptureResult = {
   windows: CapturedWindow[];
   /** BrowserWindow ids that never replied within the timeout. */
   missing: number[];
+  /** Open sticky notes at capture time — references + live bounds only. */
+  stickys: StickyRefSnapshot[];
 };
 
 type PendingCapture = {
@@ -117,7 +122,13 @@ const finish = (requestId: string) => {
   pending.delete(requestId);
   clearTimeout(capture.timer);
   const missing = [...capture.expected].filter((id) => !capture.collected.has(id));
-  capture.resolve({windows: [...capture.collected.values()], missing});
+  let stickys: StickyRefSnapshot[] = [];
+  try {
+    stickys = listOpenStickyRefs();
+  } catch {
+    // Sticky capture is best-effort; a workspace without sticky refs is valid.
+  }
+  capture.resolve({windows: [...capture.collected.values()], missing, stickys});
 };
 
 /**
@@ -204,7 +215,12 @@ export const annotateMissingResources = (
   return {layout: {...layout, sessions}, notices};
 };
 
-export type RestoredSummary = {created: number; notices: string[]};
+export type RestoredSummary = {
+  created: number;
+  notices: string[];
+  stickysReopened: number;
+  stickysSkipped: string[];
+};
 
 /**
  * Apply a workspace file: one NEW BrowserWindow per saved window, layout fed
@@ -213,6 +229,7 @@ export type RestoredSummary = {created: number; notices: string[]};
  */
 export const restoreWorkspace = (ws: {
   windows: Array<{geometry: any; layout: Record<string, any>}>;
+  stickys?: StickyRefSnapshot[];
 }): RestoredSummary => {
   const createWindow = (app as any).createWindow as
     | ((
@@ -250,13 +267,36 @@ export const restoreWorkspace = (ws: {
     }
     created += 1;
   }
-  return {created, notices: allNotices};
+
+  // Sticky refs: reopen notes that still exist at their saved bounds
+  // (createStickyNote loads content from notes.json and display-clamps);
+  // notes deleted since the save are skipped — preview already said so.
+  let stickysReopened = 0;
+  const stickysSkipped: string[] = [];
+  const refs = ws.stickys || [];
+  if (refs.length > 0) {
+    const known = new Set(readAllNotes().map((n) => n.id));
+    for (const ref of refs) {
+      if (!known.has(ref.id)) {
+        stickysSkipped.push(ref.id);
+        continue;
+      }
+      try {
+        createStickyNote({id: ref.id, x: ref.x, y: ref.y, width: ref.width, height: ref.height});
+        stickysReopened += 1;
+      } catch (err) {
+        stickysSkipped.push(ref.id);
+        allNotices.push(`sticky ${ref.id}: reopen failed (${String(err)})`);
+      }
+    }
+  }
+  return {created, notices: allNotices, stickysReopened, stickysSkipped};
 };
 
 export const captureAllWindows = (windows: BrowserWindow[], timeoutMs = 3000): Promise<CaptureResult> => {
   const live = windows.filter((w) => w && !w.isDestroyed() && (w as any).rpc);
   if (live.length === 0) {
-    return Promise.resolve({windows: [], missing: []});
+    return Promise.resolve({windows: [], missing: [], stickys: []});
   }
   const requestId = randomBytes(8).toString('hex');
   return new Promise<CaptureResult>((resolve) => {

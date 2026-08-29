@@ -259,6 +259,7 @@ pub fn save(
     dir: &std::path::Path,
     name: &str,
     windows: Vec<WorkspaceWindow>,
+    stickys: Option<Vec<StickyRef>>,
     app_version: Option<String>,
     overwrite: bool,
 ) -> Result<WorkspaceFile, WorkspaceError> {
@@ -274,7 +275,7 @@ pub fn save(
         saved_at: now_rfc3339(),
         app_version,
         windows,
-        stickys: None,
+        stickys: stickys.filter(|s| !s.is_empty()),
     };
     validate(&ws)?;
     let value = serde_json::to_value(&ws)
@@ -424,6 +425,7 @@ pub struct PreviewReport {
 pub fn preview(
     ws: &WorkspaceFile,
     known_profiles: Option<&std::collections::HashSet<String>>,
+    existing_sticky_ids: Option<&std::collections::HashSet<String>>,
     dir_exists: impl Fn(&str) -> bool,
 ) -> PreviewReport {
     let (panes, web_panes) = count_panes(ws);
@@ -458,6 +460,21 @@ pub fn preview(
             }
         }
     }
+    // Sticky refs point into ~/.hyperia/stickys/notes.json by id; a note the
+    // user has since deleted is skipped at restore, and preview says so.
+    // `None` = the notes file was unreadable, so absence can't be proven.
+    if let (Some(ids), Some(refs)) = (existing_sticky_ids, ws.stickys.as_ref()) {
+        for r in refs {
+            if !ids.contains(&r.id) {
+                issues.push(PreviewIssue {
+                    kind: "missing-sticky".into(),
+                    session_uid: None,
+                    value: r.id.clone(),
+                    resolution: "skipped (note no longer exists)".into(),
+                });
+            }
+        }
+    }
     PreviewReport {
         name: ws.name.clone(),
         schema_version: ws.schema_version,
@@ -470,12 +487,44 @@ pub fn preview(
     }
 }
 
-/// Production preview: cwd checks against the real filesystem.
+/// Production preview: cwd checks against the real filesystem, sticky ids
+/// against ~/.hyperia/stickys/notes.json.
 pub fn preview_fs(
     ws: &WorkspaceFile,
     known_profiles: Option<&std::collections::HashSet<String>>,
 ) -> PreviewReport {
-    preview(ws, known_profiles, |cwd| std::path::Path::new(cwd).is_dir())
+    preview(ws, known_profiles, sticky_ids_fs().as_ref(), |cwd| {
+        std::path::Path::new(cwd).is_dir()
+    })
+}
+
+/// Note ids present in ~/.hyperia/stickys/notes.json. A missing file means "no
+/// notes exist" (Some(empty) — refs will report missing); an unreadable or
+/// unparseable file means "can't know" (None — the check is skipped).
+pub fn sticky_ids_fs() -> Option<std::collections::HashSet<String>> {
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").ok()
+    } else {
+        std::env::var("HOME").ok()
+    }?;
+    let path = std::path::PathBuf::from(home)
+        .join(".hyperia")
+        .join("stickys")
+        .join("notes.json");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Some(std::collections::HashSet::new())
+        }
+        Err(_) => return None,
+    };
+    let notes: Vec<serde_json::Value> = serde_json::from_str(&content).ok()?;
+    Some(
+        notes
+            .iter()
+            .filter_map(|n| n["id"].as_str().map(String::from))
+            .collect(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -812,7 +861,7 @@ mod tests {
     #[test]
     fn save_then_read_round_trips() {
         let dir = tempdir();
-        let ws = save(&dir, "demo", vec![sample_window()], Some("0.17.50".into()), false).unwrap();
+        let ws = save(&dir, "demo", vec![sample_window()], None, Some("0.17.50".into()), false).unwrap();
         assert_eq!(ws.kind, WORKSPACE_KIND);
         assert_eq!(ws.schema_version, SCHEMA_VERSION);
         let read = read_and_validate(&dir.join("demo.json")).unwrap();
@@ -827,10 +876,10 @@ mod tests {
     #[test]
     fn save_refuses_overwrite_unless_flagged() {
         let dir = tempdir();
-        save(&dir, "demo", vec![sample_window()], None, false).unwrap();
-        let err = save(&dir, "demo", vec![sample_window()], None, false).unwrap_err();
+        save(&dir, "demo", vec![sample_window()], None, None, false).unwrap();
+        let err = save(&dir, "demo", vec![sample_window()], None, None, false).unwrap_err();
         assert!(matches!(err, WorkspaceError::AlreadyExists(_)));
-        save(&dir, "demo", vec![sample_window()], None, true).unwrap();
+        save(&dir, "demo", vec![sample_window()], None, None, true).unwrap();
     }
 
     #[test]
@@ -838,7 +887,7 @@ mod tests {
         let dir = tempdir();
         let mut w = sample_window();
         w.layout["sessions"]["s1"]["pid"] = serde_json::json!(4242);
-        let err = save(&dir, "demo", vec![w], None, false).unwrap_err();
+        let err = save(&dir, "demo", vec![w], None, None, false).unwrap_err();
         assert!(matches!(err, WorkspaceError::Corrupt(_)), "got {err:?}");
         assert!(!dir.join("demo.json").exists(), "nothing written on validation failure");
     }
@@ -847,13 +896,13 @@ mod tests {
     fn save_rejects_empty_and_malformed() {
         let dir = tempdir();
         assert!(matches!(
-            save(&dir, "demo", vec![], None, false).unwrap_err(),
+            save(&dir, "demo", vec![], None, None, false).unwrap_err(),
             WorkspaceError::Corrupt(_)
         ));
         let mut w = sample_window();
         w.layout = serde_json::json!({"termGroups": {}});
         assert!(matches!(
-            save(&dir, "demo", vec![w], None, false).unwrap_err(),
+            save(&dir, "demo", vec![w], None, None, false).unwrap_err(),
             WorkspaceError::Corrupt(_)
         ));
     }
@@ -870,7 +919,7 @@ mod tests {
     #[test]
     fn list_counts_and_flags_invalid() {
         let dir = tempdir();
-        save(&dir, "good", vec![sample_window()], None, false).unwrap();
+        save(&dir, "good", vec![sample_window()], None, None, false).unwrap();
         std::fs::write(dir.join("broken.json"), "{ not json").unwrap();
         std::fs::write(
             dir.join("other.json"),
@@ -897,7 +946,7 @@ mod tests {
     #[test]
     fn list_newest_first() {
         let dir = tempdir();
-        let mut a = save(&dir, "older", vec![sample_window()], None, false).unwrap();
+        let mut a = save(&dir, "older", vec![sample_window()], None, None, false).unwrap();
         // Force distinct timestamps without sleeping.
         a.saved_at = "2020-01-01T00:00:00Z".into();
         crate::util::write_json_file_atomic(
@@ -905,7 +954,7 @@ mod tests {
             &serde_json::to_value(&a).unwrap(),
         )
         .unwrap();
-        save(&dir, "newer", vec![sample_window()], None, false).unwrap();
+        save(&dir, "newer", vec![sample_window()], None, None, false).unwrap();
         let rows = list(&dir).unwrap();
         assert_eq!(rows[0].name, "newer");
         assert_eq!(rows[1].name, "older");
@@ -916,7 +965,7 @@ mod tests {
     #[test]
     fn delete_and_missing() {
         let dir = tempdir();
-        save(&dir, "demo", vec![sample_window()], None, false).unwrap();
+        save(&dir, "demo", vec![sample_window()], None, None, false).unwrap();
         delete(&dir, "demo").unwrap();
         assert!(!dir.join("demo.json").exists());
         assert!(matches!(delete(&dir, "demo").unwrap_err(), WorkspaceError::NotFound(_)));
@@ -926,7 +975,7 @@ mod tests {
     #[test]
     fn rename_moves_and_rewrites_name() {
         let dir = tempdir();
-        save(&dir, "old", vec![sample_window()], None, false).unwrap();
+        save(&dir, "old", vec![sample_window()], None, None, false).unwrap();
         rename(&dir, "old", "new", false).unwrap();
         assert!(!dir.join("old.json").exists());
         let ws = read_and_validate(&dir.join("new.json")).unwrap();
@@ -936,8 +985,8 @@ mod tests {
     #[test]
     fn rename_collision_and_noop() {
         let dir = tempdir();
-        save(&dir, "a", vec![sample_window()], None, false).unwrap();
-        save(&dir, "b", vec![sample_window()], None, false).unwrap();
+        save(&dir, "a", vec![sample_window()], None, None, false).unwrap();
+        save(&dir, "b", vec![sample_window()], None, None, false).unwrap();
         assert!(matches!(
             rename(&dir, "a", "b", false).unwrap_err(),
             WorkspaceError::AlreadyExists(_)
@@ -962,7 +1011,7 @@ mod tests {
             load_workspace(&dir, "../evil").unwrap_err(),
             WorkspaceError::InvalidName(_)
         ));
-        save(&dir, "demo", vec![sample_window()], None, false).unwrap();
+        save(&dir, "demo", vec![sample_window()], None, None, false).unwrap();
         assert_eq!(load_workspace(&dir, "demo").unwrap().name, "demo");
         std::fs::write(dir.join("trunc.json"), "{\"kind\": \"hyperia-worksp").unwrap();
         assert!(matches!(
@@ -983,7 +1032,7 @@ mod tests {
             stickys: None,
         };
         let profiles: std::collections::HashSet<String> = ["zsh".to_string()].into();
-        let report = preview(&ws, Some(&profiles), |_| true);
+        let report = preview(&ws, Some(&profiles), None, |_| true);
         assert_eq!(report.windows, 1);
         assert_eq!(report.panes, 1);
         assert_eq!(report.web_panes, 1);
@@ -1002,7 +1051,7 @@ mod tests {
             stickys: None,
         };
         let profiles: std::collections::HashSet<String> = ["bash".to_string()].into();
-        let report = preview(&ws, Some(&profiles), |_| false);
+        let report = preview(&ws, Some(&profiles), None, |_| false);
         let kinds: Vec<&str> = report.issues.iter().map(|i| i.kind.as_str()).collect();
         assert!(kinds.contains(&"missing-cwd"));
         assert!(kinds.contains(&"unknown-profile"));
@@ -1024,8 +1073,55 @@ mod tests {
             windows: vec![sample_window()],
             stickys: None,
         };
-        let report = preview(&ws, None, |_| true);
+        let report = preview(&ws, None, None, |_| true);
         assert!(report.issues.is_empty());
+    }
+
+    #[test]
+    fn preview_reports_missing_stickys() {
+        let mut ws = WorkspaceFile {
+            kind: WORKSPACE_KIND.into(),
+            schema_version: SCHEMA_VERSION,
+            name: "demo".into(),
+            saved_at: "2026-08-28T00:00:00Z".into(),
+            app_version: None,
+            windows: vec![sample_window()],
+            stickys: Some(vec![
+                StickyRef {id: "note-alive".into(), x: 1, y: 2, width: 300, height: 200, open: true},
+                StickyRef {id: "note-gone".into(), x: 5, y: 6, width: 300, height: 200, open: true},
+            ]),
+        };
+        let ids: std::collections::HashSet<String> = ["note-alive".to_string()].into();
+        let report = preview(&ws, None, Some(&ids), |_| true);
+        assert_eq!(report.stickys, 2);
+        let missing: Vec<&PreviewIssue> =
+            report.issues.iter().filter(|i| i.kind == "missing-sticky").collect();
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].value, "note-gone");
+        assert!(missing[0].resolution.contains("skipped"));
+
+        // Unreadable notes file (None) → the check is skipped entirely.
+        let report2 = preview(&ws, None, None, |_| true);
+        assert!(report2.issues.iter().all(|i| i.kind != "missing-sticky"));
+
+        // No stickys in the file → nothing to report either way.
+        ws.stickys = None;
+        let report3 = preview(&ws, None, Some(&ids), |_| true);
+        assert_eq!(report3.stickys, 0);
+        assert!(report3.issues.is_empty());
+    }
+
+    #[test]
+    fn save_persists_sticky_refs_and_drops_empty() {
+        let dir = tempdir();
+        let refs = vec![StickyRef {id: "note-1".into(), x: 0, y: 0, width: 300, height: 200, open: true}];
+        let ws = save(&dir, "with-sticky", vec![sample_window()], Some(refs.clone()), None, false).unwrap();
+        assert_eq!(ws.stickys.as_ref().unwrap().len(), 1);
+        let read = load_workspace(&dir, "with-sticky").unwrap();
+        assert_eq!(read.stickys.unwrap(), refs);
+        // Empty vec normalizes to absent, keeping old files byte-shape stable.
+        let ws2 = save(&dir, "no-sticky", vec![sample_window()], Some(vec![]), None, false).unwrap();
+        assert!(ws2.stickys.is_none());
     }
 
     // ---- export / import / migrate (#169) ----------------------------------
@@ -1051,7 +1147,7 @@ mod tests {
     #[test]
     fn export_then_import_round_trips_byte_stable() {
         let dir = tempdir();
-        save(&dir, "demo", vec![sample_window()], Some("x".into()), false).unwrap();
+        save(&dir, "demo", vec![sample_window()], None, Some("x".into()), false).unwrap();
         let dest = dir.join("exported").join("demo-export.json");
         export(&dir, "demo", &dest, false).unwrap();
         // The export equals the library file byte-for-byte (same serializer).
@@ -1071,7 +1167,7 @@ mod tests {
     #[test]
     fn export_refuses_existing_dest_unless_overwrite() {
         let dir = tempdir();
-        save(&dir, "demo", vec![sample_window()], None, false).unwrap();
+        save(&dir, "demo", vec![sample_window()], None, None, false).unwrap();
         let dest = dir.join("out.json");
         std::fs::write(&dest, "occupied").unwrap();
         assert!(matches!(
@@ -1146,7 +1242,7 @@ mod tests {
     #[test]
     fn import_name_collision_and_overwrite() {
         let dir = tempdir();
-        save(&dir, "demo", vec![sample_window()], None, false).unwrap();
+        save(&dir, "demo", vec![sample_window()], None, None, false).unwrap();
         let srcdir = dir.join("incoming");
         std::fs::create_dir_all(&srcdir).unwrap();
         let src = srcdir.join("incoming.json");
@@ -1184,7 +1280,7 @@ mod tests {
     #[test]
     fn future_version_refused() {
         let dir = tempdir();
-        let ws = save(&dir, "demo", vec![sample_window()], None, false).unwrap();
+        let ws = save(&dir, "demo", vec![sample_window()], None, None, false).unwrap();
         let mut v = serde_json::to_value(&ws).unwrap();
         v["schemaVersion"] = serde_json::json!(99);
         crate::util::write_json_file_atomic(&dir.join("future.json"), &v).unwrap();

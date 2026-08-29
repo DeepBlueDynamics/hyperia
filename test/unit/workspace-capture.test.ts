@@ -7,10 +7,20 @@ const proxyquire = require('proxyquire').noCallThru();
 
 // app/workspace.ts imports electron for geometry capture; the pure layout
 // normalizer under test never touches it.
-const {toWorkspaceLayout, remapUids, annotateMissingResources} = proxyquire('../../app/workspace', {
-  electron: {app: {}, screen: {getDisplayMatching: () => ({id: 1}), getAllDisplays: () => []}},
-  './window-state': {boundsAreVisible: () => true}
-});
+// Load app/workspace with its electron/sticky/window-state seams stubbed.
+const loadWorkspaceModule = (overrides: Record<string, any> = {}) =>
+  proxyquire('../../app/workspace', {
+    electron: {app: {}, screen: {getDisplayMatching: () => ({id: 1}), getAllDisplays: () => []}},
+    './window-state': {boundsAreVisible: () => true},
+    './sticky': {
+      listOpenStickyRefs: () => [],
+      readAllNotes: () => [],
+      createStickyNote: () => ({win: null, id: '', name: ''})
+    },
+    ...overrides
+  });
+
+const {toWorkspaceLayout, remapUids, annotateMissingResources} = loadWorkspaceModule();
 
 test('toWorkspaceLayout strips the transport envelope and pids', (t) => {
   const layout = toWorkspaceLayout({
@@ -94,6 +104,44 @@ test('remapUids twice yields disjoint uid sets (collision-proof)', (t) => {
   for (const uid of uids(first)) {
     t.false(uids(second).has(uid));
   }
+});
+
+// ---- sticky restore (#170) -------------------------------------------------
+
+test('restoreWorkspace reopens existing stickys and skips deleted ones', (t) => {
+  const created: any[] = [];
+  const opened: any[] = [];
+  const mod = loadWorkspaceModule({
+    electron: {
+      app: {
+        createWindow: (fn: any) => {
+          created.push(fn);
+          return {setFullScreen: () => {}, maximize: () => {}};
+        }
+      },
+      screen: {getDisplayMatching: () => ({id: 1}), getAllDisplays: () => []}
+    },
+    './sticky': {
+      listOpenStickyRefs: () => [],
+      readAllNotes: () => [{id: 'note-alive'}],
+      createStickyNote: (opts: any) => {
+        opened.push(opts);
+        return {win: {}, id: opts.id, name: 'x'};
+      }
+    }
+  });
+  const summary = mod.restoreWorkspace({
+    windows: [{geometry: {x: 0, y: 0, width: 800, height: 600}, layout: {termGroups: {}, sessions: {}}}],
+    stickys: [
+      {id: 'note-alive', x: 11, y: 22, width: 300, height: 200, open: true},
+      {id: 'note-gone', x: 1, y: 2, width: 300, height: 200, open: true}
+    ]
+  });
+  t.is(summary.created, 1);
+  t.is(summary.stickysReopened, 1);
+  t.deepEqual(summary.stickysSkipped, ['note-gone']);
+  t.is(opened.length, 1);
+  t.deepEqual(opened[0], {id: 'note-alive', x: 11, y: 22, width: 300, height: 200});
 });
 
 // ---- annotateMissingResources (#168) --------------------------------------

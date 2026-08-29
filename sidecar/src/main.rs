@@ -2925,10 +2925,16 @@ async fn post_workspace_save(
         .as_array()
         .cloned()
         .unwrap_or_default();
+    // Open sticky notes captured alongside the windows (chunk 4: #170) —
+    // references only; note content stays canonical in stickys/notes.json.
+    let stickys: Option<Vec<workspace::StickyRef>> = snapshot
+        .get("stickys")
+        .and_then(|s| serde_json::from_value(s.clone()).ok());
     match workspace::save(
         &dir,
         &body.name,
         windows,
+        stickys,
         Some(env!("CARGO_PKG_VERSION").to_string()),
         body.overwrite,
     ) {
