@@ -36,6 +36,8 @@ export type ITermGroup = Immutable<{
   tabName?: string | null;
   disableTitleInheritance?: boolean;
   webName?: string | null;
+  // Pinned tabs shrink to initials and hold the leftmost slots of the strip.
+  pinned?: boolean;
 }>;
 
 export type ITermGroups = Immutable<Record<string, ITermGroup>>;
@@ -276,6 +278,8 @@ export type TabProps = {
   defaultProfile?: string;
   disableTitleInheritance?: boolean;
   onToggleTitleInheritance?: () => void;
+  isPinned?: boolean;
+  onPin?: () => void;
 } & extensionProps;
 
 export type AgentStatus = {
@@ -300,6 +304,7 @@ export type ITab = {
   groupTabName?: string;
   manualTabName?: boolean;
   disableTitleInheritance?: boolean;
+  pinned?: boolean;
 };
 
 export type TabsProps = {
@@ -314,6 +319,7 @@ export type TabsProps = {
   profiles: configOptions['profiles'];
   openNewTab: (profile: string) => void;
   onMoveTab?: (fromUid: string, toIndex: number) => void;
+  onPinTab?: (uid: string, pinned: boolean) => void;
 } & extensionProps;
 
 export type NotificationProps = {

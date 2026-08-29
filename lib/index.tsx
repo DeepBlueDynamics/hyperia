@@ -481,6 +481,14 @@ rpc.on('move right req', () => {
   store_.dispatch(uiActions.moveRight());
 });
 
+rpc.on('move tab left req', () => {
+  store_.dispatch(uiActions.moveTabLeft());
+});
+
+rpc.on('move tab right req', () => {
+  store_.dispatch(uiActions.moveTabRight());
+});
+
 rpc.on('move jump req', (index) => {
   store_.dispatch(uiActions.moveTo(index));
 });
@@ -875,7 +883,8 @@ rpc.on('get-layout-state-req', (req) => {
         webUrl: (g as any).webUrl,
         webName: (g as any).webName,
         tabName: g.tabName,
-        manualTabName: !!(g as any).manualTabName
+        manualTabName: !!(g as any).manualTabName,
+        pinned: (g as any).pinned
       };
     }
   });
