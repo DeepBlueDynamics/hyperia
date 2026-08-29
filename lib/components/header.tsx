@@ -99,7 +99,8 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
             defaultProfile: props.defaultProfile,
             profiles: props.profiles.asMutable({deep: true}),
             openNewTab: props.openNewTab,
-            onMoveTab: props.onMoveTab
+            onMoveTab: props.onMoveTab,
+            onPinTab: props.onPinTab
           })}
         />
         {/* Linux is frameless (app/ui/window.ts) and gets NEITHER the native

@@ -27,6 +27,8 @@
     "command+alt+left",
     "ctrl+shift+tab"
   ],
+  "tab:moveLeft": "command+shift+pageup",
+  "tab:moveRight": "command+shift+pagedown",
   "tab:jump:prefix": "command",
   "pane:next": "command+]",
   "pane:prev": "command+[",
