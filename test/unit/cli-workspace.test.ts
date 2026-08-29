@@ -1,5 +1,7 @@
 /* eslint-disable eslint-comments/disable-enable-pair */
 
+import {resolve} from 'path';
+
 import test from 'ava';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -122,8 +124,9 @@ test('workspace export resolves the path and passes overwrite', async (t) => {
   t.is(calls[0].body.params.name, 'workspace_export');
   const args = calls[0].body.params.arguments;
   t.is(args.name, 'demo');
-  t.true(args.path.startsWith('/'), 'relative path resolved to absolute');
-  t.true(args.path.endsWith('/out/demo.json'));
+  // Same resolver the CLI uses — keeps the assertion honest on Windows,
+  // where absolute paths are drive-lettered, not slash-prefixed.
+  t.is(args.path, resolve('out/demo.json'));
   t.is(args.overwrite, true);
 });
 
@@ -132,7 +135,7 @@ test('workspace import passes resolved path and optional name', async (t) => {
   const code = await runMcpCli(['workspace', 'import', '/abs/from.json', '--name', 'brought-in']);
   t.is(code, 0);
   t.is(calls[0].body.params.name, 'workspace_import');
-  t.deepEqual(calls[0].body.params.arguments, {path: '/abs/from.json', name: 'brought-in'});
+  t.deepEqual(calls[0].body.params.arguments, {path: resolve('/abs/from.json'), name: 'brought-in'});
 });
 
 test('workspace with a missing sub-verb or name errors without calling out', async (t) => {
