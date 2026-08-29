@@ -3016,8 +3016,24 @@ async fn post_workspace_restore(
     Json(body): Json<WorkspaceNameBody>,
 ) -> (StatusCode, String) {
     // Restoring spawns windows and PTYs — same consent bar as opening panes.
-    if let Err(resp) = enforce_create(&state, &headers, "create_window").await {
-        return resp;
+    if let Err((status, msg)) = enforce_create(&state, &headers, "create_window").await {
+        // The generic held-command message promises the command "will run
+        // AUTOMATICALLY on approval" — true for held pane writes, NOT for
+        // this route (nothing replays the HTTP request). Say what actually
+        // works: approve in Hyperia, then call restore again (durable grants
+        // persist, so the retry sails through).
+        if msg.contains("\"pending\":true") {
+            return (
+                status,
+                serde_json::json!({
+                    "ok": false,
+                    "pending": true,
+                    "message": "The human is being asked in Hyperia (a consent toast in the app). Once they approve, CALL workspace_restore AGAIN — this request is not replayed automatically. A durable grant (e.g. 'Always') makes the retry and all future restores immediate.",
+                })
+                .to_string(),
+            );
+        }
+        return (status, msg);
     }
     let dir = match workspaces_dir_or_500() {
         Ok(d) => d,
