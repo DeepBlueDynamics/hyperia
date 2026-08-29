@@ -115,6 +115,26 @@ test.serial('workspace preview renders counts and issues', async (t) => {
   t.true(out.includes('missing-cwd: /gone — will open in the home directory'));
 });
 
+test('workspace export resolves the path and passes overwrite', async (t) => {
+  const {runMcpCli, calls} = load('{"ok":true}');
+  const code = await runMcpCli(['workspace', 'export', 'demo', 'out/demo.json', '--overwrite']);
+  t.is(code, 0);
+  t.is(calls[0].body.params.name, 'workspace_export');
+  const args = calls[0].body.params.arguments;
+  t.is(args.name, 'demo');
+  t.true(args.path.startsWith('/'), 'relative path resolved to absolute');
+  t.true(args.path.endsWith('/out/demo.json'));
+  t.is(args.overwrite, true);
+});
+
+test('workspace import passes resolved path and optional name', async (t) => {
+  const {runMcpCli, calls} = load('{"ok":true}');
+  const code = await runMcpCli(['workspace', 'import', '/abs/from.json', '--name', 'brought-in']);
+  t.is(code, 0);
+  t.is(calls[0].body.params.name, 'workspace_import');
+  t.deepEqual(calls[0].body.params.arguments, {path: '/abs/from.json', name: 'brought-in'});
+});
+
 test('workspace with a missing sub-verb or name errors without calling out', async (t) => {
   const {runMcpCli, calls} = load('{"ok":true}');
   t.not(await runMcpCli(['workspace']), 0);

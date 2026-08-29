@@ -281,6 +281,8 @@ pub const DOORS: &[Door] = &[
             "workspace_rename",
             "workspace_preview",
             "workspace_restore",
+            "workspace_export",
+            "workspace_import",
         ],
     },
     Door {

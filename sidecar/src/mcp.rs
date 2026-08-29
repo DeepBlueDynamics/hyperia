@@ -848,6 +848,26 @@ pub struct WorkspaceRestoreRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WorkspaceExportRequest {
+    /// Name of the saved workspace to export.
+    pub name: String,
+    /// ABSOLUTE destination file path for the exported .json.
+    pub path: String,
+    /// Replace an existing file at the destination. Default false.
+    pub overwrite: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WorkspaceImportRequest {
+    /// ABSOLUTE path of the workspace .json to import (a legacy savedLayoutState blob is auto-migrated).
+    pub path: String,
+    /// Name to import under. Defaults to the file's own name field, else its filename.
+    pub name: Option<String>,
+    /// Replace an existing workspace of the same name. Default false.
+    pub overwrite: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct WorkspaceRenameRequest {
     /// Current name of the saved workspace.
     pub from: String,
@@ -1460,6 +1480,44 @@ impl HyperiaMcp {
         let resp = self
             .post_json_as("/api/workspace/restore", &body, forwarded_auth(&ctx).as_deref())
             .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Export a saved workspace to an ABSOLUTE file path as the documented versioned JSON (docs/workspace-format.md) — for sharing or backup. The file is a normal workspace file; import it on any Hyperia with workspace_import. Fails if the destination exists unless overwrite=true. Requires identity.")]
+    async fn workspace_export(
+        &self,
+        Parameters(req): Parameters<WorkspaceExportRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if let Err(refusal) = self.require_workspace_identity(&ctx).await {
+            return Ok(refusal);
+        }
+        let body = serde_json::json!({
+            "name": req.name,
+            "path": req.path,
+            "overwrite": req.overwrite.unwrap_or(false),
+        });
+        let resp = self.post_json("/api/workspace/export", &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Import a workspace file from an ABSOLUTE path into ~/.hyperia/workspaces/. Accepts current workspace files and auto-migrates the legacy savedLayoutState blob (even one still wrapped in a whole hyperia.json). The source file is never modified; corrupt or newer-versioned files fail with a clear typed error. Fails on a name collision unless overwrite=true. Importing never restores anything — preview/restore afterwards. Requires identity.")]
+    async fn workspace_import(
+        &self,
+        Parameters(req): Parameters<WorkspaceImportRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if let Err(refusal) = self.require_workspace_identity(&ctx).await {
+            return Ok(refusal);
+        }
+        let mut body = serde_json::json!({
+            "path": req.path,
+            "overwrite": req.overwrite.unwrap_or(false),
+        });
+        if let Some(name) = req.name {
+            body["name"] = serde_json::json!(name);
+        }
+        let resp = self.post_json("/api/workspace/import", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -2130,8 +2188,8 @@ impl HyperiaMcp {
             },
             {
                 "name": "workspace",
-                "description": "Named workspaces: save the whole app state (windows, tabs, splits, panes, web panes) under a name at ~/.hyperia/workspaces/, list/rename/delete saved workspaces, preview what a restore would substitute, and restore one into new windows.",
-                "tools": ["workspace_save", "workspace_list", "workspace_rename", "workspace_delete", "workspace_preview", "workspace_restore"]
+                "description": "Named workspaces: save the whole app state (windows, tabs, splits, panes, web panes) under a name at ~/.hyperia/workspaces/, list/rename/delete saved workspaces, preview what a restore would substitute, restore one into new windows, and export/import the documented versioned JSON for sharing.",
+                "tools": ["workspace_save", "workspace_list", "workspace_rename", "workspace_delete", "workspace_preview", "workspace_restore", "workspace_export", "workspace_import"]
             },
             {
                 "name": "editing",

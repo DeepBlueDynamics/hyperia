@@ -137,6 +137,8 @@ Named snapshots of the whole app — every window's geometry plus its tabs, spli
 | `workspace_delete` | Permanently delete a saved workspace file. |
 | `workspace_preview` | What a restore would do without doing it: counts + issues (missing directories, unknown profiles) with each substitution. Free read. |
 | `workspace_restore` | Restore a saved workspace into NEW windows — additive, never touches existing windows or steals focus; missing resources fall back loudly (pane banner + report). Never executes saved commands. Consent-gated. |
+| `workspace_export` | Write a saved workspace to an absolute path as the documented versioned JSON ([workspace-format.md](workspace-format.md)) for sharing/backup. |
+| `workspace_import` | Bring a workspace file into the library from an absolute path; auto-migrates the legacy `savedLayoutState` blob. Source never modified; corrupt/newer files fail with typed errors. |
 
 ## Settings & profiles
 

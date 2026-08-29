@@ -3046,6 +3046,99 @@ async fn post_workspace_restore(
     }
 }
 
+/// Fallback geometry for imported legacy (v0) blobs: the last-known window
+/// rect from window-state.json when available, else a neutral default.
+fn v0_fallback_geometry() -> workspace::Geometry {
+    let path = crate::fsnav::home_dir().join(".hyperia").join("window-state.json");
+    if let Ok(content) = std::fs::read_to_string(&path) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let (Some(w), Some(h)) = (v["width"].as_u64(), v["height"].as_u64()) {
+                return workspace::Geometry {
+                    x: v["x"].as_i64().unwrap_or(60) as i32,
+                    y: v["y"].as_i64().unwrap_or(60) as i32,
+                    width: w as u32,
+                    height: h as u32,
+                    display_id: v.get("displayId").cloned(),
+                    is_maximized: v["isMaximized"].as_bool().unwrap_or(false),
+                    is_full_screen: v["isFullScreen"].as_bool().unwrap_or(false),
+                };
+            }
+        }
+    }
+    workspace::default_v0_geometry()
+}
+
+#[derive(serde::Deserialize)]
+struct WorkspaceExportBody {
+    name: String,
+    path: String,
+    #[serde(default)]
+    overwrite: bool,
+}
+
+async fn post_workspace_export(Json(body): Json<WorkspaceExportBody>) -> (StatusCode, String) {
+    let dir = match workspaces_dir_or_500() {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    let dest = std::path::PathBuf::from(&body.path);
+    if !dest.is_absolute() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "export path must be absolute (the sidecar's working directory is not yours)".to_string(),
+        );
+    }
+    match workspace::export(&dir, &body.name, &dest, body.overwrite) {
+        Ok(ws) => (
+            StatusCode::OK,
+            serde_json::json!({
+                "ok": true,
+                "name": ws.name,
+                "exportedTo": dest.to_string_lossy(),
+                "windows": ws.windows.len(),
+            })
+            .to_string(),
+        ),
+        Err(e) => (workspace_error_status(&e), e.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct WorkspaceImportBody {
+    path: String,
+    name: Option<String>,
+    #[serde(default)]
+    overwrite: bool,
+}
+
+async fn post_workspace_import(Json(body): Json<WorkspaceImportBody>) -> (StatusCode, String) {
+    let dir = match workspaces_dir_or_500() {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    let src = std::path::PathBuf::from(&body.path);
+    if !src.is_absolute() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "import path must be absolute (the sidecar's working directory is not yours)".to_string(),
+        );
+    }
+    match workspace::import(&dir, &src, body.name.as_deref(), body.overwrite, v0_fallback_geometry()) {
+        Ok((ws, was_v0)) => (
+            StatusCode::OK,
+            serde_json::json!({
+                "ok": true,
+                "name": ws.name,
+                "windows": ws.windows.len(),
+                "migrated": was_v0,
+                "schemaVersion": ws.schema_version,
+            })
+            .to_string(),
+        ),
+        Err(e) => (workspace_error_status(&e), e.to_string()),
+    }
+}
+
 async fn post_workspace_delete(Json(body): Json<WorkspaceNameBody>) -> (StatusCode, String) {
     let dir = match workspaces_dir_or_500() {
         Ok(d) => d,
@@ -4221,6 +4314,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/workspace/rename", axum::routing::post(post_workspace_rename))
         .route("/api/workspace/preview", axum::routing::post(post_workspace_preview))
         .route("/api/workspace/restore", axum::routing::post(post_workspace_restore))
+        .route("/api/workspace/export", axum::routing::post(post_workspace_export))
+        .route("/api/workspace/import", axum::routing::post(post_workspace_import))
         .route("/api/web-pane", axum::routing::post(post_open_web_pane))
         .route("/api/web-pane/reload", axum::routing::post(post_web_pane_reload))
         .route("/api/web-pane/click", axum::routing::post(post_web_pane_click))
