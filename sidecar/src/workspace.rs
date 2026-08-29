@@ -646,20 +646,29 @@ fn sanitize_v0_layout(mut blob: serde_json::Value) -> serde_json::Value {
 /// Export a saved workspace to an arbitrary destination path (validate, then
 /// write atomically). The library file is the source of truth; the export is
 /// a byte-equivalent copy of its re-serialized content.
+///
+/// A destination that is an existing DIRECTORY means "put `<name>.json` in
+/// there" — exporting to ~/Downloads must not produce a file named
+/// `Downloads`. Returns the workspace plus the final file path written.
 pub fn export(
     dir: &std::path::Path,
     name: &str,
     dest: &std::path::Path,
     overwrite: bool,
-) -> Result<WorkspaceFile, WorkspaceError> {
+) -> Result<(WorkspaceFile, std::path::PathBuf), WorkspaceError> {
     let ws = load_workspace(dir, name)?;
+    let dest: std::path::PathBuf = if dest.is_dir() {
+        dest.join(format!("{}.json", ws.name))
+    } else {
+        dest.to_path_buf()
+    };
     if dest.exists() && !overwrite {
         return Err(WorkspaceError::AlreadyExists(dest.to_string_lossy().into_owned()));
     }
     let value = serde_json::to_value(&ws)
         .map_err(|e| WorkspaceError::Io(format!("serialize failed: {e}")))?;
-    crate::util::write_json_file_atomic(dest, &value)?;
-    Ok(ws)
+    crate::util::write_json_file_atomic(&dest, &value)?;
+    Ok((ws, dest))
 }
 
 /// Import a workspace (or legacy blob) from an arbitrary source path into the
@@ -1152,7 +1161,8 @@ mod tests {
         let dir = tempdir();
         save(&dir, "demo", vec![sample_window()], None, Some("x".into()), false).unwrap();
         let dest = dir.join("exported").join("demo-export.json");
-        export(&dir, "demo", &dest, false).unwrap();
+        let (_, written) = export(&dir, "demo", &dest, false).unwrap();
+        assert_eq!(written, dest);
         // The export equals the library file byte-for-byte (same serializer).
         let lib = std::fs::read_to_string(dir.join("demo.json")).unwrap();
         let exp = std::fs::read_to_string(&dest).unwrap();
@@ -1179,6 +1189,25 @@ mod tests {
         ));
         export(&dir, "demo", &dest, true).unwrap();
         assert!(std::fs::read_to_string(&dest).unwrap().contains(WORKSPACE_KIND));
+    }
+
+    #[test]
+    fn export_to_directory_appends_name_json() {
+        let dir = tempdir();
+        save(&dir, "demo", vec![sample_window()], None, None, false).unwrap();
+        let outdir = dir.join("downloads");
+        std::fs::create_dir_all(&outdir).unwrap();
+        let (_, written) = export(&dir, "demo", &outdir, false).unwrap();
+        assert_eq!(written, outdir.join("demo.json"));
+        assert!(written.is_file());
+        // The directory itself must never be replaced by a file.
+        assert!(outdir.is_dir());
+        // Collision inside the dir still respects overwrite.
+        assert!(matches!(
+            export(&dir, "demo", &outdir, false).unwrap_err(),
+            WorkspaceError::AlreadyExists(_)
+        ));
+        export(&dir, "demo", &outdir, true).unwrap();
     }
 
     #[test]

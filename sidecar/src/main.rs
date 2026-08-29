@@ -3103,20 +3103,29 @@ async fn post_workspace_export(Json(body): Json<WorkspaceExportBody>) -> (Status
         Ok(d) => d,
         Err(e) => return e,
     };
-    let dest = std::path::PathBuf::from(&body.path);
+    let mut dest = std::path::PathBuf::from(&body.path);
     if !dest.is_absolute() {
         return (
             StatusCode::BAD_REQUEST,
             "export path must be absolute (the sidecar's working directory is not yours)".to_string(),
         );
     }
+    // A trailing separator is a directory INTENT even if the dir doesn't
+    // exist yet — never turn "…/Downloads/" into a file named Downloads.
+    // (Existing directories are handled inside workspace::export.)
+    if body.path.ends_with('/') || body.path.ends_with('\\') {
+        match workspace::sanitize_name(&body.name) {
+            Ok(n) => dest = dest.join(format!("{n}.json")),
+            Err(e) => return (workspace_error_status(&e), e.to_string()),
+        }
+    }
     match workspace::export(&dir, &body.name, &dest, body.overwrite) {
-        Ok(ws) => (
+        Ok((ws, written)) => (
             StatusCode::OK,
             serde_json::json!({
                 "ok": true,
                 "name": ws.name,
-                "exportedTo": dest.to_string_lossy(),
+                "exportedTo": written.to_string_lossy(),
                 "windows": ws.windows.len(),
             })
             .to_string(),
