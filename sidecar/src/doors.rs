@@ -268,6 +268,20 @@ pub const DOORS: &[Door] = &[
         ],
     },
     Door {
+        // Named workspaces (epic #146). Deliberately its own door:
+        // terminal_layout sits at 9 tools and this family grows to 8
+        // (preview/restore/export/import land in later chunks).
+        name: "workspace",
+        description: "Named workspaces: save, list, rename, delete terminal layouts",
+        ghost_tools: &[],
+        mcp_tools: &[
+            "workspace_save",
+            "workspace_list",
+            "workspace_delete",
+            "workspace_rename",
+        ],
+    },
+    Door {
         name: "pulse",
         description: "Pane busy/idle status and pulse indicators",
         ghost_tools: &[],
@@ -702,9 +716,10 @@ mod tests {
     fn expected_door_counts_per_surface() {
         // Plan §3.1 table: 8 ghost doors (header says "7", table lists 8 —
         // the table is authoritative). Plan §3.2: 9 MCP doors + the local-TTS
-        // `media` door (hyperia_spoken_summary) = 10.
+        // `media` door (hyperia_spoken_summary) + the `workspace` door
+        // (epic #146) = 11.
         assert_eq!(doors_for(Surface::Ghost).count(), 8, "ghost door count");
-        assert_eq!(doors_for(Surface::Mcp).count(), 10, "mcp door count");
+        assert_eq!(doors_for(Surface::Mcp).count(), 11, "mcp door count");
         assert_eq!(GHOST_CORE.len(), 11, "ghost core count");
         assert_eq!(MCP_CORE.len(), 12, "mcp core count");
     }

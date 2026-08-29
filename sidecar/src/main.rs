@@ -22,6 +22,7 @@ mod lume_store;
 mod screen;
 mod stream;
 mod util;
+mod workspace;
 mod settings;
 mod snapshot_image;
 mod telemetry;
@@ -2855,6 +2856,157 @@ async fn post_layout_save(State(state): State<AppState>) -> (StatusCode, String)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Named workspaces (epic #146, chunk 1: #167). File ops live in workspace.rs;
+// these handlers do the Electron capture round-trip and translate errors.
+// ---------------------------------------------------------------------------
+
+fn workspaces_dir_or_500() -> Result<std::path::PathBuf, (StatusCode, String)> {
+    workspace::default_workspaces_dir().ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "could not resolve home directory for ~/.hyperia/workspaces".to_string(),
+    ))
+}
+
+fn workspace_error_status(e: &workspace::WorkspaceError) -> StatusCode {
+    use workspace::WorkspaceError as E;
+    match e {
+        E::InvalidName(_) | E::AlreadyExists(_) => StatusCode::BAD_REQUEST,
+        E::NotFound(_) => StatusCode::NOT_FOUND,
+        E::Corrupt(_) | E::WrongKind(_) | E::NewerThanSupported(_) => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
+        E::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct WorkspaceSaveBody {
+    name: String,
+    #[serde(default)]
+    overwrite: bool,
+}
+
+async fn post_workspace_save(
+    State(state): State<AppState>,
+    Json(body): Json<WorkspaceSaveBody>,
+) -> (StatusCode, String) {
+    let dir = match workspaces_dir_or_500() {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    // Correlated capture: every window's geometry + layout, or a missing list.
+    let raw = match state
+        .bridge
+        .send_command(serde_json::json!({"type": "CaptureWorkspace"}))
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("capture failed: {e}")),
+    };
+    let snapshot: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("capture returned invalid JSON: {e}")),
+    };
+    if let Some(err) = snapshot.get("error").and_then(|e| e.as_str()) {
+        return (StatusCode::BAD_GATEWAY, format!("capture failed: {err}"));
+    }
+    let windows: Vec<workspace::WorkspaceWindow> =
+        match serde_json::from_value(snapshot["windows"].clone()) {
+            Ok(w) => w,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    format!("capture snapshot didn't match the workspace schema: {e}"),
+                )
+            }
+        };
+    let missing: Vec<serde_json::Value> = snapshot["missing"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    match workspace::save(
+        &dir,
+        &body.name,
+        windows,
+        Some(env!("CARGO_PKG_VERSION").to_string()),
+        body.overwrite,
+    ) {
+        Ok(ws) => {
+            let mut reply = serde_json::json!({
+                "ok": true,
+                "name": ws.name,
+                "savedAt": ws.saved_at,
+                "windows": ws.windows.len(),
+                "path": dir.join(format!("{}.json", ws.name)).to_string_lossy(),
+            });
+            if !missing.is_empty() {
+                reply["warning"] = serde_json::json!(format!(
+                    "{} window(s) did not reply in time and are not in the snapshot",
+                    missing.len()
+                ));
+            }
+            (StatusCode::OK, reply.to_string())
+        }
+        Err(e) => (workspace_error_status(&e), e.to_string()),
+    }
+}
+
+async fn get_workspace_list() -> (StatusCode, String) {
+    let dir = match workspaces_dir_or_500() {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    match workspace::list(&dir) {
+        Ok(rows) => (
+            StatusCode::OK,
+            serde_json::json!({"workspaces": rows}).to_string(),
+        ),
+        Err(e) => (workspace_error_status(&e), e.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct WorkspaceNameBody {
+    name: String,
+}
+
+async fn post_workspace_delete(Json(body): Json<WorkspaceNameBody>) -> (StatusCode, String) {
+    let dir = match workspaces_dir_or_500() {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    match workspace::delete(&dir, &body.name) {
+        Ok(()) => (
+            StatusCode::OK,
+            serde_json::json!({"ok": true, "deleted": body.name}).to_string(),
+        ),
+        Err(e) => (workspace_error_status(&e), e.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct WorkspaceRenameBody {
+    from: String,
+    to: String,
+    #[serde(default)]
+    overwrite: bool,
+}
+
+async fn post_workspace_rename(Json(body): Json<WorkspaceRenameBody>) -> (StatusCode, String) {
+    let dir = match workspaces_dir_or_500() {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    match workspace::rename(&dir, &body.from, &body.to, body.overwrite) {
+        Ok(()) => (
+            StatusCode::OK,
+            serde_json::json!({"ok": true, "from": body.from, "to": body.to}).to_string(),
+        ),
+        Err(e) => (workspace_error_status(&e), e.to_string()),
+    }
+}
+
 async fn post_open_web_pane(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3988,6 +4140,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/window/new", axum::routing::post(post_new_window))
         .route("/api/window/size", axum::routing::post(post_window_size))
         .route("/api/layout/save", axum::routing::post(post_layout_save))
+        .route("/api/workspace/save", axum::routing::post(post_workspace_save))
+        .route("/api/workspace/list", axum::routing::get(get_workspace_list))
+        .route("/api/workspace/delete", axum::routing::post(post_workspace_delete))
+        .route("/api/workspace/rename", axum::routing::post(post_workspace_rename))
         .route("/api/web-pane", axum::routing::post(post_open_web_pane))
         .route("/api/web-pane/reload", axum::routing::post(post_web_pane_reload))
         .route("/api/web-pane/click", axum::routing::post(post_web_pane_click))

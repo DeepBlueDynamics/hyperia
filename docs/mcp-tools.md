@@ -125,6 +125,17 @@ A **pulse** is a recurring prompt the sidecar re-submits into a pane on its own 
 | `report_bug` | File a Hyperia bug report (title, details, failing tool, exact error, repro context). Use instead of guessing when Hyperia itself misbehaves. |
 | `bug_log` | List filed bug reports, newest first. |
 
+## Workspaces
+
+Named snapshots of the whole app — every window's geometry plus its tabs, splits, terminal panes (profile + cwd), and web panes — stored one file per workspace at `~/.hyperia/workspaces/<name>.json`. The scraped per-pane command line is saved as display-only metadata (`annotations.lastCommand`) and is never executed on restore. Save/delete/rename require identity; list is a free read.
+
+| Tool | Description |
+|------|-------------|
+| `workspace_save` | Save the current app state under a name (`overwrite` to replace an existing one). |
+| `workspace_list` | List saved workspaces, newest first, with window/pane counts. Corrupt files show flagged `valid=false`, never hidden. |
+| `workspace_rename` | Rename a saved workspace (`overwrite` to replace a name collision). |
+| `workspace_delete` | Permanently delete a saved workspace file. |
+
 ## Settings & profiles
 
 | Tool | Description |

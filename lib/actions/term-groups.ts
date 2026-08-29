@@ -381,7 +381,9 @@ export function restoreLayoutState(savedState: any) {
             cwd: session.cwd,
             profile: session.profile,
             isRestore: true,
-            lastCommand: session.lastCommand
+            // New saves carry the scraped command under annotations
+            // (display-only, epic #146); old blobs had it bare.
+            lastCommand: session.annotations?.lastCommand ?? session.lastCommand
           });
         }
       });

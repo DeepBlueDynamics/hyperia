@@ -172,7 +172,9 @@ const windowSet = new Set<BrowserWindow>([]);
 
 // --- Sidecar process (Rust agent engine, MCP) ---
 let sidecarProcess: ChildProcess | null = null;
-const SIDECAR_PORT = 9800;
+// Overridable so a dev build (spawned or external) can run beside an installed
+// Hyperia that owns 9800 — same var the sidecar and shell-pane URL already use.
+const SIDECAR_PORT = Number(process.env.HYPERIA_PORT) || 9800;
 
 // Pulse UI bridge. The renderer can't hold SYSTEM_TOKEN (kept off the renderer
 // for the same reason it's off PTYs), so it asks main to call the consent-gated

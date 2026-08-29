@@ -319,7 +319,9 @@ const reducer: ISessionReducer = (state = initialState, action) => {
             profile: s.profile || '',
             cwd: s.cwd || '',
             shellName: s.shellName || nextShellName(),
-            lastCommand: s.lastCommand || '',
+            // New saves keep the scraped command under annotations (epic #146);
+            // old blobs had it bare.
+            lastCommand: s.annotations?.lastCommand || s.lastCommand || '',
             manualTitle: s.manualTitle || false
           });
         });

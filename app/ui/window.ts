@@ -48,6 +48,7 @@ import {getAppIcon} from '../utils/icon';
 import {setRendererType, unsetRendererType} from '../utils/renderer-utils';
 import toElectronBackgroundColor from '../utils/to-electron-background-color';
 import {initWebPaneManager, destroyPanesForWindow, setWindowWebPanesSuppressed} from '../web-pane-manager';
+import {deliverLayoutReply} from '../workspace';
 
 import contextMenuTemplate from './contextmenu';
 
@@ -958,7 +959,7 @@ export function newWindow(
     e.preventDefault();
     isClosingAndWaitingForSave = true;
     (window as any).isClosing = true;
-    rpc.emit('get-layout-state-req');
+    rpc.emit('get-layout-state-req', undefined);
     // Failsafe: the close used to hang waiting for the renderer's
     // 'layout-state-reply' — if that never arrived the window stayed open and
     // you had to click close a SECOND time. Saving layout is best-effort; close
@@ -972,6 +973,11 @@ export function newWindow(
   });
 
   rpc.on('layout-state-reply', (layoutState) => {
+    // A reply carrying a requestId belongs to a workspace capture
+    // (app/workspace.ts) — consume it there and skip the legacy writer.
+    if (layoutState?.requestId && deliverLayoutReply(layoutState.requestId, window, layoutState)) {
+      return;
+    }
     try {
       let currentConfig: any = {};
       if (existsSync(cfgPath)) {
