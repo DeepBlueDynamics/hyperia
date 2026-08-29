@@ -190,6 +190,7 @@ export default class Term extends React.PureComponent<
     newEnvVal: string;
     isCustomModalOpen: boolean;
     customKind: 'shell' | 'agent';
+    restoreNoticeDismissed: boolean;
     profileName: string;
     shellPath: string;
     shellArgs: string;
@@ -266,6 +267,8 @@ export default class Term extends React.PureComponent<
     newEnvVal: '',
     isCustomModalOpen: false,
     customKind: 'shell' as 'shell' | 'agent',
+    // Workspace-restore substitution banner (#168) — dismissed per pane life.
+    restoreNoticeDismissed: false,
     profileName: '',
     shellPath: '',
     shellArgs: '',
@@ -2917,6 +2920,40 @@ export default class Term extends React.PureComponent<
         onDrop={this.onFileDrop}
         style={{position: 'relative'}}
       >
+        {/* Workspace-restore substitution notice (#168): a restored pane whose
+            cwd (etc.) was missing fell back loudly — this banner says what was
+            substituted. Dismissible; never blocks the terminal. */}
+        {(this.props as any).restoreNotice && !this.state.restoreNoticeDismissed && (
+          <div
+            className="term_restoreNotice"
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              zIndex: 6,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '4px 10px',
+              fontSize: '11px',
+              fontFamily: 'var(--font-sans, sans-serif)',
+              background: 'var(--warning-bg, rgba(180, 130, 0, 0.25))',
+              color: 'var(--text-primary, #eee)',
+              borderBottom: '1px solid var(--border-neutral, rgba(255,255,255,0.15))'
+            }}
+          >
+            <span style={{flex: 1}}>⚠ {(this.props as any).restoreNotice}</span>
+            <span
+              role="button"
+              aria-label="Dismiss restore notice"
+              style={{cursor: 'pointer', opacity: 0.8, padding: '0 4px'}}
+              onClick={() => this.setState({restoreNoticeDismissed: true})}
+            >
+              ✕
+            </span>
+          </div>
+        )}
         {/* Ghosted watermark (paneStyle.watermark, e.g. "TOP SECRET") — reads
             as background: faint, diagonal, centered, mouse-transparent. Drawn
             over the canvas because xterm paints an opaque background. */}

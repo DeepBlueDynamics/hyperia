@@ -376,6 +376,279 @@ pub fn rename(
     Ok(())
 }
 
+/// Load one saved workspace by name, with typed errors: `NotFound`,
+/// `Corrupt`, `WrongKind`, `NewerThanSupported`.
+pub fn load_workspace(dir: &std::path::Path, name: &str) -> Result<WorkspaceFile, WorkspaceError> {
+    let name = sanitize_name(name)?;
+    let path = file_path(dir, &name);
+    if !path.exists() {
+        return Err(WorkspaceError::NotFound(name));
+    }
+    read_and_validate(&path)
+}
+
+// ---------------------------------------------------------------------------
+// Preview (chunk 2: #168) — what would restore do, computed without touching
+// Electron. cwd existence via the injected checker (std::fs in production,
+// a closure in tests); profiles against the names the config file declares.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewIssue {
+    /// "missing-cwd" | "unknown-profile" (more kinds in later chunks).
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_uid: Option<String>,
+    pub value: String,
+    pub resolution: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewReport {
+    pub name: String,
+    pub schema_version: u32,
+    pub saved_at: String,
+    pub windows: usize,
+    pub panes: usize,
+    pub web_panes: usize,
+    pub stickys: usize,
+    pub issues: Vec<PreviewIssue>,
+}
+
+/// Compute a restore preview. `known_profiles` is the set of profile names the
+/// config declares — pass `None` when the config lists no profiles at all
+/// (Electron auto-detects shells at startup, so an empty config can't prove a
+/// profile unknown; restore still falls back loudly if one turns out missing).
+pub fn preview(
+    ws: &WorkspaceFile,
+    known_profiles: Option<&std::collections::HashSet<String>>,
+    dir_exists: impl Fn(&str) -> bool,
+) -> PreviewReport {
+    let (panes, web_panes) = count_panes(ws);
+    let mut issues = Vec::new();
+    for w in &ws.windows {
+        let sessions = match w.layout.get("sessions").and_then(|v| v.as_object()) {
+            Some(s) => s,
+            None => continue,
+        };
+        for (uid, s) in sessions {
+            if let Some(cwd) = s.get("cwd").and_then(|c| c.as_str()) {
+                if !cwd.is_empty() && !dir_exists(cwd) {
+                    issues.push(PreviewIssue {
+                        kind: "missing-cwd".into(),
+                        session_uid: Some(uid.clone()),
+                        value: cwd.to_string(),
+                        resolution: "will open in the home directory".into(),
+                    });
+                }
+            }
+            if let (Some(profiles), Some(profile)) =
+                (known_profiles, s.get("profile").and_then(|p| p.as_str()))
+            {
+                if !profile.is_empty() && !profiles.contains(profile) {
+                    issues.push(PreviewIssue {
+                        kind: "unknown-profile".into(),
+                        session_uid: Some(uid.clone()),
+                        value: profile.to_string(),
+                        resolution: "will use the default shell if unavailable".into(),
+                    });
+                }
+            }
+        }
+    }
+    PreviewReport {
+        name: ws.name.clone(),
+        schema_version: ws.schema_version,
+        saved_at: ws.saved_at.clone(),
+        windows: ws.windows.len(),
+        panes,
+        web_panes,
+        stickys: ws.stickys.as_ref().map(|s| s.len()).unwrap_or(0),
+        issues,
+    }
+}
+
+/// Production preview: cwd checks against the real filesystem.
+pub fn preview_fs(
+    ws: &WorkspaceFile,
+    known_profiles: Option<&std::collections::HashSet<String>>,
+) -> PreviewReport {
+    preview(ws, known_profiles, |cwd| std::path::Path::new(cwd).is_dir())
+}
+
+// ---------------------------------------------------------------------------
+// Import / export / migration (chunk 3: #169)
+//
+// Export and import speak the same schema as the library files — an exported
+// file IS a workspace file, so import ≈ migrate + validate + copy into the
+// library. The migration chain also accepts the pre-workspace legacy shape
+// (v0): the `savedLayoutState` blob Hyperia used to keep in hyperia.json.
+// ---------------------------------------------------------------------------
+
+/// What `migrate` needs beyond the raw value. Kept as a struct so migration
+/// stays pure and testable — the HTTP layer fills in real-world defaults.
+pub struct MigrateOpts {
+    /// Name for files that don't carry one (the v0 blob has no name field).
+    pub name_hint: String,
+    /// Geometry for v0 blobs (they predate geometry capture). The caller may
+    /// pass the last-known window rect from window-state.json.
+    pub fallback_geometry: Geometry,
+}
+
+pub fn default_v0_geometry() -> Geometry {
+    Geometry {
+        x: 60,
+        y: 60,
+        width: 1200,
+        height: 800,
+        display_id: None,
+        is_maximized: false,
+        is_full_screen: false,
+    }
+}
+
+/// Does this value look like the legacy `savedLayoutState` blob — the
+/// pre-workspace single-window layout (no `kind`, but the renderer's
+/// termGroups/sessions maps at top level)?
+fn looks_like_v0_blob(v: &serde_json::Value) -> bool {
+    v.get("kind").is_none()
+        && v.get("termGroups").map(|t| t.is_object()).unwrap_or(false)
+        && v.get("sessions").map(|s| s.is_object()).unwrap_or(false)
+}
+
+/// Bring an arbitrary parsed JSON value up to the current schema.
+///
+/// Accepted inputs, in order of detection:
+/// - a current (v1) workspace file → validated as-is
+/// - a future version → `NewerThanSupported` (refuse rather than guess)
+/// - a legacy v0 `savedLayoutState` blob, bare or still wrapped in a
+///   hyperia.json (`{"savedLayoutState": {…}}`) → adapted to v1: one window
+///   with the fallback geometry, pids stripped, bare `lastCommand` demoted to
+///   `annotations.lastCommand`
+/// - anything else → `WrongKind` / `Corrupt`
+pub fn migrate(raw: serde_json::Value, opts: &MigrateOpts) -> Result<WorkspaceFile, WorkspaceError> {
+    match raw.get("kind").and_then(|k| k.as_str()) {
+        Some(k) if k == WORKSPACE_KIND => {
+            if let Some(v) = raw.get("schemaVersion").and_then(|v| v.as_u64()) {
+                if v as u32 > SCHEMA_VERSION {
+                    return Err(WorkspaceError::NewerThanSupported(v as u32));
+                }
+            }
+            let ws: WorkspaceFile = serde_json::from_value(raw)
+                .map_err(|e| WorkspaceError::Corrupt(format!("schema mismatch: {e}")))?;
+            validate(&ws)?;
+            return Ok(ws);
+        }
+        Some(k) => return Err(WorkspaceError::WrongKind(k.to_string())),
+        None => {}
+    }
+    // No kind — v0 territory. Accept the blob bare or under savedLayoutState.
+    let blob = if looks_like_v0_blob(&raw) {
+        raw
+    } else if raw.get("savedLayoutState").map(looks_like_v0_blob).unwrap_or(false) {
+        raw["savedLayoutState"].clone()
+    } else {
+        return Err(WorkspaceError::Corrupt(
+            "not a workspace file and not a legacy savedLayoutState blob".into(),
+        ));
+    };
+    let ws = WorkspaceFile {
+        kind: WORKSPACE_KIND.to_string(),
+        schema_version: SCHEMA_VERSION,
+        name: sanitize_name(&opts.name_hint)?,
+        saved_at: now_rfc3339(),
+        app_version: None,
+        windows: vec![WorkspaceWindow {
+            geometry: opts.fallback_geometry.clone(),
+            layout: sanitize_v0_layout(blob),
+        }],
+        stickys: None,
+    };
+    validate(&ws)?;
+    Ok(ws)
+}
+
+/// v0 → v1 layout cleanup: strip pids (workspace files must not carry them)
+/// and fold a bare `lastCommand` into `annotations.lastCommand`.
+fn sanitize_v0_layout(mut blob: serde_json::Value) -> serde_json::Value {
+    if let Some(sessions) = blob.get_mut("sessions").and_then(|s| s.as_object_mut()) {
+        for s in sessions.values_mut() {
+            if let Some(obj) = s.as_object_mut() {
+                obj.remove("pid");
+                if let Some(last) = obj.remove("lastCommand") {
+                    if last.as_str().map(|t| !t.is_empty()).unwrap_or(false) {
+                        obj.entry("annotations")
+                            .or_insert_with(|| serde_json::json!({}))
+                            .as_object_mut()
+                            .map(|a| a.insert("lastCommand".to_string(), last));
+                    }
+                }
+            }
+        }
+    }
+    blob
+}
+
+/// Export a saved workspace to an arbitrary destination path (validate, then
+/// write atomically). The library file is the source of truth; the export is
+/// a byte-equivalent copy of its re-serialized content.
+pub fn export(
+    dir: &std::path::Path,
+    name: &str,
+    dest: &std::path::Path,
+    overwrite: bool,
+) -> Result<WorkspaceFile, WorkspaceError> {
+    let ws = load_workspace(dir, name)?;
+    if dest.exists() && !overwrite {
+        return Err(WorkspaceError::AlreadyExists(dest.to_string_lossy().into_owned()));
+    }
+    let value = serde_json::to_value(&ws)
+        .map_err(|e| WorkspaceError::Io(format!("serialize failed: {e}")))?;
+    crate::util::write_json_file_atomic(dest, &value)?;
+    Ok(ws)
+}
+
+/// Import a workspace (or legacy blob) from an arbitrary source path into the
+/// library: read → migrate → validate → atomic write. The source file is
+/// NEVER modified or deleted, whatever happens.
+pub fn import(
+    dir: &std::path::Path,
+    src: &std::path::Path,
+    name: Option<&str>,
+    overwrite: bool,
+    fallback_geometry: Geometry,
+) -> Result<(WorkspaceFile, bool), WorkspaceError> {
+    let content = std::fs::read_to_string(src)?;
+    let raw: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| WorkspaceError::Corrupt(format!("not valid JSON: {e}")))?;
+    let was_v0 = raw.get("kind").is_none();
+    // Name precedence: explicit > the file's own name field > source filename.
+    let fallback_name = name
+        .map(|n| n.to_string())
+        .or_else(|| raw.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
+        .or_else(|| src.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string()))
+        .unwrap_or_else(|| "imported".to_string());
+    let mut ws = migrate(
+        raw,
+        &MigrateOpts {
+            name_hint: fallback_name.clone(),
+            fallback_geometry,
+        },
+    )?;
+    let final_name = sanitize_name(name.unwrap_or(&ws.name))?;
+    ws.name = final_name.clone();
+    let path = file_path(dir, &final_name);
+    if path.exists() && !overwrite {
+        return Err(WorkspaceError::AlreadyExists(final_name));
+    }
+    let value = serde_json::to_value(&ws)
+        .map_err(|e| WorkspaceError::Io(format!("serialize failed: {e}")))?;
+    crate::util::write_json_file_atomic(&path, &value)?;
+    Ok((ws, was_v0))
+}
+
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
@@ -674,6 +947,236 @@ mod tests {
         // Renaming to itself is a no-op, not an error.
         rename(&dir, "b", "b", false).unwrap();
         assert!(matches!(rename(&dir, "ghost", "x", false).unwrap_err(), WorkspaceError::NotFound(_)));
+    }
+
+    // ---- load / preview ----------------------------------------------------
+
+    #[test]
+    fn load_workspace_typed_errors() {
+        let dir = tempdir();
+        assert!(matches!(
+            load_workspace(&dir, "ghost").unwrap_err(),
+            WorkspaceError::NotFound(_)
+        ));
+        assert!(matches!(
+            load_workspace(&dir, "../evil").unwrap_err(),
+            WorkspaceError::InvalidName(_)
+        ));
+        save(&dir, "demo", vec![sample_window()], None, false).unwrap();
+        assert_eq!(load_workspace(&dir, "demo").unwrap().name, "demo");
+        std::fs::write(dir.join("trunc.json"), "{\"kind\": \"hyperia-worksp").unwrap();
+        assert!(matches!(
+            load_workspace(&dir, "trunc").unwrap_err(),
+            WorkspaceError::Corrupt(_)
+        ));
+    }
+
+    #[test]
+    fn preview_clean_workspace_has_no_issues() {
+        let ws = WorkspaceFile {
+            kind: WORKSPACE_KIND.into(),
+            schema_version: SCHEMA_VERSION,
+            name: "demo".into(),
+            saved_at: "2026-08-28T00:00:00Z".into(),
+            app_version: None,
+            windows: vec![sample_window()],
+            stickys: None,
+        };
+        let profiles: std::collections::HashSet<String> = ["zsh".to_string()].into();
+        let report = preview(&ws, Some(&profiles), |_| true);
+        assert_eq!(report.windows, 1);
+        assert_eq!(report.panes, 1);
+        assert_eq!(report.web_panes, 1);
+        assert!(report.issues.is_empty());
+    }
+
+    #[test]
+    fn preview_flags_missing_cwd_and_unknown_profile() {
+        let ws = WorkspaceFile {
+            kind: WORKSPACE_KIND.into(),
+            schema_version: SCHEMA_VERSION,
+            name: "demo".into(),
+            saved_at: "2026-08-28T00:00:00Z".into(),
+            app_version: None,
+            windows: vec![sample_window()],
+            stickys: None,
+        };
+        let profiles: std::collections::HashSet<String> = ["bash".to_string()].into();
+        let report = preview(&ws, Some(&profiles), |_| false);
+        let kinds: Vec<&str> = report.issues.iter().map(|i| i.kind.as_str()).collect();
+        assert!(kinds.contains(&"missing-cwd"));
+        assert!(kinds.contains(&"unknown-profile"));
+        let cwd_issue = report.issues.iter().find(|i| i.kind == "missing-cwd").unwrap();
+        assert_eq!(cwd_issue.value, "/home/x");
+        assert_eq!(cwd_issue.session_uid.as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn preview_skips_profile_check_without_config_profiles() {
+        // Electron auto-detects shells; an empty config can't prove a profile
+        // unknown, so None disables that check entirely.
+        let ws = WorkspaceFile {
+            kind: WORKSPACE_KIND.into(),
+            schema_version: SCHEMA_VERSION,
+            name: "demo".into(),
+            saved_at: "2026-08-28T00:00:00Z".into(),
+            app_version: None,
+            windows: vec![sample_window()],
+            stickys: None,
+        };
+        let report = preview(&ws, None, |_| true);
+        assert!(report.issues.is_empty());
+    }
+
+    // ---- export / import / migrate (#169) ----------------------------------
+
+    fn v0_blob() -> serde_json::Value {
+        serde_json::json!({
+            "activeUid": "s1",
+            "activeRootGroup": "g1",
+            "activeSessions": {"g1": "s1"},
+            "termGroups": {
+                "g1": {"uid": "g1", "sessionUid": "s1", "parentUid": null,
+                        "direction": null, "sizes": null, "children": [],
+                        "tabName": "legacy"}
+            },
+            "sessions": {
+                "s1": {"uid": "s1", "title": "zsh", "cwd": "/home/x", "profile": "zsh",
+                        "shell": "/bin/zsh", "cols": 80, "rows": 24, "pid": 999,
+                        "lastCommand": "vim ."}
+            }
+        })
+    }
+
+    #[test]
+    fn export_then_import_round_trips_byte_stable() {
+        let dir = tempdir();
+        save(&dir, "demo", vec![sample_window()], Some("x".into()), false).unwrap();
+        let dest = dir.join("exported").join("demo-export.json");
+        export(&dir, "demo", &dest, false).unwrap();
+        // The export equals the library file byte-for-byte (same serializer).
+        let lib = std::fs::read_to_string(dir.join("demo.json")).unwrap();
+        let exp = std::fs::read_to_string(&dest).unwrap();
+        assert_eq!(lib, exp);
+        // Import it back under a new name: identical except the name field.
+        let (ws, was_v0) = import(&dir, &dest, Some("demo-copy"), false, default_v0_geometry()).unwrap();
+        assert!(!was_v0);
+        assert_eq!(ws.name, "demo-copy");
+        let orig = load_workspace(&dir, "demo").unwrap();
+        let copy = load_workspace(&dir, "demo-copy").unwrap();
+        assert_eq!(orig.windows, copy.windows);
+        assert_eq!(orig.saved_at, copy.saved_at, "import preserves the save timestamp");
+    }
+
+    #[test]
+    fn export_refuses_existing_dest_unless_overwrite() {
+        let dir = tempdir();
+        save(&dir, "demo", vec![sample_window()], None, false).unwrap();
+        let dest = dir.join("out.json");
+        std::fs::write(&dest, "occupied").unwrap();
+        assert!(matches!(
+            export(&dir, "demo", &dest, false).unwrap_err(),
+            WorkspaceError::AlreadyExists(_)
+        ));
+        export(&dir, "demo", &dest, true).unwrap();
+        assert!(std::fs::read_to_string(&dest).unwrap().contains(WORKSPACE_KIND));
+    }
+
+    #[test]
+    fn import_migrates_v0_blob_bare_and_wrapped() {
+        let dir = tempdir();
+        let srcdir = dir.join("incoming");
+        std::fs::create_dir_all(&srcdir).unwrap();
+        let bare = srcdir.join("legacy-bare.json");
+        std::fs::write(&bare, v0_blob().to_string()).unwrap();
+        let (ws, was_v0) = import(&dir, &bare, None, false, default_v0_geometry()).unwrap();
+        assert!(was_v0);
+        assert_eq!(ws.name, "legacy-bare", "name falls back to the source filename");
+        assert_eq!(ws.schema_version, SCHEMA_VERSION);
+        assert_eq!(ws.windows.len(), 1);
+        let s1 = &ws.windows[0].layout["sessions"]["s1"];
+        assert!(s1.get("pid").is_none(), "v0 pid stripped");
+        assert!(s1.get("lastCommand").is_none(), "bare lastCommand demoted");
+        assert_eq!(s1["annotations"]["lastCommand"], "vim .");
+
+        // Wrapped in a whole hyperia.json — the shape the boot key lived in.
+        let wrapped = srcdir.join("old-config.json");
+        std::fs::write(
+            &wrapped,
+            serde_json::json!({"config": {"fontSize": 12}, "savedLayoutState": v0_blob()}).to_string(),
+        )
+        .unwrap();
+        let (ws2, was_v0b) = import(&dir, &wrapped, Some("from-config"), false, default_v0_geometry()).unwrap();
+        assert!(was_v0b);
+        assert_eq!(ws2.name, "from-config");
+        assert!(load_workspace(&dir, "from-config").is_ok());
+    }
+
+    #[test]
+    fn import_failures_are_typed_and_leave_source_untouched() {
+        let dir = tempdir();
+        let cases: Vec<(&str, String)> = vec![
+            ("garbage.json", "{ not json".to_string()),
+            ("wrongkind.json", r#"{"kind": "something-else"}"#.to_string()),
+            (
+                "future.json",
+                serde_json::json!({"kind": WORKSPACE_KIND, "schemaVersion": 99}).to_string(),
+            ),
+            ("unrelated.json", r#"{"hello": "world"}"#.to_string()),
+        ];
+        let srcdir = dir.join("incoming");
+        std::fs::create_dir_all(&srcdir).unwrap();
+        for (fname, content) in &cases {
+            let src = srcdir.join(fname);
+            std::fs::write(&src, content).unwrap();
+            let err = import(&dir, &src, None, false, default_v0_geometry()).unwrap_err();
+            match *fname {
+                "garbage.json" | "unrelated.json" => assert!(matches!(err, WorkspaceError::Corrupt(_)), "{fname}: {err:?}"),
+                "wrongkind.json" => assert!(matches!(err, WorkspaceError::WrongKind(_)), "{fname}: {err:?}"),
+                "future.json" => assert!(matches!(err, WorkspaceError::NewerThanSupported(99)), "{fname}: {err:?}"),
+                _ => unreachable!(),
+            }
+            // Source file byte-identical afterwards.
+            assert_eq!(&std::fs::read_to_string(&src).unwrap(), content, "{fname} modified!");
+        }
+        // Nothing snuck into the library.
+        assert!(list(&dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn import_name_collision_and_overwrite() {
+        let dir = tempdir();
+        save(&dir, "demo", vec![sample_window()], None, false).unwrap();
+        let srcdir = dir.join("incoming");
+        std::fs::create_dir_all(&srcdir).unwrap();
+        let src = srcdir.join("incoming.json");
+        std::fs::write(&src, v0_blob().to_string()).unwrap();
+        assert!(matches!(
+            import(&dir, &src, Some("demo"), false, default_v0_geometry()).unwrap_err(),
+            WorkspaceError::AlreadyExists(_)
+        ));
+        let (ws, _) = import(&dir, &src, Some("demo"), true, default_v0_geometry()).unwrap();
+        assert_eq!(ws.name, "demo");
+    }
+
+    #[test]
+    fn migrate_v1_passthrough_validates() {
+        let ws = WorkspaceFile {
+            kind: WORKSPACE_KIND.into(),
+            schema_version: SCHEMA_VERSION,
+            name: "demo".into(),
+            saved_at: "2026-08-28T00:00:00Z".into(),
+            app_version: None,
+            windows: vec![sample_window()],
+            stickys: None,
+        };
+        let raw = serde_json::to_value(&ws).unwrap();
+        let opts = MigrateOpts {name_hint: "x".into(), fallback_geometry: default_v0_geometry()};
+        assert_eq!(migrate(raw, &opts).unwrap(), ws);
+        // v1 with a pid smuggled in fails validation even through migrate.
+        let mut bad = serde_json::to_value(&ws).unwrap();
+        bad["windows"][0]["layout"]["sessions"]["s1"]["pid"] = serde_json::json!(1);
+        assert!(matches!(migrate(bad, &opts).unwrap_err(), WorkspaceError::Corrupt(_)));
     }
 
     // ---- version gates -----------------------------------------------------

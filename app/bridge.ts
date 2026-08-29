@@ -22,7 +22,7 @@ import {
   unscheduleSticky
 } from './sticky';
 import {capturePaneJpeg} from './web-pane-manager';
-import {captureAllWindows} from './workspace';
+import {captureAllWindows, restoreWorkspace} from './workspace';
 
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
@@ -413,6 +413,19 @@ function handleCommand(msg: Record<string, unknown>) {
       void captureAllWindows(windows)
         .then((snapshot) => sendResult(seq, JSON.stringify(snapshot)))
         .catch((err) => sendResult(seq, JSON.stringify({error: String(err)})));
+      break;
+    }
+
+    case 'RestoreWorkspace': {
+      // Additive restore into NEW windows: uids remapped, live windows never
+      // touched (epic #146 chunk 2). Layout applies via each window's init
+      // callback — the same hook the boot restore uses.
+      try {
+        const summary = restoreWorkspace(msg.workspace as any);
+        sendResult(seq, JSON.stringify(summary));
+      } catch (err) {
+        sendResult(seq, JSON.stringify({error: String(err)}));
+      }
       break;
     }
 

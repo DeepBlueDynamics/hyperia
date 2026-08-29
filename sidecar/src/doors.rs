@@ -272,13 +272,17 @@ pub const DOORS: &[Door] = &[
         // terminal_layout sits at 9 tools and this family grows to 8
         // (preview/restore/export/import land in later chunks).
         name: "workspace",
-        description: "Named workspaces: save, list, rename, delete terminal layouts",
+        description: "Named workspaces: save, list, preview, restore, rename, delete layouts",
         ghost_tools: &[],
         mcp_tools: &[
             "workspace_save",
             "workspace_list",
             "workspace_delete",
             "workspace_rename",
+            "workspace_preview",
+            "workspace_restore",
+            "workspace_export",
+            "workspace_import",
         ],
     },
     Door {

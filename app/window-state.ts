@@ -51,7 +51,7 @@ function writeState(s: WindowState): void {
 // Does the saved rect overlap any attached display by at least MIN_VISIBLE_PX
 // on each axis? If a saved display was unplugged, this guards against the
 // window restoring off-screen.
-function boundsAreVisible(x: number, y: number, w: number, h: number): boolean {
+export function boundsAreVisible(x: number, y: number, w: number, h: number): boolean {
   return screen.getAllDisplays().some((d) => {
     const wa = d.workArea;
     const ox = Math.max(x, wa.x);

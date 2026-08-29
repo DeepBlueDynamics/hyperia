@@ -134,6 +134,13 @@ type profileConfigOptions = {
    */
   preserveCWD: boolean;
   /**
+   * if `true`, a restored pane re-types (never runs) its saved last command
+   * into the shell. Off by default: the scraped command is untrusted display
+   * metadata, and a shared/imported workspace must not pre-type into your
+   * shell (epic #146).
+   */
+  typeRestoredCommand?: boolean;
+  /**
    * if `true` on right click selected text will be copied or pasted if no
    * selection is present (`true` by default on Windows and disables the context menu feature)
    */

@@ -148,6 +148,7 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
       sessionManualTitle: session ? (session as any).manualTitle : false,
       sessionCwd: session ? (session as any).cwd : undefined,
       sessionShellName: session ? (session as any).shellName : undefined,
+      restoreNotice: session ? (session as any).restoreNotice : undefined,
       allTermGroups: (this.props as any).parentProps.allTermGroups
     } as any);
 
