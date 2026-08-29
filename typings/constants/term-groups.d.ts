@@ -69,6 +69,13 @@ export interface TermGroupToggleTitleInheritanceAction {
   uid: string;
 }
 
+export const TERM_GROUP_SET_PINNED = 'TERM_GROUP_SET_PINNED';
+export interface TermGroupSetPinnedAction {
+  type: typeof TERM_GROUP_SET_PINNED;
+  uid: string;
+  pinned: boolean;
+}
+
 export const RESTORE_LAYOUT_STATE = 'RESTORE_LAYOUT_STATE';
 export interface RestoreLayoutStateAction {
   type: typeof RESTORE_LAYOUT_STATE;
@@ -93,5 +100,6 @@ export type TermGroupActions =
   | TermGroupSetWebNameAction
   | TermGroupSetTabNameAction
   | TermGroupToggleTitleInheritanceAction
+  | TermGroupSetPinnedAction
   | RestoreLayoutStateAction
   | TermGroupPopOutPaneAction;
