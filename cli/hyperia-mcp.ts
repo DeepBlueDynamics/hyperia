@@ -522,6 +522,69 @@ async function cmdRename(pos: string[], flags: Flags, wantJson: boolean): Promis
   return invoke('terminal_rename', {name, ...target(flags)}, wantJson);
 }
 
+// ---------- named workspaces (epic #146) ----------
+async function cmdWorkspace(pos: string[], flags: Flags, wantJson: boolean): Promise<number> {
+  const verb = pos[0];
+  const usage =
+    'usage: hyperia workspace <save|list|delete|rename> ...\n' +
+    '  workspace save <name> [--overwrite]     snapshot every window under a name\n' +
+    '  workspace list                          saved workspaces, newest first\n' +
+    '  workspace delete <name>                 remove a saved workspace\n' +
+    '  workspace rename <from> <to> [--overwrite]';
+  switch (verb) {
+    case 'save': {
+      if (!pos[1]) throw new CliError('usage: hyperia workspace save <name> [--overwrite]');
+      const args: Record<string, unknown> = {name: pos[1]};
+      if (flags.overwrite === true) args.overwrite = true;
+      return invoke('workspace_save', args, wantJson);
+    }
+    case 'list': {
+      if (wantJson) return invoke('workspace_list', {}, true);
+      const result = await mcp('tools/call', {name: 'workspace_list', arguments: {}});
+      const text = ((result?.content as Array<{text?: string}>) || [])
+        .map((c) => c?.text ?? '')
+        .join('\n')
+        .trim();
+      try {
+        const rows: Array<Record<string, any>> = JSON.parse(text).workspaces || [];
+        if (rows.length === 0) {
+          console.log('no saved workspaces (hyperia workspace save <name>)');
+          return 0;
+        }
+        for (const r of rows) {
+          if (r.valid === false) {
+            console.log(`  ${r.name}  [invalid: ${r.error || 'unreadable'}]`);
+          } else {
+            const web = r.webPanes ? ` + ${r.webPanes} web` : '';
+            console.log(
+              `  ${r.name}  ${r.windows} window${r.windows === 1 ? '' : 's'}, ${r.panes} pane${
+                r.panes === 1 ? '' : 's'
+              }${web}  (${r.savedAt})`
+            );
+          }
+        }
+        return 0;
+      } catch {
+        // Server said something unexpected — show it rather than guessing.
+        console.log(text);
+        return result?.isError ? 5 : 0;
+      }
+    }
+    case 'delete': {
+      if (!pos[1]) throw new CliError('usage: hyperia workspace delete <name>');
+      return invoke('workspace_delete', {name: pos[1]}, wantJson);
+    }
+    case 'rename': {
+      if (!pos[1] || !pos[2]) throw new CliError('usage: hyperia workspace rename <from> <to> [--overwrite]');
+      const args: Record<string, unknown> = {from: pos[1], to: pos[2]};
+      if (flags.overwrite === true) args.overwrite = true;
+      return invoke('workspace_rename', args, wantJson);
+    }
+    default:
+      throw new CliError(usage);
+  }
+}
+
 async function cmdRequestAccess(pos: string[], flags: Flags, wantJson: boolean): Promise<number> {
   const args: Record<string, unknown> = {...target(flags)};
   const pane = pos[0] ?? (typeof flags.pane === 'string' ? flags.pane : undefined);
@@ -639,6 +702,12 @@ COMMON
   hyperia screen --pane <id>        read a pane's screen
   hyperia request-access <pane> --purpose "..."   ask the human for consent
 
+WORKSPACES (named layout snapshots in ~/.hyperia/workspaces/)
+  hyperia workspace save <name> [--overwrite]     snapshot every window
+  hyperia workspace list                          what's saved
+  hyperia workspace rename <from> <to>            rename a snapshot
+  hyperia workspace delete <name>                 remove a snapshot
+
 ANYTHING (generic, mirrors the live tool catalog)
   hyperia tools                  list every tool
   hyperia describe <tool>        its arguments
@@ -674,6 +743,7 @@ export const MCP_COMMANDS = new Set([
   'close',
   'focus',
   'rename',
+  'workspace',
   'request-access',
   // C5 / C6
   'doctor',
@@ -718,6 +788,8 @@ export async function runMcpCli(argv: string[]): Promise<number> {
         return await cmdFocus(flags, wantJson);
       case 'rename':
         return await cmdRename(pos, flags, wantJson);
+      case 'workspace':
+        return await cmdWorkspace(pos, flags, wantJson);
       case 'request-access':
         return await cmdRequestAccess(pos, flags, wantJson);
       case 'doctor':

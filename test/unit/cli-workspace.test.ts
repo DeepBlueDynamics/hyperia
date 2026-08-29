@@ -1,0 +1,91 @@
+/* eslint-disable eslint-comments/disable-enable-pair */
+
+import test from 'ava';
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const proxyquire = require('proxyquire').noCallThru();
+
+// Load the CLI with `got` stubbed: capture each JSON-RPC request body and
+// answer with a canned MCP result — the same seam cli-api.test.ts uses.
+const load = (resultText: string) => {
+  const calls: Array<{url: string; body: any}> = [];
+  const {runMcpCli} = proxyquire('../../cli/hyperia-mcp', {
+    got: (url: string, opts: {body: string}) => {
+      const body = JSON.parse(opts.body);
+      calls.push({url, body});
+      return Promise.resolve({
+        statusCode: 200,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: body.id,
+          result: {content: [{type: 'text', text: resultText}], isError: false}
+        })
+      });
+    }
+  });
+  return {runMcpCli, calls};
+};
+
+test('workspace save passes name and omits overwrite by default', async (t) => {
+  const {runMcpCli, calls} = load('{"ok":true}');
+  const code = await runMcpCli(['workspace', 'save', 'deploy-day']);
+  t.is(code, 0);
+  t.is(calls.length, 1);
+  t.is(calls[0].body.params.name, 'workspace_save');
+  t.deepEqual(calls[0].body.params.arguments, {name: 'deploy-day'});
+});
+
+test('workspace save --overwrite sets the flag', async (t) => {
+  const {runMcpCli, calls} = load('{"ok":true}');
+  const code = await runMcpCli(['workspace', 'save', 'deploy-day', '--overwrite']);
+  t.is(code, 0);
+  t.deepEqual(calls[0].body.params.arguments, {name: 'deploy-day', overwrite: true});
+});
+
+test('workspace rename passes from/to', async (t) => {
+  const {runMcpCli, calls} = load('{"ok":true}');
+  const code = await runMcpCli(['workspace', 'rename', 'old', 'new']);
+  t.is(code, 0);
+  t.is(calls[0].body.params.name, 'workspace_rename');
+  t.deepEqual(calls[0].body.params.arguments, {from: 'old', to: 'new'});
+});
+
+test('workspace delete passes the name', async (t) => {
+  const {runMcpCli, calls} = load('{"ok":true}');
+  const code = await runMcpCli(['workspace', 'delete', 'stale']);
+  t.is(code, 0);
+  t.is(calls[0].body.params.name, 'workspace_delete');
+  t.deepEqual(calls[0].body.params.arguments, {name: 'stale'});
+});
+
+test('workspace list renders rows and flags invalid files', async (t) => {
+  const rows = {
+    workspaces: [
+      {name: 'good', savedAt: '2026-08-28T12:00:00Z', windows: 2, panes: 3, webPanes: 1, valid: true},
+      {name: 'broken', savedAt: '', windows: 0, panes: 0, webPanes: 0, valid: false, error: 'not valid JSON'}
+    ]
+  };
+  const {runMcpCli, calls} = load(JSON.stringify(rows));
+  const logged: string[] = [];
+  const orig = console.log;
+  console.log = (line: string) => logged.push(String(line));
+  try {
+    const code = await runMcpCli(['workspace', 'list']);
+    t.is(code, 0);
+  } finally {
+    console.log = orig;
+  }
+  t.is(calls[0].body.params.name, 'workspace_list');
+  const out = logged.join('\n');
+  t.true(out.includes('good'));
+  t.true(out.includes('2 windows, 3 panes + 1 web'));
+  t.true(out.includes('[invalid: not valid JSON]'));
+});
+
+test('workspace with a missing sub-verb or name errors without calling out', async (t) => {
+  const {runMcpCli, calls} = load('{"ok":true}');
+  t.not(await runMcpCli(['workspace']), 0);
+  t.not(await runMcpCli(['workspace', 'save']), 0);
+  t.not(await runMcpCli(['workspace', 'rename', 'only-one']), 0);
+  t.is(calls.length, 0, 'no MCP call should be made on usage errors');
+});

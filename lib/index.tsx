@@ -839,7 +839,7 @@ rpc.on('open web pane req', ({url, isAgentInitiated}: {url?: string; isAgentInit
   }
 });
 
-rpc.on('get-layout-state-req', () => {
+rpc.on('get-layout-state-req', (req) => {
   const {termGroups, sessions} = store_.getState();
 
   const serializedSessions: Record<string, any> = {};
@@ -860,7 +860,11 @@ rpc.on('get-layout-state-req', () => {
         profile: s.profile,
         cwd: s.cwd,
         shellName: s.shellName,
-        lastCommand
+        manualTitle: !!s.manualTitle,
+        // The scraped command line is display-only metadata (epic #146):
+        // restore may show it, but typing it back is opt-in. Readers stay
+        // tolerant of the old bare `lastCommand` field.
+        annotations: lastCommand ? {lastCommand} : undefined
       };
     }
   });
@@ -879,14 +883,19 @@ rpc.on('get-layout-state-req', () => {
         webUrl: (g as any).webUrl,
         webName: (g as any).webName,
         tabName: g.tabName,
+        manualTabName: !!(g as any).manualTabName,
         pinned: (g as any).pinned
       };
     }
   });
 
   const layoutState = {
+    // Echo the correlation id so main can route this reply to a workspace
+    // capture; absent for the legacy close-time save.
+    requestId: req?.requestId,
     activeUid: sessions.activeUid,
     activeRootGroup: termGroups.activeRootGroup,
+    activeTermGroup: termGroups.activeTermGroup || null,
     activeSessions: termGroups.activeSessions ? termGroups.activeSessions.asMutable() : {},
     termGroups: serializedTermGroups,
     sessions: serializedSessions

@@ -240,7 +240,9 @@ export type RendererEvents = {
     tabCount?: number;
     paneCount?: number;
   };
-  'get-layout-state-req': never;
+  // requestId correlates a workspace capture (app/workspace.ts); the legacy
+  // close-time save passes undefined and its reply routes to the old writer.
+  'get-layout-state-req': {requestId?: string} | undefined;
   'restore-layout-state': any;
   'web-pane-zoom-in': {uid: string};
   'web-pane-zoom-out': {uid: string};

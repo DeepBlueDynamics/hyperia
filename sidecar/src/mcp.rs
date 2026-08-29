@@ -819,6 +819,33 @@ pub struct SettingsDeleteProfileRequest {
 pub struct FlushRequest {}
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WorkspaceSaveRequest {
+    /// Workspace name — becomes the filename under ~/.hyperia/workspaces/ (no path separators).
+    pub name: String,
+    /// Replace an existing workspace of the same name. Default false: saving over an existing name errors.
+    pub overwrite: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WorkspaceListRequest {}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WorkspaceDeleteRequest {
+    /// Name of the saved workspace to delete permanently.
+    pub name: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WorkspaceRenameRequest {
+    /// Current name of the saved workspace.
+    pub from: String,
+    /// New name for the workspace.
+    pub to: String,
+    /// Replace an existing workspace at the new name. Default false.
+    pub overwrite: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct SpokenSummaryRequest {
     /// The text to speak aloud (required). Keep it short — a sentence or two.
     pub text: String,
@@ -1349,6 +1376,87 @@ impl HyperiaMcp {
         Parameters(req): Parameters<FlushRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let resp = self.post_text("/api/layout/save", "").await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    // ---- named workspaces (epic #146) ------------------------------------
+
+    /// Workspace save/delete/rename write files under the user's home — the
+    /// same "writes need identity" bar as style_create. List stays free.
+    async fn require_workspace_identity(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+    ) -> Result<(), CallToolResult> {
+        let auth = forwarded_auth(ctx);
+        let who = self
+            .get_as("/api/identity/whoami", auth.as_deref())
+            .await
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+        let anonymous = who.map(|w| w["anonymous"].as_bool().unwrap_or(true)).unwrap_or(true);
+        if anonymous {
+            return Err(CallToolResult::success(vec![Content::text(
+                "Workspace changes require identity (they write files in the user's home). Run request_token, wire the Bearer token into your MCP client, and retry. workspace_list works without identity.",
+            )]));
+        }
+        Ok(())
+    }
+
+    #[tool(description = "Save the CURRENT app state as a named workspace: every window's geometry plus its tabs, splits, terminal panes (profile + cwd), and web panes, written to ~/.hyperia/workspaces/<name>.json. Fails if the name exists unless overwrite=true. The scraped per-pane command line is stored as display-only metadata and is never executed on restore. Requires identity.")]
+    async fn workspace_save(
+        &self,
+        Parameters(req): Parameters<WorkspaceSaveRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if let Err(refusal) = self.require_workspace_identity(&ctx).await {
+            return Ok(refusal);
+        }
+        let body = serde_json::json!({
+            "name": req.name,
+            "overwrite": req.overwrite.unwrap_or(false),
+        });
+        let resp = self.post_json("/api/workspace/save", &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "List saved workspaces (newest first): name, savedAt, window/pane/web-pane counts. Corrupt files are included flagged valid=false with the reason — they are never hidden or deleted. Free read, no identity needed.")]
+    async fn workspace_list(
+        &self,
+        Parameters(_req): Parameters<WorkspaceListRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let resp = self.get("/api/workspace/list").await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Permanently delete a saved workspace file by name. Does not touch any open windows. Requires identity.")]
+    async fn workspace_delete(
+        &self,
+        Parameters(req): Parameters<WorkspaceDeleteRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if let Err(refusal) = self.require_workspace_identity(&ctx).await {
+            return Ok(refusal);
+        }
+        let body = serde_json::json!({"name": req.name});
+        let resp = self.post_json("/api/workspace/delete", &body).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Rename a saved workspace. Fails if the target name exists unless overwrite=true. Requires identity.")]
+    async fn workspace_rename(
+        &self,
+        Parameters(req): Parameters<WorkspaceRenameRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if let Err(refusal) = self.require_workspace_identity(&ctx).await {
+            return Ok(refusal);
+        }
+        let body = serde_json::json!({
+            "from": req.from,
+            "to": req.to,
+            "overwrite": req.overwrite.unwrap_or(false),
+        });
+        let resp = self.post_json("/api/workspace/rename", &body).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
@@ -1984,6 +2092,11 @@ impl HyperiaMcp {
                 "name": "settings",
                 "description": "Inspect and change Hyperia configuration and shell profiles, and run a readiness check.",
                 "tools": ["settings_get", "settings_set", "settings_list_profiles", "settings_add_profile", "settings_delete_profile", "doctor"]
+            },
+            {
+                "name": "workspace",
+                "description": "Named workspaces: save the whole app state (windows, tabs, splits, panes, web panes) under a name at ~/.hyperia/workspaces/, then list, rename, or delete saved workspaces.",
+                "tools": ["workspace_save", "workspace_list", "workspace_rename", "workspace_delete"]
             },
             {
                 "name": "editing",

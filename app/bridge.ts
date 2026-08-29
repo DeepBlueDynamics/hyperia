@@ -22,6 +22,7 @@ import {
   unscheduleSticky
 } from './sticky';
 import {capturePaneJpeg} from './web-pane-manager';
+import {captureAllWindows} from './workspace';
 
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
@@ -400,6 +401,18 @@ function handleCommand(msg: Record<string, unknown>) {
 
       const result = executeSessionCd(uid, path, sidecarState, false);
       sendResult(seq, JSON.stringify(result));
+      break;
+    }
+
+    case 'CaptureWorkspace': {
+      // Correlated multi-window snapshot for named workspaces (epic #146):
+      // resolves with every window's geometry + layout, unlike the legacy
+      // SaveLayoutState fan-out below which replies 'ok' before any state
+      // lands. The bridge command timeout is 10s; capture bounds itself at 3s.
+      const windows: any[] = Array.from((app as any).getWindows?.() || []);
+      void captureAllWindows(windows)
+        .then((snapshot) => sendResult(seq, JSON.stringify(snapshot)))
+        .catch((err) => sendResult(seq, JSON.stringify({error: String(err)})));
       break;
     }
 
