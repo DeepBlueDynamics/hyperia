@@ -41,6 +41,16 @@ const parseTabName = (name: string, isWeb?: boolean, hasCustomName?: boolean) =>
   return {emoji: isWeb && !hasCustomName ? '🌐' : '', text: name};
 };
 
+// Pinned tabs collapse to the first letter of every word ("Brilliant Peacock"
+// → "BP"), keeping the tab's emoji beside them. Spread iterates code points so
+// a leading non-BMP character survives the slice.
+const tabInitials = (text: string) =>
+  text
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => [...word][0].toUpperCase())
+    .join('');
+
 const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const {
     isActive,
@@ -100,6 +110,12 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   };
 
   const startRename = () => {
+    // No renaming while pinned — unpin, rename, repin. The pinned initials are
+    // a temporary display form; keeping the editor out avoids confusing the
+    // initials for the real (unchanged) name.
+    if (props.isPinned) {
+      return;
+    }
     const currentName = pendingName ?? (tabName || description || props.text) ?? '';
     const parsed = parseTabName(currentName, isWebPane);
 
@@ -153,6 +169,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     menu.append(
       new MenuItem({
         label: 'Rename',
+        // Disabled rather than hidden while pinned, so the "unpin to rename"
+        // affordance stays discoverable.
+        enabled: !props.isPinned,
         click: () => {
           startRename();
         }
@@ -160,8 +179,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     );
 
     // Only offer the revert when the human actually typed a custom name —
-    // agent/auto tab names (manualTabName=false) shouldn't show it.
-    if (props.manualTabName || pendingName) {
+    // agent/auto tab names (manualTabName=false) shouldn't show it. It's a
+    // rename-class action, so it sits out while the tab is pinned too.
+    if ((props.manualTabName || pendingName) && !props.isPinned) {
       menu.append(
         new MenuItem({
           label: 'Use Automatic Name',
@@ -219,6 +239,14 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     }
 
     menu.append(new MenuItem({type: 'separator'}));
+    menu.append(
+      new MenuItem({
+        label: props.isPinned ? 'Unpin Tab' : 'Pin Tab',
+        click: () => props.onPin?.()
+      })
+    );
+
+    menu.append(new MenuItem({type: 'separator'}));
     menu.append(new MenuItem({label: 'Close', click: () => props.onClose()}));
 
     menu.popup();
@@ -237,6 +265,10 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const parsed = parseTabName(rawText, isWebPane);
   // Optimistically show pendingName to avoid any flicker while Redux propagates.
   const displayText = copied ? 'Copied ✓' : isFirstRun ? 'untitled' : parsed.text;
+  const isPinned = !!props.isPinned;
+  // A pinned tab shrinks to its initials (emoji kept); the full name moves to
+  // the hover tooltip.
+  const shownText = isPinned && !copied && !isFirstRun ? tabInitials(displayText) : displayText;
 
   // Agent dot color
   const agentDotColor = agentStatus?.working
@@ -261,7 +293,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         onClick={props.onClick}
         onMouseDown={handleMouseDown}
         onContextMenu={handleContextMenu}
-        draggable
+        draggable={!isPinned}
         onDragStart={props.onDragStart}
         onDragEnd={props.onDragEnd}
         style={{
@@ -276,7 +308,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           isWebPane ? 'tab_webPane' : ''
         } ${isFirstRun ? 'tab_firstRun' : ''} ${props.isDragging ? 'tab_dragging' : ''} ${
           props.isDragSource ? 'tab_dragSource' : ''
-        }`}
+        } ${isPinned ? 'tab_pinned' : ''}`}
         ref={ref}
       >
         <div
@@ -300,7 +332,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
             />
           )}
           <span
-            title={props.text !== displayText ? props.text : ''}
+            title={isPinned ? parsed.text || props.text : props.text !== displayText ? props.text : ''}
             className={`tab_textInner ${isActive ? 'tab_textInnerActive' : ''}`}
             onDoubleClick={handleDoubleClick}
           >
@@ -337,20 +369,23 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
                 {parsed.emoji ? <span className="tab_webIcon">{parsed.emoji}</span> : null}
                 {isWebPane ? (
                   <span className="tab_webUrl" title={webUrl}>
-                    {displayText}
+                    {shownText}
                   </span>
                 ) : (
-                  displayText
+                  shownText
                 )}
               </span>
             )}
           </span>
         </span>
-        <i className="tab_icon" onClick={props.onClose}>
-          <svg className="tab_shape">
-            <use xlinkHref="./renderer/assets/icons.svg#close-tab" />
-          </svg>
-        </i>
+        {/* Browser-style: a pinned tab has no close button (middle-click still closes). */}
+        {!isPinned && (
+          <i className="tab_icon" onClick={props.onClose}>
+            <svg className="tab_shape">
+              <use xlinkHref="./renderer/assets/icons.svg#close-tab" />
+            </svg>
+          </i>
+        )}
         {props.customChildren}
       </li>
 
@@ -369,6 +404,26 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           font-family: var(--font-sans);
           font-size: 11px;
           font-weight: 400;
+        }
+
+        /* A pinned tab shrinks to comfortably fit its initials: no flex growth,
+           no close-button gutter, content-sized width. */
+        .tab_pinned {
+          flex: 0 0 auto;
+          min-width: 0;
+          max-width: none;
+          cursor: default;
+        }
+        .tab_pinned:active {
+          cursor: default;
+        }
+        .tab_pinned .tab_text {
+          width: auto;
+          padding-left: 12px;
+          padding-right: 12px;
+        }
+        .tab_pinned .tab_textInner {
+          padding: 0;
         }
 
         .tab_activeIndicator {

@@ -165,6 +165,8 @@ export type RendererEvents = {
   'reset fontSize req': never;
   'move left req': never;
   'move right req': never;
+  'move tab left req': never;
+  'move tab right req': never;
   'prev pane req': never;
   'decrease fontSize req': never;
   'increase fontSize req': never;

@@ -2491,7 +2491,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 showUrlBar ? (
                   <div
                     ref={this.urlBarRef}
-                    className="web_locationBar"
+                    className={`web_locationBar ${this.state.paneWidth < 380 ? 'web_locationBarCollapsed' : ''}`}
                     onContextMenu={(e) => {
                       // Right-click the URL bar → Copy URL (this is toolbar chrome,
                       // not the guest page, so it's a plain renderer menu).
@@ -3420,24 +3420,23 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             flex-direction: column;
             overflow: hidden;
             background: var(--bg-primary);
-            container-type: inline-size;
-            container-name: pane;
           }
 
-          @container pane (max-width: 380px) {
-            .web_locationBar {
-              border-color: transparent !important;
-              background: transparent !important;
-              padding: 0 !important;
-              width: fit-content !important;
-              min-width: unset !important;
-              max-width: unset !important;
-              margin-right: 0 !important;
-              margin-left: 0 !important;
-            }
-            .web_locationBar span {
-              display: none !important;
-            }
+          /* Narrow collapse is a JS class toggle on state.paneWidth —
+             @container queries are OFF LIMITS in styled-jsx (it flattens
+             them, leaking narrow rules to every width; see term.tsx). */
+          .web_locationBarCollapsed {
+            border-color: transparent !important;
+            background: transparent !important;
+            padding: 0 !important;
+            width: fit-content !important;
+            min-width: unset !important;
+            max-width: unset !important;
+            margin-right: 0 !important;
+            margin-left: 0 !important;
+          }
+          .web_locationBarCollapsed span {
+            display: none !important;
           }
         `}</style>
       </div>
