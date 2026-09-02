@@ -596,7 +596,7 @@ app.on('ready', () => {
         // they don't stomp the saved state.
         let stateAttach: ((w: BrowserWindow) => void) | null = null;
         if (windowSet.size === 0) {
-          const restore = restoreFor({width, height, x: startX, y: startY});
+          const restore = restoreFor({width, height, x: startX, y: startY}, Boolean(options.size || cfg.windowSize));
           width = restore.opts.width;
           height = restore.opts.height;
           if (typeof restore.opts.x === 'number') startX = restore.opts.x;
