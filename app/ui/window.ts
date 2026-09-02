@@ -190,15 +190,25 @@ export function newWindow(
   const classOpts = Object.assign({uid: uuidv4()});
   app.plugins.decorateWindowClass(classOpts);
 
+  // toElectronBackgroundColor yields #RRGGBB when fully opaque and #AARRGGBB
+  // when the configured color carries alpha.
+  const bgColor = toElectronBackgroundColor(cfg.backgroundColor || '#000');
+  const bgHasAlpha = bgColor.length > 7;
+
   const winOpts: BrowserWindowConstructorOptions = {
     minWidth: 370,
     minHeight: 190,
-    backgroundColor: toElectronBackgroundColor(cfg.backgroundColor || '#000'),
+    backgroundColor: bgColor,
     titleBarStyle: process.platform === 'win32' ? 'hidden' : 'hiddenInset',
     title: 'Hyperia',
     // Frameless on Linux, native overlay on Windows for snap layouts, inset on Mac
     frame: process.platform !== 'linux',
-    transparent: process.platform === 'darwin',
+    // macOS only: a transparent window loses the native traffic lights (and the
+    // window shadow), and macOS has no in-app fallback controls — header.tsx
+    // renders those for Linux only. Opt into transparency ONLY when the user
+    // actually configured a translucent backgroundColor, which is the single
+    // thing it buys us ("opacity is only supported on macOS").
+    transparent: process.platform === 'darwin' && bgHasAlpha,
     ...(process.platform === 'win32'
       ? {
           titleBarOverlay: {
@@ -228,6 +238,17 @@ export function newWindow(
   if (process.platform === 'win32') {
     const winIco = getAppIcon();
     window.setIcon(typeof winIco === 'string' ? nativeImage.createFromPath(winIco) : winIco);
+  }
+
+  // Belt-and-suspenders on macOS too: re-assert the traffic lights on the live
+  // window. Harmless when they are already showing, and it recovers them for a
+  // transparent (translucent background) window where AppKit hides them.
+  if (process.platform === 'darwin') {
+    try {
+      window.setWindowButtonVisibility(true);
+    } catch {
+      // Older/other platforms: not fatal, the window is still usable.
+    }
   }
 
   window.profileName = profileName;
