@@ -114,6 +114,10 @@ export default class Session extends EventEmitter {
       pid: number;
     };
   };
+  // nemesis8 durable-session binding, captured from OSC 777 (nemesis8#106 R1).
+  // Present only once an n8 agent in this pane announces itself; consumed by
+  // workspace capture to record a resumable session id. Undefined = no binding.
+  n8Binding?: {kind: string; sessionId: string; workspace: string; resume: string};
   // Per-pane identity token injected into the PTY env as HYPERIA_AGENT_TOKEN.
   // An agent running in this pane forwards it to the sidecar (MCP Authorization
   // header) so it's identified as THIS pane — gets consent prompts instead of
@@ -386,9 +390,14 @@ fi
       // wire format, so no-control-regex is intentionally disabled here.
       oscBuffer += chunk;
       let match;
-      // RegExp to match OSC sequences: \x1b] (code) ; (content) BEL or ST
+      // RegExp to match OSC sequences: \x1b] (code) ; (content) BEL or ST.
+      // 777 = the nemesis8 session-binding announcement (DeepBlueDynamics/
+      // nemesis8#106 R1): ESC ] 777 ; n8 ; session=<uuid> ; workspace=<path> ;
+      // event=<start|resume|attach> BEL. Captured passively so a workspace
+      // snapshot can record which n8 session a pane hosts (hyperia#172); no
+      // OSC → no binding → unchanged behaviour.
       // eslint-disable-next-line no-control-regex
-      const oscRegex = /\x1b\](7|133|697);(.*?)(?:\x07|\x1b\\)/g;
+      const oscRegex = /\x1b\](7|133|697|777);(.*?)(?:\x07|\x1b\\)/g;
 
       let lastIndex = 0;
       while ((match = oscRegex.exec(oscBuffer)) !== null) {
@@ -487,6 +496,32 @@ fi
                 : undefined
           };
           this.emit('shellstate', this.shellState);
+        } else if (code === '777') {
+          // nemesis8 session binding (nemesis8#106 R1). Content is
+          // `n8 ; session=<uuid> ; workspace=<path> ; event=<...>`. Only the
+          // `n8` sub-type is ours; ignore anything else on 777 (it's a shared
+          // OSC number). Store the binding on the session so workspace capture
+          // can annotate the pane with its durable n8 session id.
+          const parts = content.split(';').map((p) => p.trim());
+          if (parts[0] === 'n8') {
+            const kv: Record<string, string> = {};
+            for (const p of parts.slice(1)) {
+              const i = p.indexOf('=');
+              if (i !== -1) kv[p.substring(0, i).trim()] = p.substring(i + 1).trim();
+            }
+            if (kv.session) {
+              const binding = {
+                kind: 'nemesis8',
+                sessionId: kv.session,
+                workspace: kv.workspace || '',
+                resume: `n8 resume ${kv.session}`
+              };
+              // Only emit on a real change (start/resume/attach all re-announce).
+              const changed = !this.n8Binding || this.n8Binding.sessionId !== binding.sessionId;
+              this.n8Binding = binding;
+              if (changed) this.emit('n8-binding', binding);
+            }
+          }
         }
       }
 
