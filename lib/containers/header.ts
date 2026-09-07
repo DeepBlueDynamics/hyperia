@@ -65,11 +65,20 @@ const getTabs = createSelector(
     rootGroups.map((t: any): ITab => {
       const leaves = getLeaves(termGroups, t);
       const firstLeaf = leaves[0];
+      // A tab is a "web tab" — web-formatted name, web context menu, web
+      // styling, and web focus handling — ONLY when it contains NO terminal.
+      // The moment a terminal split lands in it (a web pane + a terminal),
+      // it's a normal tab: a codename, normal rename, normal menu. Deciding
+      // by the FIRST leaf alone left a web-first tab mis-classified as "web"
+      // after a terminal was split into it, so its name/menu/focus all went
+      // off. Two web panes (no terminal) stay a web tab, as expected.
+      const hasTerminal = leaves.some((leaf) => leaf.sessionUid);
       const isFirstLeafWeb = firstLeaf && !firstLeaf.sessionUid;
+      const isWebTab = !!isFirstLeafWeb && !hasTerminal;
       const groupTabName: string | null | undefined = t.tabName;
 
       let title = groupTabName || '';
-      if (isFirstLeafWeb) {
+      if (isWebTab) {
         if (!title && !t.disableTitleInheritance) {
           title = (firstLeaf.webName as string) || '';
         }
@@ -88,8 +97,10 @@ const getTabs = createSelector(
         if (!title) title = 'Browser';
       } else {
         if (!title) {
-          const firstSessionUid = firstLeaf ? (firstLeaf.sessionUid as string) : null;
-          const session = firstSessionUid ? sessions[firstSessionUid] : null;
+          // Mixed tab: name after the first TERMINAL leaf (not firstLeaf,
+          // which may be the web pane), so it gets a real codename.
+          const termLeaf = leaves.find((leaf) => leaf.sessionUid);
+          const session = termLeaf ? sessions[termLeaf.sessionUid as string] : null;
           title = session ? session.tabName || session.title : 'Terminal';
         }
       }
@@ -132,8 +143,8 @@ const getTabs = createSelector(
         hasActivity,
         hasBell,
         agentStatus,
-        isWebPane: isFirstLeafWeb,
-        webUrl: isFirstLeafWeb && firstLeaf ? firstLeaf.webUrl || undefined : undefined,
+        isWebPane: isWebTab,
+        webUrl: isWebTab && firstLeaf ? firstLeaf.webUrl || undefined : undefined,
         paneColors,
         groupTabName: groupTabName || undefined,
         manualTabName: !!t.manualTabName,
