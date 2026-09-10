@@ -20,7 +20,7 @@ jobs:
           # (native-process-working-directory) fails in install-app-deps.
           - os: windows-2022
             rust_target: x86_64-pc-windows-msvc
-          - os: macos-latest
+          - os: macos-14
             rust_target: x86_64-apple-darwin
           - os: ubuntu-latest
             rust_target: x86_64-unknown-linux-gnu
@@ -46,7 +46,7 @@ jobs:
 
       # macOS: also build arm64 sidecar
       - name: Setup Rust ARM64 target (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-14'
         run: rustup target add aarch64-apple-darwin
 
       - name: Install Yarn
@@ -80,18 +80,18 @@ jobs:
       # A bare `cargo build --release` puts it at target/release/ and the
       # packaging step doesn't find it ("Sidecar binary not found …").
       - name: Build sidecar (release, default target)
-        if: matrix.os != 'macos-latest'
+        if: matrix.os != 'macos-14'
         run: cargo build --release --manifest-path sidecar/Cargo.toml
 
       # Intel mac: --no-default-features drops the `tts` feature — ort provides
       # no prebuilt ONNX Runtime for x86_64-apple-darwin, so this leg ships
       # without voice (the /api/tts route reports unavailable).
       - name: Build sidecar x86_64 (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-14'
         run: cargo build --release --manifest-path sidecar/Cargo.toml --target x86_64-apple-darwin --no-default-features
 
       - name: Build sidecar ARM64 (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-14'
         run: cargo build --release --manifest-path sidecar/Cargo.toml --target aarch64-apple-darwin
 
       # Build Electron app
@@ -115,7 +115,7 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
       - name: Build installer (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-14'
         # Signs with the Developer ID cert from CSC_LINK and notarizes via
         # Apple's notary service (electron-builder does both in this one step;
         # mac.notarize.teamId in electron-builder.json triggers notarization).
