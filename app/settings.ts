@@ -127,6 +127,29 @@ export function initSettings() {
     return hasAgentToken();
   });
 
+  // Screenshot a terminal pane: capture a rect of the SENDING renderer's
+  // content (the xterm canvas has no native view, so unlike web panes it's
+  // captured straight from the window's webContents). Returns a PNG data URL;
+  // the renderer copies it to the clipboard and saves under ~/.hyperia/snapshots.
+  ipcMain.handle(
+    'term:capture',
+    async (event, {rect}: {rect: {x: number; y: number; width: number; height: number}}) => {
+      try {
+        if (!rect || rect.width < 1 || rect.height < 1) return null;
+        const img = await event.sender.capturePage({
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height)
+        });
+        return img && !img.isEmpty() ? img.toDataURL() : null;
+      } catch (err) {
+        console.error('[term:capture] failed:', err);
+        return null;
+      }
+    }
+  );
+
   ipcMain.handle('pick-shell-executable', async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
     const res = await dialog.showOpenDialog(win!, {
