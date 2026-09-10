@@ -328,48 +328,56 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           </div>
         </div>
 
-        <button
-          className="tabs_newTabBtn"
-          onClick={() => {
-            try {
-              ipcRenderer.send('new-window');
-            } catch (err) {
-              console.error(err);
-            }
-          }}
-          aria-label="New window"
-          title="New Window"
-        >
-          <svg viewBox="0 0 14 14" width="13" height="13">
-            <rect x="1" y="3" width="10" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
-            <rect x="3" y="1" width="10" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
-          </svg>
-        </button>
+        {/* Wrapped in the shared tooltip trigger so hovering shows an instant
+            styled label instead of waiting ~1s on the OS `title` tooltip. The
+            `title` attr is dropped so the two don't stack; aria-label carries
+            the accessible name. */}
+        <div className="tabs_newTab_tooltip_trigger">
+          <button
+            className="tabs_newTabBtn"
+            onClick={() => {
+              try {
+                ipcRenderer.send('new-window');
+              } catch (err) {
+                console.error(err);
+              }
+            }}
+            aria-label="New window"
+          >
+            <svg viewBox="0 0 14 14" width="13" height="13">
+              <rect x="1" y="3" width="10" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+              <rect x="3" y="1" width="10" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+            </svg>
+          </button>
+          <div className="tabs_newTab_tooltip tabs_btnTip">New Window</div>
+        </div>
 
-        <button
-          className="tabs_newTabBtn"
-          onClick={() => {
-            try {
-              ipcRenderer.send('new-sticky');
-            } catch (err) {
-              console.error(err);
-            }
-          }}
-          aria-label="New sticky note"
-          title="New Stickys"
-        >
-          <svg viewBox="0 0 14 14" width="13" height="13">
-            <path
-              d="M2 1h10a1 1 0 0 1 1 1v7l-4 4H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.2"
-            />
-            <path d="M9 8v5l4-4H9z" fill="currentColor" opacity="0.35" />
-            <line x1="4" y1="5" x2="10" y2="5" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
-            <line x1="4" y1="7.5" x2="8" y2="7.5" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
-          </svg>
-        </button>
+        <div className="tabs_newTab_tooltip_trigger">
+          <button
+            className="tabs_newTabBtn"
+            onClick={() => {
+              try {
+                ipcRenderer.send('new-sticky');
+              } catch (err) {
+                console.error(err);
+              }
+            }}
+            aria-label="New sticky note"
+          >
+            <svg viewBox="0 0 14 14" width="13" height="13">
+              <path
+                d="M2 1h10a1 1 0 0 1 1 1v7l-4 4H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.2"
+              />
+              <path d="M9 8v5l4-4H9z" fill="currentColor" opacity="0.35" />
+              <line x1="4" y1="5" x2="10" y2="5" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
+              <line x1="4" y1="7.5" x2="8" y2="7.5" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" />
+            </svg>
+          </button>
+          <div className="tabs_newTab_tooltip tabs_btnTip">New Stickys</div>
+        </div>
       </div>
 
       {isMac && tabs.length > 1 && (
@@ -904,6 +912,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
 
         .tabs_newTab_tooltip_trigger {
           position: relative;
+          display: inline-flex;
         }
 
         .tabs_newTab_tooltip {
@@ -934,6 +943,20 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
 
         .tabs_newTab_tooltip_trigger:hover .tabs_newTab_tooltip {
           display: block;
+        }
+
+        /* Compact label variant for the icon buttons. Anchored to the RIGHT
+           edge: these sit at the end of the tab bar, so a left-anchored
+           tooltip would run off the window. */
+        .tabs_btnTip {
+          left: auto;
+          right: 0;
+          top: 32px;
+          padding: var(--space-4) var(--space-8);
+          font-size: 11px;
+          font-weight: var(--weight-regular);
+          color: var(--text-primary);
+          box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
         }
 
         /* Layouts grid */

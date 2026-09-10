@@ -76,7 +76,10 @@ export interface RestoreHandle {
  *   const win = new BrowserWindow(r.opts);
  *   r.attach(win);
  */
-export function restoreFor(defaults: {x?: number; y?: number; width: number; height: number}): RestoreHandle {
+export function restoreFor(
+  defaults: {x?: number; y?: number; width: number; height: number},
+  hasExplicitSize = false
+): RestoreHandle {
   const state = readState();
 
   const opts: RestoreHandle['opts'] = {
@@ -87,20 +90,31 @@ export function restoreFor(defaults: {x?: number; y?: number; width: number; hei
   };
 
   if (state) {
-    // Open it smaller than it was when last closed
-    opts.width = Math.max(370, Math.round(state.width * 0.85));
-    opts.height = Math.max(190, Math.round(state.height * 0.85));
+    // Restore the last bounds VERBATIM. An earlier "open smaller than last
+    // closed" tweak scaled these by 0.85 on every launch — and since save()
+    // then persisted the shrunken size, that compounded (0.85^n) until the
+    // window bottomed out at the minWidth/minHeight floor after a dozen or so
+    // launches. Never scale restored geometry by anything.
+    opts.width = state.width;
+    opts.height = state.height;
     if (
       typeof state.x === 'number' &&
       typeof state.y === 'number' &&
       boundsAreVisible(state.x, state.y, state.width, state.height)
     ) {
-      const dx = Math.round((state.width - opts.width) / 2);
-      const dy = Math.round((state.height - opts.height) / 2);
-      opts.x = state.x + dx;
-      opts.y = state.y + dy;
+      opts.x = state.x;
+      opts.y = state.y;
     }
     // else: drop x/y so Electron centers on the primary display.
+  } else if (!hasExplicitSize) {
+    // First run with nothing configured: the stored 540x380 default is far too
+    // small for a terminal on a modern display. Take ~85% of the work area,
+    // centered. An explicit windowSize in the user's config still wins.
+    const wa = screen.getPrimaryDisplay().workArea;
+    opts.width = Math.round(wa.width * 0.85);
+    opts.height = Math.round(wa.height * 0.85);
+    opts.x = wa.x + Math.round((wa.width - opts.width) / 2);
+    opts.y = wa.y + Math.round((wa.height - opts.height) / 2);
   }
 
   const attach = (window: BrowserWindow): void => {
@@ -109,7 +123,12 @@ export function restoreFor(defaults: {x?: number; y?: number; width: number; hei
     if (state) {
       const applyChrome = () => {
         if (window.isDestroyed()) return;
-        // Do not auto-maximize or fullscreen on startup to respect "smaller than last closed" request.
+        // Fullscreen and maximized are mutually exclusive; fullscreen wins.
+        if (state.isFullScreen) {
+          window.setFullScreen(true);
+        } else if (state.isMaximized) {
+          window.maximize();
+        }
       };
       window.once('ready-to-show', applyChrome);
     }
