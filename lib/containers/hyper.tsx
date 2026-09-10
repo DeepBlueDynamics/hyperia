@@ -124,7 +124,32 @@ const Hyper = forwardRef<HTMLDivElement, HyperProps>((props, ref) => {
     window.focusActiveTerm = (uid?: string) => {
       if (uid) {
         handleFocusActive(uid);
-      } else {
+        return;
+      }
+      // Refocus the active TERMINAL only if it actually lives in the active
+      // tab. A web-pane tab has no terminal session, so `activeSession` still
+      // points at the PREVIOUS tab's terminal — focusing it re-activates that
+      // tab and reverts the switch (the "click a web tab, it flashes then
+      // snaps back" bug; a drag was immune because it never hit this mouseup
+      // path). For a terminal-less tab, leave focus with the web pane.
+      try {
+        const st = (window as any).store?.getState?.();
+        const activeTab: string | undefined = st?.termGroups?.activeRootGroup;
+        const activeUid: string | undefined = st?.sessions?.activeUid;
+        const groups = st?.termGroups?.termGroups;
+        const inActiveTab = (root?: string, target?: string): boolean => {
+          if (!root || !target || !groups) return false;
+          const g = groups[root];
+          if (!g) return false;
+          if (g.sessionUid === target) return true;
+          return ((g.children as string[]) || []).some((c) => inActiveTab(c, target));
+        };
+        if (inActiveTab(activeTab, activeUid)) {
+          terms.current?.getActiveTerm()?.focus();
+        }
+        // else: active tab has no terminal (web pane) → don't grab a stale one.
+      } catch {
+        // Store shape unexpected — fall back to the old unconditional focus.
         terms.current?.getActiveTerm()?.focus();
       }
     };

@@ -1,4 +1,4 @@
-import {clipboard, shell, ipcRenderer, webUtils} from 'electron';
+import {clipboard, shell, ipcRenderer, webUtils, nativeImage, webFrame} from 'electron';
 import React from 'react';
 
 import {CanvasAddon} from '@xterm/addon-canvas';
@@ -404,6 +404,58 @@ export default class Term extends React.PureComponent<
       isRenamingLabel: true,
       renameLabelValue: labelText
     });
+  };
+
+  // Screenshot this terminal pane. Captures the pane's wrapper rect from the
+  // window's webContents (the xterm canvas is renderer DOM — no native view to
+  // grab like a web pane), copies the PNG to the clipboard, and saves a copy
+  // under ~/.hyperia/snapshots. Brief camera→check flash as confirmation.
+  // Mirrors the web pane's screenshot button; lives in the same nav cluster.
+  captureScreenshot = async (e: React.MouseEvent): Promise<void> => {
+    e.stopPropagation();
+    // Grab the icon BEFORE the await — React pools synthetic events.
+    const iconEl = (e.currentTarget as HTMLElement).querySelector('i');
+    const el = this.termWrapperRef;
+    if (!el) return;
+    try {
+      const r = el.getBoundingClientRect();
+      // getBoundingClientRect is CSS px; capturePage wants window DIPs. They
+      // differ by the page zoom (Linux boots at 1.2), same as the web-pane
+      // bounds fix — scale so the captured rect lines up with the pane.
+      const zoom = webFrame.getZoomFactor() || 1;
+      const dataURL: string | null = await ipcRenderer.invoke('term:capture', {
+        rect: {x: r.left * zoom, y: r.top * zoom, width: r.width * zoom, height: r.height * zoom}
+      });
+      if (!dataURL) return;
+      const img = nativeImage.createFromDataURL(dataURL);
+      if (!img || img.isEmpty()) return;
+      clipboard.writeImage(img);
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fs = require('fs');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const os = require('os');
+        const dir = path.join(os.homedir(), '.hyperia', 'snapshots');
+        fs.mkdirSync(dir, {recursive: true});
+        const rawName = (this.props as any).sessionShellName || this.props.uid || 'pane';
+        const name = String(rawName)
+          .replace(/[^\w.-]+/g, '_')
+          .slice(0, 40);
+        fs.writeFileSync(path.join(dir, `termshot-${name}-${Date.now()}.png`), img.toPNG());
+      } catch (saveErr) {
+        // clipboard copy already succeeded; disk save is best-effort
+        console.error('[term] screenshot save failed:', saveErr);
+      }
+      if (iconEl) {
+        const prev = iconEl.className;
+        iconEl.className = 'ti ti-check';
+        setTimeout(() => {
+          iconEl.className = prev;
+        }, 1400);
+      }
+    } catch (err) {
+      console.error('[term] screenshot failed:', err);
+    }
   };
 
   handlePaneBandContextMenu = (e: React.MouseEvent) => {
@@ -3234,6 +3286,33 @@ export default class Term extends React.PureComponent<
                       }}
                     >
                       Wipe scrollback — shell only, not TUIs
+                    </div>
+                  </div>
+                </span>
+                <span
+                  className="term_controlIcon term_tooltipTrigger"
+                  onClick={(e) => void this.captureScreenshot(e)}
+                  style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
+                >
+                  <i className="ti ti-camera" style={{fontSize: '14px'}} aria-hidden="true" />
+                  <div className="term_tooltip" style={{minWidth: '160px'}}>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        color: 'var(--text-primary)',
+                        fontWeight: 500
+                      }}
+                    >
+                      Screenshot
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        color: 'var(--text-secondary)',
+                        marginTop: 'var(--space-2)'
+                      }}
+                    >
+                      Copy PNG + save to ~/.hyperia/snapshots
                     </div>
                   </div>
                 </span>
