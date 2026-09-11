@@ -2885,6 +2885,13 @@ struct WorkspaceSaveBody {
     name: String,
     #[serde(default)]
     overwrite: bool,
+    /// "tab" for single-tab snapshots (#183); absent = whole-app.
+    #[serde(default)]
+    scope: Option<String>,
+    /// Pre-captured snapshot pushed by Electron (tab saves capture renderer-
+    /// side); when present the bridge CaptureWorkspace round trip is skipped.
+    #[serde(default)]
+    snapshot: Option<serde_json::Value>,
 }
 
 async fn post_workspace_save(
@@ -2895,18 +2902,26 @@ async fn post_workspace_save(
         Ok(d) => d,
         Err(e) => return e,
     };
-    // Correlated capture: every window's geometry + layout, or a missing list.
-    let raw = match state
-        .bridge
-        .send_command(serde_json::json!({"type": "CaptureWorkspace"}))
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("capture failed: {e}")),
-    };
-    let snapshot: serde_json::Value = match serde_json::from_str(&raw) {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("capture returned invalid JSON: {e}")),
+    // Correlated capture: every window's geometry + layout, or a missing
+    // list. A pushed snapshot (tab-scoped saves, captured renderer-side)
+    // skips the round trip.
+    let snapshot: serde_json::Value = if let Some(pushed) = body.snapshot {
+        pushed
+    } else {
+        let raw = match state
+            .bridge
+            .send_command(serde_json::json!({"type": "CaptureWorkspace"}))
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return (StatusCode::BAD_GATEWAY, format!("capture failed: {e}")),
+        };
+        match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                return (StatusCode::BAD_GATEWAY, format!("capture returned invalid JSON: {e}"))
+            }
+        }
     };
     if let Some(err) = snapshot.get("error").and_then(|e| e.as_str()) {
         return (StatusCode::BAD_GATEWAY, format!("capture failed: {err}"));
@@ -2933,6 +2948,7 @@ async fn post_workspace_save(
     match workspace::save(
         &dir,
         &body.name,
+        body.scope.clone(),
         windows,
         stickys,
         Some(env!("CARGO_PKG_VERSION").to_string()),

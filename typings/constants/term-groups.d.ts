@@ -82,6 +82,13 @@ export interface RestoreLayoutStateAction {
   savedState: any;
 }
 
+export const RESTORE_TAB_STATE = 'RESTORE_TAB_STATE';
+export interface RestoreTabStateAction {
+  type: typeof RESTORE_TAB_STATE;
+  /** A tab-scoped layout blob (one root group + subtree), uids pre-remapped. */
+  layout: any;
+}
+
 export const TERM_GROUP_POP_OUT_PANE = 'TERM_GROUP_POP_OUT_PANE';
 export interface TermGroupPopOutPaneAction {
   type: typeof TERM_GROUP_POP_OUT_PANE;
@@ -102,4 +109,5 @@ export type TermGroupActions =
   | TermGroupToggleTitleInheritanceAction
   | TermGroupSetPinnedAction
   | RestoreLayoutStateAction
+  | RestoreTabStateAction
   | TermGroupPopOutPaneAction;

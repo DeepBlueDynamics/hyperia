@@ -21,6 +21,8 @@ export type Session = {
   isNewGroup?: boolean;
   isRestore?: boolean;
   lastCommand?: string;
+  /** Tab-workspace resume-once (#183): human-checked at save; EXECUTED once on restore. */
+  resumeOnce?: {command: string; source: string};
   // Typed into the fresh PTY WITHOUT a newline (user reviews, presses Enter).
   prefillCommand?: string;
   splitPlacement?: 'BEFORE' | 'AFTER';
@@ -142,6 +144,12 @@ export type MainEvents = {
   'session-cd': {uid: string; path: string};
   /** Copy OS-dragged files into an idle terminal pane's cwd (drag-and-drop). */
   'pane copy files': {uid: string; cwd: string; paths: string[]};
+  /** Tab-scoped workspace save (#183): renderer-captured tab layout + choices. */
+  'save tab workspace': {name: string; overwrite: boolean; layout: any};
+  /** Ask main for the tab-scoped workspace library (the + menu's list). */
+  'list tab workspaces': never;
+  /** Restore a saved tab-workspace into THIS window as a new tab (#183). */
+  'restore tab workspace': {name: string};
 };
 
 export type RendererEvents = {
@@ -244,6 +252,11 @@ export type RendererEvents = {
   // close-time save passes undefined and its reply routes to the old writer.
   'get-layout-state-req': {requestId?: string} | undefined;
   'restore-layout-state': any;
+  /** Graft one saved tab into the running window (#183); uids pre-remapped. */
+  'restore-tab-state': {layout: any};
+  'session n8 binding': {uid: string; binding: {kind: string; sessionId: string; workspace: string; resume: string}};
+  'save tab workspace result': {ok: boolean; name: string; error?: string; conflict?: boolean};
+  'tab workspaces list': {rows: Array<{name: string; savedAt: string; panes: number; webPanes: number}>};
   'web-pane-zoom-in': {uid: string};
   'web-pane-zoom-out': {uid: string};
   'web-pane-zoom-reset': {uid: string};

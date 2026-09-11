@@ -48,7 +48,16 @@ import {getAppIcon} from '../utils/icon';
 import {setRendererType, unsetRendererType} from '../utils/renderer-utils';
 import toElectronBackgroundColor from '../utils/to-electron-background-color';
 import {initWebPaneManager, destroyPanesForWindow, setWindowWebPanesSuppressed} from '../web-pane-manager';
-import {deliverLayoutReply, saveLastSession} from '../workspace';
+import {
+  deliverLayoutReply,
+  saveLastSession,
+  saveTabWorkspaceViaSidecar,
+  toWorkspaceLayout,
+  listTabWorkspaces,
+  readTabWorkspaceForRestore,
+  remapUids,
+  annotateMissingResources
+} from '../workspace';
 
 import contextMenuTemplate from './contextmenu';
 
@@ -687,6 +696,9 @@ export function newWindow(
       isNewGroup: extraOptions.isNewGroup,
       isRestore: extraOptions.isRestore,
       lastCommand: extraOptions.lastCommand,
+      // Tab-workspace resume-once (#183): human-checked at save time; the
+      // renderer EXECUTES it once after the restored shell settles.
+      resumeOnce: (extraOptions as any).resumeOnce,
       prefillCommand: (extraOptions as any).prefillCommand,
       layoutPattern: (extraOptions as any).layoutPattern,
       shellState: (session as any).shellState,
@@ -725,6 +737,13 @@ export function newWindow(
 
     session.on('shellstate', (shellState: any) => {
       rpc.emit('session shellstate', {uid: options.uid, shellState});
+    });
+
+    // Mirror the OSC-777 n8 session binding (nemesis8#106) into the renderer
+    // so the tab-workspace save flow (#183) knows which panes host resumable
+    // agent sessions.
+    session.on('n8-binding', (binding: any) => {
+      rpc.emit('session n8 binding', {uid: options.uid, binding});
     });
 
     session.on('exit', () => {
@@ -1004,6 +1023,44 @@ export function newWindow(
         window.destroy();
       }
     }, 4000);
+  });
+
+  // ---- tab-scoped workspaces (#183) --------------------------------------
+
+  rpc.on('save tab workspace', ({name, overwrite, layout}) => {
+    void (async () => {
+      const bounds = window.getBounds();
+      const geometry = {
+        ...bounds,
+        isMaximized: window.isMaximized(),
+        isFullScreen: window.isFullScreen()
+      };
+      // Same normalization the window-level capture applies: strip pids
+      // (the sidecar rejects them) and fold any bare lastCommand into
+      // annotations. resumeOnce passes through untouched.
+      const result = await saveTabWorkspaceViaSidecar({name, overwrite, geometry, layout: toWorkspaceLayout(layout)});
+      rpc.emit('save tab workspace result', {name, ...result});
+    })();
+  });
+
+  rpc.on('list tab workspaces', () => {
+    rpc.emit('tab workspaces list', {rows: listTabWorkspaces()});
+  });
+
+  rpc.on('restore tab workspace', ({name}) => {
+    const ws = readTabWorkspaceForRestore(name);
+    if (!ws) {
+      console.warn(`[workspace] tab-workspace '${name}' missing or invalid — nothing restored`);
+      return;
+    }
+    // Additive graft into THIS window: fresh uids (no collisions with live
+    // sessions), loud placeholders for vanished cwds, same as any restore.
+    const remapped = remapUids(ws.windows[0].layout || {});
+    const {layout, notices} = annotateMissingResources(remapped);
+    if (notices.length > 0) {
+      console.log('[workspace] tab restore substitutions:', notices);
+    }
+    rpc.emit('restore-tab-state', {layout});
   });
 
   rpc.on('layout-state-reply', (layoutState) => {

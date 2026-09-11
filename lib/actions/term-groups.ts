@@ -9,6 +9,7 @@ import {
   TERM_GROUP_ADD_WEB_TAB,
   TERM_GROUP_ACTIVATE_WEB_TAB,
   RESTORE_LAYOUT_STATE,
+  RESTORE_TAB_STATE,
   TERM_GROUP_POP_OUT_PANE
 } from '../../typings/constants/term-groups';
 import type {ITermState, ITermGroup, HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
@@ -360,6 +361,33 @@ export function exitActiveTermGroup() {
         if (activeUid) {
           dispatch(userExitTermGroup(activeUid));
         }
+      }
+    });
+  };
+}
+
+// Tab-scoped restore (#183): graft one saved tab (uids pre-remapped by main)
+// into the live window, then spawn its terminal sessions. Web panes need no
+// spawn — their groups render from state. resumeOnce carries the human's
+// save-time checkbox choices; the session actions execute it once.
+export function restoreTabState(layout: any) {
+  return (dispatch: HyperDispatch) => {
+    dispatch({
+      type: RESTORE_TAB_STATE,
+      layout
+    } as any);
+
+    Object.keys(layout.sessions || {}).forEach((uid) => {
+      const session = layout.sessions[uid];
+      if (session) {
+        rpc.emit('new', {
+          uid,
+          cwd: session.cwd,
+          profile: session.profile,
+          isRestore: true,
+          lastCommand: session.annotations?.lastCommand ?? session.lastCommand,
+          resumeOnce: session.resumeOnce
+        } as any);
       }
     });
   };
