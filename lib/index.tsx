@@ -26,6 +26,7 @@ import ConsentModal from './components/consent-modal';
 import {activeTerminals} from './components/term';
 import ToastStack, {pushToast, pushStickyToast, dismissStickyToast} from './components/toast-stack';
 import WebPaneDialog, {showWebPaneDialog} from './components/web-pane-dialog';
+import WorkspaceSaveToast from './components/workspace-save-toast';
 import HyperContainer from './containers/hyper';
 import * as permissionsBus from './permissions-bus';
 import rpc from './rpc';
@@ -33,6 +34,7 @@ import {getRootGroups} from './selectors';
 import configureStore from './store/configure-store';
 import * as config from './utils/config';
 import {getBase64FileData} from './utils/file';
+import {serializeLayoutState} from './utils/layout-serialize';
 import {toNavigableUrl} from './utils/navigable-url';
 import * as plugins from './utils/plugins';
 import {syncWebUrls} from './utils/web-url-sync';
@@ -743,6 +745,7 @@ root.render(
     <HyperContainer />
     <WebPaneDialog />
     <AgentToast />
+    <WorkspaceSaveToast />
     <ToastStack />
     <ConsentModal />
     <CloseConfirmModal />
@@ -839,71 +842,33 @@ rpc.on('open web pane req', ({url, isAgentInitiated}: {url?: string; isAgentInit
   }
 });
 
+// The layout blob shape lives in utils/layout-serialize.ts — shared with the
+// tab-scoped save flow (#183) so the two capture paths can't drift.
+const getSessionCommandLine = (uid: string): string | undefined => activeTerminals.get(uid)?.getCurrentCommandLine();
+
 rpc.on('get-layout-state-req', (req) => {
-  const {termGroups, sessions} = store_.getState();
-
-  const serializedSessions: Record<string, any> = {};
-  Object.keys(sessions.sessions).forEach((uid) => {
-    const s = sessions.sessions[uid];
-    if (s) {
-      const activeTerm = activeTerminals.get(uid);
-      const lastCommand = activeTerm ? activeTerm.getCurrentCommandLine() : s.lastCommand || '';
-      serializedSessions[uid] = {
-        uid: s.uid,
-        title: s.title,
-        tabName: s.tabName,
-        description: s.description,
-        cols: s.cols,
-        rows: s.rows,
-        shell: s.shell,
-        pid: s.pid,
-        profile: s.profile,
-        cwd: s.cwd,
-        shellName: s.shellName,
-        manualTitle: !!s.manualTitle,
-        // The scraped command line is display-only metadata (epic #146):
-        // restore may show it, but typing it back is opt-in. Readers stay
-        // tolerant of the old bare `lastCommand` field.
-        annotations: lastCommand ? {lastCommand} : undefined
-      };
-    }
-  });
-
-  const serializedTermGroups: Record<string, any> = {};
-  Object.keys(termGroups.termGroups).forEach((uid) => {
-    const g = termGroups.termGroups[uid];
-    if (g) {
-      serializedTermGroups[uid] = {
-        uid: g.uid,
-        sessionUid: g.sessionUid,
-        parentUid: g.parentUid,
-        direction: g.direction,
-        sizes: g.sizes,
-        children: g.children ? g.children.asMutable() : [],
-        webUrl: (g as any).webUrl,
-        webName: (g as any).webName,
-        tabName: g.tabName,
-        manualTabName: !!(g as any).manualTabName,
-        pinned: (g as any).pinned
-      };
-    }
-  });
-
   const layoutState = {
     // Echo the correlation id so main can route this reply to a workspace
     // capture; absent for the legacy close-time save.
     requestId: req?.requestId,
-    activeUid: sessions.activeUid,
-    activeRootGroup: termGroups.activeRootGroup,
-    activeTermGroup: termGroups.activeTermGroup || null,
-    activeSessions: termGroups.activeSessions ? termGroups.activeSessions.asMutable() : {},
-    termGroups: serializedTermGroups,
-    sessions: serializedSessions
+    ...serializeLayoutState(store_.getState(), getSessionCommandLine)
   };
-
   rpc.emit('layout-state-reply', layoutState);
 });
 
 rpc.on('restore-layout-state', (savedState) => {
   store_.dispatch(termGroupActions.restoreLayoutState(savedState));
+});
+
+// Tab-scoped restore (#183): graft ONE saved tab (uids already remapped by
+// main) into the running window as a new tab — additive, never replacing.
+rpc.on('restore-tab-state', ({layout}) => {
+  store_.dispatch(termGroupActions.restoreTabState(layout) as any);
+});
+
+// n8 durable-session binding, captured main-side from OSC 777 (nemesis8#106)
+// and mirrored into redux so the save toast and the workspace serializer see
+// which panes host resumable agent sessions.
+rpc.on('session n8 binding', ({uid, binding}) => {
+  store_.dispatch({type: 'SESSION_SET_N8_BINDING', uid, binding} as any);
 });
