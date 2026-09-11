@@ -3322,7 +3322,7 @@ export default class Term extends React.PureComponent<
               showDirBar ? (
                 <div
                   ref={this.pathBarRef}
-                  className="term_locationBar"
+                  className="term_locationBar term_tooltipTrigger"
                   onClick={(e) => {
                     e.stopPropagation();
                     this.toggleDirNavigator();
@@ -3344,13 +3344,12 @@ export default class Term extends React.PureComponent<
                     opacity: this.isTerminalBusy() ? 0.5 : 1,
                     boxSizing: 'border-box',
                     marginLeft: 'var(--space-4)',
-                    marginRight: 'var(--space-8)'
+                    marginRight: 'var(--space-8)',
+                    // Anchor for the styled hover tooltip (replaces the old
+                    // native title=, which couldn't show the full path AND
+                    // the action notice as distinct lines — #182).
+                    position: 'relative'
                   }}
-                  title={
-                    this.isTerminalBusy()
-                      ? `Directory browsing locked while a process is running`
-                      : 'Click to browse directories (Ctrl+Shift+O)'
-                  }
                 >
                   <i
                     className={
@@ -3381,6 +3380,40 @@ export default class Term extends React.PureComponent<
                       ? this.state.navigatorCurrentPath || '/'
                       : this.props.sessionCwd || '/'}
                   </span>
+                  {/* Hover: FULL untruncated cwd + the action notice (#182).
+                      Suppressed while the navigator popup is open — it sits
+                      right below this bar and already shows where you're
+                      browsing. */}
+                  {!this.state.isDirNavigatorOpen && (
+                    <div className="term_tooltip" style={{minWidth: '160px', left: '-6px', right: 'auto'}}>
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          fontFamily: 'var(--font-mono)',
+                          color: 'var(--text-primary)',
+                          fontWeight: 500,
+                          // Deep paths wrap instead of clipping at the window
+                          // edge; break-all because paths have no spaces.
+                          whiteSpace: 'normal',
+                          wordBreak: 'break-all',
+                          maxWidth: 'min(60ch, 70vw)'
+                        }}
+                      >
+                        {(this.props as any).sessionCwd || '/'}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          color: 'var(--text-secondary)',
+                          marginTop: 'var(--space-2)'
+                        }}
+                      >
+                        {this.isTerminalBusy()
+                          ? 'Directory browsing locked while a process is running'
+                          : 'Click to browse directories · Ctrl+Shift+O'}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : null
             }
