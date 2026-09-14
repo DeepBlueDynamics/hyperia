@@ -2908,15 +2908,15 @@ export default class Term extends React.PureComponent<
       clearBuffer: 260,
       screenshot: 240,
       pulse: 220,
-      dirIconOnly: 120
+      dirIconOnly: 90
     };
     // 0 at splitUpDown (both split icons just gone), 1 at splitUpDown-100 and
     // below. sq(roomy, tight) interpolates a px value along that ramp.
     const squeeze = w >= LADDER.splitUpDown ? 0 : Math.min(1, (LADDER.splitUpDown - w) / 100);
     const sq = (roomy: number, tight: number) => `${Math.round(roomy + (tight - roomy) * squeeze)}px`;
-    // Dir-bar min-width floor: 80px (~11 chars) roomy, easing to 30px (icon +
-    // ~2 chars) right before the icon-only collapse.
-    const dirMinWidth = Math.round(Math.max(30, Math.min(80, 30 + ((w - LADDER.dirIconOnly) * 50) / 180)));
+    // Dir-bar min-width floor: 80px (~11 chars) roomy, easing to 26px (icon +
+    // ~1 char) right before the icon-only collapse.
+    const dirMinWidth = Math.round(Math.max(26, Math.min(80, 26 + ((w - LADDER.dirIconOnly) * 54) / 210)));
     const hideQuickLayout = w < LADDER.quickLayout;
     const hideSplitRightLeft = w < LADDER.splitRightLeft;
     const hideSplitUpDown = w < LADDER.splitUpDown;
@@ -3415,14 +3415,12 @@ export default class Term extends React.PureComponent<
                   padding: `0 ${sq(6, 3)}`,
                   height: '24px',
                   // Fill the row (flex:1 absorbs space freed by hidden icons —
-                  // never a dead gap); the floor eases 80px → 30px (dirMinWidth)
-                  // so the path squeezes to a couple of chars before the
-                  // ladder's last step drops the text for the folder icon alone
-                  // (the #184 tooltip still reveals the full path on hover).
-                  // Icon-only keeps flex:1 too: the empty pill stretches to the
-                  // close X rather than leaving a hole, and shrinks to icon
-                  // width once the row truly runs out of room.
-                  ...(dirIconOnly ? {flex: '1 1 auto', minWidth: 'auto'} : {flex: 1, minWidth: `${dirMinWidth}px`}),
+                  // never a dead gap); the floor eases 80px → 26px (dirMinWidth)
+                  // so the path squeezes to a char or two before the ladder's
+                  // last step collapses it to a COMPACT folder-icon pill (per
+                  // Clint: no stretched empty pill — the #184 tooltip still
+                  // reveals the full path on hover).
+                  ...(dirIconOnly ? {flex: '0 0 auto', minWidth: 'auto'} : {flex: 1, minWidth: `${dirMinWidth}px`}),
                   cursor: this.isTerminalBusy() ? 'not-allowed' : 'pointer',
                   opacity: this.isTerminalBusy() ? 0.5 : 1,
                   boxSizing: 'border-box',
