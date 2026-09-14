@@ -191,6 +191,7 @@ export default class Term extends React.PureComponent<
     isCustomModalOpen: boolean;
     customKind: 'shell' | 'agent';
     restoreNoticeDismissed: boolean;
+    dirTipPos: {left: number; top: number} | null;
     profileName: string;
     shellPath: string;
     shellArgs: string;
@@ -269,6 +270,9 @@ export default class Term extends React.PureComponent<
     customKind: 'shell' as 'shell' | 'agent',
     // Workspace-restore substitution banner (#168) — dismissed per pane life.
     restoreNoticeDismissed: false,
+    // Viewport coords for the dir-bar tooltip (position:fixed so it can
+    // overhang neighboring panes instead of clipping at this pane's edge).
+    dirTipPos: null as {left: number; top: number} | null,
     profileName: '',
     shellPath: '',
     shellArgs: '',
@@ -3367,6 +3371,28 @@ export default class Term extends React.PureComponent<
                   e.stopPropagation();
                   this.toggleDirNavigator();
                 }}
+                onMouseEnter={() => {
+                  // Pane containers clip with overflow:hidden (rounded
+                  // corners), so the tooltip goes position:fixed, placed from
+                  // the bar's viewport rect — free to overhang the neighbor
+                  // pane. Anchor at the bar first, then re-clamp by the
+                  // tooltip's ACTUAL rendered width so short tooltips stay by
+                  // the bar and long ones never run off the window edge.
+                  const rect = this.pathBarRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  const anchored = Math.max(8, rect.left - 6);
+                  this.setState({dirTipPos: {left: anchored, top: Math.round(rect.bottom) + 4}}, () => {
+                    requestAnimationFrame(() => {
+                      const tip = this.pathBarRef.current?.querySelector('.term_tooltip');
+                      if (!tip) return;
+                      const width = tip.getBoundingClientRect().width;
+                      const clamped = Math.max(8, Math.min(anchored, window.innerWidth - width - 8));
+                      if (Math.abs(clamped - anchored) > 1) {
+                        this.setState({dirTipPos: {left: clamped, top: Math.round(rect.bottom) + 4}});
+                      }
+                    });
+                  });
+                }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -3427,7 +3453,20 @@ export default class Term extends React.PureComponent<
                       right below this bar and already shows where you're
                       browsing. */}
                 {!this.state.isDirNavigatorOpen && (
-                  <div className="term_tooltip" style={{minWidth: '160px', left: '-6px', right: 'auto'}}>
+                  <div
+                    className="term_tooltip"
+                    style={
+                      this.state.dirTipPos
+                        ? {
+                            position: 'fixed',
+                            minWidth: '160px',
+                            left: this.state.dirTipPos.left,
+                            top: this.state.dirTipPos.top,
+                            right: 'auto'
+                          }
+                        : {minWidth: '160px', left: '-6px', right: 'auto'}
+                    }
+                  >
                     <div
                       style={{
                         fontSize: '11px',
