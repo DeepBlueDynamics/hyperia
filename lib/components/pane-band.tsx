@@ -46,6 +46,10 @@ type PaneBandProps = {
   onSplitLeft?: () => void;
   onSplitUp?: () => void;
   onClose: () => void;
+  /** Responsive collapse (narrow panes): drop the quick-layout button. */
+  hideQuickLayout?: boolean;
+  /** Responsive collapse (narrow panes): drop the periodic-pulse button. */
+  hidePulse?: boolean;
   onClick?: (e: React.MouseEvent) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   height?: 'normal' | 'compact'; // maps to var(--band-height) | var(--band-height-compact)
@@ -98,6 +102,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       onSplitLeft,
       onSplitUp,
       onClose,
+      hideQuickLayout = false,
+      hidePulse = false,
       onClick,
       onContextMenu,
       height = 'compact',
@@ -482,7 +488,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
         >
           {/* Pulse (re-poke watchdog) — clock toggle, mirrors the sticky timer icon.
               Pulses (animates) while a pulse is active so it's obvious it's running. */}
-          {paneId && !isPlaceholder && (
+          {paneId && !isPlaceholder && !hidePulse && (
             <>
               <style>{`@keyframes hyPulseRun{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.72)}}`}</style>
               <span
@@ -531,7 +537,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           )}
 
           {/* Layouts Button */}
-          {paneId && !isPlaceholder && !isSplitRightDisabled && !isSplitDownDisabled && (
+          {paneId && !isPlaceholder && !hideQuickLayout && !isSplitRightDisabled && !isSplitDownDisabled && (
             <span
               className="pane-band-control-icon pane-band-tooltip-trigger"
               style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
