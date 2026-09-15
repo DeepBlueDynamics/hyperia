@@ -2886,12 +2886,13 @@ export default class Term extends React.PureComponent<
     //   1. the dir-bar path text ellipsizes (flex, continuous) …
     //   2. … and floors at its min-width (~first path segment);
     //   3. header tools drop one per step, lowest-value first: split right/left,
-    //      split up/down, quick layout, periodic pulse, screenshot — THEN the
-    //      session label shrinks (full → short → just its ">" icon) — and the
-    //      nav arrows + clear buffer are the last to go, so they survive as long
-    //      as there's room. Once both splits are gone the survivors close ranks:
-    //      gaps/margins interpolate down (squeeze below) so a removal never
-    //      leaves dead space;
+    //      split up/down, quick layout, screenshot — THEN the session label
+    //      shrinks (full → short → just its ">" icon) — and the nav arrows +
+    //      clear buffer are the last to go, so they survive as long as there's
+    //      room. The periodic pulse is NOT on the ladder (per Kord): it stays
+    //      through the narrowest state on shell panes. Once both splits are
+    //      gone the survivors close ranks: gaps/margins interpolate down
+    //      (squeeze below) so a removal never leaves dead space;
     //   5. meanwhile the dir bar keeps flex:1 — it absorbs freed space and its
     //      min-width floor eases 80px → 30px, so the path squeezes to a couple
     //      of chars before, finally, it collapses to the folder icon alone
@@ -2900,16 +2901,16 @@ export default class Term extends React.PureComponent<
     // live in one place so they're tunable as a set.
     const w = this.state.paneWidth;
     // Collapse order as the pane narrows (per Kord's spec): the split buttons go
-    // first, then the quick-layout picker, then the periodic pulse, then the
-    // screenshot; only after that does the session name shrink (full → short →
-    // just its ">" / globe icon). The nav arrows and the clear-buffer button are
-    // the LAST to go — they're never dropped while there's room for them. Higher
-    // threshold = removed sooner.
+    // first, then the quick-layout picker, then the screenshot; only after that
+    // does the session name shrink (full → short → just its ">" / globe icon).
+    // The nav arrows and the clear-buffer button are the LAST to go — they're
+    // never dropped while there's room for them. The pulse has no threshold: it
+    // is always shown on shell panes (pane-band gates it off pickers and
+    // web/ai panes). Higher threshold = removed sooner.
     const LADDER = {
       splitRightLeft: 380,
       splitUpDown: 360,
       quickLayout: 340,
-      pulse: 320,
       screenshot: 300,
       labelShort: 280,
       labelIconOnly: 260,
@@ -2930,7 +2931,6 @@ export default class Term extends React.PureComponent<
     const hideNavArrows = w < LADDER.navArrows;
     const hideClearBuffer = w < LADDER.clearBuffer;
     const hideScreenshot = w < LADDER.screenshot;
-    const hidePulse = w < LADDER.pulse;
     const dirIconOnly = w < LADDER.dirIconOnly;
     // Find-bar match counts (xterm reports a 0-based resultIndex).
     const sr = this.state.searchResults as {resultIndex: number; resultCount: number} | undefined;
@@ -3175,7 +3175,6 @@ export default class Term extends React.PureComponent<
             isSplitRightDisabled={hideSplitRightLeft}
             isSplitDownDisabled={isSplitDownDisabled || hideSplitUpDown}
             hideQuickLayout={hideQuickLayout}
-            hidePulse={hidePulse}
             squeeze={squeeze}
             isBusy={this.isTerminalBusy()}
             paneName={labelFull}
