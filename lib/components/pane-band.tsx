@@ -642,8 +642,9 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             </span>
           )}
 
-          {/* Split Down */}
-          {!isPlaceholder && !isSplitDownDisabled && (
+          {/* Split Down — shown on picker (placeholder) panes too, per Clint's
+              full-control-set direction; width ladder still governs it. */}
+          {!isSplitDownDisabled && (
             <span
               className="pane-band-control-icon pane-band-tooltip-trigger"
               onClick={(e) => {
@@ -745,8 +746,9 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             </span>
           )}
 
-          {/* Split Right */}
-          {!isPlaceholder && !isSplitRightDisabled && (
+          {/* Split Right — shown on picker (placeholder) panes too, per Clint's
+              full-control-set direction; width ladder still governs it. */}
+          {!isSplitRightDisabled && (
             <span
               className="pane-band-control-icon pane-band-tooltip-trigger"
               onClick={(e) => {
