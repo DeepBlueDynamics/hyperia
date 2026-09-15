@@ -1090,18 +1090,16 @@ export function newWindow(
   rpc.on('close', () => {
     window.close();
   });
-  // The renderer exited the window's LAST pane (already past the per-pane guard).
-  // If other Hyperia windows are open, close this one without re-prompting about
-  // active processes (#148). But if this is the LAST window, don't quit Hyperia —
-  // tell the renderer to reset the window to a fresh picker, so closing the last
-  // pane just drops you back to "pick a shell/agent" instead of exiting the app.
+  // The renderer emptied the window's LAST pane. ALWAYS reset it to a fresh
+  // picker rather than closing — a window is closed only by its own controls
+  // (the X / Quit), never by closing its last pane. This is deliberately not
+  // gated on the window count: the earlier "close when other windows are open,
+  // picker only on the last window" split was both surprising (closing a pane
+  // shouldn't take the whole window) and fragile (a stale/phantom entry in the
+  // tracked window set inflated the count, so even a lone window took the close
+  // branch). One path now: emptied window → picker.
   rpc.on('close-no-confirm', () => {
-    if (app.getWindows().size <= 1) {
-      rpc.emit('reset-to-picker');
-      return;
-    }
-    skipNextCloseConfirm = true;
-    window.close();
+    rpc.emit('reset-to-picker');
   });
   // #148: the renderer wants to close a TAB whose panes are running foreground
   // programs — confirm via the in-app modal (native fallback) and echo back

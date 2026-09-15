@@ -48,8 +48,6 @@ type PaneBandProps = {
   onClose: () => void;
   /** Responsive collapse (narrow panes): drop the quick-layout button. */
   hideQuickLayout?: boolean;
-  /** Responsive collapse (narrow panes): drop the periodic-pulse button. */
-  hidePulse?: boolean;
   /**
    * Responsive collapse (narrow panes): 0 = roomy spacing, 1 = fully tight.
    * Once the split buttons are gone the survivors close ranks — band padding
@@ -109,7 +107,6 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       onSplitUp,
       onClose,
       hideQuickLayout = false,
-      hidePulse = false,
       squeeze = 0,
       onClick,
       onContextMenu,
@@ -158,6 +155,36 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
     // the agent consent gate. We only show the active state + a compact editor.
     const [pulseOpen, setPulseOpen] = React.useState(false);
     const [pulseActive, setPulseActive] = React.useState(false);
+    // Popover position in viewport coords. Pane containers clip with
+    // overflow:hidden, so the old absolute popover was cut off in short or
+    // narrow panes and could land over a neighbor. position:fixed from the
+    // icon's rect escapes the clipping; clamped to the window on both axes
+    // (height measured after first paint — same pattern as the dir-bar
+    // tooltip in term.tsx).
+    const pulseIconRef = React.useRef<HTMLSpanElement | null>(null);
+    const pulsePopoverRef = React.useRef<HTMLDivElement | null>(null);
+    const [pulsePos, setPulsePos] = React.useState<{left: number; top: number} | null>(null);
+    const togglePulseOpen = React.useCallback(() => {
+      setPulseOpen((v) => {
+        const opening = !v;
+        if (opening) {
+          const rect = pulseIconRef.current?.getBoundingClientRect();
+          if (!rect) return v;
+          const width = Math.min(320, window.innerWidth - 16);
+          const left = Math.round(Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)));
+          const top = Math.round(rect.bottom) + 6;
+          setPulsePos({left, top});
+          requestAnimationFrame(() => {
+            const el = pulsePopoverRef.current;
+            if (!el) return;
+            const h = el.getBoundingClientRect().height;
+            const clampedTop = Math.round(Math.max(8, Math.min(top, window.innerHeight - h - 8)));
+            if (Math.abs(clampedTop - top) > 1) setPulsePos({left, top: clampedTop});
+          });
+        }
+        return opening;
+      });
+    }, []);
     const [pKeys, setPKeys] = React.useState('');
     // Default to a random interval (30s–5m) so multiple pulses don't fire in
     // lockstep; the [rand] button re-rolls it.
@@ -500,16 +527,18 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
         >
           {/* Pulse (re-poke watchdog) — clock toggle, mirrors the sticky timer icon.
               Pulses (animates) while a pulse is active so it's obvious it's running.
-              Shown on picker (placeholder) panes too — per Clint, the fresh-split
-              picker keeps the full control set. */}
-          {paneId && !hidePulse && (
+              Shell sessions only (per Kord): hidden on the picker until a shell is
+              chosen, never on web/ai panes — and NEVER dropped by the width
+              ladder: it stays through the narrowest state. */}
+          {paneId && paneType === 'shell' && !isPlaceholder && (
             <>
               <style>{`@keyframes hyPulseRun{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.72)}}`}</style>
               <span
+                ref={pulseIconRef}
                 className="pane-band-control-icon pane-band-tooltip-trigger"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setPulseOpen((v) => !v);
+                  togglePulseOpen();
                 }}
                 style={{
                   display: 'inline-flex',
@@ -537,15 +566,19 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   <polyline points="12 7 12 12 15 14" />
                 </svg>
                 {/* Styled hint (right-anchored) matching the other control icons —
-                    replaces a native title= that popped over the border. */}
-                <div className="pane-band-tooltip pane-band-pulse-tooltip">
-                  <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
-                    {pulseActive ? 'Pulse running' : 'Periodic pulse'}
+                    replaces a native title= that popped over the border.
+                    Suppressed while the editor popover is open so the two never
+                    overlap (the tooltip anchors to the same icon). */}
+                {!pulseOpen && (
+                  <div className="pane-band-tooltip pane-band-pulse-tooltip">
+                    <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
+                      {pulseActive ? 'Pulse running' : 'Periodic pulse'}
+                    </div>
+                    <div style={{fontSize: '11px', color: 'var(--text-secondary)', marginTop: 'var(--space-2)'}}>
+                      {pulseActive ? 'Click to edit or clear' : 'Re-poke this pane on a timer'}
+                    </div>
                   </div>
-                  <div style={{fontSize: '11px', color: 'var(--text-secondary)', marginTop: 'var(--space-2)'}}>
-                    {pulseActive ? 'Click to edit or clear' : 'Re-poke this pane on a timer'}
-                  </div>
-                </div>
+                )}
               </span>
             </>
           )}
@@ -934,16 +967,16 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           </span>
         </div>
 
-        {pulseOpen && paneId && (
+        {pulseOpen && paneId && pulsePos && (
           <div
+            ref={pulsePopoverRef}
             onClick={(e) => e.stopPropagation()}
             style={{
-              position: 'absolute',
-              top: 'calc(100% + 6px)',
-              right: 8,
-              zIndex: 60,
-              width: 'min(320px, calc(100% - 16px))',
-              maxWidth: 320,
+              position: 'fixed',
+              left: pulsePos.left,
+              top: pulsePos.top,
+              zIndex: 1000,
+              width: 'min(320px, calc(100vw - 16px))',
               padding: '12px 14px',
               boxSizing: 'border-box',
               background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',

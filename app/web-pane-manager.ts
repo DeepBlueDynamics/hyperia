@@ -789,4 +789,39 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
       return null;
     }
   });
+
+  // Capture every LIVE, on-screen web pane in the SENDER's window — its pixels
+  // plus its window-DIP bounds. A whole-tab screenshot is taken in the renderer
+  // via capturePage, which can't see native WebContentsViews, so it composites
+  // these in at their bounds to fill the otherwise-blank web-pane areas. Panes
+  // parked far off-screen (inactive tabs sit at a large negative x) are skipped,
+  // so only the active tab's panes come back.
+  ipcMain.handle('web-panes:capture-for-window', async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win) return [];
+    const out: Array<{
+      uid: string;
+      bounds: {x: number; y: number; width: number; height: number};
+      dataURL: string;
+    }> = [];
+    for (const [uid, entry] of panes) {
+      if (entry.win !== win || entry.view.webContents.isDestroyed()) continue;
+      let bounds: {x: number; y: number; width: number; height: number};
+      try {
+        bounds = entry.view.getBounds();
+      } catch {
+        continue;
+      }
+      if (!bounds || bounds.width < 1 || bounds.height < 1) continue;
+      if (bounds.x < -1000 || bounds.y < -1000) continue; // parked off-screen
+      try {
+        const img = await entry.view.webContents.capturePage();
+        if (img.isEmpty()) continue;
+        out.push({uid, bounds, dataURL: img.toDataURL()});
+      } catch {
+        /* skip a pane that won't capture */
+      }
+    }
+    return out;
+  });
 }
