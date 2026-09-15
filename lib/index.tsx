@@ -361,6 +361,13 @@ rpc.on('termgroup add req', ({activeUid, profile, isAgentInitiated}) => {
   store_.dispatch(termGroupActions.requestTermGroup(activeUid ?? undefined, profile ?? undefined, isAgentInitiated));
 });
 
+// Main kept the LAST window alive after its last pane was closed (instead of
+// quitting Hyperia). Open a fresh picker tab so the emptied window lands back on
+// "pick a shell/agent" — the same tab the + button opens.
+rpc.on('reset-to-picker', () => {
+  store_.dispatch(termGroupActions.requestTermGroup(undefined, 'picker'));
+});
+
 rpc.on('split request horizontal', ({activeUid, profile, url, splitPlacement, isAgentInitiated}) => {
   store_.dispatch(
     termGroupActions.requestHorizontalSplit(
