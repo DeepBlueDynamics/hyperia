@@ -258,17 +258,14 @@ export function userExitTermGroup(uid: string) {
         const group = termGroups.termGroups[uid];
         if (!group) return;
         if (Object.keys(termGroups.termGroups).length <= 1) {
-          // Last group — exit the session if there is one, and close the window
-          // immediately. Route through main so it doesn't re-prompt about active
-          // processes: the user already closed this pane deliberately (#148).
+          // Last group in this window: exit its session if there is one. Removing
+          // the group drops the window's root-count to 0, and the single
+          // rootCount subscribe in lib/index.tsx then routes 'close-no-confirm'
+          // through main, which decides whether to close the window or (on the
+          // last window) reset it to a fresh picker. We deliberately DON'T close
+          // here too — a second close-no-confirm would reset twice → two pickers.
           if (group.sessionUid) {
             dispatch(userExitSession(group.sessionUid));
-          }
-          const windowRpc = (window as any).rpc;
-          if (windowRpc && typeof windowRpc.emit === 'function') {
-            windowRpc.emit('close-no-confirm');
-          } else {
-            window.close();
           }
           return;
         }
