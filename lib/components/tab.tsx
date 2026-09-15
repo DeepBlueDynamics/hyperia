@@ -245,6 +245,19 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         click: () => props.onPin?.()
       })
     );
+    menu.append(
+      new MenuItem({
+        // Tab-scoped workspace save (#183) — opens the styled confirm with
+        // the name pre-filled from the tab and the resume-once checklist.
+        label: 'Save Workspace…',
+        click: () => {
+          const defaultName = (pendingName ?? (tabName || description || props.text) ?? 'Tab').trim();
+          window.dispatchEvent(
+            new CustomEvent('hyperia-save-tab-workspace', {detail: {rootUid: props.uid, defaultName}})
+          );
+        }
+      })
+    );
 
     menu.append(new MenuItem({type: 'separator'}));
     menu.append(new MenuItem({label: 'Close', click: () => props.onClose()}));

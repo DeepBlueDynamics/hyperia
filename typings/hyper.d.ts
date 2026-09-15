@@ -150,6 +150,8 @@ export type session = {
   busy?: boolean;
   /** Workspace-restore substitution note (missing cwd, …) — pane banner (#168). */
   restoreNotice?: string;
+  /** n8 durable-session binding from OSC 777 (nemesis8#106) — mirrored from main. */
+  n8Binding?: {kind: string; sessionId: string; workspace: string; resume: string};
 };
 
 export type sessionState = Immutable<{

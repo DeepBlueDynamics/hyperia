@@ -81,13 +81,29 @@ export function addSession(data: Session) {
     // Type (but never run) a command into the fresh PTY: restore re-types the
     // interrupted command; prefillCommand does the same for new panes (e.g. the
     // agent-install "Open in shell" — the user reviews and presses Enter).
+    // Tab-workspace resume-once (#183): the human checked this command in
+    // the save toast, sourced only from the n8 session binding or the
+    // shell-integration-reported command — never the screen scrape. This is
+    // the one deliberate exception to "restore never executes": EXECUTE it
+    // once after the restored shell settles, then the pane is ordinary.
+    const resumeOnce = (data as any).resumeOnce;
+    if (isRestore && resumeOnce?.command) {
+      setTimeout(() => {
+        const state = getState();
+        if (state.sessions.sessions[uid]) {
+          console.log(`[sessions] resume-once (${resumeOnce.source}) in ${uid}: ${resumeOnce.command}`);
+          rpc.emit('data', {uid, data: `${resumeOnce.command}\r`});
+        }
+      }, 800);
+    }
+
     const prefillCommand = (data as any).prefillCommand;
     // Restore re-typing is OPT-IN (config.typeRestoredCommand, default off,
     // epic #146): the scraped command is untrusted display metadata, and a
     // shared/imported workspace must not pre-type text into the user's shell.
     // prefillCommand stays unconditional — it's a deliberate human action.
     let typeRestored = false;
-    if (isRestore && lastCommand) {
+    if (isRestore && lastCommand && !resumeOnce?.command) {
       try {
         typeRestored = getConfig().typeRestoredCommand === true;
       } catch {

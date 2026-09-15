@@ -19,7 +19,7 @@ import {
   SESSION_SET_SHELL_STATE,
   SESSION_SET_BUSY
 } from '../../typings/constants/sessions';
-import {RESTORE_LAYOUT_STATE} from '../../typings/constants/term-groups';
+import {RESTORE_LAYOUT_STATE, RESTORE_TAB_STATE} from '../../typings/constants/term-groups';
 import type {sessionState, session, Mutable, ISessionReducer} from '../../typings/hyper';
 import {decorateSessionsReducer} from '../utils/plugins';
 
@@ -299,6 +299,48 @@ const reducer: ISessionReducer = (state = initialState, action) => {
           shellState: action.shellState
         })
       );
+    }
+
+    case 'SESSION_SET_N8_BINDING' as any: {
+      const {uid, binding} = action as any;
+      if (!state.sessions[uid]) {
+        return state;
+      }
+      return state.setIn(['sessions', uid, 'n8Binding'], binding);
+    }
+
+    case RESTORE_TAB_STATE: {
+      // Merge ONE restored tab's placeholder sessions into the live map
+      // (#183) — unlike RESTORE_LAYOUT_STATE below, existing sessions stay.
+      const {layout} = action as any;
+      let nextState = state;
+      Object.keys(layout.sessions || {}).forEach((uid) => {
+        const s = layout.sessions[uid];
+        if (!s) return;
+        nextState = nextState.setIn(
+          ['sessions', uid],
+          Session({
+            uid,
+            title: s.tabName || s.title || '',
+            tabName: s.tabName || s.title || '',
+            description: s.description || '',
+            cols: s.cols || null,
+            rows: s.rows || null,
+            shell: s.shell || null,
+            pid: null,
+            profile: s.profile || '',
+            cwd: s.cwd || '',
+            shellName: s.shellName || nextShellName(),
+            lastCommand: s.annotations?.lastCommand || s.lastCommand || '',
+            manualTitle: s.manualTitle || false,
+            restoreNotice: s.restoreNotice || undefined
+          })
+        );
+      });
+      if (layout.activeUid && layout.sessions?.[layout.activeUid]) {
+        nextState = nextState.set('activeUid', layout.activeUid);
+      }
+      return nextState;
     }
 
     case RESTORE_LAYOUT_STATE: {
