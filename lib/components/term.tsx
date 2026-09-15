@@ -191,6 +191,7 @@ export default class Term extends React.PureComponent<
     isCustomModalOpen: boolean;
     customKind: 'shell' | 'agent';
     restoreNoticeDismissed: boolean;
+    dirTipPos: {left: number; top: number} | null;
     profileName: string;
     shellPath: string;
     shellArgs: string;
@@ -269,6 +270,9 @@ export default class Term extends React.PureComponent<
     customKind: 'shell' as 'shell' | 'agent',
     // Workspace-restore substitution banner (#168) — dismissed per pane life.
     restoreNoticeDismissed: false,
+    // Viewport coords for the dir-bar tooltip (position:fixed so it can
+    // overhang neighboring panes instead of clipping at this pane's edge).
+    dirTipPos: null as {left: number; top: number} | null,
     profileName: '',
     shellPath: '',
     shellArgs: '',
@@ -2877,12 +2881,57 @@ export default class Term extends React.PureComponent<
     }
 
     // Identical toolbar-collapse contract to the web pane (see web-pane.tsx):
-    // splits drop below ~400 (and hand their room back to the dir bar); the dir
-    // bar floors at ~11 chars and is hidden entirely below ~320 rather than
-    // shrinking to a stub. End state = title + nav + close.
+    // Responsive collapse ladder (per Clint's spec on top of #184). As the
+    // pane narrows, things give way in this order:
+    //   1. the dir-bar path text ellipsizes (flex, continuous) …
+    //   2. … and floors at its min-width (~first path segment);
+    //   3. header tools drop one per step, lowest-value first: split right/left,
+    //      split up/down, quick layout, periodic pulse, screenshot — THEN the
+    //      session label shrinks (full → short → just its ">" icon) — and the
+    //      nav arrows + clear buffer are the last to go, so they survive as long
+    //      as there's room. Once both splits are gone the survivors close ranks:
+    //      gaps/margins interpolate down (squeeze below) so a removal never
+    //      leaves dead space;
+    //   5. meanwhile the dir bar keeps flex:1 — it absorbs freed space and its
+    //      min-width floor eases 80px → 30px, so the path squeezes to a couple
+    //      of chars before, finally, it collapses to the folder icon alone
+    //      (the #184 hover tooltip still reveals the full path).
+    // End state: ">" (session icon) + folder icon + the close X. Thresholds
+    // live in one place so they're tunable as a set.
     const w = this.state.paneWidth;
-    const hideSplits = w < 300;
-    const showDirBar = w >= 240;
+    // Collapse order as the pane narrows (per Kord's spec): the split buttons go
+    // first, then the quick-layout picker, then the periodic pulse, then the
+    // screenshot; only after that does the session name shrink (full → short →
+    // just its ">" / globe icon). The nav arrows and the clear-buffer button are
+    // the LAST to go — they're never dropped while there's room for them. Higher
+    // threshold = removed sooner.
+    const LADDER = {
+      splitRightLeft: 380,
+      splitUpDown: 360,
+      quickLayout: 340,
+      pulse: 320,
+      screenshot: 300,
+      labelShort: 280,
+      labelIconOnly: 260,
+      clearBuffer: 240,
+      navArrows: 220,
+      dirIconOnly: 90
+    };
+    // 0 at splitUpDown (both split icons just gone), 1 at splitUpDown-100 and
+    // below. sq(roomy, tight) interpolates a px value along that ramp.
+    const squeeze = w >= LADDER.splitUpDown ? 0 : Math.min(1, (LADDER.splitUpDown - w) / 100);
+    const sq = (roomy: number, tight: number) => `${Math.round(roomy + (tight - roomy) * squeeze)}px`;
+    // Dir-bar min-width floor: 80px (~11 chars) roomy, easing to 26px (icon +
+    // ~1 char) right before the icon-only collapse.
+    const dirMinWidth = Math.round(Math.max(26, Math.min(80, 26 + ((w - LADDER.dirIconOnly) * 54) / 210)));
+    const hideQuickLayout = w < LADDER.quickLayout;
+    const hideSplitRightLeft = w < LADDER.splitRightLeft;
+    const hideSplitUpDown = w < LADDER.splitUpDown;
+    const hideNavArrows = w < LADDER.navArrows;
+    const hideClearBuffer = w < LADDER.clearBuffer;
+    const hideScreenshot = w < LADDER.screenshot;
+    const hidePulse = w < LADDER.pulse;
+    const dirIconOnly = w < LADDER.dirIconOnly;
     // Find-bar match counts (xterm reports a 0-based resultIndex).
     const sr = this.state.searchResults as {resultIndex: number; resultCount: number} | undefined;
     const findActive = sr ? sr.resultIndex + 1 : 0;
@@ -3123,8 +3172,11 @@ export default class Term extends React.PureComponent<
                     });
                   }
             }
-            isSplitRightDisabled={hideSplits}
-            isSplitDownDisabled={isSplitDownDisabled || hideSplits}
+            isSplitRightDisabled={hideSplitRightLeft}
+            isSplitDownDisabled={isSplitDownDisabled || hideSplitUpDown}
+            hideQuickLayout={hideQuickLayout}
+            hidePulse={hidePulse}
+            squeeze={squeeze}
             isBusy={this.isTerminalBusy()}
             paneName={labelFull}
             label={
@@ -3162,211 +3214,249 @@ export default class Term extends React.PureComponent<
                   {/* Width switch lives in JS (state.paneWidth), NOT a CSS
                       @container query: styled-jsx flattens @container blocks,
                       leaking the narrow rules to every width — which rendered
-                      BOTH label variants glued together ("Name | zshName"). */}
-                  {w >= 380 ? labelFull : labelShort}
+                      BOTH label variants glued together ("Name | zshName").
+                      Third stage: below labelIconOnly the text vanishes and
+                      only the ">_" session icon remains (always visible). */}
+                  {w >= LADDER.labelShort ? labelFull : w >= LADDER.labelIconOnly ? labelShort : ''}
                 </span>
               )
             }
             icon={<span style={{fontFamily: 'var(--font-mono)', fontWeight: 700}}>{icon}</span>}
             navCluster={
+              hideNavArrows && hideClearBuffer && hideScreenshot ? null : (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: sq(4, 2),
+                    marginLeft: sq(6, 2),
+                    marginRight: sq(6, 2),
+                    flexShrink: 0
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {!hideNavArrows && (
+                    <>
+                      <span
+                        className="term_controlIcon term_tooltipTrigger"
+                        onClick={this.navigateBack}
+                        onContextMenu={this.handleBackContextMenu}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          cursor: this.state.cwdCursor <= 0 ? 'default' : 'pointer',
+                          opacity: this.state.cwdCursor <= 0 ? 0.4 : 1,
+                          pointerEvents: this.state.cwdCursor <= 0 ? 'none' : 'auto'
+                        }}
+                      >
+                        <i className="ti ti-arrow-left" style={{fontSize: '14px'}} aria-hidden="true" />
+                        <div className="term_tooltip" style={{minWidth: '160px'}}>
+                          <div
+                            style={{
+                              fontSize: '11px',
+                              color: 'var(--text-primary)',
+                              fontWeight: 500
+                            }}
+                          >
+                            Previous directory
+                          </div>
+                          <div
+                            style={{
+                              fontSize: '11px',
+                              fontFamily: 'var(--font-mono)',
+                              color: 'var(--text-secondary)',
+                              marginTop: 'var(--space-2)'
+                            }}
+                          >
+                            Alt+Left
+                          </div>
+                        </div>
+                      </span>
+                      <span
+                        className="term_controlIcon term_tooltipTrigger"
+                        onClick={this.navigateForward}
+                        onContextMenu={this.handleForwardContextMenu}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          cursor:
+                            this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
+                              ? 'default'
+                              : 'pointer',
+                          opacity:
+                            this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
+                              ? 0.4
+                              : 1,
+                          pointerEvents:
+                            this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
+                              ? 'none'
+                              : 'auto'
+                        }}
+                      >
+                        <i className="ti ti-arrow-right" style={{fontSize: '14px'}} aria-hidden="true" />
+                        <div className="term_tooltip" style={{minWidth: '160px'}}>
+                          <div
+                            style={{
+                              fontSize: '11px',
+                              color: 'var(--text-primary)',
+                              fontWeight: 500
+                            }}
+                          >
+                            Next directory
+                          </div>
+                          <div
+                            style={{
+                              fontSize: '11px',
+                              fontFamily: 'var(--font-mono)',
+                              color: 'var(--text-secondary)',
+                              marginTop: 'var(--space-2)'
+                            }}
+                          >
+                            Alt+Right
+                          </div>
+                        </div>
+                      </span>
+                    </>
+                  )}
+                  {!hideClearBuffer && (
+                    <span
+                      ref={this._clearBtnRef}
+                      className="term_controlIcon term_tooltipTrigger"
+                      onClick={() => {
+                        this.clear();
+                        this.focus();
+                      }}
+                      style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
+                    >
+                      <i className="ti ti-clear-all" style={{fontSize: '14px'}} aria-hidden="true" />
+                      <div className="term_tooltip" style={{minWidth: '160px'}}>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            color: 'var(--text-primary)',
+                            fontWeight: 500
+                          }}
+                        >
+                          Clear buffer
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            fontFamily: 'var(--font-mono)',
+                            color: 'var(--text-secondary)',
+                            marginTop: 'var(--space-2)'
+                          }}
+                        >
+                          Wipe scrollback — shell only, not TUIs
+                        </div>
+                      </div>
+                    </span>
+                  )}
+                  {!hideScreenshot && (
+                    <span
+                      className="term_controlIcon term_tooltipTrigger"
+                      onClick={(e) => void this.captureScreenshot(e)}
+                      style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
+                    >
+                      <i className="ti ti-camera" style={{fontSize: '14px'}} aria-hidden="true" />
+                      <div className="term_tooltip" style={{minWidth: '160px'}}>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            color: 'var(--text-primary)',
+                            fontWeight: 500
+                          }}
+                        >
+                          Screenshot
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            color: 'var(--text-secondary)',
+                            marginTop: 'var(--space-2)'
+                          }}
+                        >
+                          Copy PNG + save to ~/.hyperia/snapshots
+                        </div>
+                      </div>
+                    </span>
+                  )}
+                </div>
+              )
+            }
+            locationBar={
               <div
+                ref={this.pathBarRef}
+                className="term_locationBar term_tooltipTrigger"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  this.toggleDirNavigator();
+                }}
+                onMouseEnter={() => {
+                  // Pane containers clip with overflow:hidden (rounded
+                  // corners), so the tooltip goes position:fixed, placed from
+                  // the bar's viewport rect — free to overhang the neighbor
+                  // pane. Anchor at the bar first, then re-clamp by the
+                  // tooltip's ACTUAL rendered width so short tooltips stay by
+                  // the bar and long ones never run off the window edge.
+                  const rect = this.pathBarRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  const anchored = Math.max(8, rect.left - 6);
+                  this.setState({dirTipPos: {left: anchored, top: Math.round(rect.bottom) + 4}}, () => {
+                    requestAnimationFrame(() => {
+                      const tip = this.pathBarRef.current?.querySelector('.term_tooltip');
+                      if (!tip) return;
+                      const width = tip.getBoundingClientRect().width;
+                      const clamped = Math.max(8, Math.min(anchored, window.innerWidth - width - 8));
+                      if (Math.abs(clamped - anchored) > 1) {
+                        this.setState({dirTipPos: {left: clamped, top: Math.round(rect.bottom) + 4}});
+                      }
+                    });
+                  });
+                }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 'var(--space-4)',
-                  marginLeft: 'var(--space-6)',
-                  marginRight: 'var(--space-6)',
-                  flexShrink: 0
+                  gap: sq(4, 2),
+                  background: 'var(--bg-primary)',
+                  border: '0.5px solid var(--border-focus)',
+                  borderRadius: 'var(--radius-3)',
+                  padding: `0 ${sq(6, 3)}`,
+                  height: '24px',
+                  // Fill the row (flex:1 absorbs space freed by hidden icons —
+                  // never a dead gap); the floor eases 80px → 26px (dirMinWidth)
+                  // so the path squeezes to a char or two before the ladder's
+                  // last step collapses it to a COMPACT folder-icon pill (per
+                  // Clint: no stretched empty pill — the #184 tooltip still
+                  // reveals the full path on hover).
+                  ...(dirIconOnly ? {flex: '0 0 auto', minWidth: 'auto'} : {flex: 1, minWidth: `${dirMinWidth}px`}),
+                  cursor: this.isTerminalBusy() ? 'not-allowed' : 'pointer',
+                  opacity: this.isTerminalBusy() ? 0.5 : 1,
+                  boxSizing: 'border-box',
+                  marginLeft: sq(4, 2),
+                  marginRight: sq(8, 2),
+                  // Anchor for the styled hover tooltip (replaces the old
+                  // native title=, which couldn't show the full path AND
+                  // the action notice as distinct lines — #182).
+                  position: 'relative'
                 }}
-                onClick={(e) => e.stopPropagation()}
               >
-                <span
-                  className="term_controlIcon term_tooltipTrigger"
-                  onClick={this.navigateBack}
-                  onContextMenu={this.handleBackContextMenu}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    cursor: this.state.cwdCursor <= 0 ? 'default' : 'pointer',
-                    opacity: this.state.cwdCursor <= 0 ? 0.4 : 1,
-                    pointerEvents: this.state.cwdCursor <= 0 ? 'none' : 'auto'
-                  }}
-                >
-                  <i className="ti ti-arrow-left" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <div className="term_tooltip" style={{minWidth: '160px'}}>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        color: 'var(--text-primary)',
-                        fontWeight: 500
-                      }}
-                    >
-                      Previous directory
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontFamily: 'var(--font-mono)',
-                        color: 'var(--text-secondary)',
-                        marginTop: 'var(--space-2)'
-                      }}
-                    >
-                      Alt+Left
-                    </div>
-                  </div>
-                </span>
-                <span
-                  className="term_controlIcon term_tooltipTrigger"
-                  onClick={this.navigateForward}
-                  onContextMenu={this.handleForwardContextMenu}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    cursor:
-                      this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
-                        ? 'default'
-                        : 'pointer',
-                    opacity:
-                      this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1 ? 0.4 : 1,
-                    pointerEvents:
-                      this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
-                        ? 'none'
-                        : 'auto'
-                  }}
-                >
-                  <i className="ti ti-arrow-right" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <div className="term_tooltip" style={{minWidth: '160px'}}>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        color: 'var(--text-primary)',
-                        fontWeight: 500
-                      }}
-                    >
-                      Next directory
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontFamily: 'var(--font-mono)',
-                        color: 'var(--text-secondary)',
-                        marginTop: 'var(--space-2)'
-                      }}
-                    >
-                      Alt+Right
-                    </div>
-                  </div>
-                </span>
-                <span
-                  ref={this._clearBtnRef}
-                  className="term_controlIcon term_tooltipTrigger"
-                  onClick={() => {
-                    this.clear();
-                    this.focus();
-                  }}
-                  style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
-                >
-                  <i className="ti ti-clear-all" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <div className="term_tooltip" style={{minWidth: '160px'}}>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        color: 'var(--text-primary)',
-                        fontWeight: 500
-                      }}
-                    >
-                      Clear buffer
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontFamily: 'var(--font-mono)',
-                        color: 'var(--text-secondary)',
-                        marginTop: 'var(--space-2)'
-                      }}
-                    >
-                      Wipe scrollback — shell only, not TUIs
-                    </div>
-                  </div>
-                </span>
-                <span
-                  className="term_controlIcon term_tooltipTrigger"
-                  onClick={(e) => void this.captureScreenshot(e)}
-                  style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
-                >
-                  <i className="ti ti-camera" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <div className="term_tooltip" style={{minWidth: '160px'}}>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        color: 'var(--text-primary)',
-                        fontWeight: 500
-                      }}
-                    >
-                      Screenshot
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        color: 'var(--text-secondary)',
-                        marginTop: 'var(--space-2)'
-                      }}
-                    >
-                      Copy PNG + save to ~/.hyperia/snapshots
-                    </div>
-                  </div>
-                </span>
-              </div>
-            }
-            locationBar={
-              showDirBar ? (
-                <div
-                  ref={this.pathBarRef}
-                  className="term_locationBar"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    this.toggleDirNavigator();
-                  }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-4)',
-                    background: 'var(--bg-primary)',
-                    border: '0.5px solid var(--border-focus)',
-                    borderRadius: 'var(--radius-3)',
-                    padding: '0 var(--space-6)',
-                    height: '24px',
-                    // Fill the row; hard floor ~11 chars; hidden (not stubbed)
-                    // below ~320 via showDirBar. Matches the web-pane URL bar.
-                    flex: 1,
-                    minWidth: '80px',
-                    cursor: this.isTerminalBusy() ? 'not-allowed' : 'pointer',
-                    opacity: this.isTerminalBusy() ? 0.5 : 1,
-                    boxSizing: 'border-box',
-                    marginLeft: 'var(--space-4)',
-                    marginRight: 'var(--space-8)'
-                  }}
-                  title={
+                <i
+                  className={
                     this.isTerminalBusy()
-                      ? `Directory browsing locked while a process is running`
-                      : 'Click to browse directories (Ctrl+Shift+O)'
+                      ? 'ti ti-lock'
+                      : this.state.isDirNavigatorOpen
+                        ? 'ti ti-folder-open'
+                        : 'ti ti-folder'
                   }
-                >
-                  <i
-                    className={
-                      this.isTerminalBusy()
-                        ? 'ti ti-lock'
-                        : this.state.isDirNavigatorOpen
-                          ? 'ti ti-folder-open'
-                          : 'ti ti-folder'
-                    }
-                    style={{
-                      fontSize: '12px',
-                      color: 'var(--info-text)',
-                      flexShrink: 0
-                    }}
-                    aria-hidden="true"
-                  />
+                  style={{
+                    fontSize: '12px',
+                    color: 'var(--info-text)',
+                    flexShrink: 0
+                  }}
+                  aria-hidden="true"
+                />
+                {!dirIconOnly && (
                   <span
                     style={{
                       fontFamily: 'var(--font-mono)',
@@ -3381,8 +3471,55 @@ export default class Term extends React.PureComponent<
                       ? this.state.navigatorCurrentPath || '/'
                       : this.props.sessionCwd || '/'}
                   </span>
-                </div>
-              ) : null
+                )}
+                {/* Hover: FULL untruncated cwd + the action notice (#182).
+                      Suppressed while the navigator popup is open — it sits
+                      right below this bar and already shows where you're
+                      browsing. */}
+                {!this.state.isDirNavigatorOpen && (
+                  <div
+                    className="term_tooltip"
+                    style={
+                      this.state.dirTipPos
+                        ? {
+                            position: 'fixed',
+                            minWidth: '160px',
+                            left: this.state.dirTipPos.left,
+                            top: this.state.dirTipPos.top,
+                            right: 'auto'
+                          }
+                        : {minWidth: '160px', left: '-6px', right: 'auto'}
+                    }
+                  >
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        fontFamily: 'var(--font-mono)',
+                        color: 'var(--text-primary)',
+                        fontWeight: 500,
+                        // Deep paths wrap instead of clipping at the window
+                        // edge; break-all because paths have no spaces.
+                        whiteSpace: 'normal',
+                        wordBreak: 'break-all',
+                        maxWidth: 'min(60ch, 70vw)'
+                      }}
+                    >
+                      {(this.props as any).sessionCwd || '/'}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        color: 'var(--text-secondary)',
+                        marginTop: 'var(--space-2)'
+                      }}
+                    >
+                      {this.isTerminalBusy()
+                        ? 'Directory browsing locked while a process is running'
+                        : 'Click to browse directories · Ctrl+Shift+O'}
+                    </div>
+                  </div>
+                )}
+              </div>
             }
             onSplitRight={() => rpc.emit('split request vertical', {activeUid: this.props.uid})}
             onSplitDown={() =>
@@ -4291,7 +4428,8 @@ export default class Term extends React.PureComponent<
              OFF LIMITS in styled-jsx blocks: it flattens them, leaking the
              narrow-width rules to every width. The dir bar stays floored
              (border + ~11 chars) by inline styles down to ~320px and hidden
-             below that (showDirBar), matching the web pane's URL bar. */
+             it collapses to the folder icon alone at the ladder's last
+             step (dirIconOnly), tooltip still carrying the full path. */
         `}</style>
       </div>
     );
