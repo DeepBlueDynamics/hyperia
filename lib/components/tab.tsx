@@ -157,6 +157,58 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
     }
   };
 
+  // Screenshot this tab's whole pane area — every terminal pane WITH its header
+  // band — and copy the PNG to the clipboard, saving a copy under
+  // ~/.hyperia/snapshots. Only the active tab's term group is painted (inactive
+  // ones are parked offscreen at left:-9999em), so a background tab is activated
+  // first — a human-initiated menu action, so moving the view is expected.
+  // Reuses the 'term:capture' IPC that the pane screenshot button uses; native
+  // web-pane views aren't part of the renderer paint, so their pixels are blank.
+  const captureTabScreenshot = async () => {
+    try {
+      if (!props.isActive) {
+        props.onSelect();
+        // Let the newly-activated term group paint before we grab it.
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      const el = document.querySelector('.terms_termGroupActive');
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return;
+      /* eslint-disable @typescript-eslint/no-var-requires */
+      const {ipcRenderer, clipboard, nativeImage, webFrame} = require('electron');
+      // getBoundingClientRect is CSS px; capturePage wants window DIPs — scale by
+      // the page zoom (Linux boots at 1.2), same as the pane bounds fix.
+      const zoom = webFrame.getZoomFactor() || 1;
+      const dataURL: string | null = await ipcRenderer.invoke('term:capture', {
+        rect: {x: r.left * zoom, y: r.top * zoom, width: r.width * zoom, height: r.height * zoom}
+      });
+      if (!dataURL) return;
+      const img = nativeImage.createFromDataURL(dataURL);
+      if (!img || img.isEmpty()) return;
+      clipboard.writeImage(img);
+      try {
+        const fs = require('fs');
+        const os = require('os');
+        const path = require('path');
+        const dir = path.join(os.homedir(), '.hyperia', 'snapshots');
+        fs.mkdirSync(dir, {recursive: true});
+        const rawName = (pendingName ?? (tabName || description || props.text) ?? 'tab').trim();
+        const name =
+          String(rawName)
+            .replace(/[^\w.-]+/g, '_')
+            .slice(0, 40) || 'tab';
+        fs.writeFileSync(path.join(dir, `tabshot-${name}-${Date.now()}.png`), img.toPNG());
+      } catch (saveErr) {
+        // clipboard copy already succeeded; disk save is best-effort
+        console.error('[tab] screenshot save failed:', saveErr);
+      }
+      /* eslint-enable @typescript-eslint/no-var-requires */
+    } catch (err) {
+      console.error('[tab] screenshot failed:', err);
+    }
+  };
+
   const handleContextMenu = (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -205,6 +257,13 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           setCopied(true);
           setTimeout(() => setCopied(false), 1000);
         }
+      })
+    );
+
+    menu.append(
+      new MenuItem({
+        label: 'Screenshot',
+        click: () => void captureTabScreenshot()
       })
     );
 
