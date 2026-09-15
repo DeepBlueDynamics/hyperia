@@ -158,12 +158,18 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   };
 
   // Screenshot this tab's whole pane area — every terminal pane WITH its header
-  // band — and copy the PNG to the clipboard, saving a copy under
-  // ~/.hyperia/snapshots. Only the active tab's term group is painted (inactive
-  // ones are parked offscreen at left:-9999em), so a background tab is activated
-  // first — a human-initiated menu action, so moving the view is expected.
-  // Reuses the 'term:capture' IPC that the pane screenshot button uses; native
-  // web-pane views aren't part of the renderer paint, so their pixels are blank.
+  // band, plus any web panes composited in — and copy the PNG to the clipboard,
+  // saving a copy under ~/.hyperia/snapshots. Only the active tab's term group
+  // is painted (inactive ones are parked offscreen at left:-9999em), so a
+  // background tab is activated first — a human-initiated menu action, so moving
+  // the view is expected.
+  //
+  // The base is the renderer's own capturePage (via 'term:capture'), which gets
+  // terminals + pane header bands but NOT native web-pane content (a
+  // WebContentsView isn't part of the renderer paint — its area is blank). So we
+  // pull each on-screen web pane's pixels + bounds from main and paint them into
+  // place on a canvas. Scale factor comes from the base image itself (capturePage
+  // returns physical pixels), so it's correct on HiDPI too.
   const captureTabScreenshot = async () => {
     try {
       if (!props.isActive) {
@@ -177,14 +183,75 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
       if (r.width < 1 || r.height < 1) return;
       /* eslint-disable @typescript-eslint/no-var-requires */
       const {ipcRenderer, clipboard, nativeImage, webFrame} = require('electron');
-      // getBoundingClientRect is CSS px; capturePage wants window DIPs — scale by
-      // the page zoom (Linux boots at 1.2), same as the pane bounds fix.
+      // getBoundingClientRect is CSS px; capturePage + native web-pane bounds are
+      // window DIPs — scale by the page zoom (Linux boots at 1.2).
       const zoom = webFrame.getZoomFactor() || 1;
-      const dataURL: string | null = await ipcRenderer.invoke('term:capture', {
-        rect: {x: r.left * zoom, y: r.top * zoom, width: r.width * zoom, height: r.height * zoom}
-      });
-      if (!dataURL) return;
-      const img = nativeImage.createFromDataURL(dataURL);
+      const rectDip = {x: r.left * zoom, y: r.top * zoom, width: r.width * zoom, height: r.height * zoom};
+      const baseURL: string | null = await ipcRenderer.invoke('term:capture', {rect: rectDip});
+      if (!baseURL) return;
+
+      // Composite native web-pane content over the blank areas of the base.
+      let webPanes: Array<{
+        uid: string;
+        bounds: {x: number; y: number; width: number; height: number};
+        dataURL: string;
+      }> = [];
+      try {
+        webPanes = (await ipcRenderer.invoke('web-panes:capture-for-window')) || [];
+      } catch {
+        webPanes = [];
+      }
+      // Keep only panes that overlap THIS tab's rect (drops other tabs' panes).
+      const overlapping = webPanes.filter(
+        (w) =>
+          w.bounds.x < rectDip.x + rectDip.width &&
+          w.bounds.x + w.bounds.width > rectDip.x &&
+          w.bounds.y < rectDip.y + rectDip.height &&
+          w.bounds.y + w.bounds.height > rectDip.y
+      );
+
+      let finalURL = baseURL;
+      if (overlapping.length > 0) {
+        const load = (src: string) =>
+          new Promise<HTMLImageElement>((resolve, reject) => {
+            const im = new Image();
+            im.onload = () => resolve(im);
+            im.onerror = reject;
+            im.src = src;
+          });
+        try {
+          const baseImg = await load(baseURL);
+          // capturePage returns PHYSICAL pixels; naturalWidth / requested DIP
+          // width is the device scale factor — composite in that same space.
+          const sf = baseImg.naturalWidth / rectDip.width || 1;
+          const canvas = document.createElement('canvas');
+          canvas.width = baseImg.naturalWidth;
+          canvas.height = baseImg.naturalHeight;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(baseImg, 0, 0);
+            for (const w of overlapping) {
+              try {
+                const wImg = await load(w.dataURL);
+                ctx.drawImage(
+                  wImg,
+                  (w.bounds.x - rectDip.x) * sf,
+                  (w.bounds.y - rectDip.y) * sf,
+                  w.bounds.width * sf,
+                  w.bounds.height * sf
+                );
+              } catch {
+                /* skip a pane image that won't load */
+              }
+            }
+            finalURL = canvas.toDataURL('image/png');
+          }
+        } catch {
+          finalURL = baseURL; // compositing failed — fall back to the base shot
+        }
+      }
+
+      const img = nativeImage.createFromDataURL(finalURL);
       if (!img || img.isEmpty()) return;
       clipboard.writeImage(img);
       try {
