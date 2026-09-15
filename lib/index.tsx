@@ -54,10 +54,14 @@ Object.defineProperty(window, 'rpc', {get: () => rpc});
 Object.defineProperty(window, 'config', {get: () => config});
 Object.defineProperty(window, 'plugins', {get: () => plugins});
 
-// When the last tab (root term group) in this window closes, close the WINDOW
-// instead of leaving an empty frame with just a "+". Driven off the live
-// root-group count so it fires no matter HOW the tab emptied — pane ×, tab ×,
-// shell exit, or a desynced/ghost group — which the old per-action
+// When the last tab (root term group) in this window empties, the window would
+// normally close — but route the decision through main via 'close-no-confirm'
+// instead of closing here. Main knows the real window count: on the LAST window
+// it keeps the frame alive and resets it to a fresh picker (see the
+// 'close-no-confirm' handler in app/ui/window.ts) rather than quitting Hyperia;
+// on any other window it closes as before. Driven off the live root-group count
+// so it fires no matter HOW the tab emptied — pane ×, tab ×, shell exit, or a
+// desynced/ghost group — which the old per-action
 // `Object.keys(termGroups).length <= 1` guard missed (it counted split children
 // + ghosts off a stale snapshot). `hadTabsOnce` gates it so it never fires
 // before the first tab exists (root count is 0 at startup / during restore).
@@ -69,7 +73,7 @@ store_.subscribe(() => {
     hadTabsOnce = true;
   } else if (hadTabsOnce) {
     hadTabsOnce = false;
-    window.close();
+    rpc.emit('close-no-confirm');
   }
 });
 
