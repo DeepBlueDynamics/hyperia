@@ -153,6 +153,8 @@ export type MainEvents = {
 };
 
 export type RendererEvents = {
+  /** Last window's last pane closed — open a fresh picker instead of quitting. */
+  'reset-to-picker': never;
   'session-cd-reply': {uid: string; applied?: boolean; queued?: boolean; refused?: boolean; reason?: string};
   /** Result of a drag-and-drop file copy into a pane's cwd. */
   'pane copy files done': {uid: string; ok: boolean; dir: string; count: number; names?: string[]; error?: string};
