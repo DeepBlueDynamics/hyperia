@@ -499,8 +499,10 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           onClick={(e) => e.stopPropagation()}
         >
           {/* Pulse (re-poke watchdog) — clock toggle, mirrors the sticky timer icon.
-              Pulses (animates) while a pulse is active so it's obvious it's running. */}
-          {paneId && !isPlaceholder && !hidePulse && (
+              Pulses (animates) while a pulse is active so it's obvious it's running.
+              Shown on picker (placeholder) panes too — per Clint, the fresh-split
+              picker keeps the full control set. */}
+          {paneId && !hidePulse && (
             <>
               <style>{`@keyframes hyPulseRun{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.72)}}`}</style>
               <span
@@ -548,8 +550,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             </>
           )}
 
-          {/* Layouts Button */}
-          {paneId && !isPlaceholder && !hideQuickLayout && !isSplitRightDisabled && !isSplitDownDisabled && (
+          {/* Layouts Button — also on picker (placeholder) panes */}
+          {paneId && !hideQuickLayout && !isSplitRightDisabled && !isSplitDownDisabled && (
             <span
               className="pane-band-control-icon pane-band-tooltip-trigger"
               style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
