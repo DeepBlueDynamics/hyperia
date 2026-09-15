@@ -1033,9 +1033,16 @@ export function newWindow(
   rpc.on('close', () => {
     window.close();
   });
-  // The renderer exited the window's LAST pane (already past the per-pane guard);
-  // close without re-prompting about active processes. (#148)
+  // The renderer exited the window's LAST pane (already past the per-pane guard).
+  // If other Hyperia windows are open, close this one without re-prompting about
+  // active processes (#148). But if this is the LAST window, don't quit Hyperia —
+  // tell the renderer to reset the window to a fresh picker, so closing the last
+  // pane just drops you back to "pick a shell/agent" instead of exiting the app.
   rpc.on('close-no-confirm', () => {
+    if (app.getWindows().size <= 1) {
+      rpc.emit('reset-to-picker');
+      return;
+    }
     skipNextCloseConfirm = true;
     window.close();
   });
