@@ -2885,12 +2885,13 @@ export default class Term extends React.PureComponent<
     // pane narrows, things give way in this order:
     //   1. the dir-bar path text ellipsizes (flex, continuous) …
     //   2. … and floors at its min-width (~first path segment);
-    //   3. the session label shrinks: full → short → just the ">" icon;
-    //   4. header tools drop one per step: quick layout, split right/left,
-    //      split up/down, prev-directory arrows, clear buffer, screenshot,
-    //      periodic pulse — and once both splits are gone the survivors close
-    //      ranks: gaps/margins interpolate down (squeeze below) so a removal
-    //      never leaves dead space;
+    //   3. header tools drop one per step, lowest-value first: split right/left,
+    //      split up/down, quick layout, periodic pulse, screenshot — THEN the
+    //      session label shrinks (full → short → just its ">" icon) — and the
+    //      nav arrows + clear buffer are the last to go, so they survive as long
+    //      as there's room. Once both splits are gone the survivors close ranks:
+    //      gaps/margins interpolate down (squeeze below) so a removal never
+    //      leaves dead space;
     //   5. meanwhile the dir bar keeps flex:1 — it absorbs freed space and its
     //      min-width floor eases 80px → 30px, so the path squeezes to a couple
     //      of chars before, finally, it collapses to the folder icon alone
@@ -2898,16 +2899,22 @@ export default class Term extends React.PureComponent<
     // End state: ">" (session icon) + folder icon + the close X. Thresholds
     // live in one place so they're tunable as a set.
     const w = this.state.paneWidth;
+    // Collapse order as the pane narrows (per Kord's spec): the split buttons go
+    // first, then the quick-layout picker, then the periodic pulse, then the
+    // screenshot; only after that does the session name shrink (full → short →
+    // just its ">" / globe icon). The nav arrows and the clear-buffer button are
+    // the LAST to go — they're never dropped while there's room for them. Higher
+    // threshold = removed sooner.
     const LADDER = {
-      labelShort: 380,
-      labelIconOnly: 360,
+      splitRightLeft: 380,
+      splitUpDown: 360,
       quickLayout: 340,
-      splitRightLeft: 320,
-      splitUpDown: 300,
-      navArrows: 280,
-      clearBuffer: 260,
-      screenshot: 240,
-      pulse: 220,
+      pulse: 320,
+      screenshot: 300,
+      labelShort: 280,
+      labelIconOnly: 260,
+      clearBuffer: 240,
+      navArrows: 220,
       dirIconOnly: 90
     };
     // 0 at splitUpDown (both split icons just gone), 1 at splitUpDown-100 and
@@ -3216,7 +3223,7 @@ export default class Term extends React.PureComponent<
             }
             icon={<span style={{fontFamily: 'var(--font-mono)', fontWeight: 700}}>{icon}</span>}
             navCluster={
-              hideScreenshot ? null : (
+              hideNavArrows && hideClearBuffer && hideScreenshot ? null : (
                 <div
                   style={{
                     display: 'flex',
@@ -3345,33 +3352,35 @@ export default class Term extends React.PureComponent<
                       </div>
                     </span>
                   )}
-                  <span
-                    className="term_controlIcon term_tooltipTrigger"
-                    onClick={(e) => void this.captureScreenshot(e)}
-                    style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
-                  >
-                    <i className="ti ti-camera" style={{fontSize: '14px'}} aria-hidden="true" />
-                    <div className="term_tooltip" style={{minWidth: '160px'}}>
-                      <div
-                        style={{
-                          fontSize: '11px',
-                          color: 'var(--text-primary)',
-                          fontWeight: 500
-                        }}
-                      >
-                        Screenshot
+                  {!hideScreenshot && (
+                    <span
+                      className="term_controlIcon term_tooltipTrigger"
+                      onClick={(e) => void this.captureScreenshot(e)}
+                      style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
+                    >
+                      <i className="ti ti-camera" style={{fontSize: '14px'}} aria-hidden="true" />
+                      <div className="term_tooltip" style={{minWidth: '160px'}}>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            color: 'var(--text-primary)',
+                            fontWeight: 500
+                          }}
+                        >
+                          Screenshot
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            color: 'var(--text-secondary)',
+                            marginTop: 'var(--space-2)'
+                          }}
+                        >
+                          Copy PNG + save to ~/.hyperia/snapshots
+                        </div>
                       </div>
-                      <div
-                        style={{
-                          fontSize: '11px',
-                          color: 'var(--text-secondary)',
-                          marginTop: 'var(--space-2)'
-                        }}
-                      >
-                        Copy PNG + save to ~/.hyperia/snapshots
-                      </div>
-                    </div>
-                  </span>
+                    </span>
+                  )}
                 </div>
               )
             }

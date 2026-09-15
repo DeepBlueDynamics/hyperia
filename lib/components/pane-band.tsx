@@ -641,7 +641,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           )}
 
           {/* Split Down */}
-          {!isSplitDownDisabled && (
+          {!isPlaceholder && !isSplitDownDisabled && (
             <span
               className="pane-band-control-icon pane-band-tooltip-trigger"
               onClick={(e) => {
@@ -744,7 +744,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           )}
 
           {/* Split Right */}
-          {!isSplitRightDisabled && (
+          {!isPlaceholder && !isSplitRightDisabled && (
             <span
               className="pane-band-control-icon pane-band-tooltip-trigger"
               onClick={(e) => {
