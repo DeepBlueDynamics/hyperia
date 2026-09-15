@@ -46,6 +46,16 @@ type PaneBandProps = {
   onSplitLeft?: () => void;
   onSplitUp?: () => void;
   onClose: () => void;
+  /** Responsive collapse (narrow panes): drop the quick-layout button. */
+  hideQuickLayout?: boolean;
+  /** Responsive collapse (narrow panes): drop the periodic-pulse button. */
+  hidePulse?: boolean;
+  /**
+   * Responsive collapse (narrow panes): 0 = roomy spacing, 1 = fully tight.
+   * Once the split buttons are gone the survivors close ranks — band padding
+   * and cluster gaps interpolate down so removals never leave dead space.
+   */
+  squeeze?: number;
   onClick?: (e: React.MouseEvent) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   height?: 'normal' | 'compact'; // maps to var(--band-height) | var(--band-height-compact)
@@ -98,6 +108,9 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       onSplitLeft,
       onSplitUp,
       onClose,
+      hideQuickLayout = false,
+      hidePulse = false,
+      squeeze = 0,
       onClick,
       onContextMenu,
       height = 'compact',
@@ -110,6 +123,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
     ref
   ) => {
     const resolvedTint = isPlaceholder ? 'neutral' : tint;
+    // Interpolate a px value along the squeeze ramp (0 roomy → 1 tight).
+    const sq = (roomy: number, tight: number) => `${Math.round(roomy + (tight - roomy) * squeeze)}px`;
     const isAi = paneType === 'ai';
 
     const [confirmClose, setConfirmClose] = React.useState(false);
@@ -334,7 +349,10 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           display: 'flex',
           alignItems: 'center',
           width: '100%',
-          paddingRight: 'var(--space-10)',
+          // Both paddings ride the squeeze ramp (left overrides the class's
+          // var(--space-10) so the whole band tightens symmetrically).
+          paddingLeft: sq(10, 4),
+          paddingRight: sq(10, 4),
           flexShrink: 0,
           boxSizing: 'border-box',
           cursor: onClick ? 'pointer' : 'default',
@@ -347,7 +365,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 'var(--space-8)',
+            gap: sq(8, 3),
             flex: 1,
             minWidth: 0
           }}
@@ -413,14 +431,14 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: 'var(--space-6)',
+                  gap: sq(6, 3),
                   fontSize: '11px',
                   fontWeight: 500,
                   flexShrink: 1,
                   minWidth: 0,
                   cursor: 'pointer',
                   position: 'relative',
-                  padding: '2px var(--space-4)',
+                  padding: `2px ${sq(4, 2)}`,
                   borderRadius: 'var(--radius-4)',
                   transition: 'background 0.15s ease',
                   overflowX: 'auto',
@@ -477,12 +495,14 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
         {/* Controls Cluster — splits + close, anchored to the right. */}
         <div
           className="pane-band-controls-cluster"
-          style={{display: 'flex', alignItems: 'center', gap: 'var(--space-10)', flexShrink: 0}}
+          style={{display: 'flex', alignItems: 'center', gap: sq(10, 3), flexShrink: 0}}
           onClick={(e) => e.stopPropagation()}
         >
           {/* Pulse (re-poke watchdog) — clock toggle, mirrors the sticky timer icon.
-              Pulses (animates) while a pulse is active so it's obvious it's running. */}
-          {paneId && !isPlaceholder && (
+              Pulses (animates) while a pulse is active so it's obvious it's running.
+              Shown on picker (placeholder) panes too — per Clint, the fresh-split
+              picker keeps the full control set. */}
+          {paneId && !hidePulse && (
             <>
               <style>{`@keyframes hyPulseRun{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.72)}}`}</style>
               <span
@@ -530,8 +550,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             </>
           )}
 
-          {/* Layouts Button */}
-          {paneId && !isPlaceholder && !isSplitRightDisabled && !isSplitDownDisabled && (
+          {/* Layouts Button — also on picker (placeholder) panes */}
+          {paneId && !hideQuickLayout && !isSplitRightDisabled && !isSplitDownDisabled && (
             <span
               className="pane-band-control-icon pane-band-tooltip-trigger"
               style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
@@ -622,7 +642,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             </span>
           )}
 
-          {/* Split Down */}
+          {/* Split Down — shown on picker (placeholder) panes too, per Clint's
+              full-control-set direction; width ladder still governs it. */}
           {!isSplitDownDisabled && (
             <span
               className="pane-band-control-icon pane-band-tooltip-trigger"
@@ -725,7 +746,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             </span>
           )}
 
-          {/* Split Right */}
+          {/* Split Right — shown on picker (placeholder) panes too, per Clint's
+              full-control-set direction; width ladder still governs it. */}
           {!isSplitRightDisabled && (
             <span
               className="pane-band-control-icon pane-band-tooltip-trigger"
