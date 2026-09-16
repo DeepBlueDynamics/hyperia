@@ -725,7 +725,11 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
     if (!wc) return;
     switch (action) {
       case 'load':
-        if (url) void wc.loadURL(url).catch(() => {});
+        // Same-URL guard (#160, mirrors createPane): loading a URL the view is
+        // already at is always a full reload — the renderer's redux echo of a
+        // page-driven replaceState (Maps drag) landed here and flashed/reset
+        // the page. Explicit reloads use the 'reload' action instead.
+        if (url && wc.getURL() !== url) void wc.loadURL(url).catch(() => {});
         break;
       case 'back':
         if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
