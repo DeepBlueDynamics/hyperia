@@ -1,26 +1,27 @@
-# Hyperia v0.18.0 — Saved Workspaces 🗂️
+# Hyperia v0.18.1 — prompts on top, panes in their place 🧹
 
-The minor bump is named for the feature that earns it: **saved workspaces** now work one tab at a time. Any tab — its layout, directories, web panes, and the commands worth resuming — becomes a workspace you can bring back with a click. This release rounds that out: the save toast now sits above web panes, and a tab screenshot tells you it worked.
+A tidy-up release: toasts and consent prompts stop hiding behind (or blanking) web panes, Quick Layout opens where you actually are, hidden sticky notes stay hidden across a restart, and agents finally hear back the moment you grant or deny their access.
 
-## Tab-scoped workspaces
+## Toasts and prompts sit above web panes — without blanking the page
 
-Right-click a tab and choose **Save Workspace…**. A confirm toast opens with the name pre-filled from the tab, plus a **resume-once checklist**: each pane's detected command with a checkbox. Nemesis8 session resumes are pre-checked; plain shell commands are opt-in. Saving writes a single-tab workspace into the same library the whole-app workspaces already use, so every `hyws` and MCP verb works on it.
+Native web panes paint above the app's own UI, so a DOM overlay had only bad options: hide behind the page, or — if we pulled the page off-screen to show the overlay — leave a blank white rectangle (that's what happened when you saved a workspace over a web pane).
 
-To bring one back, hover the **+** button. Beneath the layout presets there is now a **Saved Workspaces** section. Clicking a row grafts that tab *additively* into the current window: your existing tabs stay put, the restored tab gets fresh pane ids, missing working directories are bannered, and focus follows because you asked for it.
+Now, whenever an overlay needs the foreground, Hyperia hands the renderer a **frozen still** of the live page first, then swaps the native view out. The page looks frozen, not blank, and the overlay renders cleanly on top. This fixes the Save-Workspace toast (no more blank), the close-confirm dialog, and the cross-pane **consent / ACL prompt** — which could previously sit invisibly behind a web pane, so you never saw what an agent was waiting on.
 
-`resumeOnce` is the one deliberate exception to "restore never executes". It is recorded only from the boxes you tick at save time, and its value can only come from the pane's n8 session binding or the shell-integration-reported command of a pane that was actually busy. The screen scrape is never promoted to a command. The format is documented in `docs/workspace-format.md` under *Scopes* and *resumeOnce*.
+## Quick Layout opens where you are
 
-## The save toast now sits above web panes
+Splitting a pane inherits its working directory; the Quick Layout presets didn't — the new pickers were born in your home directory instead of the folder you triggered the layout from. They now inherit the source pane's cwd, exactly like a split, so the shell you pick lands in the right place.
 
-Native web panes paint above the app's own UI, so in a tab with a web pane the Save Workspace toast was hidden behind the page. The window's web panes are now pulled off-screen while the toast is open — the same move the close-confirm dialog makes — and restored the moment you save or cancel.
+## Hidden sticky notes stay hidden
 
-## Tab screenshots confirm themselves
+If you'd hidden your stickies (Hide All), a restart reopened them all — because the boot restore reopened saved sticky windows without honoring the hidden state. Restore now keeps hidden notes hidden.
 
-Right-click a tab → **Screenshot** copies the whole tab — terminals, header bands, and any web panes composited in from their native views — to the clipboard. The tab name now flashes **"Screenshot copied ✓"** so you know it landed instead of leaving you guessing whether anything happened.
+## Agents hear your access decision
+
+A gated tool call returns "held — waiting for approval," but some third-party CLIs treat that as a hard failure and never retry, then act as if they still lack access you've since granted. When you allow or deny a request, Hyperia now pokes the **requesting** agent's own pane with the outcome, so it proceeds (or stops) without you relaying it by hand.
 
 ## Also
 
-- The release pipeline is now a single publisher: the GitHub release name and notes come straight from this file, so builds stop landing as a bare version number with an empty body.
-- A per-run Discord post now summarizes each release with its per-platform build status.
+- Retired the legacy Hyper e2e-screenshot PR-comment workflow (it had been failing on every PR).
 
-Coming from further back? [v0.17.69](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.17.69) was the previous published build.
+Coming from further back? [v0.18.0](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.18.0) was the previous published build.
