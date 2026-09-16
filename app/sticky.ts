@@ -338,7 +338,7 @@ function stickysDir(): string {
 function stickyStateFile(): string {
   return join(stickysDir(), 'state.json');
 }
-function readStickyHidden(): boolean {
+export function readStickyHidden(): boolean {
   try {
     return JSON.parse(readFileSync(stickyStateFile(), 'utf8'))?.hidden === true;
   } catch {

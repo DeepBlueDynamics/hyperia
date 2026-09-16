@@ -9,13 +9,26 @@ const uuidv4 = () => {
 };
 
 export const openLayout = (pattern: string, activeUid: string, cloneProfile?: string) => {
+  // Inherit the SOURCE pane's working directory into every new pane, exactly
+  // like a split does (requestSplit reads it from the active session). Without
+  // this the quick-layout pickers were born in the home directory instead of
+  // where you triggered the layout. Read once from the source pane's session;
+  // the intermediate parentUids below are only geometry anchors.
+  let cwd: string | undefined;
+  try {
+    const sess = (window as any).store?.getState?.()?.sessions?.sessions?.[activeUid];
+    cwd = sess?.cwd || undefined;
+  } catch {
+    cwd = undefined;
+  }
   const emitNew = (newUid: string, parentUid: string, direction: 'VERTICAL' | 'HORIZONTAL') => {
     rpc.emit('new', {
       uid: newUid,
       activeUid: parentUid,
       splitDirection: direction,
       isNewGroup: false,
-      profile: cloneProfile || 'picker'
+      profile: cloneProfile || 'picker',
+      cwd
     });
   };
 

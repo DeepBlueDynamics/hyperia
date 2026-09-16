@@ -23,7 +23,7 @@ import type {BrowserWindow} from 'electron';
 
 import {v4 as uuidv4} from 'uuid';
 
-import {createStickyNote, listOpenStickyRefs, readAllNotes} from './sticky';
+import {createStickyNote, listOpenStickyRefs, readAllNotes, readStickyHidden} from './sticky';
 import {boundsAreVisible} from './window-state';
 
 export type WindowGeometry = {
@@ -278,13 +278,18 @@ export const restoreWorkspace = (ws: {
   const refs = ws.stickys || [];
   if (refs.length > 0) {
     const known = new Set(readAllNotes().map((n) => n.id));
+    // If the user had stickies hidden (Hide-All) when they quit, keep them
+    // hidden on restore — otherwise every launch reopens them shown. sticky.ts's
+    // own restore already passes this; the workspace restore path (which runs on
+    // boot as last-session) was missing it, so hidden notes came back visible.
+    const hidden = readStickyHidden();
     for (const ref of refs) {
       if (!known.has(ref.id)) {
         stickysSkipped.push(ref.id);
         continue;
       }
       try {
-        createStickyNote({id: ref.id, x: ref.x, y: ref.y, width: ref.width, height: ref.height});
+        createStickyNote({id: ref.id, x: ref.x, y: ref.y, width: ref.width, height: ref.height, startHidden: hidden});
         stickysReopened += 1;
       } catch (err) {
         stickysSkipped.push(ref.id);
