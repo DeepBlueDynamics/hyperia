@@ -104,10 +104,16 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y rpm snapd
 
-      # Package installer
+      # Package installer.
+      # --publish never: electron-builder must NOT create/publish the GitHub
+      # release itself (electron-builder.json has publish:github). It used to,
+      # during the build phase, which created the release named bare "0.17.69"
+      # with no notes — and the release job below then couldn't own the name/body.
+      # Now electron-builder only BUILDS (+ generates latest*.yml); the release
+      # job is the single publisher (proper name + release-notes.md body).
       - name: Build installer (Windows)
         if: matrix.os == 'windows-2022'
-        run: npx electron-builder --win
+        run: npx electron-builder --win --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Azure Trusted Signing — build/win/sign.js reads AZURE_CLIENT_SECRET
@@ -122,7 +128,7 @@ jobs:
         # mac.notarize.teamId in electron-builder.json triggers notarization).
         # NOTE secret naming: the cert is CSC_LINK but the p12 password secret
         # is MAC_CSC_KEY_PASSWORD.
-        run: npx electron-builder --mac
+        run: npx electron-builder --mac --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -133,7 +139,7 @@ jobs:
 
       - name: Build installer (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: npx electron-builder --linux AppImage deb
+        run: npx electron-builder --linux AppImage deb --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -159,48 +165,47 @@ jobs:
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
 
     steps:
+      # Checkout the tagged commit so we can read release-notes.md — the single
+      # source of truth for BOTH the release name and body. The release-cut PR
+      # (release/vX.Y.Z) always lands one; its first "# " heading is the name.
+      - name: Checkout (for release-notes.md)
+        uses: actions/checkout@v5
+
       - name: Download all artifacts
         uses: actions/download-artifact@v5
         with:
           path: artifacts
 
-      # Enforce the release-name convention: "Hyperia vX.Y.Z — <theme> <emoji>".
-      # The <theme> is the ANNOTATED tag's message subject — cut a release with
-      #   git tag -a v0.17.69 -m "named workspaces 🗂️"
-      # and the release is named "Hyperia v0.17.69 — named workspaces 🗂️".
-      # A bare/lightweight tag (or an annotation that just restates the version)
-      # still gets "Hyperia vX.Y.Z" — so a release can never land as just
-      # "0.17.67" again (which is what this fixes).
-      - name: Resolve release name from the annotated tag
-        id: relname
+      # Release name + body come from release-notes.md:
+      #   - name  = the first "# " heading (e.g. "Hyperia v0.17.69 — save a tab 📑")
+      #   - body  = everything after that heading (the heading isn't repeated —
+      #     GitHub shows the name above the body).
+      # If release-notes.md is missing (a quick tag with no release-cut PR), the
+      # name falls back to "Hyperia <tag>" and the body is empty — so a release
+      # can never publish as just "0.17.69" with no name again.
+      - name: Compose release name + body from release-notes.md
+        id: relnotes
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          subject=""
-          obj="$(gh api "repos/${REPO}/git/refs/tags/${TAG}" \
-            --jq '{type: .object.type, sha: .object.sha}' 2>/dev/null || echo '{}')"
-          if [ "$(echo "$obj" | jq -r '.type // empty')" = "tag" ]; then
-            sha="$(echo "$obj" | jq -r '.sha')"
-            subject="$(gh api "repos/${REPO}/git/tags/${sha}" --jq '.message' 2>/dev/null | head -n1 || true)"
+          name=""
+          : > release-body.md
+          if [ -f release-notes.md ]; then
+            name="$(sed -n 's/^#[[:space:]]\+//p' release-notes.md | head -n1)"
+            # Body = file minus its first H1 line (+ a leading blank line).
+            tail -n +2 release-notes.md | sed '1{/^[[:space:]]*$/d}' > release-body.md
           fi
-          # Drop a leading "vX.Y.Z — " if the annotation restates the version.
-          subject="$(printf '%s' "$subject" | sed -E 's/^[[:space:]]*v?[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*[—:-]*[[:space:]]*//')"
-          if [ -n "${subject// /}" ]; then
-            title="Hyperia ${TAG} — ${subject}"
-          else
-            title="Hyperia ${TAG}"
-          fi
-          echo "title=${title}" >> "$GITHUB_OUTPUT"
-          echo "Release title → ${title}"
+          [ -z "${name// /}" ] && name="Hyperia ${TAG}"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "Release name → ${name}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           draft: false
-          name: ${{ steps.relname.outputs.title }}
+          name: ${{ steps.relnotes.outputs.name }}
+          body_path: release-body.md
           files: |
             artifacts/**/*.exe
             artifacts/**/*.dmg
