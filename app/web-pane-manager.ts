@@ -92,14 +92,56 @@ function nativeVisible(entry: WebPaneEntry): boolean {
   return entry.visible && !suppressedWins.has(entry.win.id);
 }
 
-// Force-hide (or restore) all web panes in a window — used to clear a native
-// view out from over a DOM overlay (e.g. the close-confirm modal).
+// Force-hide (or restore) all web panes in a window so a DOM overlay (the
+// close-confirm modal, the consent/ACL prompt, the Save-Workspace toast) paints
+// ABOVE them — native WebContentsViews otherwise paint over all DOM regardless
+// of z-index. Uses the SAME freeze-swap as a per-pane overlay: hand the renderer
+// a still of the live page BEFORE pulling the native view, so the pane shows a
+// frozen frame, not a blank white rectangle (the #195 blank-on-save regression).
 export function setWindowWebPanesSuppressed(win: BrowserWindow, suppressed: boolean): void {
   if (suppressed) suppressedWins.add(win.id);
   else suppressedWins.delete(win.id);
-  for (const entry of panes.values()) {
-    if (entry.win !== win) continue;
-    if (!entry.view.webContents.isDestroyed()) entry.view.setVisible(nativeVisible(entry));
+  for (const [uid, entry] of panes) {
+    if (entry.win !== win || entry.view.webContents.isDestroyed()) continue;
+    const token = (entry.swapToken = (entry.swapToken ?? 0) + 1);
+    if (suppressed) {
+      if (!entry.visible) {
+        // Already hidden (inactive tab / off-screen) — nothing to freeze.
+        entry.view.setVisible(false);
+      } else {
+        void (async () => {
+          let shot: string | null = null;
+          try {
+            shot = (await entry.view.webContents.capturePage()).toDataURL();
+          } catch {
+            /* keep null — falls back to the pane bg, same as before */
+          }
+          if (panes.get(uid) !== entry) return;
+          entrySend(uid, 'web-pane:frozen', {uid, shot});
+          // Hide the native view only after the renderer has had a couple frames
+          // to paint the still, so there's no one-frame blank hole.
+          setTimeout(() => {
+            if (
+              panes.get(uid) === entry &&
+              entry.swapToken === token &&
+              suppressedWins.has(win.id) &&
+              !entry.view.webContents.isDestroyed()
+            ) {
+              entry.view.setVisible(false);
+            }
+          }, SWAP_BRIDGE_MS);
+        })();
+      }
+    } else {
+      // Restore: show the live view, then clear the still a couple frames later
+      // (once the native view has re-composited) so the pane bg never flashes.
+      entry.view.setVisible(nativeVisible(entry));
+      setTimeout(() => {
+        if (panes.get(uid) === entry && entry.swapToken === token && !suppressedWins.has(win.id)) {
+          entrySend(uid, 'web-pane:frozen', {uid, shot: null});
+        }
+      }, SWAP_BRIDGE_MS);
+    }
     if (entry.devtools) entry.devtools.setVisible(nativeVisible(entry));
   }
 }

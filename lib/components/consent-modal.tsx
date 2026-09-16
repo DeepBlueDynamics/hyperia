@@ -1,3 +1,4 @@
+import {ipcRenderer} from 'electron';
 import React from 'react';
 
 import {useSelector} from 'react-redux';
@@ -78,6 +79,17 @@ export default function ConsentModal(): React.ReactElement | null {
     setDuration(null);
     setBusy(false);
   }, [req?.id]);
+
+  // Native web panes paint above the DOM, so this full-window prompt would sit
+  // BEHIND a web pane — the "ACL prompt I can't see" bug. While the full prompt
+  // is up, pull the window's web panes off-screen (frozen-still, no blank) so it
+  // renders on top; restore on close. Only for the full modal, not the pill.
+  const hasPrompt = !!req;
+  React.useEffect(() => {
+    if (!hasPrompt) return undefined;
+    ipcRenderer.send('web-panes:suppress', {suppressed: true});
+    return () => ipcRenderer.send('web-panes:suppress', {suppressed: false});
+  }, [hasPrompt]);
 
   // Resolve the target pane's friendly name (the "where") from the store.
   const paneName = useSelector((s: any) => {
