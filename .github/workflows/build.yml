@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  actions: read # notify-discord reads this run's per-job conclusions
 
 jobs:
   build:
@@ -163,10 +164,43 @@ jobs:
         with:
           path: artifacts
 
+      # Enforce the release-name convention: "Hyperia vX.Y.Z — <theme> <emoji>".
+      # The <theme> is the ANNOTATED tag's message subject — cut a release with
+      #   git tag -a v0.17.69 -m "named workspaces 🗂️"
+      # and the release is named "Hyperia v0.17.69 — named workspaces 🗂️".
+      # A bare/lightweight tag (or an annotation that just restates the version)
+      # still gets "Hyperia vX.Y.Z" — so a release can never land as just
+      # "0.17.67" again (which is what this fixes).
+      - name: Resolve release name from the annotated tag
+        id: relname
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          subject=""
+          obj="$(gh api "repos/${REPO}/git/refs/tags/${TAG}" \
+            --jq '{type: .object.type, sha: .object.sha}' 2>/dev/null || echo '{}')"
+          if [ "$(echo "$obj" | jq -r '.type // empty')" = "tag" ]; then
+            sha="$(echo "$obj" | jq -r '.sha')"
+            subject="$(gh api "repos/${REPO}/git/tags/${sha}" --jq '.message' 2>/dev/null | head -n1 || true)"
+          fi
+          # Drop a leading "vX.Y.Z — " if the annotation restates the version.
+          subject="$(printf '%s' "$subject" | sed -E 's/^[[:space:]]*v?[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*[—:-]*[[:space:]]*//')"
+          if [ -n "${subject// /}" ]; then
+            title="Hyperia ${TAG} — ${subject}"
+          else
+            title="Hyperia ${TAG}"
+          fi
+          echo "title=${title}" >> "$GITHUB_OUTPUT"
+          echo "Release title → ${title}"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           draft: false
+          name: ${{ steps.relname.outputs.title }}
           files: |
             artifacts/**/*.exe
             artifacts/**/*.dmg
@@ -177,3 +211,94 @@ jobs:
             artifacts/**/latest*.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Post a single release summary to Discord with each platform's build status.
+  # Runs after build + release, on tag releases only. always() so it still fires
+  # when a platform (or the release) failed — a partial release is exactly when
+  # the ping matters.
+  notify-discord:
+    needs: [build, release]
+    runs-on: ubuntu-latest
+    if: always() && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Post release status to Discord
+        env:
+          # Discord bot API (not a webhook): posts as the bot into the channel.
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_BOT_TOKEN:-}" ] || [ -z "${DISCORD_CHANNEL_ID:-}" ]; then
+            echo "DISCORD_BOT_TOKEN / DISCORD_CHANNEL_ID not set — skipping Discord post."
+            exit 0
+          fi
+
+          # Every job's name + conclusion for THIS run (the three build legs +
+          # the release job). --jq streams objects; jq -s collects them.
+          jobs_json="$(gh api --paginate "repos/${REPO}/actions/runs/${RUN_ID}/jobs" \
+            --jq '.jobs[] | {name, conclusion}' | jq -s '.')"
+
+          emoji() {
+            case "$1" in
+              success)   printf '✅' ;;
+              failure)   printf '❌' ;;
+              cancelled) printf '⏹️' ;;
+              skipped)   printf '⏭️' ;;
+              *)         printf '❔' ;;
+            esac
+          }
+          # Conclusion of the job whose name CONTAINS $1. Matrix legs are named
+          # "build (windows-2022, x86_64-…)", so we substring-match on the OS.
+          conc() { echo "$jobs_json" | jq -r --arg n "$1" \
+            'map(select(.name | contains($n))) | (.[0].conclusion // "unknown")'; }
+
+          win="$(conc 'windows-2022')"
+          mac="$(conc 'macos-14')"
+          lin="$(conc 'ubuntu-latest')"
+          rel="$(conc 'release')"
+
+          # green all-pass · red all-fail · gold mixed
+          passes=0; fails=0
+          for c in "$win" "$mac" "$lin"; do
+            if [ "$c" = success ]; then passes=$((passes+1)); else fails=$((fails+1)); fi
+          done
+          if   [ "$fails" -eq 0 ]; then color=3066993
+          elif [ "$passes" -eq 0 ]; then color=15158332
+          else color=15844367
+          fi
+
+          subject="$(printf '%s' "${COMMIT_MSG:-}" | head -n1)"
+          release_url="https://github.com/${REPO}/releases/tag/${TAG}"
+
+          payload="$(jq -n \
+            --arg title "🚀 Hyperia ${TAG}" \
+            --arg url "$release_url" \
+            --argjson color "$color" \
+            --arg win "$(emoji "$win") Windows (x64) — ${win}" \
+            --arg mac "$(emoji "$mac") macOS — ${mac}" \
+            --arg lin "$(emoji "$lin") Linux (x64) — ${lin}" \
+            --arg rel "$(emoji "$rel") ${rel}" \
+            --arg footer "${SHA:0:7} — ${subject}" \
+            '{embeds: [{
+               title: $title, url: $url, color: $color,
+               fields: [
+                 {name: "Windows", value: $win, inline: true},
+                 {name: "macOS",   value: $mac, inline: true},
+                 {name: "Linux",   value: $lin, inline: true},
+                 {name: "Release", value: $rel, inline: false}
+               ],
+               footer: {text: $footer}
+             }]}')"
+
+          curl -sf -X POST \
+            -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "https://discord.com/api/v10/channels/${DISCORD_CHANNEL_ID}/messages"
+          echo "Posted release status to Discord channel ${DISCORD_CHANNEL_ID}."
