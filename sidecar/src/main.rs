@@ -2111,12 +2111,45 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
                     state.bridge.resolve_create_early(&req.requester, false).await;
                 }
             }
+            // Poke the REQUESTING agent's own pane so it learns the outcome
+            // without the human relaying it. Gated tool calls return 202 "held —
+            // wait", but third-party CLIs (codex / antigravity) treat that as a
+            // hard failure and never retry, then act as if they still lack access
+            // they've since been granted. Pushing the decision into their pane —
+            // the channel they read, same Keys mechanism as pane_pulse — closes
+            // the loop. Skip external callers (empty pane) and the just-driven
+            // target (handled above). interrupt=false so it defers if the human
+            // is actively typing there (never clobber the human's input).
+            if !req.requester_pane.is_empty() && req.requester_pane != req.target_pane {
+                let msg = if allow {
+                    format!(
+                        "[Hyperia] ✅ Your access request was approved ({}). If your last action didn't complete, retry it now.\r",
+                        req.action
+                    )
+                } else {
+                    format!(
+                        "[Hyperia] ⛔ Your access request was denied ({}). Don't retry — ask the human if you still need it.\r",
+                        req.action
+                    )
+                };
+                let _ = state
+                    .bridge
+                    .send_command(serde_json::json!({
+                        "type": "Keys",
+                        "uid": req.requester_pane,
+                        "keys": msg,
+                        "interrupt": false,
+                    }))
+                    .await;
+            }
             let _ = state
                 .bridge
                 .notify(serde_json::json!({
                     "type": "PermissionResolved",
                     "id": req.id,
                     "targetPane": req.target_pane,
+                    "requesterPane": req.requester_pane,
+                    "action": req.action,
                     "decision": if allow { "allow" } else { "deny" },
                 }))
                 .await;
