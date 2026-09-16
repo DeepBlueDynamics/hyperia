@@ -828,4 +828,14 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
     }
     return out;
   });
+
+  // A renderer-side overlay (e.g. the Save Workspace toast) needs the window's
+  // native web panes pulled off-screen while it's up — native WebContentsViews
+  // always paint ABOVE the DOM, so a web pane would sit on top of the toast.
+  // Mirrors the main-side suppression the close-confirm modal already uses; the
+  // overlay sends true on open and false on close.
+  ipcMain.on('web-panes:suppress', (e, {suppressed}: {suppressed: boolean}) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (win && !win.isDestroyed()) setWindowWebPanesSuppressed(win, !!suppressed);
+  });
 }

@@ -1,3 +1,4 @@
+import {ipcRenderer} from 'electron';
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 
 import {useStore} from 'react-redux';
@@ -90,6 +91,16 @@ const WorkspaceSaveToast: React.FC = () => {
     window.addEventListener(OPEN_SAVE_TAB_WORKSPACE_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_SAVE_TAB_WORKSPACE_EVENT, onOpen);
   }, [store]);
+
+  // Native web panes paint ABOVE the renderer DOM, so this fixed card would sit
+  // behind any web pane in the tab. Pull the window's web panes off-screen while
+  // the toast is open (same suppression the close-confirm modal uses); restore
+  // on close/unmount.
+  useEffect(() => {
+    if (!open) return undefined;
+    ipcRenderer.send('web-panes:suppress', {suppressed: true});
+    return () => ipcRenderer.send('web-panes:suppress', {suppressed: false});
+  }, [open]);
 
   useEffect(() => {
     const onResult = (res: {ok: boolean; name: string; error?: string; conflict?: boolean}) => {
