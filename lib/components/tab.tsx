@@ -71,6 +71,8 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const [renameValue, setRenameValue] = useState('');
   const [pendingName, setPendingName] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Brief "Screenshot copied ✓" flash on the tab name after a tab screenshot.
+  const [shotDone, setShotDone] = useState(false);
   const renamingRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -254,6 +256,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
       const img = nativeImage.createFromDataURL(finalURL);
       if (!img || img.isEmpty()) return;
       clipboard.writeImage(img);
+      // Confirm the capture: flash "Screenshot copied ✓" in place of the tab name.
+      setShotDone(true);
+      setTimeout(() => setShotDone(false), 1600);
       try {
         const fs = require('fs');
         const os = require('os');
@@ -403,11 +408,11 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const rawText = pendingName ?? (tabName || description || props.text) ?? '';
   const parsed = parseTabName(rawText, isWebPane);
   // Optimistically show pendingName to avoid any flicker while Redux propagates.
-  const displayText = copied ? 'Copied ✓' : isFirstRun ? 'untitled' : parsed.text;
+  const displayText = shotDone ? 'Screenshot copied ✓' : copied ? 'Copied ✓' : isFirstRun ? 'untitled' : parsed.text;
   const isPinned = !!props.isPinned;
   // A pinned tab shrinks to its initials (emoji kept); the full name moves to
   // the hover tooltip.
-  const shownText = isPinned && !copied && !isFirstRun ? tabInitials(displayText) : displayText;
+  const shownText = isPinned && !copied && !shotDone && !isFirstRun ? tabInitials(displayText) : displayText;
 
   // Agent dot color
   const agentDotColor = agentStatus?.working
