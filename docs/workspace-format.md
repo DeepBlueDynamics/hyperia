@@ -28,6 +28,7 @@ session permanently.
   "name": "deploy-day",          // the workspace's display/library name
   "savedAt": "2026-08-28T21:04:11Z", // RFC3339 UTC save timestamp
   "appVersion": "0.17.50",       // optional; Hyperia version that wrote it
+  "scope": "tab",                // optional; see Scopes
   "windows": [ /* WorkspaceWindow, one per OS window; at least one */ ],
   "stickys": [ /* optional StickyRef list; reserved, populated from chunk #170 */ ]
 }
@@ -108,6 +109,26 @@ requires the `typeRestoredCommand` config flag, which is **off by default** —
 a shared or imported workspace must not put text into your shell. Treat the
 whole `annotations` object as untrusted display data; future keys (e.g.
 container reattach hints, #172) follow the same rule.
+
+## Scopes
+
+Absent `scope` = a whole-app snapshot. `"scope": "tab"` marks a **single-tab
+workspace** (#183): exactly one window whose layout holds one root term group
+— saved from a tab's right-click → *Save Workspace…*, listed bookmark-style
+in the **+** menu, and restored **additively into a new tab** of the current
+window. Tab-workspaces live in the same library and work with every
+`hyws`/MCP verb; validation requires exactly one window when scope is `tab`.
+
+### `resumeOnce` — the one executable field
+
+A session may carry `"resumeOnce": {"command": "…", "source": "n8" | "shell"}`.
+Unlike `annotations` (display-only, never executed), restore **runs this
+command once** in the restored pane. It exists only when a human checked that
+command in the save confirm, and its value may only come from trustworthy
+sources: the pane's n8 session binding (OSC-777, `source: "n8"`, e.g.
+`n8 resume <id>`) or the shell-integration-reported command of a pane that
+was actually running at save time (`source: "shell"`). The screen-scraped
+`annotations.lastCommand` is never promoted to `resumeOnce`.
 
 ## Versioning
 

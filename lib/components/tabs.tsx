@@ -124,6 +124,33 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   // they can't be picked up, and an unpinned tab can't drop among them.
   const pinnedCount = useMemo(() => tabs.filter((t) => t.pinned).length, [tabs]);
 
+  // Tab-scoped saved workspaces for the + menu (#183) — bookmark-style rows
+  // beneath the layout presets. Refreshed on hover so a save made moments ago
+  // shows up without any store plumbing.
+  const [savedTabWorkspaces, setSavedTabWorkspaces] = useState<
+    Array<{name: string; savedAt: string; panes: number; webPanes: number}>
+  >([]);
+  // rpc.emit THROWS 'Not ready' until the ipc channel id arrives (see
+  // web-url-sync.ts) — and this component mounts before that. Guard every
+  // emit; the hover refresh covers whatever an early fetch misses.
+  const requestWorkspaceList = useCallback(() => {
+    try {
+      rpc.emit('list tab workspaces');
+    } catch {
+      /* rpc not ready yet — the next hover will fetch */
+    }
+  }, []);
+  useEffect(() => {
+    const onList = ({rows}: {rows: Array<{name: string; savedAt: string; panes: number; webPanes: number}>}) => {
+      setSavedTabWorkspaces(rows);
+    };
+    rpc.on('tab workspaces list', onList);
+    requestWorkspaceList();
+    return () => {
+      rpc.removeListener('tab workspaces list', onList);
+    };
+  }, [requestWorkspaceList]);
+
   const handleDragStart = useCallback(
     (uid: string, index: number, e: React.DragEvent) => {
       if (tabs[index]?.pinned) {
@@ -268,7 +295,11 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             .tabs_layout_grid …) orphaned. Restored here: hovering + reveals the
             layout presets; each opens a new grouped tab pre-split via the same
             rpc('new', {layoutPattern}) path (sessions.ts → openLayout), still wired. */}
-        <div className="tabs_newTab_tooltip_trigger" style={{position: 'relative', display: 'inline-flex'}}>
+        <div
+          className="tabs_newTab_tooltip_trigger"
+          style={{position: 'relative', display: 'inline-flex'}}
+          onMouseEnter={requestWorkspaceList}
+        >
           <button
             className="tabs_newTabBtn"
             onClick={() => props.openNewTab('picker')}
@@ -325,6 +356,52 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                 </div>
               </div>
             </div>
+            {/* Bookmark-style tab-workspaces (#183): saved via a tab's
+                right-click menu, restored ADDITIVELY into a new tab here. */}
+            {savedTabWorkspaces.length > 0 && (
+              <>
+                <div
+                  style={{
+                    fontSize: '11px',
+                    color: 'var(--text-primary)',
+                    fontWeight: 600,
+                    margin: '10px 0 6px',
+                    textAlign: 'center'
+                  }}
+                >
+                  Saved Workspaces
+                </div>
+                <div style={{maxHeight: '160px', overflowY: 'auto'}}>
+                  {savedTabWorkspaces.map((ws) => (
+                    <div
+                      key={ws.name}
+                      onClick={() => rpc.emit('restore tab workspace', {name: ws.name})}
+                      title={`Restore into a new tab · ${ws.panes} pane${ws.panes === 1 ? '' : 's'}${
+                        ws.webPanes ? ` + ${ws.webPanes} web` : ''
+                      }`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '4px 6px',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                        color: 'var(--text-primary)'
+                      }}
+                      onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--bg-tertiary)')}
+                      onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
+                    >
+                      <i className="ti ti-bookmark" style={{fontSize: '12px', color: 'var(--info-text)'}} />
+                      <span style={{flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                        {ws.name}
+                      </span>
+                      <span style={{color: 'var(--text-tertiary)', flexShrink: 0}}>{ws.panes + ws.webPanes}▢</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
