@@ -1,6 +1,6 @@
-# Hyperia v0.17.69 — save a tab, get it back 📑
+# Hyperia v0.18.0 — Saved Workspaces 🗂️
 
-Workspaces learn to work one tab at a time, tab screenshots stop leaving web panes blank, and Google Maps stops flashing white while you drag it.
+The minor bump is named for the feature that earns it: **saved workspaces** now work one tab at a time. Any tab — its layout, directories, web panes, and the commands worth resuming — becomes a workspace you can bring back with a click. This release rounds that out: the save toast now sits above web panes, and a tab screenshot tells you it worked.
 
 ## Tab-scoped workspaces
 
@@ -10,21 +10,17 @@ To bring one back, hover the **+** button. Beneath the layout presets there is n
 
 `resumeOnce` is the one deliberate exception to "restore never executes". It is recorded only from the boxes you tick at save time, and its value can only come from the pane's n8 session binding or the shell-integration-reported command of a pane that was actually busy. The screen scrape is never promoted to a command. The format is documented in `docs/workspace-format.md` under *Scopes* and *resumeOnce*.
 
-## Tab screenshots include web panes
+## The save toast now sits above web panes
 
-The whole-tab screenshot (`tab_snapshot`) is a renderer capture, and web panes are native views the renderer never paints, so a tab with a web pane came out with a blank hole. Each on-screen web pane is now captured from main and composited onto the base shot at its bounds. Scale factor comes from the captured image itself, so HiDPI and Linux UI zoom land correctly. Panes parked off-screen from other tabs are filtered out, and if compositing fails you still get the terminals-only shot.
+Native web panes paint above the app's own UI, so in a tab with a web pane the Save Workspace toast was hidden behind the page. The window's web panes are now pulled off-screen while the toast is open — the same move the close-confirm dialog makes — and restored the moment you save or cancel.
 
-## Web panes stop reloading on page-driven URL changes
+## Tab screenshots confirm themselves
 
-Google Maps rewrites the URL with `history.replaceState` continuously while you pan. Hyperia reported that change, persisted it, and then treated the round-trip as a navigation request, calling a full `loadURL` on a page that was already there. The result was a white flash and the map rebooting to whatever coordinates the URL held mid-drag. Chrome never turns `replaceState` into a load, which is why it never reproduced there.
-
-Two guards now stop the echo, either sufficient on its own. The renderer remembers the last page-reported URL and skips the load when the new prop is just that echo. The manager skips a load whose target already equals the current URL. Pressing Enter in the URL bar on the current URL still reloads, matching Chrome. The temporary click marker in Maps, which the mid-drag reload used to wipe, comes back for free.
-
-This addresses the root cause in #160. The issue stays open for a hands-on Maps pass and the separate freeze-during-drag hardening idea.
+Right-click a tab → **Screenshot** copies the whole tab — terminals, header bands, and any web panes composited in from their native views — to the clipboard. The tab name now flashes **"Screenshot copied ✓"** so you know it landed instead of leaving you guessing whether anything happened.
 
 ## Also
 
-- Web pane manager gained a `web-panes:capture-for-window` IPC handler used by the tab screenshot compositor.
-- Sidecar workspace validation enforces exactly one window when `scope` is `tab`, with new round-trip tests.
+- The release pipeline is now a single publisher: the GitHub release name and notes come straight from this file, so builds stop landing as a bare version number with an empty body.
+- A per-run Discord post now summarizes each release with its per-platform build status.
 
-Coming from further back? [v0.17.67](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.17.67) was the previous published build.
+Coming from further back? [v0.17.69](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.17.69) was the previous published build.
