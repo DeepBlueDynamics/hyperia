@@ -1,19 +1,30 @@
-# Hyperia v0.17.51 — no more WebRTC leak 🕵️
+# Hyperia v0.17.69 — save a tab, get it back 📑
 
-A privacy fix that matters most if you drive web panes through a proxy.
+Workspaces learn to work one tab at a time, tab screenshots stop leaving web panes blank, and Google Maps stops flashing white while you drag it.
 
-## Web panes stop leaking your LAN IP over WebRTC
+## Tab-scoped workspaces
 
-Real Chrome hides your private (LAN) addresses behind mDNS `.local` ICE candidates by default. Electron's `WebContentsView` — what Hyperia's web panes are — left the raw private IP exposed, so any page's `RTCPeerConnection` could read the host's `172.x` / `192.168.x` address even when the page's HTTP traffic was routed through a proxy.
+Right-click a tab and choose **Save Workspace…**. A confirm toast opens with the name pre-filled from the tab, plus a **resume-once checklist**: each pane's detected command with a checkbox. Nemesis8 session resumes are pre-checked; plain shell commands are opt-in. Saving writes a single-tab workspace into the same library the whole-app workspaces already use, so every `hyws` and MCP verb works on it.
 
-That's a direct deanonymization signal: anti-bot systems cross-check the WebRTC address against your HTTP exit IP, and a mismatch — or a raw LAN address showing through — flags you instantly. Caught in the wild by nodemaven's connection checker running in a Hyperia pane: *"WebRTC exposed a raw LAN address, mDNS obfuscation is disabled."*
+To bring one back, hover the **+** button. Beneath the layout presets there is now a **Saved Workspaces** section. Clicking a row grafts that tab *additively* into the current window: your existing tabs stay put, the restored tab gets fresh pane ids, missing working directories are bannered, and focus follows because you asked for it.
 
-Each web pane now sets `default_public_interface_only`, binding WebRTC to the same public interface as the page's HTTP exit. No private-IP leak, and WebRTC still works — chosen over the nuclear `disable_non_proxied_udp`, which would break legitimate calls.
+`resumeOnce` is the one deliberate exception to "restore never executes". It is recorded only from the boxes you tick at save time, and its value can only come from the pane's n8 session binding or the shell-integration-reported command of a pane that was actually busy. The screen scrape is never promoted to a command. The format is documented in `docs/workspace-format.md` under *Scopes* and *resumeOnce*.
 
-**Verify:** run any WebRTC leak test (e.g. nodemaven's connection checker) in a web pane — the WebRTC section should match your exit IP with no LAN address, instead of flagging a leak.
+## Tab screenshots include web panes
+
+The whole-tab screenshot (`tab_snapshot`) is a renderer capture, and web panes are native views the renderer never paints, so a tab with a web pane came out with a blank hole. Each on-screen web pane is now captured from main and composited onto the base shot at its bounds. Scale factor comes from the captured image itself, so HiDPI and Linux UI zoom land correctly. Panes parked off-screen from other tabs are filtered out, and if compositing fails you still get the terminals-only shot.
+
+## Web panes stop reloading on page-driven URL changes
+
+Google Maps rewrites the URL with `history.replaceState` continuously while you pan. Hyperia reported that change, persisted it, and then treated the round-trip as a navigation request, calling a full `loadURL` on a page that was already there. The result was a white flash and the map rebooting to whatever coordinates the URL held mid-drag. Chrome never turns `replaceState` into a load, which is why it never reproduced there.
+
+Two guards now stop the echo, either sufficient on its own. The renderer remembers the last page-reported URL and skips the load when the new prop is just that echo. The manager skips a load whose target already equals the current URL. Pressing Enter in the URL bar on the current URL still reloads, matching Chrome. The temporary click marker in Maps, which the mid-drag reload used to wipe, comes back for free.
+
+This addresses the root cause in #160. The issue stays open for a hands-on Maps pass and the separate freeze-during-drag hardening idea.
 
 ## Also
 
-- `.claude/` (agent memory, subagent defs, local settings) is now untracked — local machine state, not repo material.
+- Web pane manager gained a `web-panes:capture-for-window` IPC handler used by the tab screenshot compositor.
+- Sidecar workspace validation enforces exactly one window when `scope` is `tab`, with new round-trip tests.
 
-Coming from further back? [v0.17.50](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.17.50) added live tab-drag reordering and welcomed our newest committer.
+Coming from further back? [v0.17.67](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.17.67) was the previous published build.
