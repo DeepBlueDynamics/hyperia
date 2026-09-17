@@ -26,6 +26,6 @@ Web panes already track in-page navigation into the saved URL, so a restored web
 
 ## Housekeeping
 
-- The **Hyperia Agent** text link under the new-pane picker is gone. The agent is still reachable from the picker's agent combobox (once configured), the tab-bar context menu, and the **A** hotkey.
+- The **Hyperia Agent** text link under the new-pane picker is replaced by **configure**, which opens the agent configuration view in that pane. Launching the agent stays in the picker's agent combobox (once configured), the tab-bar context menu, and the **A** hotkey.
 
 - `workspace-capture` unit test caught up with the hidden-stickies restore change from v0.19.1 (its sticky stub lacked the new read).

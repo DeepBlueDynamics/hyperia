@@ -1428,6 +1428,19 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             >
               Dashboard
             </span>
+            <span style={{fontSize: '11px', color: 'var(--text-tertiary)'}}>·</span>
+            <span
+              onClick={this.openAgentConfig}
+              title="Open the Hyperia agent configuration in this pane"
+              style={{
+                fontSize: '11px',
+                fontFamily: 'var(--font-sans)',
+                color: 'var(--info-text)',
+                cursor: 'pointer'
+              }}
+            >
+              configure
+            </span>
           </div>
 
           {/* Footer — running version + self-update command. Like the install
