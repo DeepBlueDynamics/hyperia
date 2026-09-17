@@ -10,6 +10,7 @@ import {startFileWatch, stopFileWatch} from './file-watch';
 import {getStickyDefaultSize, stickyOpacityNow} from './preferences';
 import {SEARCH_WIN_ID, stickyWindows} from './registry';
 import {setSchedulerNoteOpener} from './scheduler';
+import {installStickySecurityGuards, STICKY_WEB_PREFERENCES} from './security';
 import {deleteNote, getNote, readAllNotes, updateNote, upsertNote} from './store';
 import type {StickyRef} from './types';
 import {
@@ -139,12 +140,10 @@ export function createStickyNote(
     focusable: true,
     show: false,
     backgroundColor: colorHex,
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-      webSecurity: false
-    }
+    webPreferences: STICKY_WEB_PREFERENCES
   });
+
+  installStickySecurityGuards(win.webContents);
 
   if (!options.filePath && noteId !== 'sticky-search-window') {
     const current = getNote(noteId) || {

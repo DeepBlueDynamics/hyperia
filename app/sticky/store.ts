@@ -78,7 +78,7 @@ export function updateNote(id: string, text: string): boolean {
         const translated = translateContainerPath(note.source.path);
         writeFileSync(translated, text, 'utf8');
       } catch (e) {
-        console.error(`sticky: failed to write updated content to linked file ${note.source.path}:`, e);
+        console.error('sticky: failed to write updated content to linked file', note.source.path, e);
       }
     }
   }
@@ -88,7 +88,7 @@ export function updateNote(id: string, text: string): boolean {
     try {
       writeFileSync(watchPath, text, 'utf8');
     } catch (e) {
-      console.error(`sticky: failed to write updated content to watch path ${watchPath}:`, e);
+      console.error('sticky: failed to write updated content to watch path', watchPath, e);
     }
   }
 

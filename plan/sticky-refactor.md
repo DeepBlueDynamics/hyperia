@@ -1,6 +1,6 @@
 # Sticky refactor — canary
 
-Status: main and renderer implementation reviewed by Productive Cod, 2026-09-17; no remaining code blockers. Paths frozen for Then Fox's final host checks and a draft PR to canary. Existing CI blockers below remain pending owner authorization; manual installer build and release are not authorized.
+Status: draft PR #206 at 0a500fe4 contains the reviewed lifecycle refactor. Security review reopened on 2026-09-17 after the user identified the CodeQL warning. The earlier source approval is insufficient for security acceptance; the follow-up below must pass review and verification. Existing CI blockers remain pending owner authorization. No merge or release is authorized.
 
 Tracking: GitHub #204 (sticky refactor), #205 (MCP failures). Then Fox filed both. Next safe version is 0.19.3; 0.19.2 is already used by a local jev installer.
 
@@ -73,3 +73,21 @@ Behavioral tests must drive window events and public functions; a pure boolean p
 Renderer verification covers bootstrap dependency loading, packaged asset paths, editor/search/file/code/schedule modes and existing IPC contracts. Run relevant unit tests, lint and type checks with actual results. Then Fox performs a host smoke/build when authorized against the exact revision/version. Never kill/restart the installed app for diagnostics.
 
 Field smoke checklist: hide stickies then restart, explicit open, show/hide all, edit/update while hidden, scheduled reminder, close/archive, search/reopen, linked file and code note. Field result is not claimed until observed.
+
+## Security follow-up for PR #206
+
+CodeQL alert #21 reports js/disabling-electron-websecurity at the extracted window.ts:145; alert #16 is the same pre-existing setting in the original monolith. Relocation does not establish safety. The user raised this finding and the prior security acceptance has been reopened.
+
+The planner also reproduced attribute injection using applyRules: an agent-provided className or color containing a quote adds an unintended HTML attribute. Content escaping does not protect attributes. Sidecar post_notes_highlight validates only that rules is an array; its prompt is not validation. This is verified source and a benign string-output reproduction, not an exploit run against the installed app.
+
+Follow-up ownership and contract:
+
+- Antigravity: explicit webSecurity:true and allowRunningInsecureContent:false; deny renderer navigation, redirects, popups and webviews. Preserve trusted main loadFile. Add sticky-highlight IPC with a fixed localhost endpoint, registered sticky sender and exact main-frame validation, content limited to 4000 characters, bounded timeout and HTTP failure handling. The final request is {content:string}, response {ok:boolean,rules:unknown[],error?:string}. No arbitrary URL proxy or global CORS change.
+- Grok: validate untrusted highlight rules at the rendering sink; class tokens and exact supported hex colors cannot break out of attributes. Malformed rules and non-global regex flags cannot hang the simple scan loop. Replace browser fetch with the narrow IPC call, preserving local highlighting fallback. Add CSP and a small external entry script; no inline JavaScript or browser network connection is required.
+- Planner: isolated real Electron test under test/security/**, loading the actual HTML and renderer with the exported main security settings/guards/IPC handler. A test preload injects a temporary notes directory; windows remain hidden; only the HTTP response is mocked. No Hyperia entrypoint, live sidecar call, installed-app restart, or package build.
+- Productive Cod: review security changes and smoke evidence before replacing the prior approval.
+- Then Fox: run the isolated host smoke and verification, then commit/push the reviewed follow-up to the same draft PR. Keep findings open until the fix is verified; do not dismiss based on historical rationale.
+
+Security acceptance: baseline attribute breakout test fails before the change and passes after; effective loaded-window browser protections are enabled; code, note and search modes load with CSP; AI IPC success/failure both render; injected attributes stay inert; inline handlers/scripts and browser connections are blocked; navigation to an untrusted local HTML fixture emits the guard event and is denied, and popup creation is denied. The first host run found that explicit about:blank navigation bypasses will-navigate, matching upstream Electron #21136; the smoke records this separately and does not claim this guard supplies complete navigation isolation. Existing lifecycle tests stay green. Checks must distinguish unit/stub coverage, actual Electron source-asset smoke, packaged verification and installed-app field checks.
+
+Remaining debt is explicit: nodeIntegration:true and contextIsolation:false still support the legacy renderer's filesystem/CommonJS access. This follow-up does not make stickies sandboxed. Issue #208 tracks the separate preload and persistence migration to remove those privileges; no claim of complete renderer isolation is permitted. Generated JavaScript regular expressions still run in the renderer: syntax/rule-count limits do not provide a bound on pathological regex execution. That residual needs an execution budget or isolation in follow-up work.

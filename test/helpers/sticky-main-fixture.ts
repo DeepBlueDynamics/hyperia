@@ -16,6 +16,9 @@ export class FakeWebContents {
   sent: Array<{channel: string; args: any[]}> = [];
   focused = false;
   focusCalls = 0;
+  listeners: Record<string, Function[]> = {};
+  mainFrame = {parent: null};
+  windowOpenHandler: Function | null = null;
 
   isDestroyed() {
     return false;
@@ -23,6 +26,15 @@ export class FakeWebContents {
 
   send(channel: string, ...args: any[]) {
     this.sent.push({channel, args});
+  }
+
+  on(event: string, fn: Function) {
+    (this.listeners[event] = this.listeners[event] || []).push(fn);
+    return this;
+  }
+
+  setWindowOpenHandler(fn: Function) {
+    this.windowOpenHandler = fn;
   }
 
   focus() {
@@ -210,6 +222,8 @@ export interface StickyFixture {
   defaultsFile: string;
   sticky: typeof import('../../app/sticky');
   ipcEmit: (channel: string, ...args: any[]) => boolean;
+  ipcInvoke: (channel: string, event: any, ...args: any[]) => Promise<any>;
+  ipcHasHandler: (channel: string) => boolean;
   triggerStartupRestore: () => void;
   triggerSchedulerTick: () => Promise<void> | void;
   teardown: () => void;
@@ -364,6 +378,12 @@ export function createStickyFixture(t: ExecutionContext, options: {autoInit?: bo
     defaultsFile,
     sticky,
     ipcEmit: (channel: string, ...args: any[]) => ipcMain.emit(channel, ...args),
+    ipcInvoke: async (channel: string, event: any, ...args: any[]) => {
+      const handler = ipcHandlers.get(channel);
+      if (!handler) throw new Error(`No handler registered for ${channel}`);
+      return await handler(event, ...args);
+    },
+    ipcHasHandler: (channel: string) => ipcHandlers.has(channel),
     triggerStartupRestore,
     triggerSchedulerTick,
     teardown,

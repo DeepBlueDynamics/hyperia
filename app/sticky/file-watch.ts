@@ -47,7 +47,7 @@ export function bindStickyFile(noteId: string, sender: Electron.WebContents): vo
         try {
           content = readFileSync(filePath, 'utf8');
         } catch (e) {
-          console.error(`sticky: could not read ${filePath}:`, (e as Error).message);
+          console.error('sticky: could not read', filePath, (e as Error).message);
           return;
         }
         const name = basename(filePath);

@@ -5,6 +5,7 @@ import {showStickyContextMenu, toggleStickySeeThrough} from './menu';
 import {loadStickySeeThrough, readStickyHidden} from './preferences';
 import {SEARCH_WIN_ID, stickyWindows} from './registry';
 import {scheduleSticky, startScheduler, unscheduleSticky} from './scheduler';
+import {handleStickyHighlight} from './security';
 import {readAllNotes} from './store';
 import {buildStickysSummary} from './summary';
 import type {StickySchedule} from './types';
@@ -122,6 +123,8 @@ export function initSticky(): void {
   ipcMain.on('sticky-geom', () => {
     // handled by win.on('moved'/'resized') in window.ts
   });
+
+  ipcMain.handle('sticky-highlight', (event, payload) => handleStickyHighlight(event, payload));
 
   // Session Restore on Launch (Owned by remote developer — preserved exactly)
   setTimeout(() => {

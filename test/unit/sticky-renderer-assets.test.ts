@@ -11,6 +11,7 @@ const rendererDir = join(__dirname, '../../app/sticky-renderer');
 const htmlPath = join(__dirname, '../../app/sticky.html');
 
 const REQUIRED_ASSETS = [
+  'boot.js',
   'bootstrap.js',
   'chrome.js',
   'persist.js',
@@ -39,10 +40,26 @@ test('renderer JS and CSS files exist next to sticky.html', (t) => {
 test('sticky.html requires bootstrap and links renderer CSS', (t) => {
   const html = readFileSync(htmlPath, 'utf8');
   t.true(html.split(/\n/).length <= 200, 'markup stays a small shell');
-  t.true(html.includes("require('./sticky-renderer/bootstrap').boot()"));
+  t.true(html.includes('src="sticky-renderer/boot.js"'));
+  t.false(html.includes("require('./sticky-renderer/bootstrap').boot()"));
+  t.false(/<script>[^<]*require\(/.test(html));
   t.true(html.includes('sticky-renderer/chrome.css'));
   t.false(/<style>/.test(html));
   t.false(html.includes('function readNotes'));
+  t.true(/Content-Security-Policy/.test(html));
+  t.true(html.includes("default-src 'none'"));
+  t.true(html.includes("script-src 'self'"));
+  t.true(html.includes("style-src 'self' 'unsafe-inline'"));
+  t.true(html.includes("connect-src 'none'"));
+  t.true(html.includes("object-src 'none'"));
+  t.true(html.includes("frame-src 'none'"));
+  t.true(html.includes("base-uri 'none'"));
+  t.true(html.includes("form-action 'none'"));
+});
+
+test('boot.js is the external entry that requires bootstrap', (t) => {
+  const boot = readFileSync(join(rendererDir, 'boot.js'), 'utf8');
+  t.true(boot.includes("require('./sticky-renderer/bootstrap').boot()"));
 });
 
 test('app tsconfig excludes sticky-renderer so webpack is the only copy path', (t) => {
@@ -62,10 +79,10 @@ test('bootstrap require graph loads without DOM', (t) => {
   t.deepEqual(bootstrap.boot({document: null, window: null}), {ok: false, reason: 'no-dom'});
 });
 
-test('renderer modules stay under the 500-line split threshold', (t) => {
+test('renderer modules stay under the 400-line split threshold', (t) => {
   for (const name of readdirSync(rendererDir)) {
     if (!/\.(js|css)$/.test(name)) continue;
     const n = readFileSync(join(rendererDir, name), 'utf8').split(/\n/).length;
-    t.true(n <= 500, `${name} is ${n} lines`);
+    t.true(n <= 400, `${name} is ${n} lines`);
   }
 });

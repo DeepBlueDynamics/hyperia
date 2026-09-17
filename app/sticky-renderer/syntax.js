@@ -1,6 +1,12 @@
 // highlight.js / agent-highlight for code notes and the text-note backdrop.
 'use strict';
 
+const MAX_RULES = 64;
+const MAX_PATTERN = 256;
+const HLJS_CLASS = /^hljs-[a-z][a-z0-9_-]*$/;
+const HEX_COLOR = /^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
+const SAFE_FLAG_CHARS = /^[gimsuy]*$/;
+
 function simpleHash(str) {
   let h = 0;
   for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
@@ -11,20 +17,53 @@ function escHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function safeClassToken(s) {
+  return typeof s === 'string' && HLJS_CLASS.test(s) ? s : '';
+}
+
+function safeHexColor(s) {
+  return typeof s === 'string' && HEX_COLOR.test(s) ? s : '';
+}
+
+function safeFlags(flags) {
+  if (flags == null || flags === '') return 'g';
+  if (typeof flags !== 'string' || !SAFE_FLAG_CHARS.test(flags)) return null;
+  const seen = Object.create(null);
+  let out = '';
+  for (let i = 0; i < flags.length; i++) {
+    const c = flags.charAt(i);
+    if (seen[c]) continue;
+    seen[c] = true;
+    out += c;
+  }
+  if (!seen.g) out += 'g';
+  return out;
+}
+
 function applyRules(content, rules) {
+  const text = typeof content === 'string' ? content : String(content || '');
+  if (!Array.isArray(rules)) return escHtml(text);
   const marks = [];
-  for (const rule of rules) {
+  const n = Math.min(rules.length, MAX_RULES);
+  for (let i = 0; i < n; i++) {
+    const rule = rules[i];
+    if (!rule || typeof rule.pattern !== 'string') continue;
+    if (!rule.pattern || rule.pattern.length > MAX_PATTERN) continue;
+    const flags = safeFlags(rule.flags);
+    if (!flags) continue;
     try {
-      const re = new RegExp(rule.pattern, rule.flags || 'g');
+      const re = new RegExp(rule.pattern, flags);
       let m;
-      while ((m = re.exec(content)) !== null) {
+      let guard = 0;
+      while ((m = re.exec(text)) !== null) {
+        if (m[0].length === 0) break;
         marks.push({
           start: m.index,
           end: m.index + m[0].length,
-          className: rule.className || '',
-          color: rule.color || ''
+          className: safeClassToken(rule.className),
+          color: safeHexColor(rule.color)
         });
-        if (m[0].length === 0) re.lastIndex++;
+        if (++guard > text.length + 1) break;
       }
     } catch {
       /* invalid regex from agent — skip */
@@ -35,12 +74,13 @@ function applyRules(content, rules) {
   let pos = 0;
   for (const mark of marks) {
     if (mark.start < pos) continue;
-    out += escHtml(content.slice(pos, mark.start));
-    const style = mark.color ? ` style="color:${mark.color}"` : '';
-    out += `<span class="${mark.className}"${style}>${escHtml(content.slice(mark.start, mark.end))}</span>`;
+    out += escHtml(text.slice(pos, mark.start));
+    const cls = mark.className ? ' class="' + mark.className + '"' : '';
+    const style = mark.color ? ' style="color:' + mark.color + '"' : '';
+    out += '<span' + cls + style + '>' + escHtml(text.slice(mark.start, mark.end)) + '</span>';
     pos = mark.end;
   }
-  out += escHtml(content.slice(pos));
+  out += escHtml(text.slice(pos));
   return out;
 }
 
@@ -91,6 +131,20 @@ function createSyntax(ctx) {
     return doc.getElementById('aiBanner');
   }
 
+  function localHighlight(content, codeEl) {
+    delete codeEl.dataset.highlighted;
+    codeEl.textContent = content;
+    if (win.hljs) win.hljs.highlightElement(codeEl);
+  }
+
+  async function loadAgentRules(content) {
+    const ipc = ctx.ipc;
+    if (!ipc || typeof ipc.invoke !== 'function') return {ok: false};
+    const data = await ipc.invoke('sticky-highlight', {content: content.slice(0, 4000)});
+    if (!data || data.ok !== true) return {ok: false, error: data && data.error};
+    return {ok: true, rules: Array.isArray(data.rules) ? data.rules : []};
+  }
+
   async function runAgentHighlight(content, codeEl) {
     const key = simpleHash(content);
     const banner = aiBanner();
@@ -104,19 +158,14 @@ function createSyntax(ctx) {
       rules = agentCache.get(key);
     } else {
       try {
-        const resp = await fetch('http://localhost:9800/api/notes/highlight', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({content: content.slice(0, 4000)})
-        });
-        const data = await resp.json();
-        rules = data.rules || [];
-        agentCache.set(key, rules);
-      } catch (e) {
-        if (banner) {
-          banner.className = 'ai-highlight-banner';
-          banner.textContent = 'AI highlight unavailable — using auto';
+        const result = await loadAgentRules(content);
+        if (result.ok === true) {
+          rules = result.rules;
+          agentCache.set(key, rules);
+        } else {
+          rules = null;
         }
+      } catch (e) {
         rules = null;
       }
     }
@@ -127,11 +176,11 @@ function createSyntax(ctx) {
         banner.textContent = `AI highlighted · ${rules.length} rule${rules.length !== 1 ? 's' : ''}`;
       }
     } else {
-      if (win.hljs) {
-        codeEl.textContent = content;
-        win.hljs.highlightElement(codeEl);
+      if (banner) {
+        banner.className = 'ai-highlight-banner';
+        banner.textContent = 'AI highlight unavailable — using auto';
       }
-      if (banner) banner.style.display = 'none';
+      localHighlight(content, codeEl);
     }
   }
 
@@ -140,14 +189,14 @@ function createSyntax(ctx) {
     if (ctx.state.highlightMode === 'off') {
       codeEl.textContent = content;
       if (banner) banner.style.display = 'none';
-    } else if (ctx.state.highlightMode === 'agent') {
-      runAgentHighlight(content, codeEl);
-    } else {
-      codeEl.textContent = content;
-      delete codeEl.dataset.highlighted;
-      if (win.hljs) win.hljs.highlightElement(codeEl);
-      if (banner) banner.style.display = 'none';
+      return undefined;
     }
+    if (ctx.state.highlightMode === 'agent') {
+      return runAgentHighlight(content, codeEl);
+    }
+    localHighlight(content, codeEl);
+    if (banner) banner.style.display = 'none';
+    return undefined;
   }
 
   function renderSyntax() {
@@ -218,4 +267,15 @@ function createSyntax(ctx) {
   return {applyHighlight, wrapCodeLines, setSyntax, scheduleSyntax, restoreBackdrop, renderSyntax, start};
 }
 
-module.exports = {createSyntax, splitHighlightedLines, wrapCodeLines, applyRules, simpleHash, escHtml};
+module.exports = {
+  createSyntax,
+  splitHighlightedLines,
+  wrapCodeLines,
+  applyRules,
+  simpleHash,
+  escHtml,
+  safeClassToken,
+  safeHexColor,
+  safeFlags,
+  MAX_RULES
+};
