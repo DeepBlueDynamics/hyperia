@@ -404,6 +404,18 @@ export function newWindow(
 
   // Poll the sidecar for THIS window's running panes — the signal the renderer
   // heuristic can't see (ssh→remote agent). Cheap anonymous GET; every 2s.
+  //
+  // We DELIBERATELY do NOT trust the sidecar's `state` field here. For a pane
+  // without shell integration the sidecar reports `state:"running"` whenever the
+  // human typed in it within the last 15s (bridge.rs is_fallback_idle) — so a
+  // freshly-touched IDLE shell or picker reads as "running" the instant you
+  // click the window's X. That produced a phantom "a pane is still running"
+  // prompt on the first close click that vanished on the second (the recency
+  // window lapsed / a startup command settled), which is the "why is close so
+  // odd" bug. The close guard must reflect ACTUAL work-in-flight, so we key off
+  // a real foreground program instead: `process` is present and is not just the
+  // pane's own shell (agent / ssh / build / any child). Idle shells, pickers,
+  // and just-touched shells never match; a genuine ssh→remote agent does.
   const pollSidecarBusy = async () => {
     try {
       const port = process.env.HYPERIA_PORT || '9800';
@@ -414,7 +426,11 @@ export function newWindow(
       for (const w of data?.windows || []) {
         for (const t of w?.tabs || []) {
           for (const p of t?.panes || []) {
-            if (p?.state === 'running' && localUids.has(p.paneId)) {
+            if (!localUids.has(p.paneId)) continue;
+            const proc = String(p.process || '').toLowerCase();
+            const shell = String(p.shell || '').toLowerCase();
+            const hasForegroundProgram = proc.length > 0 && proc !== shell;
+            if (hasForegroundProgram) {
               found.push({name: p.name || p.title || p.process || 'a shell'});
             }
           }
@@ -982,7 +998,13 @@ export function newWindow(
         const tabCount = (window as any).tabCount || 1;
         const paneCount = (window as any).paneCount || 1;
         let ok = true;
-        if (active.length > 0 || tabCount > 1 || paneCount > 1) {
+        // Prompt ONLY when a pane is genuinely running a foreground program —
+        // that's the sole case where closing loses live work. Idle shells,
+        // pickers, and multi-pane/tab layouts are captured by saveLastSession()
+        // below and restored on next launch, so nagging about "N panes still
+        // running" for an idle window was both untrue and the reason close felt
+        // erratic. A truthful, deterministic gate: real work → ask; otherwise go.
+        if (active.length > 0) {
           ok = await confirmCloseModal({
             scope: 'window',
             names: active.map((a) => a.name),
