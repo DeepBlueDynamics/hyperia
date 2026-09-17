@@ -75,6 +75,13 @@ const config: webpack.Configuration[] = [
             from: './app/patches',
             to: './patches',
             noErrorOnMissing: true
+          },
+          {
+            // Sticky renderer CommonJS + CSS. Existing app/*.min.css / *.min.js
+            // globs do not cover this directory. Layout: target/sticky-renderer/.
+            context: path.join(__dirname, 'app/sticky-renderer'),
+            from: '**/*',
+            to: './sticky-renderer'
           }
         ]
       })

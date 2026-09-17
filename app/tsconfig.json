@@ -5,6 +5,7 @@
     "outDir": "../target/",
     "noImplicitAny": false
   },
+  "exclude": ["./node_modules", "./bower_components", "./jspm_packages", "../target", "./sticky-renderer"],
   "include": [
     "./**/*",
     "./package.json",
