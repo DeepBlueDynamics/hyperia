@@ -1,4 +1,4 @@
-# Hyperia v0.19.3 — the pane remembers what it was doing ✍️
+# Hyperia v0.19.4 — the pane remembers what it was doing ✍️
 
 Save a tab with vim open and get vim back, on the same file, when you restore it.
 
@@ -25,5 +25,7 @@ A workspace file carrying `resumeOnce` behaved differently depending on how you 
 Web panes already track in-page navigation into the saved URL, so a restored web pane loads the page it was last on. `docs/workspace-format.md` now says so explicitly.
 
 ## Housekeeping
+
+- The **Hyperia Agent** text link under the new-pane picker is gone. The agent is still reachable from the picker's agent combobox (once configured), the tab-bar context menu, and the **A** hotkey.
 
 - `workspace-capture` unit test caught up with the hidden-stickies restore change from v0.19.1 (its sticky stub lacked the new read).
