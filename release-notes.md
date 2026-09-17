@@ -1,21 +1,25 @@
-# Hyperia v0.18.2 — reach and prune your saved sessions 🗂️
+# Hyperia v0.19.0 — a sessions pulldown, and a quieter way out 🗂️
 
-Saved sessions grow up: they're now in the pane picker as well as the `+` menu, you can delete the ones you don't need, and the tab-bar menus that list them finally sit *above* your web panes instead of behind them.
+Saved sessions grow into a proper pulldown right in the pane picker, hidden stickies finally stay hidden, and closing a window stops crying wolf.
 
-## Tab-bar menus sit above web panes
+## Saved Sessions is a real pulldown
 
-The `+` new-tab dropdown (layouts + saved sessions), the **New Window** tooltip, and the **New Stickys** tooltip all drop down over the pane area — where a native web pane painted right on top of them, so you couldn't see the menu. Hovering the button cluster now pulls the window's web panes to a frozen still (no blank) for as long as you're in the menu, so it renders on top; the live page returns the moment you leave.
+In the pane picker, **Saved Sessions** is now a type-to-filter combobox — the *same* shape, width, and keyboard flow as **New Shell** and **New Agent**. Pick one (or press **Enter** on a match) to restore that saved layout into a new tab.
 
-## Saved Sessions in the pane picker
+- **R** restores your default session, right alongside **S** (shell) and **A** (agent).
+- The default — what the box pre-fills and what **R** opens — is the **last session you loaded**, remembered across restarts.
+- Every row has a **trash** with a two-click confirm (trash → **Delete?** → gone).
 
-The "pick a shell / agent / URL" picker now has a **Saved Sessions** list too, mirroring the `+` menu. Click one to restore it into a new tab — so a saved layout is reachable from the place you're already choosing what to open.
+## Right-click works in the picker
 
-## Delete saved sessions
+Right-clicking a picker pane now opens the **regular** context menu — Split, New Tab / Window, Hyperia Agent, New / Search Stickys, Clear Buffer, Find — just like any other pane. It used to only flash.
 
-Every saved-session row — in both the `+` menu and the picker — now has a **trash** button with a two-click confirm (trash → **Delete?** → gone). Deleting removes only genuine tab-workspaces (the name is path-sanitized and scope-checked), and every open menu refreshes at once.
+## Hidden stickies stay hidden
 
-## Also
+Stickies you'd hidden kept reappearing on install and restart. Two boot-restore paths both re-open your notes, and one of them was un-hiding a note the other had correctly kept down. They now both honor **Hide** — a hidden sticky stays hidden until you show it.
 
-- Both lists cap their height and scroll, so a large library never runs off the bottom of the screen.
+## A close prompt that only asks when it matters
 
-Coming from further back? [v0.18.1](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.18.1) was the previous published build.
+Closing a window (or quitting) would warn *"a pane is still running…"* even for an idle shell or a picker — then close silently on the second try. The prompt now fires **only when a pane is genuinely running something** (an agent, an ssh session, a build). Idle shells, pickers, and multi-tab layouts are saved and restored on next launch, so there's nothing to warn about.
+
+Coming from further back? [v0.18.2](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.18.2) was the previous published build.
