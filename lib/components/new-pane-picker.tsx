@@ -98,6 +98,9 @@ const INSTALL_CATALOG: InstallEntry[] = [
 // quick keys keep working across sessions.
 const LS_DEFAULT_SHELL = 'hyperia.picker.defaultShell';
 const LS_DEFAULT_AGENT = 'hyperia.picker.defaultAgent';
+// The saved session the R hotkey / Saved Sessions box defaults to = the last
+// one restored from the picker.
+const LS_DEFAULT_SESSION = 'hyperia.picker.defaultSession';
 const readStoredDefault = (key: string): string | undefined => {
   try {
     return window.localStorage.getItem(key) || undefined;
@@ -170,6 +173,8 @@ interface ComboItem {
   onEdit?: () => void;
   // Rows with a config surface (Hyperia) get a gear button on the right.
   onConfigure?: () => void;
+  // Saved-session rows get a trash button (two-click confirm) on the right.
+  onDelete?: () => void;
 }
 
 interface ComboboxProps {
@@ -180,12 +185,14 @@ interface ComboboxProps {
   // Field value when the user hasn't typed anything (e.g. last-used shell).
   defaultText: string;
   placeholder: string;
-  // First dropdown row — always present (e.g. "add a shell").
-  addLabel: string;
+  // First dropdown row (e.g. "add a shell"). Omit for a pure list (Saved
+  // Sessions) that has no "add" affordance — the row is then not rendered.
+  addLabel?: string;
   // Bottom row shown only when the typed text matches nothing (e.g. "create
   // new shell"). Both this and the add row route to the parent's `onAdd`.
-  createLabel: string;
-  onAdd: () => void;
+  // Omit (with onAdd) for a list that can't create new entries by typing.
+  createLabel?: string;
+  onAdd?: () => void;
   isGlimmerActive?: boolean;
   // Hotkey chip (e.g. "S") shown next to the label; `keyHintTitle` explains
   // what pressing the key launches.
@@ -203,6 +210,9 @@ interface ComboboxState {
   dirty: boolean;
   // Index into rows(); -1 means "nothing highlighted, resolve from text".
   focusedIndex: number;
+  // Which row's trash is armed for a two-click delete confirm (its item key),
+  // or null. Reset whenever the dropdown closes.
+  armedDeleteKey: string | null;
 }
 
 type ComboRow = {type: 'add'} | {type: 'item'; item: ComboItem} | {type: 'create'};
@@ -291,7 +301,13 @@ const pickerDropdownStyle: React.CSSProperties = {
 
 class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
   inputRef = React.createRef<HTMLInputElement>();
-  state: ComboboxState = {text: this.props.defaultText, open: false, dirty: false, focusedIndex: -1};
+  state: ComboboxState = {
+    text: this.props.defaultText,
+    open: false,
+    dirty: false,
+    focusedIndex: -1,
+    armedDeleteKey: null
+  };
 
   componentDidUpdate(prev: ComboboxProps) {
     // Refresh the field when the caller's default changes (e.g. "last used"
@@ -313,19 +329,23 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
   // Show the "create new …" fallback only when the user has typed something
   // that matches no existing item (mirrors the URL box's search fallback).
   private showCreate(): boolean {
-    return this.state.dirty && this.state.text.trim() !== '' && this.filteredItems().length === 0;
+    return (
+      !!this.props.createLabel && this.state.dirty && this.state.text.trim() !== '' && this.filteredItems().length === 0
+    );
   }
 
   private rows(): ComboRow[] {
-    const rows: ComboRow[] = [{type: 'add'}];
+    // The "add" row is optional — a pure list (Saved Sessions) omits it.
+    const rows: ComboRow[] = this.props.addLabel ? [{type: 'add'}] : [];
     for (const item of this.filteredItems()) rows.push({type: 'item', item});
     if (this.showCreate()) rows.push({type: 'create'});
     return rows;
   }
 
   // Closing resets the field back to the default name so a half-typed, un-
-  // committed value never lingers.
-  private close = () => this.setState({open: false, dirty: false, focusedIndex: -1, text: this.props.defaultText});
+  // committed value never lingers, and disarms any pending delete.
+  private close = () =>
+    this.setState({open: false, dirty: false, focusedIndex: -1, armedDeleteKey: null, text: this.props.defaultText});
 
   // Enter / badge with no explicit highlight: resolve from typed text. Exact
   // name match wins; else the first substring (type-ahead) match; else the text
@@ -349,13 +369,15 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
       }
     }
     this.close();
-    this.props.onAdd();
+    // A list with no "add" affordance (Saved Sessions) simply closes when the
+    // text matches nothing.
+    this.props.onAdd?.();
   };
 
   private commitRow = (row: ComboRow) => {
     this.close();
     if (row.type === 'item') row.item.onSelect();
-    else this.props.onAdd(); // 'add' and 'create' both open the custom modal
+    else this.props.onAdd?.(); // 'add' and 'create' both open the custom modal
   };
 
   private commit = () => {
@@ -551,6 +573,49 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                           aria-hidden="true"
                         />
                       )}
+                      {it.onDelete &&
+                        (this.state.armedDeleteKey === it.key ? (
+                          <span
+                            title="Click again to delete"
+                            // mousedown + preventDefault keeps the input focused
+                            // so the dropdown doesn't blur-close between the two
+                            // clicks of the confirm.
+                            onMouseDown={(ev) => {
+                              if (ev.button !== 0) return;
+                              ev.preventDefault();
+                              ev.stopPropagation();
+                              this.setState({armedDeleteKey: null});
+                              it.onDelete!();
+                            }}
+                            style={{
+                              fontSize: '10px',
+                              fontWeight: 600,
+                              color: 'var(--danger-text, #ff5c57)',
+                              flexShrink: 0,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Delete?
+                          </span>
+                        ) : (
+                          <i
+                            className="ti ti-trash"
+                            title="Delete this session"
+                            onMouseDown={(ev) => {
+                              if (ev.button !== 0) return;
+                              ev.preventDefault();
+                              ev.stopPropagation();
+                              this.setState({armedDeleteKey: it.key});
+                            }}
+                            style={{
+                              fontSize: '13px',
+                              color: 'var(--text-tertiary)',
+                              flexShrink: 0,
+                              cursor: 'pointer'
+                            }}
+                            aria-hidden="true"
+                          />
+                        ))}
                     </div>
                   );
                 })}
@@ -616,11 +681,12 @@ interface NewPanePickerState {
   // Whether the Hyperia agent is configured (provider+model+key) — adds it to
   // the agent pulldown. Fetched from the sidecar on mount.
   hyperiaConfigured?: boolean;
-  // Saved tab-workspaces (#183) — the "Saved Sessions" list, mirroring the +
-  // menu. Fetched on mount + refreshed when main echoes a fresh list.
+  // Saved tab-workspaces (#183) — the "Saved Sessions" combobox, mirroring the
+  // + menu. Fetched on mount + refreshed when main echoes a fresh list.
   savedWorkspaces?: Array<{name: string; savedAt: string; panes: number; webPanes: number}>;
-  // Two-click delete arming: the workspace name pending confirmation.
-  confirmDeleteWs?: string | null;
+  // The last session restored from the picker — what the R hotkey and the
+  // Saved Sessions box pre-fill. Seeded from localStorage.
+  lastUsedSession?: string;
 }
 
 // The "New Webpane" chooser shown when a pane has the synthetic `picker`
@@ -629,7 +695,8 @@ interface NewPanePickerState {
 export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePickerState> {
   state: NewPanePickerState = {
     lastUsedShell: readStoredDefault(LS_DEFAULT_SHELL),
-    lastUsedAgent: readStoredDefault(LS_DEFAULT_AGENT)
+    lastUsedAgent: readStoredDefault(LS_DEFAULT_AGENT),
+    lastUsedSession: readStoredDefault(LS_DEFAULT_SESSION)
   };
 
   // The picker's own focusable root. We pull keyboard focus here on mount so the
@@ -742,6 +809,12 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
       e.preventDefault();
       e.stopPropagation();
       this.launchDefaultAgent();
+    } else if (key === 'r') {
+      // R restores the default saved session (last one loaded). No-op when
+      // there are no saved sessions.
+      e.preventDefault();
+      e.stopPropagation();
+      this.launchDefaultSession();
     }
   };
 
@@ -769,6 +842,12 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     const remembered = this.state.lastUsedAgent && items.find((i) => i.key === this.state.lastUsedAgent);
     if (remembered) remembered.onSelect();
     else this.launchHyperiaShell();
+  };
+
+  // R: restore the default saved session (last one loaded → else the first).
+  private launchDefaultSession = () => {
+    const item = this.resolveDefaultSession(this.buildSessionItems());
+    item?.onSelect();
   };
 
   // Open the Hyperia Agent configuration pane (sidecar-served) in this pane.
@@ -801,6 +880,32 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     this.setState({lastUsedAgent: name});
     writeStoredDefault(LS_DEFAULT_AGENT, name);
     this.newWithProfile(name);
+  };
+
+  // Restore a saved tab-workspace into a new tab (main grafts it in). Remember
+  // it as the default so R / the box pre-select the last one you loaded.
+  private restoreSession = (name: string) => {
+    this.setState({lastUsedSession: name});
+    writeStoredDefault(LS_DEFAULT_SESSION, name);
+    try {
+      rpc.emit('restore tab workspace', {name});
+    } catch {
+      /* rpc not ready yet — harmless */
+    }
+  };
+
+  // Delete a saved tab-workspace. Main echoes a fresh list back to every open
+  // picker/+ menu. If it was the remembered default, forget it.
+  private deleteSession = (name: string) => {
+    try {
+      rpc.emit('delete tab workspace', {name});
+    } catch {
+      /* rpc not ready yet — harmless */
+    }
+    if (readStoredDefault(LS_DEFAULT_SESSION) === name) {
+      writeStoredDefault(LS_DEFAULT_SESSION, '');
+      this.setState({lastUsedSession: undefined});
+    }
   };
 
   // Dashboard link: swap THIS picker pane into the sidecar-served /dashboard —
@@ -1046,6 +1151,29 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     );
   }
 
+  // --- Saved session items (#183) — the tab-workspace library as combo rows.
+  // Each row restores on select and carries a two-click trash (onDelete). ---
+  private buildSessionItems(): ComboItem[] {
+    return (this.state.savedWorkspaces || []).map((ws) => {
+      const total = ws.panes + ws.webPanes;
+      return {
+        key: ws.name,
+        label: ws.name + (total ? `  ·  ${total}▢` : ''),
+        iconClass: 'ti ti-bookmark',
+        iconStyle: {color: 'var(--info-text)'},
+        onSelect: () => this.restoreSession(ws.name),
+        onDelete: () => this.deleteSession(ws.name)
+      };
+    });
+  }
+
+  // Default saved session: remembered LAST-LOADED → else the first saved one.
+  private resolveDefaultSession(sessionItems: ComboItem[]): ComboItem | undefined {
+    return (
+      (this.state.lastUsedSession && sessionItems.find((i) => i.key === this.state.lastUsedSession)) || sessionItems[0]
+    );
+  }
+
   // --- Agent items — detection-driven (app/config/detect.ts catalog) ---
   // INSTALLED harnesses arrive as profiles named exactly per AGENT_NAMES
   // (Nemesis8 installed also brings "Nemesis8 Danger" = `nemesis8 --danger`).
@@ -1118,6 +1246,13 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     const defaultAgentItem = rememberedAgentItem || agentItems[0];
     const agentDefaultText = defaultAgentItem ? defaultAgentItem.label : '';
 
+    // Saved Sessions box — only when there's at least one saved session. Its
+    // default (pre-fill + what R restores) is the last-loaded session, else the
+    // first. defaultText is the bare name (the row label carries the pane count).
+    const sessionItems = this.buildSessionItems();
+    const defaultSessionItem = this.resolveDefaultSession(sessionItems);
+    const sessionDefaultText = defaultSessionItem ? defaultSessionItem.key : '';
+
     // Footer version status. "Up to date" only when BOTH versions resolved and
     // match — an unreachable check leaves the run button enabled.
     const {currentVersion, latestVersion} = this.state;
@@ -1154,9 +1289,16 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
           if (!e.defaultPrevented && !typing) this.rootRef.current?.focus({preventScroll: true});
         }}
         onContextMenu={(e) => {
+          // A picker pane is still a pane — right-click gives the regular app
+          // context menu (Split, New Tab/Window, Stickys, …), same as a shell.
+          // No text selection in a picker, so pass an empty selection.
           e.preventDefault();
           e.stopPropagation();
-          this.props.onTriggerGlimmer();
+          try {
+            rpc.emit('open context menu', '');
+          } catch {
+            /* rpc not ready yet — harmless */
+          }
         }}
       >
         <div
@@ -1246,83 +1388,21 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             keyHintTitle={`Press A — launch ${rememberedAgentItem ? rememberedAgentItem.label : 'the Hyperia Agent'}`}
           />
 
-          {/* Saved Sessions (#183) — the tab-workspace library, mirroring the +
-              menu. Click restores into a new tab; the trash deletes (two-click).
-              Scrolls once it passes ~140px so a big library never runs long. */}
-          {(this.state.savedWorkspaces?.length ?? 0) > 0 && (
-            <div style={{marginTop: 'var(--space-8)'}}>
-              <div style={{fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '4px'}}>
-                Saved Sessions
-              </div>
-              <div style={{maxHeight: '140px', overflowY: 'auto'}}>
-                {this.state.savedWorkspaces!.map((ws) => (
-                  <div
-                    key={ws.name}
-                    onClick={() => {
-                      try {
-                        rpc.emit('restore tab workspace', {name: ws.name});
-                      } catch {
-                        /* rpc not ready */
-                      }
-                    }}
-                    title={`Restore into a new tab · ${ws.panes} pane${ws.panes === 1 ? '' : 's'}${
-                      ws.webPanes ? ` + ${ws.webPanes} web` : ''
-                    }`}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      padding: '4px 6px',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      fontSize: '11px',
-                      color: 'var(--text-primary)'
-                    }}
-                    onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--bg-tertiary)')}
-                    onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
-                  >
-                    <i className="ti ti-bookmark" style={{fontSize: '12px', color: 'var(--info-text)'}} />
-                    <span style={{flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
-                      {ws.name}
-                    </span>
-                    <span style={{color: 'var(--text-tertiary)', flexShrink: 0}}>{ws.panes + ws.webPanes}▢</span>
-                    {this.state.confirmDeleteWs === ws.name ? (
-                      <span
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          try {
-                            rpc.emit('delete tab workspace', {name: ws.name});
-                          } catch {
-                            /* rpc not ready */
-                          }
-                          this.setState({confirmDeleteWs: null});
-                        }}
-                        title="Confirm delete"
-                        style={{
-                          color: 'var(--danger-text, #ff5c57)',
-                          flexShrink: 0,
-                          cursor: 'pointer',
-                          fontWeight: 600
-                        }}
-                      >
-                        Delete?
-                      </span>
-                    ) : (
-                      <span
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          this.setState({confirmDeleteWs: ws.name});
-                        }}
-                        title="Delete this workspace"
-                        style={{color: 'var(--text-tertiary)', flexShrink: 0, cursor: 'pointer'}}
-                      >
-                        <i className="ti ti-trash" style={{fontSize: '12px'}} />
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
+          {/* Saved Sessions (#183) — the tab-workspace library as a combobox,
+              the SAME shape as New Shell / New Agent. Select restores into a new
+              tab; each row's trash deletes (two-click). R restores the default
+              (last-loaded). Shown only when at least one session is saved. */}
+          {sessionItems.length > 0 && (
+            <InlineCombobox
+              label="Saved Sessions"
+              leadingIcon="ti ti-bookmark"
+              items={sessionItems}
+              defaultText={sessionDefaultText}
+              placeholder="Type to filter sessions…"
+              isGlimmerActive={isGlimmerActive}
+              keyHint="R"
+              keyHintTitle={`Press R — restore ${sessionDefaultText || 'the last session'}`}
+            />
           )}
 
           {/* Quick page links — below the pickers, above the version footer.
