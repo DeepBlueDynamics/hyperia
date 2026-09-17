@@ -82,7 +82,7 @@ are tabs, in object-key order; leaves hold a session (terminal) or a `webUrl`
 | `direction` | "HORIZONTAL"\|"VERTICAL"\|null | Split axis for non-leaves. |
 | `sizes` | number[]\|null | Split proportions, parallel to `children`. |
 | `children` | string[] | Child group uids, in order. |
-| `webUrl` / `webName` | string\|null | Web pane URL/title (page reloads on restore). |
+| `webUrl` / `webName` | string\|null | Web pane URL/title. Tracks in-page navigation, so restore loads the page the pane was last on. |
 | `tabName` | string\|null | User/agent-set tab name (null ⇒ auto name). |
 | `manualTabName` | boolean | True only for a human-typed rename. |
 
@@ -127,8 +127,16 @@ command once** in the restored pane. It exists only when a human checked that
 command in the save confirm, and its value may only come from trustworthy
 sources: the pane's n8 session binding (OSC-777, `source: "n8"`, e.g.
 `n8 resume <id>`) or the shell-integration-reported command of a pane that
-was actually running at save time (`source: "shell"`). The screen-scraped
-`annotations.lastCommand` is never promoted to `resumeOnce`.
+was actually running at save time (`source: "shell"`, the preexec-announced
+line such as `vim notes.md` or `npm run dev`, resolved against the restored
+`cwd`). Both kinds are pre-checked in the save confirm; untick a row to keep
+that pane as a bare shell. The screen-scraped `annotations.lastCommand` is
+never promoted to `resumeOnce`.
+
+Every restore path honors it the same way: the tab restore from the **+**
+menu and the whole-app `workspace_restore` / boot restore. Saves that never
+pass through the confirm (`workspace_save`, `hyws save`, the automatic
+`last-session`) record no `resumeOnce`, so nothing runs on their restore.
 
 ## Versioning
 

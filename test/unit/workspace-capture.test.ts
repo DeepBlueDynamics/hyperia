@@ -124,6 +124,7 @@ test('restoreWorkspace reopens existing stickys and skips deleted ones', (t) => 
     './sticky': {
       listOpenStickyRefs: () => [],
       readAllNotes: () => [{id: 'note-alive'}],
+      readStickyHidden: () => false,
       createStickyNote: (opts: any) => {
         opened.push(opts);
         return {win: {}, id: opts.id, name: 'x'};
@@ -141,7 +142,7 @@ test('restoreWorkspace reopens existing stickys and skips deleted ones', (t) => 
   t.is(summary.stickysReopened, 1);
   t.deepEqual(summary.stickysSkipped, ['note-gone']);
   t.is(opened.length, 1);
-  t.deepEqual(opened[0], {id: 'note-alive', x: 11, y: 22, width: 300, height: 200});
+  t.deepEqual(opened[0], {id: 'note-alive', x: 11, y: 22, width: 300, height: 200, startHidden: false});
 });
 
 // ---- annotateMissingResources (#168) --------------------------------------

@@ -36,7 +36,7 @@ test('filterLayoutToTab rejects non-roots and unknown uids', (t) => {
   t.is(filterLayoutToTab(layout() as any, 'ghost'), null);
 });
 
-test('resume candidates: n8 binding pre-checked, busy shell opt-in, scrape never offered', (t) => {
+test('resume candidates: n8 binding and running shell command pre-checked, scrape never offered', (t) => {
   const tab = filterLayoutToTab(
     {
       ...layout(),
@@ -65,8 +65,41 @@ test('resume candidates: n8 binding pre-checked, busy shell opt-in, scrape never
     cands.map((c) => [c.sessionUid, c.source, c.preChecked, c.command]),
     [
       ['agent', 'n8', true, 'n8 resume abc-123'],
-      ['server', 'shell', false, 'npm run dev']
+      ['server', 'shell', true, 'npm run dev']
     ]
+  );
+});
+
+test('resume candidates: main-reported running state (OSC 697 cmdline) counts, idle prompt does not', (t) => {
+  const tab = filterLayoutToTab(
+    {
+      ...layout(),
+      termGroups: {
+        root: {uid: 'root', parentUid: null, sessionUid: null, children: ['a', 'b', 'c']},
+        a: {uid: 'a', parentUid: 'root', sessionUid: 'editor', children: []},
+        b: {uid: 'b', parentUid: 'root', sessionUid: 'done', children: []},
+        c: {uid: 'c', parentUid: 'root', sessionUid: 'nocmd', children: []}
+      },
+      sessions: {editor: {uid: 'editor'}, done: {uid: 'done'}, nocmd: {uid: 'nocmd'}}
+    } as any,
+    'root'
+  )!;
+  const live = {
+    // Exactly what main emits while vim is open: state 'running' + the
+    // preexec-reported command line, no `busy` flag yet.
+    editor: {
+      shellName: 'Ed ✍️',
+      shellState: {state: 'running', app: {name: 'vim', path: '/usr/bin/vim', cmdline: ' vim /tmp/notes.md ', pid: 1}}
+    },
+    // The command finished (133;D cleared app/command) — nothing to resume.
+    done: {shellName: 'Done', shellState: {state: 'idle', lastExit: 0}},
+    // Alt-screen busy (e.g. remote vim over ssh) with no reported command:
+    // nothing trustworthy to offer.
+    nocmd: {shellName: 'Remote', busy: true, shellState: {state: 'idle'}}
+  };
+  t.deepEqual(
+    resumeCandidatesForTab(tab, live as any).map((c) => [c.sessionUid, c.source, c.preChecked, c.command]),
+    [['editor', 'shell', true, 'vim /tmp/notes.md']]
   );
 });
 

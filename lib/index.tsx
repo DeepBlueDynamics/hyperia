@@ -221,7 +221,18 @@ rpc.on('session cwd', ({uid, cwd}: {uid: string; cwd: string}) => {
 
 rpc.on(
   'session shellstate',
-  ({uid, shellState}: {uid: string; shellState: {state: 'idle' | 'busy'; lastExit?: number; command?: string}}) => {
+  ({
+    uid,
+    shellState
+  }: {
+    uid: string;
+    shellState: {
+      state: 'idle' | 'busy' | 'running';
+      lastExit?: number;
+      command?: string;
+      app?: {name: string; path: string; cmdline: string; pid: number};
+    };
+  }) => {
     store_.dispatch(sessionActions.setSessionShellState(uid, shellState));
   }
 );

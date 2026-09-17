@@ -27,7 +27,12 @@ export type Session = {
   prefillCommand?: string;
   splitPlacement?: 'BEFORE' | 'AFTER';
   layoutPattern?: string;
-  shellState?: {state: 'idle' | 'busy'; lastExit?: number; command?: string};
+  shellState?: {
+    state: 'idle' | 'busy' | 'running';
+    lastExit?: number;
+    command?: string;
+    app?: {name: string; path: string; cmdline: string; pid: number};
+  };
   isAgentInitiated?: boolean;
 };
 
@@ -229,7 +234,15 @@ export type RendererEvents = {
   'session data': string;
   'session cwd': {uid: string; cwd: string};
   'session exit': {uid: string};
-  'session shellstate': {uid: string; shellState: {state: 'idle' | 'busy'; lastExit?: number; command?: string}};
+  'session shellstate': {
+    uid: string;
+    shellState: {
+      state: 'idle' | 'busy' | 'running';
+      lastExit?: number;
+      command?: string;
+      app?: {name: string; path: string; cmdline: string; pid: number};
+    };
+  };
   'permission request': {id: string; requester: string; requesterPane: string; targetPane: string; purpose?: string};
   'permission resolved': {targetPane: string; decision: string; id?: string};
   'agent toast': {id: string; requester: string; action: string};

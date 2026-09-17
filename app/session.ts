@@ -107,6 +107,8 @@ export default class Session extends EventEmitter {
   shellState?: {
     state: 'idle' | 'running';
     lastExit?: number;
+    /** Shell-integration-reported command line of the running command (OSC 697). */
+    command?: string;
     app?: {
       name: string;
       path: string;
@@ -485,6 +487,11 @@ fi
           this.shellState = {
             state: this.shellState?.state || 'idle',
             lastExit: this.shellState?.lastExit,
+            // The shell-integration-REPORTED command line (preexec), the only
+            // trustworthy "what is this pane running" — workspace save offers
+            // it as a resume-once candidate. Cleared with the rest of the state
+            // at the next prompt (133;A/B) or command end (133;D).
+            command: cmd || undefined,
             app:
               appPath || cmd || name
                 ? {
