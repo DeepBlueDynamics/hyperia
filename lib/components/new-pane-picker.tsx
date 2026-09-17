@@ -616,6 +616,11 @@ interface NewPanePickerState {
   // Whether the Hyperia agent is configured (provider+model+key) — adds it to
   // the agent pulldown. Fetched from the sidecar on mount.
   hyperiaConfigured?: boolean;
+  // Saved tab-workspaces (#183) — the "Saved Sessions" list, mirroring the +
+  // menu. Fetched on mount + refreshed when main echoes a fresh list.
+  savedWorkspaces?: Array<{name: string; savedAt: string; panes: number; webPanes: number}>;
+  // Two-click delete arming: the workspace name pending confirmation.
+  confirmDeleteWs?: string | null;
 }
 
 // The "New Webpane" chooser shown when a pane has the synthetic `picker`
@@ -633,6 +638,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
   // swallows the letters until you click the pane.
   private rootRef = React.createRef<HTMLDivElement>();
   private focusTimer: ReturnType<typeof setTimeout> | undefined;
+  private onWsList?: (payload: {rows: NewPanePickerState['savedWorkspaces']}) => void;
 
   componentDidMount() {
     // Is the Hyperia agent configured? (provider+model+key in config.agent.*)
@@ -666,6 +672,16 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         if (/^v?\d+\.\d+(\.\d+)?$/.test(v)) this.setState({latestVersion: v});
       })
       .catch(() => {});
+
+    // Saved tab-workspaces for the "Saved Sessions" list. Main echoes the fresh
+    // list after any save/delete, so this stays current without store plumbing.
+    this.onWsList = ({rows}) => this.setState({savedWorkspaces: rows || []});
+    rpc.on('tab workspaces list', this.onWsList);
+    try {
+      rpc.emit('list tab workspaces');
+    } catch {
+      /* rpc not ready yet — harmless; user can reopen the picker */
+    }
 
     // W/S/A quick-launch hotkeys — window-level; gated on this pane being the
     // active session (hotkeysEnabled) and on focus not being in a text field.
@@ -701,6 +717,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
   componentWillUnmount() {
     window.removeEventListener('keydown', this.handleHotkey);
     if (this.focusTimer) clearTimeout(this.focusTimer);
+    if (this.onWsList) rpc.removeListener('tab workspaces list', this.onWsList);
   }
 
   // W/S/A quick paths. Only in the main view (the hints live on its section
@@ -1228,6 +1245,85 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             keyHint="A"
             keyHintTitle={`Press A — launch ${rememberedAgentItem ? rememberedAgentItem.label : 'the Hyperia Agent'}`}
           />
+
+          {/* Saved Sessions (#183) — the tab-workspace library, mirroring the +
+              menu. Click restores into a new tab; the trash deletes (two-click).
+              Scrolls once it passes ~140px so a big library never runs long. */}
+          {(this.state.savedWorkspaces?.length ?? 0) > 0 && (
+            <div style={{marginTop: 'var(--space-8)'}}>
+              <div style={{fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '4px'}}>
+                Saved Sessions
+              </div>
+              <div style={{maxHeight: '140px', overflowY: 'auto'}}>
+                {this.state.savedWorkspaces!.map((ws) => (
+                  <div
+                    key={ws.name}
+                    onClick={() => {
+                      try {
+                        rpc.emit('restore tab workspace', {name: ws.name});
+                      } catch {
+                        /* rpc not ready */
+                      }
+                    }}
+                    title={`Restore into a new tab · ${ws.panes} pane${ws.panes === 1 ? '' : 's'}${
+                      ws.webPanes ? ` + ${ws.webPanes} web` : ''
+                    }`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '4px 6px',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                      color: 'var(--text-primary)'
+                    }}
+                    onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--bg-tertiary)')}
+                    onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
+                  >
+                    <i className="ti ti-bookmark" style={{fontSize: '12px', color: 'var(--info-text)'}} />
+                    <span style={{flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                      {ws.name}
+                    </span>
+                    <span style={{color: 'var(--text-tertiary)', flexShrink: 0}}>{ws.panes + ws.webPanes}▢</span>
+                    {this.state.confirmDeleteWs === ws.name ? (
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          try {
+                            rpc.emit('delete tab workspace', {name: ws.name});
+                          } catch {
+                            /* rpc not ready */
+                          }
+                          this.setState({confirmDeleteWs: null});
+                        }}
+                        title="Confirm delete"
+                        style={{
+                          color: 'var(--danger-text, #ff5c57)',
+                          flexShrink: 0,
+                          cursor: 'pointer',
+                          fontWeight: 600
+                        }}
+                      >
+                        Delete?
+                      </span>
+                    ) : (
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          this.setState({confirmDeleteWs: ws.name});
+                        }}
+                        title="Delete this workspace"
+                        style={{color: 'var(--text-tertiary)', flexShrink: 0, cursor: 'pointer'}}
+                      >
+                        <i className="ti ti-trash" style={{fontSize: '12px'}} />
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Quick page links — below the pickers, above the version footer.
               Styled to match the sidecar pages (agent config): quiet text

@@ -55,6 +55,7 @@ import {
   toWorkspaceLayout,
   listTabWorkspaces,
   readTabWorkspaceForRestore,
+  deleteTabWorkspace,
   remapUids,
   annotateMissingResources
 } from '../workspace';
@@ -1044,6 +1045,11 @@ export function newWindow(
   });
 
   rpc.on('list tab workspaces', () => {
+    rpc.emit('tab workspaces list', {rows: listTabWorkspaces()});
+  });
+  rpc.on('delete tab workspace', ({name}) => {
+    deleteTabWorkspace(name);
+    // Echo the fresh list back so every open picker/+ menu updates immediately.
     rpc.emit('tab workspaces list', {rows: listTabWorkspaces()});
   });
 

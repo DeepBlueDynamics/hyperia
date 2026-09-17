@@ -150,6 +150,8 @@ export type MainEvents = {
   'list tab workspaces': never;
   /** Restore a saved tab-workspace into THIS window as a new tab (#183). */
   'restore tab workspace': {name: string};
+  /** Delete a saved tab-workspace by name; main echoes back a fresh list. */
+  'delete tab workspace': {name: string};
 };
 
 export type RendererEvents = {
