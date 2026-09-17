@@ -10,6 +10,11 @@ import {BrowserWindow, ipcMain, Menu, screen, app, nativeImage, shell, dialog, N
 
 import isDev from 'electron-is-dev';
 
+// A sticky BrowserWindow carries a `__startedHidden` marker: it was restored
+// while Hide-All was active and must stay hidden until explicitly shown. See
+// the "Hard Hide-All boot invariant" in createStickyNote.
+type StickyWin = BrowserWindow & {__startedHidden?: boolean};
+
 // Open a URL as a web pane in the main Hyperia window. A sticky window has no
 // rpc of its own, so route through a terminal window's shared 'open web pane
 // req' (same path the toolbar / link handlers use).
@@ -711,6 +716,9 @@ function createStickyNote(
   const existing = stickyWindows.get(noteId);
   if (existing && !existing.isDestroyed()) {
     if (!options.startHidden) {
+      // Genuine open request — release it from the Hide-All boot invariant so
+      // the show below (and future shows) stick.
+      (existing as StickyWin).__startedHidden = false;
       if (!existing.isVisible()) {
         existing.show();
       }
@@ -818,6 +826,23 @@ function createStickyNote(
   }
 
   stickyWindows.set(noteId, win);
+
+  // ── Hard Hide-All boot invariant ──────────────────────────────────────────
+  // A note restored while the user had stickies hidden (state.json hidden:true)
+  // must NOT come back onto the screen — no matter which code path later calls
+  // show() on it. We kept losing this to stray shows: a restore-path collision
+  // (workspace restore + sticky.ts's own boot restore racing), a focus, an
+  // agent update. Rather than gate each caller (we missed some every time), the
+  // window re-hides itself whenever something shows it while it's flagged
+  // started-hidden AND the global Hide-All flag is still set. Cleared the moment
+  // the note is explicitly opened (existing-branch above) or Show-All clears the
+  // flag (readStickyHidden() then returns false and this becomes a no-op).
+  (win as StickyWin).__startedHidden = !!options.startHidden;
+  win.on('show', () => {
+    if (!win.isDestroyed() && (win as StickyWin).__startedHidden && readStickyHidden()) {
+      win.hide();
+    }
+  });
 
   // Build the URL with query params
   const htmlPath = resolve(isDev ? __dirname : app.getAppPath(), 'sticky.html');
