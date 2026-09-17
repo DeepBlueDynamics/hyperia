@@ -130,6 +130,9 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   const [savedTabWorkspaces, setSavedTabWorkspaces] = useState<
     Array<{name: string; savedAt: string; panes: number; webPanes: number}>
   >([]);
+  // Two-click delete: first click on a row's trash arms it (name here), second
+  // confirms. Reset when the + menu closes (mouseleave) so it never lingers.
+  const [confirmDeleteWs, setConfirmDeleteWs] = useState<string | null>(null);
   // rpc.emit THROWS 'Not ready' until the ipc channel id arrives (see
   // web-url-sync.ts) — and this component mounts before that. Guard every
   // emit; the hover refresh covers whatever an early fetch misses.
@@ -288,7 +291,29 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         </button>
       )}
 
-      <div className="tabs_newTabPair">
+      {/* These tab-bar buttons' hover menus (the + layout/workspace dropdown,
+          New Window, New Stickys tooltips) drop DOWN over the pane area, where a
+          native web pane would paint on top of them. Suppress the window's web
+          panes (frozen-still — no blank) while the cursor is over the cluster, so
+          the menus render above; restore on leave. */}
+      <div
+        className="tabs_newTabPair"
+        onMouseEnter={() => {
+          try {
+            ipcRenderer.send('web-panes:suppress', {suppressed: true});
+          } catch {
+            /* ipc not ready */
+          }
+        }}
+        onMouseLeave={() => {
+          setConfirmDeleteWs(null);
+          try {
+            ipcRenderer.send('web-panes:suppress', {suppressed: false});
+          } catch {
+            /* ipc not ready */
+          }
+        }}
+      >
         {/* New-tab "+" with its quick-layout hover menu (#140). The menu was
             dropped when 6a93c13e redesigned this cluster into the +/window/sticky
             trio — it deleted the JSX but left the CSS (.tabs_newTab_tooltip /
@@ -397,6 +422,39 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                         {ws.name}
                       </span>
                       <span style={{color: 'var(--text-tertiary)', flexShrink: 0}}>{ws.panes + ws.webPanes}▢</span>
+                      {confirmDeleteWs === ws.name ? (
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            try {
+                              rpc.emit('delete tab workspace', {name: ws.name});
+                            } catch {
+                              /* ipc not ready */
+                            }
+                            setConfirmDeleteWs(null);
+                          }}
+                          title="Confirm delete"
+                          style={{
+                            color: 'var(--danger-text, #ff5c57)',
+                            flexShrink: 0,
+                            cursor: 'pointer',
+                            fontWeight: 600
+                          }}
+                        >
+                          Delete?
+                        </span>
+                      ) : (
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmDeleteWs(ws.name);
+                          }}
+                          title="Delete this workspace"
+                          style={{color: 'var(--text-tertiary)', flexShrink: 0, cursor: 'pointer'}}
+                        >
+                          <i className="ti ti-trash" style={{fontSize: '12px'}} />
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>

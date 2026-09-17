@@ -418,6 +418,26 @@ export const readTabWorkspaceForRestore = (name: string): Record<string, any> | 
   return ws && ws.scope === 'tab' ? ws : null;
 };
 
+/** Delete one saved TAB workspace by name. Name is path-sanitized and the file
+ *  must actually be a tab-scoped workspace, so this can't touch app-level saves
+ *  or escape the workspaces dir. Returns true if a file was removed. */
+export const deleteTabWorkspace = (name: string): boolean => {
+  if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) {
+    return false;
+  }
+  // Only delete if it's genuinely a tab workspace (not a whole-app save).
+  if (!readTabWorkspaceForRestore(name)) {
+    return false;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    (require('fs') as typeof import('fs')).unlinkSync(join(workspacesDir(), `${name}.json`));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /**
  * Persist a renderer-captured tab snapshot through the sidecar (single
  * writer: validation + atomic write + the workspace safety checks). Returns
