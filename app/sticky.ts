@@ -702,14 +702,21 @@ function createStickyNote(
   // Determine or generate note ID
   const noteId = options.id || `note-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
-  // Already open? Bring it to front and focus.
+  // Already open? Bring it to front and focus — UNLESS the caller asked to keep
+  // it hidden. This branch is why hidden stickies kept reappearing on boot: two
+  // restore paths (workspace restore + sticky.ts's own) both call createStickyNote
+  // for the same note; #196 gated the CREATE path with startHidden, but the one
+  // that ran SECOND landed here and re-showed the already-hidden window. With
+  // startHidden set we now leave the existing window exactly as it is.
   const existing = stickyWindows.get(noteId);
   if (existing && !existing.isDestroyed()) {
-    if (!existing.isVisible()) {
-      existing.show();
+    if (!options.startHidden) {
+      if (!existing.isVisible()) {
+        existing.show();
+      }
+      existing.setAlwaysOnTop(true, 'floating');
+      existing.focus();
     }
-    existing.setAlwaysOnTop(true, 'floating');
-    existing.focus();
     return {win: existing, id: noteId, name: getNote(noteId)?.name || noteId};
   }
 
