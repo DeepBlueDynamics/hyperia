@@ -24,6 +24,10 @@ A workspace file carrying `resumeOnce` behaved differently depending on how you 
 
 Web panes already track in-page navigation into the saved URL, so a restored web pane loads the page it was last on. `docs/workspace-format.md` now says so explicitly.
 
+## Save confirm lists your saved workspaces
+
+Under the name field, the **Save Workspace…** confirm now lists the tab workspaces you already have, newest first, with their pane counts. Click one to prefill its name; the button switches to **Overwrite** right away, so replacing a saved layout is one click plus Enter. Edit the name and it goes back to a plain save.
+
 ## Housekeeping
 
 - The **Hyperia Agent** text link under the new-pane picker is replaced by **configure**, which opens the agent configuration view in that pane. Launching the agent stays in the picker's agent combobox (once configured), the tab-bar context menu, and the **A** hotkey.
