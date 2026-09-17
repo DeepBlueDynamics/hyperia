@@ -1,36 +1,106 @@
 /* eslint-disable eslint-comments/disable-enable-pair */
 import test from 'ava';
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const chrome = require('../../app/sticky-renderer/chrome');
+type FakeEvent = {
+  stopPropagation: () => void;
+  preventDefault: () => void;
+};
 
-function fakeEl(text) {
-  return {
+type FakeListener = (e: FakeEvent) => void;
+
+type FakeEl = {
+  textContent: string;
+  style: {display: string};
+  value: string;
+  listeners: Record<string, FakeListener[]>;
+  addEventListener: (type: string, fn: FakeListener) => void;
+  dispatch: (type: string, extra?: Partial<FakeEvent>) => void;
+  focus: () => void;
+  select: () => void;
+};
+
+type ChromeState = {
+  isSearchMode: boolean;
+  filePath: string;
+  noteId: string;
+  displayName: string;
+  boundFilePath: string | null;
+};
+
+type ChromeMode = {
+  name: string;
+  state: ChromeState;
+  expectCopy: string;
+};
+
+type ChromeCtx = {
+  doc: {
+    querySelector: (sel: string) => null;
+    getElementById: (id: string) => null;
+  };
+  ipc: {
+    on: (ch: string, fn: () => void) => void;
+  };
+  persist: {
+    findNote: () => null;
+    saveNote: () => void;
+  };
+  clipboard: {
+    writeText: (s: string) => void;
+  };
+  els: {titleText: FakeEl; titleInput: FakeEl};
+  state: ChromeState;
+  timers: {
+    setTimeout: (fn: () => void) => number;
+    clearTimeout: () => void;
+  };
+};
+
+type ChromeApi = {
+  start: (ctx: ChromeCtx) => void;
+  startRename: (ctx: ChromeCtx) => boolean;
+};
+
+type ChromeHarness = {
+  ctx: ChromeCtx;
+  titleText: FakeEl;
+  titleInput: FakeEl;
+  copied: string[];
+  pending: Array<() => void>;
+  ipcHandlers: Record<string, Array<() => void>>;
+};
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const chrome: ChromeApi = require('../../app/sticky-renderer/chrome');
+
+function fakeEl(text: string): FakeEl {
+  const el: FakeEl = {
     textContent: text || '',
     style: {display: ''},
     value: '',
     listeners: {},
-    addEventListener(type, fn) {
+    addEventListener(type: string, fn: FakeListener) {
       this.listeners[type] = this.listeners[type] || [];
       this.listeners[type].push(fn);
     },
-    dispatch(type, extra) {
-      const ev = Object.assign({stopPropagation() {}, preventDefault() {}}, extra);
-      (this.listeners[type] || []).forEach((fn: (e: unknown) => void) => fn(ev));
+    dispatch(type: string, extra?: Partial<FakeEvent>) {
+      const ev: FakeEvent = Object.assign({stopPropagation() {}, preventDefault() {}}, extra);
+      (this.listeners[type] || []).forEach((listener: FakeListener) => listener(ev));
     },
     focus() {},
     select() {}
   };
+  return el;
 }
 
-function harness(state) {
+function harness(state: ChromeState): ChromeHarness {
   const titleText = fakeEl(state.displayName);
   const titleInput = fakeEl('');
   titleInput.style.display = 'none';
   const copied: string[] = [];
   const pending: Array<() => void> = [];
   const ipcHandlers: Record<string, Array<() => void>> = {};
-  const ctx = {
+  const ctx: ChromeCtx = {
     doc: {
       querySelector: () => null,
       getElementById: () => null
@@ -63,7 +133,7 @@ function harness(state) {
   return {ctx, titleText, titleInput, copied, pending, ipcHandlers};
 }
 
-const MODES = [
+const MODES: ChromeMode[] = [
   {
     name: 'note',
     state: {

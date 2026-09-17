@@ -7,6 +7,10 @@ import {join} from 'path';
 
 import type {ExecutionContext} from 'ava';
 
+import type {StickyFixture, StickyTestApi} from './sticky-main-types';
+
+export type {StickyFixture, StickyTestApi, StickyTestCreateNoteResult} from './sticky-main-types';
+
 const proxyquire = require('proxyquire').noCallThru().noPreserveCache();
 
 const baseTmpDir = process.env.TMPDIR || tmpdir() || join(process.cwd(), '.hyperia-test-temp');
@@ -214,23 +218,6 @@ export class FakeNotification {
   show() {}
 }
 
-export interface StickyFixture {
-  testDir: string;
-  stickysDir: string;
-  notesFile: string;
-  stateFile: string;
-  defaultsFile: string;
-  sticky: typeof import('../../app/sticky');
-  ipcEmit: (channel: string, ...args: any[]) => boolean;
-  ipcInvoke: (channel: string, event: any, ...args: any[]) => Promise<any>;
-  ipcHasHandler: (channel: string) => boolean;
-  triggerStartupRestore: () => void;
-  triggerSchedulerTick: () => Promise<void> | void;
-  teardown: () => void;
-  windows: FakeBrowserWindow[];
-  notifications: FakeNotification[];
-}
-
 export function createStickyFixture(t: ExecutionContext, options: {autoInit?: boolean} = {}): StickyFixture {
   FakeBrowserWindow.instances = [];
   FakeNotification.instances = [];
@@ -354,7 +341,7 @@ export function createStickyFixture(t: ExecutionContext, options: {autoInit?: bo
   };
 
   // Load ONLY the public facade
-  const sticky = proxyquire('../../app/sticky', stubs);
+  const sticky: StickyTestApi = proxyquire('../../app/sticky', stubs);
 
   if (options.autoInit !== false) {
     sticky.initSticky();

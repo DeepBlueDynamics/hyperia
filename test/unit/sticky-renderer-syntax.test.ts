@@ -4,6 +4,10 @@ import test from 'ava';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const syntax = require('../../app/sticky-renderer/syntax');
 
+type HighlightCall = [channel: string, payload: {content: string}];
+type HighlightInvoke = (...args: HighlightCall) => Promise<{ok: boolean; rules: unknown[]; error?: string}>;
+type HighlightTarget = {innerHTML: string; textContent: string; dataset: {highlighted?: string}};
+
 test('quote-breakout className cannot inject extra attributes', (t) => {
   const html = syntax.applyRules('hello', [{pattern: 'hello', className: 'x" data-injected="yes', color: '#c0ffee'}]);
   t.false(html.includes('data-injected'));
@@ -26,7 +30,7 @@ test('valid hljs class and documented hex still wrap the match', (t) => {
 });
 
 test('documented hex lengths are exactly 3/4/6/8', (t) => {
-  const wrap = (color) => syntax.applyRules('x', [{pattern: 'x', className: 'hljs-literal', color}]);
+  const wrap = (color: string) => syntax.applyRules('x', [{pattern: 'x', className: 'hljs-literal', color}]);
   t.true(wrap('#abc').includes('style="color:#abc"'));
   t.true(wrap('#abcd').includes('style="color:#abcd"'));
   t.true(wrap('#aabbcc').includes('style="color:#aabbcc"'));
@@ -81,12 +85,12 @@ test('zero-length unicode matches are skipped without hanging', (t) => {
 });
 
 test('agent highlight invokes sticky-highlight and falls back to hljs', async (t) => {
-  const calls = [];
+  const calls: HighlightCall[] = [];
   let hljsCalled = 0;
   const banner = {style: {display: ''}, className: '', innerHTML: '', textContent: ''};
-  function ctxWith(invoke) {
+  function ctxWith(invoke: HighlightInvoke) {
     return {
-      doc: {getElementById: (id) => (id === 'aiBanner' ? banner : null)},
+      doc: {getElementById: (id: string) => (id === 'aiBanner' ? banner : null)},
       persist: {},
       win: {
         hljs: {
@@ -112,7 +116,7 @@ test('agent highlight invokes sticky-highlight and falls back to hljs', async (t
   t.true(codeEl.innerHTML.includes('hljs-keyword'));
   t.is(hljsCalled, 0);
 
-  const code2 = {innerHTML: '', textContent: '', dataset: {highlighted: 'yes'}};
+  const code2: HighlightTarget = {innerHTML: '', textContent: '', dataset: {highlighted: 'yes'}};
   const syn2 = syntax.createSyntax(ctxWith(() => Promise.reject(new Error('timeout'))));
   await syn2.applyHighlight('hello', code2);
   t.is(hljsCalled, 1);
@@ -121,11 +125,11 @@ test('agent highlight invokes sticky-highlight and falls back to hljs', async (t
 });
 
 test('!ok highlight response is not cached and uses static fallback', async (t) => {
-  const calls = [];
+  const calls: HighlightCall[] = [];
   let hljsCalled = 0;
   const banner = {style: {display: ''}, className: '', innerHTML: '', textContent: ''};
   const syn = syntax.createSyntax({
-    doc: {getElementById: (id) => (id === 'aiBanner' ? banner : null)},
+    doc: {getElementById: (id: string) => (id === 'aiBanner' ? banner : null)},
     persist: {},
     win: {
       hljs: {
@@ -135,7 +139,7 @@ test('!ok highlight response is not cached and uses static fallback', async (t) 
       }
     },
     ipc: {
-      invoke(ch, payload) {
+      invoke(ch: string, payload: {content: string}) {
         calls.push([ch, payload]);
         return Promise.resolve({ok: false, rules: [{pattern: 'hello', className: 'hljs-keyword'}], error: 'timeout'});
       },
@@ -153,14 +157,14 @@ test('!ok highlight response is not cached and uses static fallback', async (t) 
 });
 
 test('ok highlight response is cached; content is sliced to 4000', async (t) => {
-  const calls = [];
+  const calls: HighlightCall[] = [];
   const banner = {style: {display: ''}, className: '', innerHTML: '', textContent: ''};
   const syn = syntax.createSyntax({
-    doc: {getElementById: (id) => (id === 'aiBanner' ? banner : null)},
+    doc: {getElementById: (id: string) => (id === 'aiBanner' ? banner : null)},
     persist: {},
     win: {hljs: {highlightElement() {}}},
     ipc: {
-      invoke(ch, payload) {
+      invoke(ch: string, payload: {content: string}) {
         calls.push([ch, payload]);
         return Promise.resolve({ok: true, rules: [{pattern: 'ab', className: 'hljs-keyword'}]});
       },
