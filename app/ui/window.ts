@@ -1022,14 +1022,19 @@ export function newWindow(
     e.preventDefault();
     isClosingAndWaitingForSave = true;
     (window as any).isClosing = true;
+    const closeT0 = Date.now();
+    const clog = (s: string) => console.log(`[close +${Date.now() - closeT0}ms] ${s}`);
+    clog('window close: saving last-session');
     // Save the WHOLE app as the 'last-session' workspace through the sidecar's
     // correlated pipeline (#171) — every window + geometry, not just this one.
     // If the sidecar is unreachable, fall back to the legacy single-window
     // savedLayoutState write (the no-requestId reply path below).
     void saveLastSession('close').then((ok) => {
+      clog(`last-session save ok=${ok}`);
       if (ok) {
         if (isClosingAndWaitingForSave && !window.isDestroyed()) {
           deleteSessions();
+          clog('sessions deleted; destroying window');
           window.destroy();
         }
       } else {
@@ -1042,6 +1047,7 @@ export function newWindow(
     // period (capture itself is bounded at 2.5s).
     setTimeout(() => {
       if (isClosingAndWaitingForSave && !window.isDestroyed()) {
+        clog('failsafe: save never settled — destroying window');
         deleteSessions();
         window.destroy();
       }
@@ -1335,7 +1341,9 @@ export function newWindow(
 
   // the window can be closed by the browser process itself
   window.clean = () => {
-    app.config.winRecord(window);
+    // Runs on 'closed' (index.ts) — the window is gone; geometry was
+    // recorded on the close pass while it was still alive.
+    if (!window.isDestroyed()) app.config.winRecord(window);
     rpc.destroy();
     deleteSessions();
     cfgUnsubscribe();

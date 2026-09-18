@@ -410,6 +410,7 @@ function handleCommand(msg: Record<string, unknown>) {
       // SaveLayoutState fan-out below which replies 'ok' before any state
       // lands. The bridge command timeout is 10s; capture bounds itself at 3s.
       const windows: any[] = Array.from((app as any).getWindows?.() || []);
+      console.log(`[bridge] CaptureWorkspace: ${windows.length} window(s)`);
       void captureAllWindows(windows)
         .then((snapshot) => sendResult(seq, JSON.stringify(snapshot)))
         .catch((err) => sendResult(seq, JSON.stringify({error: String(err)})));

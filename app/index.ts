@@ -609,12 +609,25 @@ app.on('ready', () => {
         if (stateAttach) stateAttach(hwin);
         void hwin.loadURL(url);
 
-        // the window can be closed by the browser process itself
+        // 'close' fires on the FIRST, prevented pass too (window.ts holds the
+        // close to save last-session first). Tearing the window down here —
+        // rpc destroyed, PTYs killed, dropped from windowSet — used to run
+        // BEFORE that save: the capture then saw zero windows, the sidecar
+        // refused the empty workspace, the legacy fallback emitted on a dead
+        // rpc, and only the 4s failsafe closed the window. Every last-window
+        // close took 4 seconds and saved nothing. Record geometry here (needs
+        // a live window); everything else waits for 'closed'.
         hwin.on('close', () => {
-          if ((hwin as any).isClosing || (app as any).isQuitting) {
-            hwin.clean();
-            windowSet.delete(hwin);
+          try {
+            if (!hwin.isDestroyed()) config.winRecord(hwin);
+          } catch {
+            /* window already tearing down */
           }
+        });
+        hwin.on('closed', () => {
+          console.log(`[window] closed: id=${hwin.id}; ${windowSet.size - 1} window(s) remain`);
+          hwin.clean();
+          windowSet.delete(hwin);
         });
 
         return hwin;
@@ -689,11 +702,20 @@ app.on('ready', () => {
       });
 
       let quitSaveInFlight = false;
+      // Quit clock: every stage of the quit path logs its offset from the first
+      // before-quit, so a slow shutdown can be attributed to a stage.
+      let quitT0 = 0;
+      const qlog = (s: string) => console.log(`[quit +${quitT0 ? Date.now() - quitT0 : 0}ms] ${s}`);
+      app.on('will-quit', () => qlog('will-quit'));
+      app.on('quit', (_e, code) => qlog(`quit (exit code ${code})`));
       app.on('before-quit', (e) => {
+        if (!quitT0) quitT0 = Date.now();
         // Already confirmed / mid-teardown — let it proceed.
         if ((app as {isQuitting?: boolean}).isQuitting) {
+          qlog('before-quit (re-entry, proceeding)');
           return;
         }
+        qlog('before-quit');
         // A save is already running for an earlier quit gesture — hold this
         // one; the pending save's finally() will quit for real.
         if (quitSaveInFlight) {
@@ -719,9 +741,13 @@ app.on('ready', () => {
         // process actually exits (the "still running" bug otherwise).
         const teardown = () => {
           (app as {isQuitting?: boolean}).isQuitting = true;
+          qlog('teardown: tray');
           destroyTray();
+          qlog('teardown: bridge');
           stopBridge();
+          qlog('teardown: sidecar');
           killSidecar();
+          qlog(`teardown: destroying ${BrowserWindow.getAllWindows().length} window(s)`);
           for (const w of BrowserWindow.getAllWindows()) {
             try {
               w.destroy();
@@ -729,15 +755,27 @@ app.on('ready', () => {
               /* already gone */
             }
           }
+          qlog('teardown: done');
         };
+        qlog(`active panes: ${running.length}`);
+        // Nothing left to snapshot (every window already closed and saved
+        // itself) — the sidecar would refuse an empty workspace anyway.
+        if (running.length === 0 && BrowserWindow.getAllWindows().length === 0) {
+          qlog('no windows open — skipping last-session save');
+          teardown();
+          return;
+        }
         if (running.length === 0) {
           // Save the whole session BEFORE teardown destroys windows — quit
           // used to save nothing at all (this early-return path predates the
           // workspace pipeline). Bounded: a wedged sidecar can't hold the quit.
           e.preventDefault();
           quitSaveInFlight = true;
+          qlog('saving last-session');
           void saveLastSession('quit').finally(() => {
+            qlog('last-session save settled');
             teardown();
+            qlog('app.quit()');
             app.quit();
           });
           return;
@@ -757,8 +795,11 @@ app.on('ready', () => {
         void confirmFn({scope: 'quit', names: running}).then((ok) => {
           if (ok) {
             quitSaveInFlight = true;
+            qlog('confirmed; saving last-session');
             void saveLastSession('quit').finally(() => {
+              qlog('last-session save settled');
               teardown();
+              qlog('app.quit()');
               app.quit();
             });
           }
