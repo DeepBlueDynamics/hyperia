@@ -367,11 +367,12 @@ export function exitActiveTermGroup() {
 // into the live window, then spawn its terminal sessions. Web panes need no
 // spawn — their groups render from state. resumeOnce carries the human's
 // save-time checkbox choices; the session actions execute it once.
-export function restoreTabState(layout: any) {
+export function restoreTabState(layout: any, name?: string) {
   return (dispatch: HyperDispatch) => {
     dispatch({
       type: RESTORE_TAB_STATE,
-      layout
+      layout,
+      name
     } as any);
 
     Object.keys(layout.sessions || {}).forEach((uid) => {

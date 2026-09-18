@@ -1094,7 +1094,7 @@ export function newWindow(
     if (notices.length > 0) {
       console.log('[workspace] tab restore substitutions:', notices);
     }
-    rpc.emit('restore-tab-state', {layout});
+    rpc.emit('restore-tab-state', {layout, name});
   });
 
   rpc.on('layout-state-reply', (layoutState) => {

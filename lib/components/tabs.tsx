@@ -394,7 +394,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                     textAlign: 'center'
                   }}
                 >
-                  Saved Workspaces
+                  Saved Tabs
                 </div>
                 <div style={{maxHeight: '160px', overflowY: 'auto'}}>
                   {savedTabWorkspaces.map((ws) => (
@@ -437,6 +437,9 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                           style={{
                             color: 'var(--danger-text, #ff5c57)',
                             flexShrink: 0,
+                            minWidth: '52px',
+                            textAlign: 'right',
+                            whiteSpace: 'nowrap',
                             cursor: 'pointer',
                             fontWeight: 600
                           }}
@@ -449,8 +452,14 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                             e.stopPropagation();
                             setConfirmDeleteWs(ws.name);
                           }}
-                          title="Delete this workspace"
-                          style={{color: 'var(--text-tertiary)', flexShrink: 0, cursor: 'pointer'}}
+                          title="Delete this saved tab"
+                          style={{
+                            color: 'var(--text-tertiary)',
+                            flexShrink: 0,
+                            minWidth: '52px',
+                            textAlign: 'right',
+                            cursor: 'pointer'
+                          }}
                         >
                           <i className="ti ti-trash" style={{fontSize: '12px'}} />
                         </span>
@@ -1058,7 +1067,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           background: var(--bg-primary);
           border: 0.5px solid var(--border-neutral);
           border-radius: var(--radius-4);
-          padding: var(--space-8) var(--space-12);
+          padding: var(--space-8, 8px) var(--space-12, 12px);
           white-space: nowrap;
           z-index: 1000;
           text-align: left;
@@ -1097,7 +1106,8 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         /* Layouts grid */
         .tabs_layout_grid {
           display: grid;
-          grid-template-columns: repeat(3, 1fr);
+          grid-template-columns: repeat(3, max-content);
+          justify-content: center;
           gap: 8px;
           padding: 4px;
         }

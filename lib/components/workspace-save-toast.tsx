@@ -158,7 +158,7 @@ const WorkspaceSaveToast: React.FC = () => {
 
   return (
     <div style={cardStyle} onKeyDown={(e) => e.key === 'Escape' && setOpen(null)}>
-      <div style={{fontWeight: 600, marginBottom: '8px'}}>Save tab as workspace</div>
+      <div style={{fontWeight: 600, marginBottom: '8px'}}>Save Tab</div>
       <input
         ref={inputRef}
         value={name}
@@ -185,7 +185,7 @@ const WorkspaceSaveToast: React.FC = () => {
       />
       {existing.length > 0 && (
         <div style={{marginTop: '8px'}}>
-          <div style={{color: 'var(--text-secondary)', marginBottom: '4px'}}>Or overwrite a saved workspace:</div>
+          <div style={{color: 'var(--text-secondary)', marginBottom: '4px'}}>Or overwrite a saved tab:</div>
           <div style={{maxHeight: '120px', overflowY: 'auto'}}>
             {existing.map((ws) => {
               const selected = ws.name === name.trim();
@@ -271,7 +271,7 @@ const WorkspaceSaveToast: React.FC = () => {
       )}
       {conflict && (
         <div style={{marginTop: '8px', color: 'var(--warning-text, #d9a300)'}}>
-          A workspace named “{name.trim()}” exists — overwrite it?
+          A saved tab named “{name.trim()}” exists — overwrite it?
         </div>
       )}
       {error && <div style={{marginTop: '8px', color: 'var(--danger-text, #ff5c57)'}}>{error}</div>}

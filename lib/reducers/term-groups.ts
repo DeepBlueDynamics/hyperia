@@ -21,6 +21,7 @@ import {
 } from '../../typings/constants/term-groups';
 import type {ITermGroup, ITermState, ITermGroups, ITermGroupReducer, Mutable} from '../../typings/hyper';
 import {decorateTermGroupsReducer} from '../utils/plugins';
+import {restoredTabName} from '../utils/restored-tab-name';
 import findBySession, {countPathHorizontalStacks} from '../utils/term-groups';
 
 const MIN_SIZE = 0.05;
@@ -391,7 +392,7 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       // Graft ONE saved tab into the live window (#183): merge its groups in
       // (uids are pre-remapped, so no collisions) and focus it — the human
       // clicked it in the + menu, so focus-follow is expected, like tab:new.
-      const {layout} = act;
+      const {layout, name} = act;
       let nextState = state;
       for (const uid of Object.keys(layout.termGroups || {})) {
         nextState = nextState.setIn(['termGroups', uid], Immutable(layout.termGroups[uid]));
@@ -399,6 +400,20 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
       const rootUid = layout.activeRootGroup;
       if (!rootUid || !layout.termGroups?.[rootUid]) {
         return state;
+      }
+      // #183: name the grafted tab after the SAVED entry, not the tabName baked
+      // into the layout at save time (that made "Bob two" come back as "Bob").
+      // If that name already shows on an open tab, add a file-style "(n)" suffix
+      // computed here — never baked into the saved name — so restoring a copy
+      // while the original is open stays tellable apart.
+      if (name) {
+        const openTabNames = Object.keys(state.termGroups)
+          .filter((u) => !state.termGroups[u].parentUid)
+          .map((u) => state.termGroups[u].tabName)
+          .filter(Boolean) as string[];
+        nextState = nextState
+          .setIn(['termGroups', rootUid, 'tabName'], restoredTabName(name, openTabNames))
+          .setIn(['termGroups', rootUid, 'manualTabName'], true);
       }
       return nextState
         .setIn(['activeSessions', rootUid], layout.activeSessions?.[rootUid] ?? null)

@@ -270,7 +270,7 @@ export type RendererEvents = {
   'get-layout-state-req': {requestId?: string} | undefined;
   'restore-layout-state': any;
   /** Graft one saved tab into the running window (#183); uids pre-remapped. */
-  'restore-tab-state': {layout: any};
+  'restore-tab-state': {layout: any; name?: string};
   'session n8 binding': {uid: string; binding: {kind: string; sessionId: string; workspace: string; resume: string}};
   'save tab workspace result': {ok: boolean; name: string; error?: string; conflict?: boolean};
   'tab workspaces list': {rows: Array<{name: string; savedAt: string; panes: number; webPanes: number}>};
