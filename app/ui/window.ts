@@ -428,8 +428,8 @@ export function newWindow(
           for (const p of t?.panes || []) {
             if (!localUids.has(p.paneId)) continue;
             const proc = String(p.process || '').toLowerCase();
-            const shell = String(p.shell || '').toLowerCase();
-            const hasForegroundProgram = proc.length > 0 && proc !== shell;
+            const paneShell = String(p.shell || '').toLowerCase();
+            const hasForegroundProgram = proc.length > 0 && proc !== paneShell;
             if (hasForegroundProgram) {
               found.push({name: p.name || p.title || p.process || 'a shell'});
             }
