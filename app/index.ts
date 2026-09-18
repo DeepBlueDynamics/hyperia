@@ -116,6 +116,7 @@ import * as plugins from './plugins';
 import {initSettings} from './settings';
 import {initSticky} from './sticky';
 import {SYSTEM_TOKEN} from './system-token';
+import {showStartupWindows} from './ui/startup-windows';
 import {newWindow} from './ui/window';
 import {installCLI} from './utils/cli-install';
 import * as windowUtils from './utils/window-utils';
@@ -635,7 +636,9 @@ app.on('ready', () => {
         const lastSession = readLastSessionForBoot();
         if (lastSession) {
           restoreWorkspace(lastSession as any);
-          bootWins = BrowserWindow.getAllWindows();
+          // Only terminal windows belong to the app startup presenter. Hidden
+          // stickies are also BrowserWindows, but must never be shown here.
+          bootWins = Array.from(windowSet);
           clearLegacySavedLayoutState(cfgPath);
           console.log(`[workspace] restored last-session (${bootWins.length} window(s))`);
         }
@@ -648,20 +651,7 @@ app.on('ready', () => {
         bootWins = [createWindow()];
       }
 
-      // Show each window when its content loads. (The once-per-version update
-      // splash was removed — it added a confusing extra window to first-boot
-      // and nobody missed it.)
-      for (const bootWin of bootWins) {
-        bootWin.webContents.once('did-finish-load', () => {
-          if (!bootWin.isDestroyed() && !bootWin.isVisible()) bootWin.show();
-        });
-      }
-      // Failsafe in case did-finish-load doesn't fire.
-      setTimeout(() => {
-        for (const bootWin of bootWins) {
-          if (!bootWin.isDestroyed() && !bootWin.isVisible()) bootWin.show();
-        }
-      }, 2000);
+      showStartupWindows(bootWins);
 
       // renderer can request a new window via IPC
       ipcMain.on('new-window', () => createWindow());

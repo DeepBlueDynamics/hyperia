@@ -1,6 +1,6 @@
 # Sticky refactor — canary
 
-Status: draft PR #206 at 0a500fe4 contains the reviewed lifecycle refactor. Security review reopened on 2026-09-17 after the user identified the CodeQL warning. The earlier source approval is insufficient for security acceptance; the follow-up below must pass review and verification. Existing CI blockers remain pending owner authorization. No merge or release is authorized.
+Status: PR #206 remains draft. Local 0.19.3 (build ca331d30, source ae62243b) was delivered; Kord reported blank note windows appearing on cold launch. The 2026-09-18 startup-presentation correction below has a failing installed-package regression and a passing corrected-target run. A fresh 0.19.4 local installer is the next artifact; 0.19.3 is already used. No merge or public release is authorized.
 
 Tracking: GitHub #204 (sticky refactor), #205 (MCP failures). Then Fox filed both. Next safe version is 0.19.3; 0.19.2 is already used by a local jev installer.
 
@@ -73,6 +73,17 @@ Behavioral tests must drive window events and public functions; a pure boolean p
 Renderer verification covers bootstrap dependency loading, packaged asset paths, editor/search/file/code/schedule modes and existing IPC contracts. Run relevant unit tests, lint and both `npx tsc --noEmit -p app/tsconfig.json` and `npx tsc --noEmit -p tsconfig.json` with actual results. The root project includes tests; AVA's transpile-only execution and the app-only type check do not catch their strict TypeScript errors. The first local installer attempt exposed this coverage gap. A successful full build remains the packaging gate. Then Fox performs a host smoke/build when authorized against the exact revision/version. Never kill/restart the installed app for diagnostics.
 
 Field smoke checklist: hide stickies then restart, explicit open, show/hide all, edit/update while hidden, scheduled reminder, close/archive, search/reopen, linked file and code note. Field result is not claimed until observed.
+
+## Cold-start field failure and presenter correction — 2026-09-18
+
+- Host inspection found Hide All persisted as true, 180 stored notes, 18 active notes (17 with text), and 20 last-session sticky references. Only aggregate metadata was reported; note contents were not printed. The user can open/search notes normally after startup.
+- Git history identifies a14c8312 (#171, 2026-08-28): boot startup collected BrowserWindow.getAllWindows(), then called show() after did-finish-load and again in a two-second fallback. This included hidden sticky windows as well as terminal windows.
+- Previous tests asserted that notes ended hidden. A native show followed by the sticky guard's hide still satisfied that check, so transient exposure was missed.
+- New real-Electron full-startup regression loads the installed app.asar with 20 synthetic notes and a last-session fixture. On unmodified 0.19.3: 20 notes loaded content, 40 native sticky show events, 20 before ready-to-show, zero visible notes at the end. The new zero-show assertion fails. This demonstrates exposure before the first paint notification; it supports the blank-surface explanation without claiming to have observed Kord's desktop during his launch.
+- Corrected compiled target: 20 notes loaded, zero native sticky show events, zero before ready-to-show, zero load errors; regression passes. Single-factory cold renderer checks also passed against source and installed assets without the earlier renderer-injection preload.
+- Fix: select the app's terminal windowSet for startup presentation, and extract the existing presenter into app/ui/startup-windows.ts. app/workspace.ts and its restore functions/tests are unmodified. The existing large app/index.ts shrinks; this bounded extraction avoids pulling remote-owned restore logic into the change.
+- Test isolation: distinct home, appData/userData/sessionData; external-sidecar mode with an unused port; no sidecar spawn/kill; browser HTTP denied; CLI/plugin installers disabled; nonfocusable transparent test windows. The first full-startup harness missed app/index.ts's userData override; subsequent runs explicitly isolate appData and assert the resulting profile path. A later harness initialization-order error caused the reported JavaScript dialog; it was a test error, not sticky evidence, and the test exited. Module interception now preserves production initialization order and catches entry-load errors.
+- Passing automated checks do not substitute for Kord's next cold-start field check. Remaining persistent blank behavior, if any, must be investigated rather than declared covered by this transient-show regression.
 
 ## Security follow-up for PR #206
 
