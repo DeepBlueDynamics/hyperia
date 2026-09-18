@@ -98,7 +98,7 @@ const INSTALL_CATALOG: InstallEntry[] = [
 // quick keys keep working across sessions.
 const LS_DEFAULT_SHELL = 'hyperia.picker.defaultShell';
 const LS_DEFAULT_AGENT = 'hyperia.picker.defaultAgent';
-// The saved session the R hotkey / Saved Sessions box defaults to = the last
+// The saved tab the R hotkey / Saved Tabs box defaults to = the last
 // one restored from the picker.
 const LS_DEFAULT_SESSION = 'hyperia.picker.defaultSession';
 const readStoredDefault = (key: string): string | undefined => {
@@ -335,7 +335,7 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
   }
 
   private rows(): ComboRow[] {
-    // The "add" row is optional — a pure list (Saved Sessions) omits it.
+    // The "add" row is optional — a pure list (Saved Tabs) omits it.
     const rows: ComboRow[] = this.props.addLabel ? [{type: 'add'}] : [];
     for (const item of this.filteredItems()) rows.push({type: 'item', item});
     if (this.showCreate()) rows.push({type: 'create'});
@@ -369,7 +369,7 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
       }
     }
     this.close();
-    // A list with no "add" affordance (Saved Sessions) simply closes when the
+    // A list with no "add" affordance (Saved Tabs) simply closes when the
     // text matches nothing.
     this.props.onAdd?.();
   };
@@ -592,6 +592,9 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                               fontWeight: 600,
                               color: 'var(--danger-text, #ff5c57)',
                               flexShrink: 0,
+                              minWidth: '48px',
+                              textAlign: 'right',
+                              whiteSpace: 'nowrap',
                               cursor: 'pointer'
                             }}
                           >
@@ -600,7 +603,7 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                         ) : (
                           <i
                             className="ti ti-trash"
-                            title="Delete this session"
+                            title="Delete this saved tab"
                             onMouseDown={(ev) => {
                               if (ev.button !== 0) return;
                               ev.preventDefault();
@@ -611,6 +614,9 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                               fontSize: '13px',
                               color: 'var(--text-tertiary)',
                               flexShrink: 0,
+                              display: 'inline-block',
+                              minWidth: '48px',
+                              textAlign: 'right',
                               cursor: 'pointer'
                             }}
                             aria-hidden="true"
@@ -681,11 +687,11 @@ interface NewPanePickerState {
   // Whether the Hyperia agent is configured (provider+model+key) — adds it to
   // the agent pulldown. Fetched from the sidecar on mount.
   hyperiaConfigured?: boolean;
-  // Saved tab-workspaces (#183) — the "Saved Sessions" combobox, mirroring the
+  // Saved tab-workspaces (#183) — the "Saved Tabs" combobox, mirroring the
   // + menu. Fetched on mount + refreshed when main echoes a fresh list.
   savedWorkspaces?: Array<{name: string; savedAt: string; panes: number; webPanes: number}>;
   // The last session restored from the picker — what the R hotkey and the
-  // Saved Sessions box pre-fill. Seeded from localStorage.
+  // Saved Tabs box pre-fill. Seeded from localStorage.
   lastUsedSession?: string;
 }
 
@@ -740,7 +746,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
       })
       .catch(() => {});
 
-    // Saved tab-workspaces for the "Saved Sessions" list. Main echoes the fresh
+    // Saved tab-workspaces for the "Saved Tabs" list. Main echoes the fresh
     // list after any save/delete, so this stays current without store plumbing.
     this.onWsList = ({rows}) => this.setState({savedWorkspaces: rows || []});
     rpc.on('tab workspaces list', this.onWsList);
@@ -810,8 +816,8 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
       e.stopPropagation();
       this.launchDefaultAgent();
     } else if (key === 'r') {
-      // R restores the default saved session (last one loaded). No-op when
-      // there are no saved sessions.
+      // R restores the default saved tab (last one loaded). No-op when
+      // there are no saved tabs.
       e.preventDefault();
       e.stopPropagation();
       this.launchDefaultSession();
@@ -844,7 +850,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     else this.launchHyperiaShell();
   };
 
-  // R: restore the default saved session (last one loaded → else the first).
+  // R: restore the default saved tab (last one loaded → else the first).
   private launchDefaultSession = () => {
     const item = this.resolveDefaultSession(this.buildSessionItems());
     item?.onSelect();
@@ -1056,7 +1062,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                       title="Configure the Hyperia agent"
                       style={{...pickerEnterBadgeStyle, cursor: 'pointer', color: 'var(--info-text)'}}
                     >
-                      configure
+                      Configure
                     </span>
                   )}
                   {(command || referenceOnly) && (
@@ -1167,7 +1173,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     });
   }
 
-  // Default saved session: remembered LAST-LOADED → else the first saved one.
+  // Default saved tab: remembered LAST-LOADED → else the first saved one.
   private resolveDefaultSession(sessionItems: ComboItem[]): ComboItem | undefined {
     return (
       (this.state.lastUsedSession && sessionItems.find((i) => i.key === this.state.lastUsedSession)) || sessionItems[0]
@@ -1246,7 +1252,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     const defaultAgentItem = rememberedAgentItem || agentItems[0];
     const agentDefaultText = defaultAgentItem ? defaultAgentItem.label : '';
 
-    // Saved Sessions box — only when there's at least one saved session. Its
+    // Saved Tabs box — only when there's at least one saved tab. Its
     // default (pre-fill + what R restores) is the last-loaded session, else the
     // first. defaultText is the bare name (the row label carries the pane count).
     const sessionItems = this.buildSessionItems();
@@ -1388,13 +1394,13 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             keyHintTitle={`Press A — launch ${rememberedAgentItem ? rememberedAgentItem.label : 'the Hyperia Agent'}`}
           />
 
-          {/* Saved Sessions (#183) — the tab-workspace library as a combobox,
+          {/* Saved Tabs (#183) — the tab-workspace library as a combobox,
               the SAME shape as New Shell / New Agent. Select restores into a new
               tab; each row's trash deletes (two-click). R restores the default
               (last-loaded). Shown only when at least one session is saved. */}
           {sessionItems.length > 0 && (
             <InlineCombobox
-              label="Saved Sessions"
+              label="Saved Tabs"
               leadingIcon="ti ti-bookmark"
               items={sessionItems}
               defaultText={sessionDefaultText}

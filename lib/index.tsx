@@ -884,8 +884,8 @@ rpc.on('restore-layout-state', (savedState) => {
 
 // Tab-scoped restore (#183): graft ONE saved tab (uids already remapped by
 // main) into the running window as a new tab — additive, never replacing.
-rpc.on('restore-tab-state', ({layout}) => {
-  store_.dispatch(termGroupActions.restoreTabState(layout) as any);
+rpc.on('restore-tab-state', ({layout, name}) => {
+  store_.dispatch(termGroupActions.restoreTabState(layout, name) as any);
 });
 
 // n8 durable-session binding, captured main-side from OSC 777 (nemesis8#106)
