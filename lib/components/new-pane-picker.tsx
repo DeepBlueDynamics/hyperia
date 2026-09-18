@@ -1430,8 +1430,8 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             </span>
             <span style={{fontSize: '11px', color: 'var(--text-tertiary)'}}>·</span>
             <span
-              onClick={this.launchHyperiaShell}
-              title="Open the Hyperia Agent tab"
+              onClick={this.openAgentConfig}
+              title="Open the Hyperia agent configuration in this pane"
               style={{
                 fontSize: '11px',
                 fontFamily: 'var(--font-sans)',
@@ -1439,7 +1439,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                 cursor: 'pointer'
               }}
             >
-              Hyperia Agent
+              configure
             </span>
           </div>
 

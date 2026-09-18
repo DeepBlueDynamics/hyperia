@@ -64,6 +64,9 @@ const WorkspaceSaveToast: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
+  // Previously saved tab-workspaces, newest first — listed under the name
+  // field so a click prefills it (and flips straight to the Overwrite flow).
+  const [existing, setExisting] = useState<Array<{name: string; savedAt: string; panes: number; webPanes: number}>>([]);
   // The captured tab layout, frozen at open time so what you see is what saves.
   const layoutRef = useRef<Record<string, any> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -86,6 +89,11 @@ const WorkspaceSaveToast: React.FC = () => {
       setConflict(false);
       setBusy(false);
       setOpen(detail);
+      try {
+        rpc.emit('list tab workspaces');
+      } catch {
+        /* rpc not ready — the list simply stays empty */
+      }
       setTimeout(() => inputRef.current?.select(), 0);
     };
     window.addEventListener(OPEN_SAVE_TAB_WORKSPACE_EVENT, onOpen);
@@ -101,6 +109,16 @@ const WorkspaceSaveToast: React.FC = () => {
     ipcRenderer.send('web-panes:suppress', {suppressed: true});
     return () => ipcRenderer.send('web-panes:suppress', {suppressed: false});
   }, [open]);
+
+  useEffect(() => {
+    const onList = ({rows}: {rows: Array<{name: string; savedAt: string; panes: number; webPanes: number}>}) => {
+      setExisting(rows || []);
+    };
+    rpc.on('tab workspaces list', onList);
+    return () => {
+      rpc.removeListener('tab workspaces list', onList);
+    };
+  }, []);
 
   useEffect(() => {
     const onResult = (res: {ok: boolean; name: string; error?: string; conflict?: boolean}) => {
@@ -165,6 +183,59 @@ const WorkspaceSaveToast: React.FC = () => {
           outline: 'none'
         }}
       />
+      {existing.length > 0 && (
+        <div style={{marginTop: '8px'}}>
+          <div style={{color: 'var(--text-secondary)', marginBottom: '4px'}}>Or overwrite a saved workspace:</div>
+          <div style={{maxHeight: '120px', overflowY: 'auto'}}>
+            {existing.map((ws) => {
+              const selected = ws.name === name.trim();
+              const total = ws.panes + ws.webPanes;
+              return (
+                <div
+                  key={ws.name}
+                  onClick={() => {
+                    setName(ws.name);
+                    setConflict(true);
+                    setError(null);
+                    inputRef.current?.focus();
+                  }}
+                  title={`Overwrite “${ws.name}” · ${total} pane${total === 1 ? '' : 's'}${
+                    ws.webPanes ? ` (${ws.webPanes} web)` : ''
+                  }`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '3px 6px',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    background: selected ? 'var(--bg-tertiary)' : 'transparent'
+                  }}
+                  onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--bg-tertiary)')}
+                  onMouseLeave={(e) =>
+                    ((e.currentTarget as HTMLElement).style.background = selected
+                      ? 'var(--bg-tertiary)'
+                      : 'transparent')
+                  }
+                >
+                  <span
+                    style={{
+                      flex: 1,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      fontWeight: selected ? 600 : 400
+                    }}
+                  >
+                    {ws.name}
+                  </span>
+                  <span style={{fontSize: '10px', color: 'var(--text-tertiary)', flexShrink: 0}}>{total}▢</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {candidates.length > 0 && (
         <div style={{marginTop: '10px'}}>
           <div style={{color: 'var(--text-secondary)', marginBottom: '4px'}}>

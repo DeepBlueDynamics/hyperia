@@ -49,6 +49,7 @@ export type CaptureResult = {
 };
 
 type PendingCapture = {
+  startedAt: number;
   expected: Set<number>;
   collected: Map<number, CapturedWindow>;
   resolve: (result: CaptureResult) => void;
@@ -124,6 +125,11 @@ const finish = (requestId: string) => {
   pending.delete(requestId);
   clearTimeout(capture.timer);
   const missing = [...capture.expected].filter((id) => !capture.collected.has(id));
+  console.log(
+    `[workspace] capture ${requestId}: ${capture.collected.size}/${capture.expected.size} window(s) in ${
+      Date.now() - capture.startedAt
+    }ms${missing.length ? ` (missing: ${missing.join(',')})` : ''}`
+  );
   let stickys: StickyRefSnapshot[] = [];
   try {
     stickys = listOpenStickyRefs();
@@ -326,6 +332,7 @@ export const lastSessionPath = (): string => join(homedir(), '.hyperia', 'worksp
  * Returns false on any failure so callers can fall back to the legacy write.
  */
 export const saveLastSession = async (reason: 'close' | 'quit', timeoutMs = 2500): Promise<boolean> => {
+  const t0 = Date.now();
   try {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), timeoutMs);
@@ -337,11 +344,13 @@ export const saveLastSession = async (reason: 'close' | 'quit', timeoutMs = 2500
     });
     clearTimeout(timer);
     if (!res.ok) {
-      console.warn(`[workspace] last-session save (${reason}) failed: HTTP ${res.status}`);
+      console.warn(`[workspace] last-session save (${reason}) failed: HTTP ${res.status} after ${Date.now() - t0}ms`);
+    } else {
+      console.log(`[workspace] last-session save (${reason}) ok in ${Date.now() - t0}ms`);
     }
     return res.ok;
   } catch (err) {
-    console.warn(`[workspace] last-session save (${reason}) unreachable:`, String(err));
+    console.warn(`[workspace] last-session save (${reason}) unreachable after ${Date.now() - t0}ms:`, String(err));
     return false;
   }
 };
@@ -501,6 +510,7 @@ export const captureAllWindows = (windows: BrowserWindow[], timeoutMs = 3000): P
   const requestId = randomBytes(8).toString('hex');
   return new Promise<CaptureResult>((resolve) => {
     pending.set(requestId, {
+      startedAt: Date.now(),
       expected: new Set(live.map((w) => w.id)),
       collected: new Map(),
       resolve,

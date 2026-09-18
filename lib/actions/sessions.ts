@@ -398,7 +398,12 @@ export function setSessionCwd(uid: string, cwd: string): HyperActions {
 
 export function setSessionShellState(
   uid: string,
-  shellState: {state: 'idle' | 'busy'; lastExit?: number; command?: string}
+  shellState: {
+    state: 'idle' | 'busy' | 'running';
+    lastExit?: number;
+    command?: string;
+    app?: {name: string; path: string; cmdline: string; pid: number};
+  }
 ): HyperActions {
   return {
     type: SESSION_SET_SHELL_STATE,

@@ -408,8 +408,12 @@ export function restoreLayoutState(savedState: any) {
             isRestore: true,
             // New saves carry the scraped command under annotations
             // (display-only, epic #146); old blobs had it bare.
-            lastCommand: session.annotations?.lastCommand ?? session.lastCommand
-          });
+            lastCommand: session.annotations?.lastCommand ?? session.lastCommand,
+            // Human-checked at save time (the tab save toast); the ONE field
+            // restore executes. Whole-app restore of a file that carries it
+            // must behave exactly like the tab restore does.
+            resumeOnce: session.resumeOnce
+          } as any);
         }
       });
     }

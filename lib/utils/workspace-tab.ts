@@ -68,7 +68,9 @@ export type ResumeCandidate = {
   command: string;
   /** Where it came from — only trustworthy sources are ever executable. */
   source: 'n8' | 'shell';
-  /** Pre-check n8 resumes in the save toast; shell commands are opt-in. */
+  /** Pre-checked in the save toast: n8 resumes and the shell-reported
+   *  foreground command alike — what was running is what you expect back.
+   *  The human sees every row and can untick it. */
   preChecked: boolean;
   /** Pane label for the toast row. */
   label: string;
@@ -79,7 +81,25 @@ export type ResumeCandidate = {
  * (#183, settled): commands come only from the n8 session binding (OSC-777)
  * or the shell-integration-REPORTED command of a pane that was busy at save.
  * The screen-scraped annotations.lastCommand is never offered for execution.
+ *
+ * The reported command is what preexec announced (OSC 697): `vim notes.md`,
+ * `nano /tmp/x`, `npm run dev` — with its arguments, relative to the pane's
+ * cwd, which restore recreates first. Main mirrors it as shellState.command
+ * (and shellState.app.cmdline); both are read so an older main still works.
  */
+const reportedCommand = (live: any): string | undefined => {
+  const st = live?.shellState;
+  const cmd = st?.command || st?.app?.cmdline;
+  return typeof cmd === 'string' && cmd.trim() ? cmd.trim() : undefined;
+};
+
+const wasRunning = (live: any): boolean => {
+  const st = live?.shellState?.state;
+  // Main reports 'running'; the renderer's older typings said 'busy'; Term's
+  // published busy flag folds in alt-screen detection. Any of them counts.
+  return !!live?.busy || st === 'running' || st === 'busy';
+};
+
 export const resumeCandidatesForTab = (
   tabLayout: SerializedLayout,
   liveSessions: Record<string, any>
@@ -95,10 +115,9 @@ export const resumeCandidatesForTab = (
       out.push({sessionUid: uid, command: live.n8Binding.resume, source: 'n8', preChecked: true, label});
       continue;
     }
-    const reported = live.shellState?.command;
-    const wasRunning = live.busy || live.shellState?.state === 'busy';
-    if (reported && wasRunning) {
-      out.push({sessionUid: uid, command: reported, source: 'shell', preChecked: false, label});
+    const reported = reportedCommand(live);
+    if (reported && wasRunning(live)) {
+      out.push({sessionUid: uid, command: reported, source: 'shell', preChecked: true, label});
     }
   }
   return out;
