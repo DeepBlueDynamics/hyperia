@@ -28,6 +28,12 @@ Web panes already track in-page navigation into the saved URL, so a restored web
 
 Under the name field, the **Save Workspace…** confirm now lists the tab workspaces you already have, newest first, with their pane counts. Click one to prefill its name; the button switches to **Overwrite** right away, so replacing a saved layout is one click plus Enter. Edit the name and it goes back to a plain save.
 
+## Closing the last window no longer takes four seconds
+
+Closing a window saves the whole session first, then destroys the window. But the app's own close hook ran on that first, held close pass and tore the window down immediately: its rpc destroyed, its shells killed, and the window dropped from the capture set. The save then found zero windows, the sidecar refused the empty workspace, the fallback fired on a dead rpc, and only a 4-second failsafe finally closed the window. Every last-window close took 4 seconds and saved nothing, so a quit from the tray afterwards had nothing to write either.
+
+Teardown now waits for the window to actually be gone (`closed`); only geometry is recorded on the close pass, while the window is still alive. Measured in the dev build: close is 70 ms including a successful save, and a tray quit with no windows left skips the pointless save and exits in under 100 ms. The quit and close paths also log an elapsed-time trail (`[quit +Nms] …`, `[close +Nms] …`) so a slow shutdown can be attributed to a stage.
+
 ## Housekeeping
 
 - The **Hyperia Agent** text link under the new-pane picker is replaced by **configure**, which opens the agent configuration view in that pane. Launching the agent stays in the picker's agent combobox (once configured), the tab-bar context menu, and the **A** hotkey.
