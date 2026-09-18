@@ -1,5 +1,6 @@
 /* eslint-disable eslint-comments/disable-enable-pair */
 import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync} from 'fs';
+import {tmpdir} from 'os';
 import {join} from 'path';
 
 import test from 'ava';
@@ -13,7 +14,7 @@ test.beforeEach((t) => {
   t.timeout(20000);
 });
 
-const TEST_TMP = process.env.TMPDIR || '/workspace/.hyperia-test-temp';
+const TEST_TMP = process.env.TMPDIR || tmpdir() || join(process.cwd(), '.hyperia-test-temp');
 
 const makePersist = () => {
   mkdirSync(TEST_TMP, {recursive: true});
