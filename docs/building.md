@@ -1,5 +1,54 @@
 # Building Hyperia for Release
 
+## One command for a local Windows installer
+
+Use the checked-in PowerShell entrypoint from the repo root:
+
+```powershell
+.\bin\build-local.ps1
+```
+
+The default command uses the current commit and asks which version to bump:
+**major**, **minor**, or **incremental (patch)**. It shows the resulting numbers
+before you choose, starting from the highest source, release tag, or completed
+local-build version. Enter `q` to cancel without changes.
+
+To select an exact reviewed commit, add `-Source <reviewed-commit>`. For
+automation, `-Version X.Y.Z` supplies an explicit version and skips the prompt.
+Start from a clean checkout with dependencies installed. The script creates
+`build/vX.Y.Z-local`, updates and commits **all four** version files (including
+the `hyperia-sidecar` entry in
+`sidecar/Cargo.lock`), rebuilds the sidecar, and runs
+`yarn run dist --publish never`. Existing build branches are never reset; retry
+is allowed only when they differ from the source by version files alone.
+
+The script checks for repo dev processes without stopping them. The installed
+app can remain running. It removes only the known `.antigravitycli` build
+landmine and refuses tracked files there. It never installs, pushes, tags,
+merges, publishes, or kills an app.
+
+Completed installer versions cannot be reused. The script checks local tags,
+existing installers, and build records in Git's common directory under
+`local-builds/`. Keep those records: deleting `dist` must not erase the version
+history. An interrupted build with no installer can be retried with the same
+version. If an installer exists when packaging or verification fails, the
+version is conservatively consumed.
+
+Logs and the result manifest are in `dist/local-builds/`. The result includes
+source/build commits, SHA256, size, signature, and package verification. The
+packaged app version and app assets must match `target`; the packaged sidecar
+must match the just-built binary. Signing is mandatory: the script requires the SDK, signing library, and
+`AZURE_CLIENT_SECRET` (environment or `.signing.env`) before building.
+The installer, packaged app, and packaged sidecar must all have a **Valid**
+Authenticode signature. There is no unsigned success mode. A failed signature
+check still consumes a completed version.
+
+Use `-CheckOnly` to check prerequisites without changing files or building.
+The bounded script checks run with `pwsh -NoProfile -File test/build-local.test.ps1`;
+they clean their fixture directory under `dist` when finished.
+
+The manual steps below document the same build sequence.
+
 For the end-to-end release flow (CI + signing + GitHub release + auto-update channel + install-script deploy), use **`deploy/operations/release-build.md`** — that's the operations runbook. This file covers the per-platform local-build mechanics only.
 
 ## Dev workflow (the standing cadence)
@@ -20,28 +69,22 @@ For the end-to-end release flow (CI + signing + GitHub release + auto-update cha
   Tenant ID, Client ID, endpoint, and account name are hardcoded in `build/win/sign.js`.
   If `AZURE_CLIENT_SECRET` is not set, signing is skipped with a warning — the build still completes unsigned.
 
-## Important: Close Hyperia Before Building
+## Check which Hyperia is running
 
-The build replaces `sidecar/target/release/hyperia-sidecar.exe`. If Hyperia is running it holds
-that file open and the Rust build will fail with "Access is denied." Close Hyperia first.
-
-**Closing the window is not enough in dev.** A `yarn start` session runs an `electronmon`
-watcher that **respawns `electron` every time you kill it** — and the respawned app re-locks
-both `hyperia-sidecar.exe` and `node-pty`'s native `.node` files. Kill the whole chain, not
-just the windows. On Windows:
-
-```bash
-# kill every node/electron/cmd process whose command line mentions this repo, plus the sidecar
-powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { (\$_.Name -eq 'hyperia-sidecar.exe') -or ((\$_.Name -in 'node.exe','electron.exe','cmd.exe') -and \$_.CommandLine -like '*hyperia*') } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }"
-```
+An installed Hyperia under `AppData\\Local\\Programs` uses its own sidecar and
+can stay running during a local build. A repo dev instance (`yarn start` /
+`electronmon`) holds the repo binary and must be stopped by the user first.
+The local build script reports repo dev processes and exits; it never kills
+or restarts the installed app.
 
 ## Step 1 — Bump the Version
 
-Before every release build, increment the patch version in **all three** files:
+Before every release build, set the selected version in **all four** files:
 
 - `package.json` — `"version": "X.Y.Z"`
 - `app/package.json` — `"version": "X.Y.Z"` ← the real source; `tsc -b` copies this to `target/package.json`
 - `sidecar/Cargo.toml` — `version = "X.Y.Z"`
+- `sidecar/Cargo.lock` — version in the `hyperia-sidecar` package entry
 
 `target/package.json` is generated from `app/package.json` by `tsc -b`. Do not edit `target/package.json` directly — it will be overwritten. The installer artifact name comes from `target/package.json`, so if `app/package.json` is wrong the installer will be named with the old version.
 
