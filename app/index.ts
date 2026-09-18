@@ -370,10 +370,14 @@ app.getWindows = () => new Set([...windowSet]); // return a clone
 // function to retrieve the last focused window in windowSet;
 // added to app object in order to expose it to plugins.
 app.getLastFocusedWindow = () => {
-  if (!windowSet.size) {
+  // Never hand back a destroyed window: a dead entry lingering in windowSet
+  // makes callers (tray click, new-window, bridge) throw "Object has been
+  // destroyed" on win.show()/focus instead of opening a fresh window.
+  const live = Array.from(windowSet).filter((win) => !win.isDestroyed());
+  if (!live.length) {
     return null;
   }
-  return Array.from(windowSet).reduce((lastWindow, win) => {
+  return live.reduce((lastWindow, win) => {
     return win.focusTime > lastWindow.focusTime ? win : lastWindow;
   });
 };
@@ -606,6 +610,7 @@ app.on('ready', () => {
         }
 
         const hwin = newWindow({width, height, x: startX, y: startY}, cfg, fn, profileName);
+        const winId = hwin.id; // capture while alive; hwin.id throws once destroyed
         windowSet.add(hwin);
         if (stateAttach) stateAttach(hwin);
         void hwin.loadURL(url);
@@ -626,9 +631,15 @@ app.on('ready', () => {
           }
         });
         hwin.on('closed', () => {
-          console.log(`[window] closed: id=${hwin.id}; ${windowSet.size - 1} window(s) remain`);
+          // Cleanup MUST run first. Touching a native prop like hwin.id after the
+          // window is destroyed throws "Object has been destroyed", which used to
+          // abort this handler before the delete — leaving a dead window in
+          // windowSet. getLastFocusedWindow() then handed that destroyed window to
+          // the tray/new-window path, so a tray click no longer opened a window and
+          // "new window" failed. Use the id captured while the window was alive.
           hwin.clean();
           windowSet.delete(hwin);
+          console.log(`[window] closed: id=${winId}; ${windowSet.size} window(s) remain`);
         });
 
         return hwin;
