@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -115,6 +115,24 @@ struct IdleCallback {
     #[allow(dead_code)]
     creator: String,
 }
+
+/// A pending "you've got mail" notice for a pane, delivered idle-gated by the
+/// idle monitor. Separate from IdleCallback/Pulse so a message notice never
+/// clobbers the pane's own pane_on_idle callback or trips the poke rate-limiter,
+/// and many messages collapse into ONE notice (the count is recomputed at fire
+/// time from the bus, so it self-heals if the recipient already read them).
+struct MsgNotify {
+    pending: bool,
+    armed_at: std::time::Instant,
+    last_fire: Option<std::time::Instant>,
+}
+
+/// Min seconds between two message-notice fires for a pane — coalesces a burst of
+/// arriving mail into a single idle notice.
+const MSG_NOTIFY_COOLDOWN_SECS: u64 = 45;
+/// Drop a notify entry that's been sitting un-fired this long (pane went away /
+/// stayed busy) so the map can't grow unbounded.
+const MSG_NOTIFY_TTL_SECS: u64 = 3600;
 
 /// Minimum seconds between two fires of the same idle callback. An edge that
 /// lands inside the cooldown is NOT consumed (running_seen stays set) — if the
@@ -250,6 +268,10 @@ struct BridgeInner {
     idle_fire_log: Mutex<HashMap<String, Vec<std::time::Instant>>>,
     /// Panes whose idle pokes are suspended for rate abuse (pane -> unblock time).
     idle_blocked: Mutex<HashMap<String, std::time::Instant>>,
+    /// Pending message-bus notices: pane uid -> state. Set when mail is addressed
+    /// to a pane; the idle monitor delivers ONE coalesced "you've got mail" line
+    /// the next time that pane is idle (never mid-turn), then clears it.
+    msg_notify: Mutex<HashMap<String, MsgNotify>>,
     /// Per-session output subscribers: uid → list of senders waiting for PTY bytes
     output_subs: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>,
     /// Lume-backed per-shell log store (BM25 search + pickle-to-disk).
@@ -287,6 +309,7 @@ impl Bridge {
                 pulses: Mutex::new(load_pulses()),
                 idle_fire_log: Mutex::new(HashMap::new()),
                 idle_blocked: Mutex::new(HashMap::new()),
+                msg_notify: Mutex::new(HashMap::new()),
                 output_subs: Mutex::new(HashMap::new()),
                 lume: crate::lume_store::LumeStore::new(),
                 perms: crate::perms::PermStore::default(),
@@ -649,6 +672,26 @@ impl Bridge {
         Ok((id, replaced))
     }
 
+    /// Arm a coalesced, idle-gated "you've got mail" notice for a pane (called
+    /// when a bus message is addressed to it). The idle monitor delivers ONE line
+    /// the next time the pane is idle — never mid-turn, never clobbering the
+    /// pane's own idle callback, never counted against the poke rate-limiter.
+    /// Repeated arms before it fires collapse into a single notice.
+    pub async fn arm_msg_notify(&self, pane: &str) {
+        if pane.is_empty() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let mut m = self.inner.msg_notify.lock().await;
+        let e = m.entry(pane.to_string()).or_insert(MsgNotify {
+            pending: false,
+            armed_at: now,
+            last_fire: None,
+        });
+        e.pending = true;
+        e.armed_at = now;
+    }
+
     /// Record a self-reported liveness pulse. busy=true marks the pane busy until
     /// now+ttl (overrides the screen heuristic); busy=false clears it (let the
     /// screen decide, so a pending callback can fire). TTL clamped to a sane window.
@@ -910,8 +953,10 @@ impl Bridge {
         let panes: Vec<String> = {
             let cbs = self.inner.idle_callbacks.lock().await;
             let pulses = self.inner.pulses.lock().await;
+            let notif = self.inner.msg_notify.lock().await;
             let mut v: Vec<String> = cbs.iter().map(|c| c.pane.clone()).collect();
             v.extend(pulses.iter().filter(|p| !p.paused).map(|p| p.pane.clone()));
+            v.extend(notif.iter().filter(|(_, n)| n.pending).map(|(p, _)| p.clone()));
             v.sort();
             v.dedup();
             v
@@ -1060,6 +1105,67 @@ impl Bridge {
             self.persist_pulses().await;
         }
 
+        // Message-bus notices — a coalesced, idle-gated "you've got mail" line.
+        // Separate channel from idle callbacks and pulses: it never clobbers the
+        // pane's own pane_on_idle callback and is not counted against the poke
+        // rate-limiter. Phase 1 picks candidates under the lock (no awaits);
+        // phase 2 recomputes unread from the bus (self-heals if already read) and
+        // pushes the notice; a TTL sweep drops stale entries.
+        let notify_candidates: Vec<String> = {
+            let already: HashSet<String> = to_fire.iter().map(|(p, _, _, _)| p.clone()).collect();
+            let notif = self.inner.msg_notify.lock().await;
+            notif
+                .iter()
+                .filter(|(pane, st)| {
+                    st.pending
+                        && !already.contains(*pane)
+                        && kinds.get(*pane).map(|s| s.as_str()) == Some("idle")
+                        && st
+                            .last_fire
+                            .map(|t| t.elapsed().as_secs() >= MSG_NOTIFY_COOLDOWN_SECS)
+                            .unwrap_or(true)
+                })
+                .map(|(p, _)| p.clone())
+                .collect()
+        };
+        for pane in notify_candidates {
+            // Only notify an AGENT pane — never type "[Hyperia] 📬 …" into a
+            // human's idle shell (it would land at the prompt). Clear pending
+            // either way so a non-agent recipient doesn't get re-checked forever.
+            if !self.is_agent_pane(&pane).await {
+                let mut notif = self.inner.msg_notify.lock().await;
+                if let Some(st) = notif.get_mut(&pane) {
+                    st.pending = false;
+                }
+                continue;
+            }
+            let label = self.pane_display_name(&pane).await.unwrap_or_else(|| pane.clone());
+            let unread = crate::msgbus::inbox(&label, &pane, true, 100).len();
+            {
+                let mut notif = self.inner.msg_notify.lock().await;
+                match notif.get_mut(&pane) {
+                    Some(st) => {
+                        st.pending = false; // this fire consumes the batch
+                        if unread == 0 {
+                            continue; // already read between arm and fire — self-heal
+                        }
+                        st.last_fire = Some(now);
+                    }
+                    None => continue,
+                }
+            }
+            let notice = format!(
+                "[Hyperia] 📬 You have {unread} unread message{} on the agent message bus — read {} with msg_inbox (msg_search finds older mail). Automated notice, not a person.",
+                if unread == 1 { "" } else { "s" },
+                if unread == 1 { "it" } else { "them" },
+            );
+            to_fire.push((pane.clone(), notice, None, true));
+        }
+        {
+            let mut notif = self.inner.msg_notify.lock().await;
+            notif.retain(|_, st| st.pending || st.armed_at.elapsed().as_secs() < MSG_NOTIFY_TTL_SECS);
+        }
+
         // Fire outside the locks — through the ONE shared delivery routine
         // (deliver_keys: bracketed paste for TUIs, isolated Enter, verify +
         // one nudge, honest queue notices). Pulses get a "From: <creator>:"
@@ -1068,7 +1174,8 @@ impl Bridge {
         for (pane, keys, from_creator, submit) in to_fire {
             let is_agent = self.is_agent_pane(&pane).await;
             let payload = match &from_creator {
-                Some(creator) if is_agent => format!("From: {creator}: {keys}"),
+                Some(creator) if is_agent => format!("[Hyperia auto-poke — automated re-nudge because this pane looked idle (armed by {creator}); NOT a person messaging you. Stop it: pane_pulse_clear this pane. Details: the Hyperia MCP server instructions.]
+{keys}"),
                 _ => keys,
             };
             // Anti-stack: if the PREVIOUS poke is still sitting unsubmitted in
@@ -2160,6 +2267,9 @@ impl Bridge {
                 self.inner.sessions.lock().await.remove(uid);
                 // Revoke any cross-pane grants/prompts tied to the closed pane.
                 self.inner.perms.cleanup_pane(uid).await;
+                // Drop a pending "you've got mail" notice for the closed pane
+                // (it will never go idle again). The mail itself stays on the bus.
+                self.inner.msg_notify.lock().await.remove(uid);
             }
 
             "Resize" => {
