@@ -1068,7 +1068,8 @@ impl Bridge {
         for (pane, keys, from_creator, submit) in to_fire {
             let is_agent = self.is_agent_pane(&pane).await;
             let payload = match &from_creator {
-                Some(creator) if is_agent => format!("From: {creator}: {keys}"),
+                Some(creator) if is_agent => format!("[Hyperia auto-poke — automated re-nudge because this pane looked idle (armed by {creator}); NOT a person messaging you. Stop it: pane_pulse_clear this pane. Details: the Hyperia MCP server instructions.]
+{keys}"),
                 _ => keys,
             };
             // Anti-stack: if the PREVIOUS poke is still sitting unsubmitted in

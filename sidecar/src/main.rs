@@ -16,6 +16,7 @@ mod mcp;
 /// Agent-facing prose, keyed and per-locale — see `messages/mod.rs`.
 mod messages;
 mod models;
+mod msgbus;
 mod perms;
 mod process;
 mod lume_store;
@@ -94,7 +95,9 @@ struct PaneAddress {
     /// command string that may contain Windows paths like `\research` —
     /// the default unescape behavior would turn `\r` into a literal CR
     /// and shred the path. `terminal_keys` keeps raw=false (default) so
-    /// `\x03` still maps to Ctrl-C.
+    /// `\x03` still maps to Ctrl-C. CAUTION: raw control bytes / escape
+    /// sequences delivered into ANOTHER agent's pane can crash or detach it
+    /// (e.g. nemesis8) — reserve raw/control bytes for your own shell.
     raw: Option<bool>,
     /// When true, prepend a "From: <your pane>:" header so the recipient agent
     /// knows who's messaging it. Opt-in (default off) — the caller decides; Hyperia
@@ -102,6 +105,11 @@ struct PaneAddress {
     /// applied when the target is an agent/AI pane (a prefix would corrupt a shell
     /// command).
     attribute: Option<bool>,
+    /// Override the 512-char pane-injection cap on attributed agent→pane messages.
+    /// Default off: an attributed message longer than 512 chars is rejected with a
+    /// pointer to the message bus (msg_send), which carries long/persistent text
+    /// without flooding the pane. Ignored for shell commands (attribute=false).
+    allow_long: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -921,6 +929,32 @@ async fn maybe_attribute(state: &AppState, headers: &HeaderMap, uid: &str, keys:
     attribute_keys(keys, &from)
 }
 
+/// The pane-injection cap on ATTRIBUTED agent→pane messages (chars, not bytes).
+/// Only applies to attribute=true sends (agent messaging another agent), never to
+/// shell commands. Long attributed messages flood the recipient's pane and have no
+/// reply/persistence — the message bus (msg_send) is the channel for those.
+const MSG_INJECT_CAP: usize = 512;
+
+/// One-line nudge appended to a successful attributed send's notice, so agents
+/// learn the better channel exists.
+const BUS_NUDGE: &str =
+    "\n[hyperia] tip: for anything but a quick nudge, prefer the message bus (msg_send) — it's searchable, persistent, and doesn't flood the recipient's pane.";
+
+/// Enforce the 512-char cap on attributed agent→pane messages. `keys` is the
+/// agent's own text (pre-attribution — the "From:" header doesn't count). Returns
+/// the reject response when over cap and allow_long isn't set; Ok otherwise.
+fn check_inject_cap(addr: &PaneAddress, keys: &str) -> Result<(), (StatusCode, String)> {
+    if addr.attribute.unwrap_or(false) && !addr.allow_long.unwrap_or(false) {
+        let n = keys.chars().count();
+        if n > MSG_INJECT_CAP {
+            return Err((StatusCode::BAD_REQUEST, format!(
+                "This agent message is {n} chars; the pane-inject cap is {MSG_INJECT_CAP}. Long messages flood the recipient's pane and can't be replied to or searched. Use the message bus instead: msg_send delivers durable, searchable mail (up to 16 KB) to a pane or agent without flooding it. If you truly need to type this into the pane, resend with allow_long=true."
+            )));
+        }
+    }
+    Ok(())
+}
+
 async fn post_type(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -961,10 +995,17 @@ tab's current active pane, no matter how many times the pane inside it has resta
             ));
         }
     };
+    // 512-char cap on attributed agent→pane messages (checked on the agent's own
+    // text, before the "From:" header is added). Over cap without allow_long →
+    // reject and point at the message bus.
+    if let Err(resp) = check_inject_cap(&addr, &keys) {
+        return resp;
+    }
+    let attributed = addr.attribute.unwrap_or(false);
     // Opt-in attribution: stamp "From: <caller>:" only when the caller asked
     // (attribute=true). Applied before hold/send so held/flushed and the immediate
     // send stay consistent. Hyperia fills in the caller's origin pane.
-    let keys = if addr.attribute.unwrap_or(false) {
+    let keys = if attributed {
         maybe_attribute(&state, &headers, &uid, &keys).await
     } else {
         keys
@@ -1003,12 +1044,20 @@ tab's current active pane, no matter how many times the pane inside it has resta
     // unchanged on the legacy path.
     let body_text = keys.trim_end_matches(['\r', '\n']);
     if !interrupt && body_text.len() < keys.len() && !body_text.is_empty() {
-        let notice = state.bridge.deliver_keys(&uid, body_text, true).await;
+        let mut notice = state.bridge.deliver_keys(&uid, body_text, true).await;
+        if attributed {
+            notice.push_str(BUS_NUDGE);
+        }
         return (StatusCode::OK, notice);
     }
     let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys, "interrupt": interrupt});
     match state.bridge.send_command(cmd).await {
-        Ok(r) => (StatusCode::OK, r),
+        Ok(mut r) => {
+            if attributed {
+                r.push_str(BUS_NUDGE);
+            }
+            (StatusCode::OK, r)
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
@@ -1049,8 +1098,14 @@ async fn post_type_and_collect(
     // for terminal_run so Windows paths with `\research`, `\new`, `\test`
     // aren't shredded by the unescape rule.
     let keys = if addr.raw.unwrap_or(false) { body.clone() } else { unescape_keys(&body) };
+    // 512-char cap on attributed agent→pane messages (see post_type). Checked on
+    // the agent's own text, before the "From:" header is added.
+    if let Err(resp) = check_inject_cap(&addr, &keys) {
+        return resp;
+    }
+    let attributed = addr.attribute.unwrap_or(false);
     // Opt-in attribution (attribute=true) — stamp "From: <caller>:" only on request.
-    let keys = if addr.attribute.unwrap_or(false) {
+    let keys = if attributed {
         maybe_attribute(&state, &headers, &uid, &keys).await
     } else {
         keys
@@ -1062,12 +1117,15 @@ async fn post_type_and_collect(
             win, tab, pane, quiet_ms, keys.len(), crate::util::safe_prefix(&keys, 120)
         );
     }
-    let output = state.bridge.type_and_collect(&uid, &keys, quiet_ms).await;
+    let mut output = state.bridge.type_and_collect(&uid, &keys, quiet_ms).await;
     if let Some((tab, pane, win)) = &log_addr {
         tracing::info!(
             "type-and-collect ◀ win={} tab={:?} pane={} bytes_out={}",
             win, tab, pane, output.len()
         );
+    }
+    if attributed {
+        output.push_str(BUS_NUDGE);
     }
     (StatusCode::OK, output)
 }
@@ -2111,36 +2169,34 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
                     state.bridge.resolve_create_early(&req.requester, false).await;
                 }
             }
-            // Poke the REQUESTING agent's own pane so it learns the outcome
-            // without the human relaying it. Gated tool calls return 202 "held —
-            // wait", but third-party CLIs (codex / antigravity) treat that as a
-            // hard failure and never retry, then act as if they still lack access
-            // they've since been granted. Pushing the decision into their pane —
-            // the channel they read, same Keys mechanism as pane_pulse — closes
-            // the loop. Skip external callers (empty pane) and the just-driven
-            // target (handled above). interrupt=false so it defers if the human
-            // is actively typing there (never clobber the human's input).
+            // Tell the REQUESTING agent the outcome so it learns without the human
+            // relaying it. Gated tool calls return 202 "held — wait", but third-party
+            // CLIs (codex / antigravity) treat that as a hard failure and never retry,
+            // then act as if they still lack access they've since been granted.
+            let outcome = if allow {
+                format!(
+                    "[Hyperia] ✅ Your access request was approved ({}). If your last action didn't complete, retry it now.",
+                    req.action
+                )
+            } else {
+                format!(
+                    "[Hyperia] ⛔ Your access request was denied ({}). Don't retry — ask the human if you still need it.",
+                    req.action
+                )
+            };
             if !req.requester_pane.is_empty() && req.requester_pane != req.target_pane {
-                let msg = if allow {
-                    format!(
-                        "[Hyperia] ✅ Your access request was approved ({}). If your last action didn't complete, retry it now.\r",
-                        req.action
-                    )
-                } else {
-                    format!(
-                        "[Hyperia] ⛔ Your access request was denied ({}). Don't retry — ask the human if you still need it.\r",
-                        req.action
-                    )
-                };
-                let _ = state
-                    .bridge
-                    .send_command(serde_json::json!({
-                        "type": "Keys",
-                        "uid": req.requester_pane,
-                        "keys": msg,
-                        "interrupt": false,
-                    }))
-                    .await;
+                // In-pane requester: deliver through the two-phase submit
+                // (deliver_keys) — a raw Keys write with a glued \r races an
+                // Ink/TUI submit and can be swallowed. interrupt=false so it
+                // defers if the human is actively typing there.
+                let _ = state.bridge.deliver_keys(&req.requester_pane, &outcome, true).await;
+            } else if req.requester_pane.is_empty() && !req.requester.is_empty() {
+                // External / agent-token requester: no pane to poke, so the old
+                // code silently dropped the outcome — the very agents request_access
+                // serves never learned they were approved. Drop it in their
+                // message-bus inbox; they'll see it on their next msg_inbox.
+                let subject = if allow { "access request approved" } else { "access request denied" };
+                msgbus::record("Hyperia", "system", "", "", &req.requester, subject, &outcome);
             }
             let _ = state
                 .bridge
@@ -2484,6 +2540,132 @@ async fn get_bug_log(
         .min(2000);
     let results = bugs::search(q, limit);
     Json(serde_json::json!({ "count": results.len(), "results": results }))
+}
+
+// ---- Message bus (email for agents) ---------------------------------------
+
+/// Resolve the calling identity into (display label, kind, pane_uid). Mirrors
+/// the (reporter, kind) derivation in post_bug; pane callers also expose their uid.
+async fn caller_parts(state: &AppState, headers: &HeaderMap) -> (String, String, String) {
+    let id = state.bridge.resolve_caller(bearer_token(headers).as_deref()).await;
+    match &id {
+        identity::CallerIdentity::Pane { pane, .. } => (
+            state.bridge.pane_display_name(pane).await.unwrap_or_else(|| id.label()),
+            "pane".into(),
+            pane.clone(),
+        ),
+        identity::CallerIdentity::Agent { name, .. } => (name.clone(), "agent".into(), String::new()),
+        identity::CallerIdentity::System => ("Hyperia".into(), "system".into(), String::new()),
+        identity::CallerIdentity::Anonymous => ("anonymous".into(), "anonymous".into(), String::new()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct MsgSendBody {
+    window: Option<u32>,
+    tab: Option<String>,
+    pane: Option<String>,
+    #[serde(default)]
+    to_label: Option<String>,
+    #[serde(default)]
+    subject: String,
+    body: String,
+}
+
+/// POST /api/msg/send — deliver a durable message on the bus. Address a recipient
+/// pane by window/tab/pane, or an agent by to_label. Body capped at MAX_BODY_CHARS.
+async fn post_msg_send(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<MsgSendBody>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if req.body.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"ok": false, "error": "body is required"})));
+    }
+    let body_chars = req.body.chars().count();
+    if body_chars > msgbus::MAX_BODY_CHARS {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"ok": false, "error": format!("body is {body_chars} chars; the bus cap is {}", msgbus::MAX_BODY_CHARS)})),
+        );
+    }
+    // Recipient: a pane address wins; otherwise a free to_label (agent by name).
+    let (to_pane, to_label) = if req.window.is_some() || req.tab.is_some() || req.pane.is_some() {
+        match state.bridge.resolve_pane_uid(req.window, req.tab.as_deref(), req.pane.as_deref()).await {
+            Some(uid) => {
+                let label = state.bridge.pane_display_name(&uid).await.unwrap_or_else(|| uid.clone());
+                (uid, label)
+            }
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"ok": false, "error": "no pane at that address (call terminal_status for current ids)"})),
+                );
+            }
+        }
+    } else if let Some(label) = req.to_label.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        (String::new(), label.to_string())
+    } else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"ok": false, "error": "address a recipient: window/tab/pane, or to_label"})),
+        );
+    };
+    let (from_label, from_kind, from_pane) = caller_parts(&state, &headers).await;
+    let id = msgbus::record(&from_label, &from_kind, &from_pane, &to_pane, &to_label, req.subject.trim(), &req.body);
+    tracing::info!(target: "msgbus", "msg {} {} -> {}", id, from_label, to_label);
+    (StatusCode::OK, Json(serde_json::json!({"ok": true, "id": id, "to": to_label})))
+}
+
+/// GET /api/msg/inbox — messages addressed to me, newest first, read-annotated.
+async fn get_msg_inbox(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let (me_label, _kind, me_pane) = caller_parts(&state, &headers).await;
+    let unread_only = params.get("unread_only").map(|s| s == "true" || s == "1").unwrap_or(false);
+    let limit = params.get("limit").and_then(|s| s.parse::<usize>().ok()).unwrap_or(100).min(2000);
+    let results = msgbus::inbox(&me_label, &me_pane, unread_only, limit);
+    Json(serde_json::json!({"count": results.len(), "me": me_label, "results": results}))
+}
+
+#[derive(serde::Deserialize)]
+struct MsgReadBody {
+    id: String,
+}
+
+/// POST /api/msg/read — mark a message read (append a receipt from me).
+async fn post_msg_read(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<MsgReadBody>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let id = req.id.trim();
+    if id.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"ok": false, "error": "id is required"})));
+    }
+    let (me_label, _kind, _pane) = caller_parts(&state, &headers).await;
+    msgbus::record_read(id, &me_label);
+    (StatusCode::OK, Json(serde_json::json!({"ok": true, "id": id})))
+}
+
+/// GET /api/msg/search — search my messages. box=sent|received|all (default all).
+async fn get_msg_search(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let (me_label, _kind, me_pane) = caller_parts(&state, &headers).await;
+    let q = params.get("q").map(|s| s.as_str());
+    let scope = match params.get("box").map(|s| s.as_str()) {
+        Some("sent") => msgbus::Scope::Sent,
+        Some("received") => msgbus::Scope::Received,
+        _ => msgbus::Scope::All,
+    };
+    let limit = params.get("limit").and_then(|s| s.parse::<usize>().ok()).unwrap_or(100).min(2000);
+    let results = msgbus::search(&me_label, &me_pane, scope, q, limit);
+    Json(serde_json::json!({"count": results.len(), "me": me_label, "results": results}))
 }
 
 /// Mint/return the access token for a pane. The pane menu copies this and the
@@ -4375,6 +4557,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/consent/log", axum::routing::get(get_consent_log))
         .route("/api/bug", axum::routing::post(post_bug))
         .route("/api/bug/log", axum::routing::get(get_bug_log))
+        .route("/api/msg/send", axum::routing::post(post_msg_send))
+        .route("/api/msg/inbox", axum::routing::get(get_msg_inbox))
+        .route("/api/msg/read", axum::routing::post(post_msg_read))
+        .route("/api/msg/search", axum::routing::get(get_msg_search))
         .route("/api/perms/check", axum::routing::post(post_perm_check))
         .route("/api/perms/token", axum::routing::get(get_perm_token))
         .route("/api/perms/enforce", axum::routing::post(post_perm_enforce))
