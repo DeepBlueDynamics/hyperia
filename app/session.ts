@@ -98,6 +98,9 @@ interface SessionOptions {
 }
 export default class Session extends EventEmitter {
   pty: IPty | null;
+  // Last size we resized the pty to, so a two-axis resize can be detected and
+  // split into single-axis steps (see resize() — the 2x2 quick-layout scrollback fix).
+  lastResize?: {cols: number; rows: number};
   batcher: DataBatcher | null;
   shell: string | null;
   ended: boolean;
@@ -601,15 +604,40 @@ No fallback available, please check the shell config.
   }
 
   resize({cols, rows}: {cols: number; rows: number}) {
-    if (this.pty) {
-      try {
-        this.pty.resize(cols, rows);
-      } catch (_err) {
-        const err = _err as {stack: any};
-        console.error(err.stack);
-      }
-    } else {
+    if (!this.pty) {
       console.warn('Warning: Attempted to resize a session with no pty');
+      return;
+    }
+    const prev = this.lastResize;
+    // A resize that changes BOTH width and height at once makes ConPTY reflow the
+    // whole screen in one pass and re-emit the shell prompt, leaving the old
+    // prompt plus surplus blank rows in scrollback — the 2x2 quick-layout bug,
+    // where the preset's two splits collapse (via the renderer resize debounce)
+    // into one two-axis resize. A single-axis reflow doesn't do it, which is why a
+    // manual Split Right (width only) or Split Down (height only) stays clean. So
+    // split a two-axis change into width-now / height-next-tick — but only for an
+    // idle shell; a running foreground/alt-screen app redraws fine and never
+    // scrolls the artifact back, so keep its resize atomic (no double reflow).
+    const bothAxes = !!prev && prev.cols !== cols && prev.rows !== rows;
+    const idle = this.shellState?.state !== 'running';
+    try {
+      if (bothAxes && idle) {
+        this.pty.resize(cols, prev.rows);
+        setTimeout(() => {
+          if (!this.pty) return;
+          try {
+            this.pty.resize(cols, rows);
+          } catch (_e) {
+            /* pane closed between the two resize steps */
+          }
+        }, 50);
+      } else {
+        this.pty.resize(cols, rows);
+      }
+      this.lastResize = {cols, rows};
+    } catch (_err) {
+      const err = _err as {stack: any};
+      console.error(err.stack);
     }
   }
 
