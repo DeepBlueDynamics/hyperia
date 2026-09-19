@@ -2614,6 +2614,12 @@ async fn post_msg_send(
     let (from_label, from_kind, from_pane) = caller_parts(&state, &headers).await;
     let id = msgbus::record(&from_label, &from_kind, &from_pane, &to_pane, &to_label, req.subject.trim(), &req.body);
     tracing::info!(target: "msgbus", "msg {} {} -> {}", id, from_label, to_label);
+    // Idle-gated "you've got mail": if addressed to a real pane (not the sender's
+    // own), arm a coalesced notice the idle monitor delivers next time that pane
+    // is idle. Label-only recipients have no pane to notify — they poll msg_inbox.
+    if !to_pane.is_empty() && to_pane != from_pane {
+        state.bridge.arm_msg_notify(&to_pane).await;
+    }
     (StatusCode::OK, Json(serde_json::json!({"ok": true, "id": id, "to": to_label})))
 }
 

@@ -2043,7 +2043,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Send a durable message to another agent on Hyperia's local message bus — the searchable inbox alternative to typing into another pane. PREFER THIS over terminal_run/terminal_keys for anything but a one-line nudge: it does not flood the recipient's pane, it persists, it is searchable, and it carries long text (up to 16KB). Address a recipient PANE by window/tab/pane (from terminal_status), or an agent by to_label (its codename). The recipient picks it up with msg_inbox on their own schedule. Returns the message id.")]
+    #[tool(description = "Send a durable message to another agent on Hyperia's local message bus — the searchable inbox alternative to typing into another pane. PREFER THIS over terminal_run/terminal_keys for anything but a one-line nudge: it does not flood the recipient's pane, it persists, it is searchable, and it carries long text (up to 16KB). Address a recipient PANE by window/tab/pane (from terminal_status), or an agent by to_label (its codename). When addressed to a pane, Hyperia drops a single 'you've got mail' notice into that pane the next time it's IDLE (never mid-turn) — the message body itself is only fetched via msg_inbox, so it can't flood the recipient. Returns the message id.")]
     async fn msg_send(
         &self,
         Parameters(req): Parameters<MsgSendRequest>,
@@ -2064,7 +2064,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Read YOUR message-bus inbox: messages other agents sent to you (or to your pane), newest first, each flagged read/unread. Poll this to pick up mail — it does NOT auto-arrive in your pane (by design, so mail can't flood you). Set unread_only:true for just new mail. Mark one read with msg_read once handled.")]
+    #[tool(description = "Read YOUR message-bus inbox: messages other agents sent to you (or to your pane), newest first, each flagged read/unread. When mail arrives for your pane, Hyperia types a one-line 'you've got mail' notice into it while you're idle — call this to actually read the messages (the bodies never auto-arrive, so they can't flood you). Set unread_only:true for just new mail. Mark one read with msg_read once handled.")]
     async fn msg_inbox(
         &self,
         Parameters(req): Parameters<MsgInboxRequest>,
@@ -4188,9 +4188,11 @@ impl ServerHandler for HyperiaMcp {
                  \n\nLogs: sidecar_logs. \
                  \n\nMESSAGING OTHER AGENTS: to reach another agent, PREFER the message bus over typing \
                  into its pane. `msg_send` delivers durable, searchable mail — to a pane (window/tab/pane) \
-                 or to an agent by label — up to 16 KB, without flooding the pane; the recipient picks it \
-                 up with `msg_inbox` on its own schedule, marks it handled with `msg_read`, and finds old \
-                 mail with `msg_search`. Typing straight into another agent's pane (terminal_run / \
+                 or to an agent by label — up to 16 KB, without flooding the pane. When a message is \
+                 addressed to a pane, Hyperia types a single one-line 'you've got mail' notice into it the \
+                 next time it is IDLE (never mid-turn); the recipient then reads the bodies with `msg_inbox` \
+                 on its own schedule, marks them handled with `msg_read`, and finds old mail with \
+                 `msg_search`. Typing straight into another agent's pane (terminal_run / \
                  terminal_keys with attribute=true) is capped at 512 chars (override allow_long=true) and \
                  should be reserved for a quick one-line nudge. NEVER send raw control characters or escape \
                  sequences into another agent's pane — they can crash or detach it (this has knocked over \
