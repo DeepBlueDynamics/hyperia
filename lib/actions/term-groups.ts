@@ -15,6 +15,8 @@ import {
 import type {ITermState, ITermGroup, HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
 import {getRootGroups} from '../selectors';
+import {restoredTabName} from '../utils/restored-tab-name';
+import {openTabDisplayNames} from '../utils/tab-display-name';
 import findBySession, {countPathHorizontalStacks} from '../utils/term-groups';
 
 import {setActiveSession, ptyExitSession, userExitSession} from './sessions';
@@ -368,11 +370,20 @@ export function exitActiveTermGroup() {
 // spawn — their groups render from state. resumeOnce carries the human's
 // save-time checkbox choices; the session actions execute it once.
 export function restoreTabState(layout: any, name?: string) {
-  return (dispatch: HyperDispatch) => {
+  return (dispatch: HyperDispatch, getState: () => HyperState) => {
+    // #183: disambiguate against the names OTHER open tabs actually SHOW. A
+    // non-renamed tab has no tabName (its name comes from the session), so read
+    // resolved display names here, not tabName — otherwise a restored copy kept
+    // the original's name when the original stayed open.
+    let finalName = name;
+    if (name) {
+      const s = getState();
+      finalName = restoredTabName(name, openTabDisplayNames(s.termGroups.termGroups, s.sessions.sessions));
+    }
     dispatch({
       type: RESTORE_TAB_STATE,
       layout,
-      name
+      name: finalName
     } as any);
 
     Object.keys(layout.sessions || {}).forEach((uid) => {
