@@ -229,7 +229,7 @@ async fn wall_loop(socket: WebSocket, bridge: Bridge, fps: u64) {
 
 // --- focused mode: /ws/pane/{id} (raw PTY binary, xterm.js-ready) -----------
 
-async fn pane_raw_loop(socket: WebSocket, bridge: Bridge, pane: String) {
+async fn pane_raw_loop(socket: WebSocket, bridge: Bridge, pane: String, caller: crate::identity::CallerIdentity) {
     let (mut tx, mut rx) = socket.split();
     if !send_text(&mut tx, hello("focused")).await {
         return;
@@ -238,10 +238,11 @@ async fn pane_raw_loop(socket: WebSocket, bridge: Bridge, pane: String) {
     // Resolve the pane prefix → (uid, meta json, boot seed bytes) under one lock.
     let resolved = {
         let sessions = bridge.sessions().await;
-        sessions
-            .iter()
-            .find(|(uid, _)| uid.as_str() == pane.as_str() || uid.starts_with(pane.as_str()))
-            .map(|(uid, s)| {
+        let mut candidates = sessions.iter()
+            .filter(|(uid, _)| !pane.is_empty() && (uid.as_str() == pane.as_str() || uid.starts_with(pane.as_str())));
+        let first = candidates.next();
+        let unique = if candidates.next().is_none() { first } else { None };
+        unique.map(|(uid, s)| {
                 let title = if s.title.is_empty() { s.shell_name.clone() } else { s.title.clone() };
                 (
                     uid.clone(),
@@ -309,14 +310,17 @@ async fn pane_raw_loop(socket: WebSocket, bridge: Bridge, pane: String) {
                 match msg {
                     // INPUT: the human typing in the 3D viewer. Keystrokes arrive as
                     // BINARY frames (UTF-8 of xterm's onData) and go straight to the
-                    // pane's PTY. Direct write (no agent-consent gate) — this is the
-                    // human at the keyboard, not an agent.
+                    // pane's PTY. A claimed human viewer is not an identity: require
+                    // authenticated terminal-control permission for every input frame.
                     Some(Ok(Message::Binary(keys))) => {
+                        if caller.is_anonymous() || !matches!(bridge.authorize_drive(&caller, &uid).await, crate::perms::AuthDecision::Allow) {
+                            let _ = send_text(&mut tx, json!({"t":"error","error":"Terminal-control permission required for stream input."}).to_string()).await;
+                            continue;
+                        }
                         if let Ok(s) = String::from_utf8(keys.to_vec()) {
                             if !s.is_empty() {
-                                let _ = bridge
-                                    .send_command(json!({"type": "Keys", "uid": uid, "keys": s}))
-                                    .await;
+                                let _input = bridge.lock_input(&uid).await;
+                                let _ = bridge.send_command(json!({"type":"Keys","uid":uid,"keys":s})).await;
                             }
                         }
                     }
@@ -344,9 +348,10 @@ pub async fn pane_handler(
     ws: WebSocketUpgrade,
     Path(pane): Path<String>,
     State(state): State<crate::AppState>,
+    axum::Extension(caller): axum::Extension<crate::identity::CallerIdentity>,
 ) -> impl IntoResponse {
     let bridge = state.bridge;
-    ws.on_upgrade(move |socket| pane_raw_loop(socket, bridge, pane))
+    ws.on_upgrade(move |socket| pane_raw_loop(socket, bridge, pane, caller))
 }
 
 // --- pixel mode: /ws/pixels/{id} (rendered frames — for WEB panes) ----------
@@ -487,15 +492,24 @@ pub async fn tab_handler(
     Path(tab): Path<String>,
     Query(params): Query<HashMap<String, String>>,
     State(state): State<crate::AppState>,
+    axum::Extension(caller): axum::Extension<crate::identity::CallerIdentity>,
 ) -> impl IntoResponse {
     let bridge = state.bridge;
     let fps = fps_from(&params);
     let w: u32 = params.get("w").and_then(|s| s.parse().ok()).unwrap_or(1920).clamp(16, 7680);
     let h: u32 = params.get("h").and_then(|s| s.parse().ok()).unwrap_or(1080).clamp(16, 4320);
-    ws.on_upgrade(move |socket| tab_loop(socket, bridge, tab, fps, w, h))
+    ws.on_upgrade(move |socket| tab_loop(socket, bridge, tab, fps, w, h, caller))
 }
 
-async fn tab_loop(socket: WebSocket, bridge: Bridge, tab_key: String, fps: u64, tab_w: u32, tab_h: u32) {
+async fn tab_loop(
+    socket: WebSocket,
+    bridge: Bridge,
+    tab_key: String,
+    fps: u64,
+    tab_w: u32,
+    tab_h: u32,
+    caller: crate::identity::CallerIdentity,
+) {
     let (mut tx, mut rx) = socket.split();
     if !send_text(&mut tx, hello("tab")).await {
         return;
@@ -647,15 +661,33 @@ async fn tab_loop(socket: WebSocket, bridge: Bridge, tab_key: String, fps: u64, 
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
                             if v["t"] == "input" {
                                 if let (Some(pid), Some(keys)) = (v["paneId"].as_str(), v["keys"].as_str()) {
-                                    if !keys.is_empty() {
-                                        let full = {
-                                            let sessions = bridge.sessions().await;
-                                            sessions.keys().find(|u| u.as_str() == pid || u.starts_with(pid)).cloned()
-                                        };
-                                        if let Some(uid) = full {
-                                            let _ = bridge.send_command(json!({"type":"Keys","uid":uid,"keys":keys})).await;
-                                        }
+                                    if pid.is_empty() || keys.is_empty() {
+                                        continue;
                                     }
+                                    let matches: Vec<String> = {
+                                        let sessions = bridge.sessions().await;
+                                        sessions
+                                            .iter()
+                                            .filter(|(u, session)| session.root_tab_uid == tab_uid && (u.as_str() == pid || u.starts_with(pid)))
+                                            .map(|(u, _)| u.clone())
+                                            .collect()
+                                    };
+                                    let uid = match matches.as_slice() {
+                                        [one] => one.clone(),
+                                        _ => {
+                                            let _ = send_text(&mut tx, json!({"t":"error","error":"Tab input pane id must match exactly one pane."}).to_string()).await;
+                                            continue;
+                                        }
+                                    };
+                                    // Same gate as the binary pane stream. Anything other
+                                    // than Allow is not written and not queued: anonymous
+                                    // and ungranted callers must not become a later Keys.
+                                    if caller.is_anonymous() || !matches!(bridge.authorize_drive(&caller, &uid).await, crate::perms::AuthDecision::Allow) {
+                                        let _ = send_text(&mut tx, json!({"t":"error","error":"Terminal-control permission required for stream input."}).to_string()).await;
+                                        continue;
+                                    }
+                                    let _input = bridge.lock_input(&uid).await;
+                                    let _ = bridge.send_command(json!({"type":"Keys","uid":uid,"keys":keys})).await;
                                 }
                             }
                         }

@@ -179,6 +179,7 @@ export default class Session extends EventEmitter {
       TERM_PROGRAM: productName,
       TERM_PROGRAM_VERSION: version,
       HYPERIA_AGENT_TOKEN: this.agentToken,
+      HYPERIA_PANE_TOKEN: this.agentToken,
       HYPERIA_MCP_URL: `http://localhost:${hyperiaPort}/mcp`,
       HYPERIA_PANE: uid,
       ...envFromConfig
@@ -319,6 +320,7 @@ fi
           'HYPERIA_INTEGRATION_DIR/p',
           'HYPERIA_CTL_DIR/p',
           'HYPERIA_AGENT_TOKEN',
+          'HYPERIA_PANE_TOKEN',
           'HYPERIA_MCP_URL',
           'HYPERIA_PANE'
         ];

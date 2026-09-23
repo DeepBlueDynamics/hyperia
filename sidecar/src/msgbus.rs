@@ -15,6 +15,15 @@
 //! A message is "unread for me" when it is addressed to me and no read receipt
 //! from me exists for it.
 
+#[path = "mailbox.rs"]
+pub mod mailbox;
+
+pub use mailbox::{
+    acknowledge_message, check_inbox, generate_message_id, matches_recipient, matches_sender,
+    send_message, BindingRecord, BindingStore, MailboxError, MessageEnvelope, Principal,
+    ProofOfResidency, ReadReceipt, SearchScope, SendParams,
+};
+
 use std::collections::HashSet;
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};

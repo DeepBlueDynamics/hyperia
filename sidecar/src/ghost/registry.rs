@@ -666,22 +666,19 @@ impl ToolRegistry {
             url
         };
 
-        // For terminal_keys and terminal_run: read the screen FIRST to detect interactive programs
-        if name == "terminal_keys" || name == "terminal_run" {
-            let screen_before = self.read_screen(&build_target_url("/api/screen")).await;
-            let interactive = detect_interactive(&screen_before);
-
-            if let Some(_program) = &interactive {
-                // Interactive program detected — terminal_run will send text as keystrokes (same as terminal_keys)
-                // No block: let terminal_run fall through and send command + \r naturally
-            }
-        }
-
         let result = match name {
             "terminal_keys" => {
                 let keys = input["keys"].as_str().unwrap_or("");
                 match self.client
-                    .post(build_target_url("/api/type-and-collect"))
+                    .post({
+                        let mut url = build_target_url("/api/terminal/keys");
+                        let sep = if url.contains('?') { '&' } else { '?' };
+                        url.push_str(&format!("{sep}interrupt={}", input["interrupt"].as_bool().unwrap_or(false)));
+                        if let Some(key) = input["idempotency_key"].as_str() {
+                            url.push_str(&format!("&idempotency_key={}", urlencoding::encode(key)));
+                        }
+                        url
+                    })
                     .body(keys.to_string())
                     .send()
                     .await
@@ -709,30 +706,40 @@ impl ToolRegistry {
                 }
             }
             "terminal_run" => {
-                let command = input["command"].as_str().unwrap_or("");
-                let submit = input["submit"].as_bool().unwrap_or(true);
-                let wait_ms = input["wait_ms"].as_u64().unwrap_or(if submit { 2000 } else { 200 });
-                let command = command.trim_end_matches('\n').trim_end_matches('\r');
-                // Concatenate text + Enter into ONE PTY write so they
-                // arrive atomically. The previous implementation issued
-                // two separate POSTs back-to-back, which raced against
-                // TUI clients (Claude Code, vim, anything with input-mode
-                // semantics): the text would land but the trailing \r
-                // could be swallowed by the TUI's input handler before
-                // it reached "submit", leaving the buffer typed but not
-                // sent.
-                let body = if submit {
-                    format!("{}\r", command)
-                } else {
-                    command.to_string()
+                let body = serde_json::json!({
+                    "window": input["window"], "tab": input["tab"], "pane": input["pane"],
+                    "text": input["command"].as_str().unwrap_or("").trim_end_matches(['\r', '\n']),
+                    "submit": input["submit"].as_bool().unwrap_or(true),
+                    "idempotency_key": input["idempotency_key"],
+                });
+                match self.client.post(format!("{base}/api/terminal/run")).json(&body).send().await {
+                    Ok(resp) => return resp.text().await.unwrap_or_default(),
+                    Err(e) => return format!("Error: {e}"),
+                }
+            }
+            "pane_send" | "pane_bind" | "msg_send" | "msg_check" | "msg_read" => {
+                let path = match name {
+                    "pane_send" => "/api/pane/send",
+                    "pane_bind" => "/api/pane/bind-agent",
+                    "msg_send" => "/api/msg/send",
+                    "msg_check" => "/api/msg/check",
+                    _ => "/api/msg/read",
                 };
-                let _ = self.client
-                    .post(build_target_url("/api/type"))
-                    .body(body)
-                    .send()
-                    .await;
-                tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
-                return self.read_screen(&build_target_url("/api/screen")).await;
+                match self.client.post(format!("{base}{path}")).json(&input).send().await {
+                    Ok(resp) => return resp.text().await.unwrap_or_default(),
+                    Err(e) => return format!("Error: {e}"),
+                }
+            }
+            "delivery_status" | "msg_inbox" | "msg_search" => {
+                let path = match name {
+                    "delivery_status" => "/api/delivery/status",
+                    "msg_inbox" => "/api/msg/inbox",
+                    _ => "/api/msg/search",
+                };
+                match self.client.get(format!("{base}{path}")).query(&input).send().await {
+                    Ok(resp) => return resp.text().await.unwrap_or_default(),
+                    Err(e) => return format!("Error: {e}"),
+                }
             }
             "terminal_split" => {
                 // If a label is given, focus that pane first
@@ -1927,10 +1934,12 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
     let defs: Vec<serde_json::Value> = serde_json::from_value(serde_json::json!([
         {
             "name": "terminal_keys",
-            "description": "Type keystrokes into a terminal pane. Use \\n for Enter, \\t for Tab.",
+            "description": "Send explicit terminal-control keys under drive permission. No implicit Enter is added. Retained approval executes automatically; inspect delivery_status. Use pane_send for agent text.",
             "input_schema": {
                 "type": "object",
                 "properties": {
+                    "interrupt": {"type": "boolean", "description": "Explicitly bypass human focus for this control input"},
+                    "idempotency_key": {"type": "string", "description": "Reuse on retries of the same operation"},
                     "keys": { "type": "string", "description": "Keystrokes to type (e.g. \"ls -la\\n\")" },
                     "window": { "type": "integer", "description": "Window id (optional)" },
                     "tab": { "type": "string", "description": "Tab name (optional)" },
@@ -1955,20 +1964,197 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "terminal_run",
-            "description": "Type text into a terminal pane and press Enter. Works for shell commands and interactive programs (Codex, Python REPL, vim, etc.). Set submit=false to type without pressing Enter — useful to let the human review before submitting. Pass focus= to receive only the relevant part of the output (e.g. \"exit code\", \"error messages\", \"port number\") — Maximus filters the result so you only see what you asked for.",
+            "description": "Run a command only at a verified open shell prompt. Returns retained operation state; approval executes automatically. Agent input uses pane_send. Inspect delivery_status and terminal_screen for outcome.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "Text or command to type" },
-                    "submit": { "type": "boolean", "description": "Press Enter after typing (default true). Set false to type without submitting." },
-                    "wait_ms": { "type": "integer", "description": "Time to wait for output in ms (default 2000)" },
-                    "focus": { "type": "string", "description": "What you're looking for in the output (e.g. 'port number', 'error messages', 'did it succeed'). Maximus extracts just that — saves tokens." },
-                    "raw": { "type": "boolean", "description": "Pass true to bypass Maximus and receive the full unfiltered output." },
-                    "window": { "type": "integer" },
-                    "tab": { "type": "string" },
-                    "pane": { "type": "string" }
+                    "window": {
+                        "type": "integer"
+                    },
+                    "tab": {
+                        "type": "string"
+                    },
+                    "pane": {
+                        "type": "string"
+                    },
+                    "command": {
+                        "type": "string"
+                    },
+                    "submit": {
+                        "type": "boolean"
+                    },
+                    "idempotency_key": {
+                        "type": "string",
+                        "description": "Requester-scoped key for an identical retry."
+                    }
                 },
-                "required": ["command"]
+                "required": [
+                    "command"
+                ]
+            }
+        },
+        {
+            "name": "pane_send",
+            "description": "Send text directly to a supported agent pane with recipient message permission. Protects human focus, requires no agent idle silence, and retains before approval. Submitted is not read.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "window": {
+                        "type": "integer"
+                    },
+                    "tab": {
+                        "type": "string"
+                    },
+                    "pane": {
+                        "type": "string"
+                    },
+                    "text": {
+                        "type": "string"
+                    },
+                    "submit": {
+                        "type": "boolean"
+                    },
+                    "idempotency_key": {
+                        "type": "string",
+                        "description": "Requester-scoped key for an identical retry."
+                    }
+                },
+                "required": [
+                    "pane",
+                    "text"
+                ]
+            }
+        },
+        {
+            "name": "pane_bind",
+            "description": "Bind your authenticated persistent agent identity to a pane with its pane credential or human approval.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pane": {
+                        "type": "string"
+                    },
+                    "pane_token": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "pane"
+                ]
+            }
+        },
+        {
+            "name": "delivery_status",
+            "description": "Get your retained operation's state. Do not repeat uncertain input with a new key.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "id"
+                ]
+            }
+        },
+        {
+            "name": "msg_send",
+            "description": "Store mail for an explicit pane or registered agent. Recipient ACL and retained approval apply; a short notice announces mail to eligible agents.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "window": {
+                        "type": "integer"
+                    },
+                    "tab": {
+                        "type": "string"
+                    },
+                    "pane": {
+                        "type": "string"
+                    },
+                    "to_label": {
+                        "type": "string"
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "body": {
+                        "type": "string"
+                    },
+                    "idempotency_key": {
+                        "type": "string",
+                        "description": "Requester-scoped key for an identical retry."
+                    }
+                },
+                "required": [
+                    "body"
+                ]
+            }
+        },
+        {
+            "name": "msg_inbox",
+            "description": "Preview your authenticated inbox without changing read state.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "unread_only": {
+                        "type": "boolean"
+                    },
+                    "limit": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "msg_check",
+            "description": "Fetch unread mail and acknowledge exactly the messages returned.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        {
+            "name": "msg_read",
+            "description": "Acknowledge one message addressed to your authenticated mailbox.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "id"
+                ]
+            }
+        },
+        {
+            "name": "msg_search",
+            "description": "Search your sent or received mail without changing read state.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "q": {
+                        "type": "string"
+                    },
+                    "box": {
+                        "type": "string",
+                        "enum": [
+                            "sent",
+                            "received",
+                            "all"
+                        ]
+                    },
+                    "limit": {
+                        "type": "integer"
+                    }
+                }
             }
         },
         {

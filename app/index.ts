@@ -199,6 +199,29 @@ ipcMain.handle('pulse:clear', (_e, body) => pulseFetch('POST', '/api/pulse/clear
 ipcMain.handle('pulse:pause', (_e, body) => pulseFetch('POST', '/api/pulse/pause', body));
 ipcMain.handle('pulse:status', () => pulseFetch('GET', '/api/pulse/status'));
 
+// Human-only consent operations. Only a top-level Hyperia renderer may invoke
+// these; web panes and agent HTTP clients never receive the System credential.
+async function consentFetch(event: Electron.IpcMainInvokeEvent, apiPath: string, body?: unknown): Promise<unknown> {
+  if (
+    !Array.from(windowSet).some((win) => win.webContents === event.sender) ||
+    event.senderFrame !== event.sender.mainFrame
+  ) {
+    throw new Error('Consent requires the Hyperia application window.');
+  }
+  const response = await fetch(`http://localhost:${SIDECAR_PORT}${apiPath}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: {'Content-Type': 'application/json', Authorization: `Bearer ${SYSTEM_TOKEN}`},
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(`Consent request failed (${response.status}).`);
+  return response.json();
+}
+ipcMain.handle('consent:respond', (event, body) => consentFetch(event, '/api/perms/respond', body));
+ipcMain.handle('consent:pane-token', (event, pane: string) => {
+  if (typeof pane !== 'string' || !pane) throw new Error('Pane is required.');
+  return consentFetch(event, `/api/perms/token?pane=${encodeURIComponent(pane)}`);
+});
+
 function findSidecarBinary(): string | null {
   const exeDir = process.platform === 'win32' ? resolve(process.execPath, '..') : __dirname;
   const resDir = process.resourcesPath || resolve(exeDir, 'resources');

@@ -104,6 +104,7 @@ pub struct PermStore {
     /// resets to ON on restart.
     enforce: AtomicBool,
     next_id: AtomicU64,
+    persist_path: Option<std::path::PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -132,8 +133,12 @@ fn load_persisted() -> (
     let mut grants = Vec::new();
     let mut create_grants = Vec::new();
     let mut cap_grants: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    let mut schema = crate::identity::PERMS_SCHEMA_VERSION;
+    let mut existed = false;
     if let Ok(data) = std::fs::read_to_string(perms_path()) {
+        existed = true;
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
+            schema = v["schema"].as_u64().unwrap_or(0);
             if let Some(m) = v["tokens"].as_object() {
                 for (k, val) in m {
                     if let Some(s) = val.as_str() {
@@ -187,8 +192,111 @@ fn load_persisted() -> (
             }
         }
     }
+    if schema < crate::identity::PERMS_SCHEMA_VERSION {
+        let names = crate::identity::IdentityStore::registered_names_from_disk();
+        let mut migrated = false;
+        owners.retain(|_, owner| match crate::identity::cutover_requester(owner, &names) {
+            crate::identity::RequesterCutover::Key(key) => {
+                if key != *owner {
+                    migrated = true;
+                }
+                *owner = key;
+                true
+            }
+            crate::identity::RequesterCutover::Invalidate => {
+                migrated = true;
+                false
+            }
+        });
+        grants.retain_mut(|grant| match crate::identity::cutover_requester(&grant.requester, &names) {
+            crate::identity::RequesterCutover::Key(key) => {
+                if key != grant.requester {
+                    migrated = true;
+                }
+                grant.requester = key;
+                true
+            }
+            crate::identity::RequesterCutover::Invalidate => {
+                migrated = true;
+                false
+            }
+        });
+        grants.sort_by(|a, b| {
+            (&a.requester, &a.scope, &a.pane).cmp(&(&b.requester, &b.scope, &b.pane))
+        });
+        grants.dedup_by(|a, b| a.requester == b.requester && a.scope == b.scope && a.pane == b.pane);
+        create_grants.retain_mut(|grant| match crate::identity::cutover_requester(&grant.agent, &names) {
+            crate::identity::RequesterCutover::Key(key) => {
+                if key != grant.agent {
+                    migrated = true;
+                }
+                grant.agent = key;
+                true
+            }
+            crate::identity::RequesterCutover::Invalidate => {
+                migrated = true;
+                false
+            }
+        });
+        create_grants.sort_by(|a, b| a.agent.cmp(&b.agent));
+        create_grants.dedup_by(|a, b| a.agent == b.agent);
+        let mut merged_caps: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+        for (agent, caps) in cap_grants.drain() {
+            match crate::identity::cutover_requester(&agent, &names) {
+                crate::identity::RequesterCutover::Key(key) => {
+                    if key != agent {
+                        migrated = true;
+                    }
+                    merged_caps.entry(key).or_default().extend(caps);
+                }
+                crate::identity::RequesterCutover::Invalidate => migrated = true,
+            }
+        }
+        cap_grants = merged_caps;
+        if existed {
+            let _ = migrated;
+            let owners_json: serde_json::Map<String, serde_json::Value> = owners
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect();
+            let tokens_json: serde_json::Map<String, serde_json::Value> = tokens
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect();
+            let grants_json: Vec<serde_json::Value> = grants
+                .iter()
+                .map(|g| serde_json::json!({"requester": g.requester, "scope": g.scope, "pane": g.pane}))
+                .collect();
+            let create_json: Vec<serde_json::Value> =
+                create_grants.iter().map(|g| serde_json::Value::String(g.agent.clone())).collect();
+            let caps_json: serde_json::Map<String, serde_json::Value> = cap_grants
+                .iter()
+                .map(|(agent, caps)| {
+                    (
+                        agent.clone(),
+                        serde_json::Value::Array(
+                            caps.iter().map(|c| serde_json::Value::String(c.clone())).collect(),
+                        ),
+                    )
+                })
+                .collect();
+            let doc = serde_json::json!({
+                "schema": crate::identity::PERMS_SCHEMA_VERSION,
+                "tokens": tokens_json,
+                "owners": owners_json,
+                "grants": grants_json,
+                "create_grants": create_json,
+                "cap_grants": caps_json,
+            });
+            let _ = crate::util::write_json_file_atomic(&perms_path(), &doc);
+        }
+    }
     (tokens, owners, grants, create_grants, cap_grants)
 }
+
+#[cfg(test)]
+#[path = "message_acl_tests.rs"]
+mod message_acl_tests;
 
 impl Default for PermStore {
     fn default() -> Self {
@@ -203,6 +311,7 @@ impl Default for PermStore {
             cap_grants: Mutex::new(cap_grants),
             enforce: AtomicBool::new(true), // gated out of the box
             next_id: AtomicU64::default(),
+            persist_path: Some(perms_path()),
         }
     }
 }
@@ -212,6 +321,7 @@ impl PermStore {
     /// non-expiring grants). Best-effort — a failed write never breaks the
     /// in-memory truth.
     async fn save(&self) {
+        let Some(path) = &self.persist_path else { return; };
         let tokens: serde_json::Map<String, serde_json::Value> = self
             .tokens
             .lock()
@@ -255,13 +365,14 @@ impl PermStore {
             })
             .collect();
         let doc = serde_json::json!({
+            "schema": crate::identity::PERMS_SCHEMA_VERSION,
             "tokens": tokens,
             "owners": owners,
             "grants": grants,
             "create_grants": create_grants,
             "cap_grants": cap_grants,
         });
-        if let Err(e) = crate::util::write_json_file_atomic(&perms_path(), &doc) {
+        if let Err(e) = crate::util::write_json_file_atomic(path, &doc) {
             tracing::warn!("perms persist failed: {e}");
         }
     }
@@ -277,7 +388,7 @@ impl PermStore {
     ) -> PermRequest {
         let n = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req = PermRequest {
-            id: format!("perm-{n}"),
+            id: format!("perm-{:x}-{}-{n}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos(), std::process::id()),
             requester: requester.to_string(),
             requester_pane: requester_pane.to_string(),
             target_pane: target_pane.to_string(),
@@ -291,6 +402,15 @@ impl PermStore {
     /// Resolve a pending request. On "allow", records a grant. Returns the
     /// request that was resolved (so the caller can notify the right pane), or
     /// None if the id was unknown.
+    pub async fn pending_action_target(&self, requester: &str, action: &str, target: &str) -> Option<PermRequest> {
+        self.pending.lock().await.values()
+            .find(|r| r.requester == requester && r.action == action && r.target_pane == target).cloned()
+    }
+
+    pub async fn pending_request(&self, id: &str) -> Option<PermRequest> {
+        self.pending.lock().await.get(id).cloned()
+    }
+
     pub async fn respond(
         &self,
         id: &str,
@@ -301,17 +421,21 @@ impl PermStore {
         let req = self.pending.lock().await.remove(id)?;
         let is_create = req.action.starts_with("create");
         let is_cap = req.action.starts_with("cap:");
+        let message_recipient = req.action.strip_prefix("message:");
+        let is_bind = req.action.starts_with("bind:");
         // Denials/grants key: create on the sentinel, cap on its action string,
         // drive on the target pane.
         let key = if is_create {
             CREATE_KEY.to_string()
-        } else if is_cap {
+        } else if is_cap || message_recipient.is_some() || is_bind {
             req.action.clone()
         } else {
             req.target_pane.clone()
         };
         if allow {
-            if is_cap {
+            if is_bind {
+                // Binding approval is consumed by the mailbox service. It grants no drive access.
+            } else if is_cap {
                 let cap = req.action.strip_prefix("cap:").unwrap_or("");
                 self.grant_cap(&req.requester, cap).await;
             } else if is_create {
@@ -324,15 +448,20 @@ impl PermStore {
                 let expires_at = duration_secs
                     .filter(|s| *s > 0)
                     .map(|s| Instant::now() + Duration::from_secs(s));
-                let scope = match scope {
-                    "any" => "any",
-                    "tab" => "tab",
-                    _ => "pane",
+                // Message consent grants only this recipient, never terminal control.
+                let scope = if message_recipient.is_some() {
+                    "message"
+                } else {
+                    match scope {
+                        "any" => "any",
+                        "tab" => "tab",
+                        _ => "pane",
+                    }
                 };
                 self.grants.lock().await.push(Grant {
                     requester: req.requester.clone(),
                     scope: scope.into(),
-                    pane: req.target_pane.clone(),
+                    pane: message_recipient.unwrap_or(&req.target_pane).to_string(),
                     expires_at,
                 });
             }
@@ -421,9 +550,23 @@ impl PermStore {
         grants.retain(|g| g.live(now));
         grants
             .iter()
-            .filter(|g| g.requester == requester)
+            .filter(|g| g.requester == requester && g.scope != "message")
             .map(|g| (g.scope.clone(), g.pane.clone()))
             .collect()
+    }
+
+    /// Message grants are recipient-scoped and cannot authorize terminal writes.
+    pub async fn has_message_grant(&self, requester: &str, recipient: &str) -> bool {
+        let now = Instant::now();
+        let mut grants = self.grants.lock().await;
+        grants.retain(|g| g.live(now));
+        grants.iter().any(|g| g.requester == requester && g.scope == "message" && g.pane == recipient)
+    }
+
+    /// Find one exact pending capability without conflating it with drive access.
+    pub async fn pending_action_for(&self, requester: &str, action: &str) -> Option<PermRequest> {
+        self.pending.lock().await.values()
+            .find(|r| r.requester == requester && r.action == action).cloned()
     }
 
     /// Is there already a pending prompt for this (requester, pane)? Used to
@@ -433,7 +576,7 @@ impl PermStore {
             .lock()
             .await
             .values()
-            .any(|r| r.requester == requester && r.target_pane == target_pane)
+            .any(|r| r.requester == requester && r.target_pane == target_pane && r.action == "drive")
     }
 
     /// Is there already a pending CREATE prompt for this requester? (Create
@@ -541,7 +684,8 @@ impl PermStore {
         self.grants
             .lock()
             .await
-            .retain(|g| !((g.scope == "pane" || g.scope == "tab") && g.pane == uid));
+            .retain(|g| !(((g.scope == "pane" || g.scope == "tab") && g.pane == uid)
+                || (g.scope == "message" && g.pane == format!("pane:{uid}"))));
         self.tokens.lock().await.remove(uid);
         self.owners.lock().await.remove(uid);
         self.denials.lock().await.retain(|(_, p), _| p != uid);
