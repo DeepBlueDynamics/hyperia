@@ -1,19 +1,39 @@
-# Hyperia v0.19.7 — a tab is a tab 🗂️
+# Hyperia v0.20.2 — agents get mail 📬
 
-Saved layouts are "saved tabs" now, they come back under the name you saved them, and the "+" menu stops jumping around.
+Agents stop shouting into each other's panes. They now have a mailbox, deliveries you approve actually go through, and every permission is tied to a real identity instead of a display name.
 
-## "Saved Tabs", not "workspaces"
+## An inbox for every agent
 
-Inside Hyperia a *workspace* is the directory mapped into an agent's container, so calling a saved tab layout a "workspace" was overloaded. Tab-scoped saves are **tabs** throughout now: the **+** menu heading reads **Saved Tabs**, the tab right-click is **Save Tab…**, the save dialog is **Save Tab**, and the pane picker's list — previously "Saved Sessions" — is **Saved Tabs** too. (Whole-app `workspace` saves and the `workspace_*` tools keep the name; those really are app-wide snapshots.) The agent-config badge in the picker is now capitalized: **Configure**.
+Agents used to talk to each other by typing raw text into the other pane: no length limit, no record, no reply channel. There's now a local mailbox:
 
-## A restored tab keeps the name you saved it under
+- **`msg_send`** leaves a durable message for an agent or a pane, up to 16 KB.
+- **`msg_inbox`** previews your mail, **`msg_check`** fetches your unread mail and marks it read, **`msg_read`** acknowledges one message, and **`msg_search`** searches what you've sent and received.
 
-Rename a tab to "Bob", save it as "Bob two", then restore it — and it used to come back as "Bob". The restore was reading the name baked into the layout at save time instead of the name on the saved entry. It now uses the entry name, so **"Bob two" comes back as "Bob two"**.
+The recipient gets a short, coalesced "you've got mail" notice in its pane. The notice never carries the message body, and it doesn't wait for the agent to go quiet first. Mail is addressed to a verified identity, never a display label, and an agent that runs under its own token links itself to its pane with **`pane_bind`**.
 
-Restoring a copy while the original is still open — a deliberate "give me another one" — now adds a file-style suffix: **Bob (2)**, **Bob (3)**. The number is worked out at restore time, so a second copy never stacks up "(2) (2)".
+Typing a long message straight into another agent's pane is capped at 512 characters, and the error points you to the mailbox. Pass `allow_long` if you really need to paste it.
 
-## The "+" menu holds still
+## "Allow" actually does the thing
 
-Two small fixes to the new-tab menu: the two-click **Delete?** confirm on a saved row now reserves its space, so the row no longer jumps when the trash icon turns into "Delete?". And the quick-layout previews are centered and evenly padded — they were skewed to the right on Windows and had no padding at all on Linux.
+Previously, approving an agent's request after the ~8 second wait granted the permission but dropped the action, so the agent had to try again. Now the request is saved first and a worker runs it once you approve. Each request gets an operation ID you can look up with **`delivery_status`**, retries don't create duplicates, and if Hyperia isn't sure a write reached the pane it won't blindly send it again.
 
-Coming from further back? [v0.19.6](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.19.6) is where the pane started remembering what it was running on restore.
+## Permissions follow identities, not names
+
+Grants, owners and consent now use a canonical identity key (`agent:<name>` / `pane:<id>`). A display label can no longer inherit someone else's access. On first launch your saved permissions are migrated once. Any grant that can't be tied to a single known agent is dropped, and that agent will ask again. Pane and tab streams check permission on every keystroke, and anonymous viewers stay read-only.
+
+## Safer ways to type into panes
+
+- **`terminal_run`** only runs at a real shell prompt. It refuses to type a shell command into an agent or a busy pane.
+- **`pane_send`** is the new way to hand an agent text, with Enter as a separate step.
+- **`terminal_keys`** is for explicit control keys and never adds an Enter on its own.
+
+Automated re-pokes now say what they are: **`[Hyperia auto-poke …]`**, *not a person messaging you*, and how to stop it with `pane_pulse_clear`. The tool descriptions also warn that raw control characters sent into another agent's pane can crash it.
+
+**Heads-up for scripts and clients:** refresh your tool list after upgrading. `/api/type-and-collect` now returns a saved shell operation instead of screen output, so read the output explicitly with `terminal_screen`.
+
+## Also fixed
+
+- **2×2 quick layout:** the original pane no longer gets a scrollbar with its old prompt pushed into scrollback when you apply the layout.
+- **Restored tabs:** a tab you never renamed now gets a "(2)" suffix when you restore a copy while the original is still open, the same as renamed tabs.
+
+Coming from further back? [v0.19.7](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.19.7) is where saved layouts became "saved tabs".
