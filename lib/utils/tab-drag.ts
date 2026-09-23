@@ -39,7 +39,7 @@ export const dropIndexForX = (metrics: TabMetrics, from: number, x: number): num
  *
  * Re-laying the whole strip out from the snapshot beats the usual trick of
  * shifting the tabs between `from` and `to` by one tab width: `.tab_tab` is
- * `flex: 1 1 auto` clamped between 86px and 260px, so tabs are equal-width only
+ * `flex: 1 1 auto` clamped between 120px and 260px, so tabs are equal-width only
  * until the strip fills up, and past that a fixed shift opens a gap of the wrong
  * size and leaves the neighbours overlapping.
  */

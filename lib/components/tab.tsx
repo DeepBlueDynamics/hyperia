@@ -475,11 +475,6 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
               style={{backgroundColor: agentDotColor}}
             />
           )}
-          {/* The tab's horizontal padding, as flex items rather than CSS padding so
-              it can give way: when the strip fills up these squish (down to their
-              min-widths) before the title loses a pixel, and long before the tab
-              hits its min-width and the strip has to grow scroll arrows. */}
-          <span className="tab_padL" aria-hidden="true" />
           <span
             title={isPinned ? parsed.text || props.text : props.text !== displayText ? props.text : ''}
             className={`tab_textInner ${isActive ? 'tab_textInnerActive' : ''}`}
@@ -526,7 +521,6 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
               </span>
             )}
           </span>
-          <span className="tab_padR" aria-hidden="true" />
         </span>
         {/* Browser-style: a pinned tab has no close button (middle-click still closes). */}
         {!isPinned && (
@@ -544,11 +538,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           color: var(--text-secondary);
           list-style-type: none;
           flex: 1 1 auto;
-          /* 86px = the 60px title floor (.tab_textInner) plus the squished
-             padding (.tab_padL 4px + .tab_padR 22px). Between 120px and 86px a
-             tab only loses padding, never title; only past 86px does the strip
-             overflow and show its scroll arrows. */
-          min-width: 86px;
+          min-width: 120px;
           max-width: 260px;
           position: relative;
           background: var(--bg-secondary);
@@ -577,11 +567,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           padding-right: 12px;
         }
         .tab_pinned .tab_textInner {
-          min-width: 0;
-        }
-        .tab_pinned .tab_padL,
-        .tab_pinned .tab_padR {
-          display: none;
+          padding: 0;
         }
 
         .tab_activeIndicator {
@@ -694,38 +680,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           width: 100%;
           position: relative;
           overflow: hidden;
+          padding-left: 8px;
+          padding-right: 28px;
           box-sizing: border-box;
-        }
-
-        /* Squishable padding. At rest these match the old fixed padding (8+12 on
-           the left, 12+28 on the right, the 28 being the close-button gutter).
-           They have no flex-grow, so a roomy tab still hands all spare width to
-           the title; and because the title's flex-basis is 0 with a 60px floor,
-           a narrowing tab first eats into these until the right one is just the
-           close-button gutter (.tab_icon at right:7px + 14px wide) and the left
-           one a hairline. */
-        .tab_padL,
-        .tab_padR {
-          flex: 0 1 auto;
-          height: 100%;
-          pointer-events: none;
-        }
-        .tab_padL {
-          width: 20px;
-          min-width: 4px;
-        }
-        .tab_padR {
-          width: 40px;
-          min-width: 22px;
-        }
-        /* An agent dot sits absolutely at left:8px, 8px wide — keep the title
-           clear of it. The tab's min-width doesn't grow for it, so the title floor
-           gives up the difference instead. */
-        .tab_agentDot + .tab_padL {
-          min-width: 18px;
-        }
-        .tab_agentDot ~ .tab_textInner {
-          min-width: 46px;
         }
 
         .tab_renameInput {
@@ -772,16 +729,14 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         }
 
         .tab_textInner {
+          padding: 0 12px;
           text-align: center;
           text-overflow: ellipsis;
           white-space: nowrap;
           overflow: hidden;
-          /* Basis 0 so the squish is a function of the tab's width, not the
-             title's length: a long title in a roomy tab keeps full padding. The
-             60px floor is the title room a 120px tab had with the old padding. */
-          flex: 1 1 0%;
+          flex: 1;
           line-height: 34px;
-          min-width: 60px;
+          min-width: 0;
         }
 
         .tab_textInnerActive {
