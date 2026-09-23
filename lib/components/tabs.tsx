@@ -11,6 +11,7 @@ import Tab_ from './tab';
 
 const Tab = decorate(Tab_, 'Tab');
 const isMac = /Mac/.test(navigator.userAgent);
+const isWindows = /Windows/.test(navigator.userAgent);
 
 const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   const {tabs = [], borderColor, onChange, onClose, onDescribe, fullScreen} = props;
@@ -876,6 +877,16 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           flex: 1 1 auto;
           min-width: 0;
           -webkit-app-region: drag;
+          /* Windows draws its min/max/close as a native titleBarOverlay
+             (app/ui/window.ts) ON TOP of the page's top-right corner. Nothing in
+             the DOM sees it, so once the strip fills and .tabs_dragSpace has
+             collapsed, the right scroll arrow and the +/window/sticky cluster
+             land under the caption buttons and vanish. Keep them out from under
+             it: Chromium's Window Controls Overlay exposes the uncovered width
+             as env(titlebar-area-width). (A fixed 200px stand-in was dropped in
+             v0.10.32.) Falls back to no padding where the env isn't defined. */
+          padding-right: ${isWindows ? 'calc(100vw - env(titlebar-area-width, 100vw))' : '0'};
+          box-sizing: border-box;
         }
 
         .tabs_list {
