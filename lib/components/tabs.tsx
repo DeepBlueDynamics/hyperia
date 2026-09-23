@@ -156,6 +156,44 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
 
   const scrollBy = stepTabs;
 
+  // Scroll-arrow hover hints. They're DOM and drop over the pane area, where a
+  // native web pane would paint on top of them, so web panes are suppressed
+  // (frozen still) while an arrow is hovered, the same as the +/window/sticky
+  // cluster below. An arrow can unmount under the cursor (scrolled to the end),
+  // which skips mouseleave, so its disappearance also releases the suppression.
+  const hoveredArrow = useRef<'left' | 'right' | null>(null);
+  const setWebPanesSuppressed = useCallback((suppressed: boolean) => {
+    try {
+      ipcRenderer.send('web-panes:suppress', {suppressed});
+    } catch {
+      /* ipc not ready */
+    }
+  }, []);
+  const arrowHover = (dir: 'left' | 'right') => ({
+    onMouseEnter: () => {
+      hoveredArrow.current = dir;
+      setWebPanesSuppressed(true);
+    },
+    onMouseLeave: () => {
+      hoveredArrow.current = null;
+      setWebPanesSuppressed(false);
+    }
+  });
+  useEffect(() => {
+    const gone =
+      (hoveredArrow.current === 'left' && !canScrollLeft) || (hoveredArrow.current === 'right' && !canScrollRight);
+    if (gone) {
+      hoveredArrow.current = null;
+      setWebPanesSuppressed(false);
+    }
+  }, [canScrollLeft, canScrollRight, setWebPanesSuppressed]);
+  useEffect(
+    () => () => {
+      if (hoveredArrow.current) setWebPanesSuppressed(false);
+    },
+    [setWebPanesSuppressed]
+  );
+
   // Tab drag-to-reorder.
   //
   // `drag.to` is the index the carried tab would land on if dropped now, so the
@@ -299,9 +337,14 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
     <nav className="tabs_nav" ref={ref}>
       {props.customChildrenBefore}
       {canScrollLeft && (
-        <button className="tabs_scrollBtn tabs_scrollLeft" onClick={() => scrollBy(-1)} aria-label="Scroll tabs left">
-          ‹
-        </button>
+        <div className="tabs_newTab_tooltip_trigger tabs_scrollTrigger" {...arrowHover('left')}>
+          <button className="tabs_scrollBtn tabs_scrollLeft" onClick={() => scrollBy(-1)} aria-label="Scroll tabs left">
+            ‹
+          </button>
+          <div className="tabs_newTab_tooltip tabs_btnTip tabs_scrollTip tabs_scrollTipLeft">
+            Scroll tabs left, or use the scroll wheel
+          </div>
+        </div>
       )}
       <ul
         key="list"
@@ -367,9 +410,18 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         })}
       </ul>
       {canScrollRight && (
-        <button className="tabs_scrollBtn tabs_scrollRight" onClick={() => scrollBy(1)} aria-label="Scroll tabs right">
-          ›
-        </button>
+        <div className="tabs_newTab_tooltip_trigger tabs_scrollTrigger" {...arrowHover('right')}>
+          <button
+            className="tabs_scrollBtn tabs_scrollRight"
+            onClick={() => scrollBy(1)}
+            aria-label="Scroll tabs right"
+          >
+            ›
+          </button>
+          <div className="tabs_newTab_tooltip tabs_btnTip tabs_scrollTip">
+            Scroll tabs right, or use the scroll wheel
+          </div>
+        </div>
       )}
 
       {/* These tab-bar buttons' hover menus (the + layout/workspace dropdown,
@@ -1017,6 +1069,24 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         .tabs_scrollRight {
           border-right: none;
           border-left: 0.5px solid var(--border-neutral);
+        }
+
+        /* Arrow + its hover hint. The wrapper takes the arrow's place as a
+           fixed-size flex item; the hint drops below the tab bar. */
+        .tabs_scrollTrigger {
+          flex: 0 0 auto;
+          -webkit-app-region: no-drag;
+        }
+        /* Compound selectors: .tabs_newTab_tooltip / .tabs_btnTip are declared
+           later in this sheet and would otherwise win at equal specificity. */
+        .tabs_newTab_tooltip.tabs_scrollTip {
+          pointer-events: none;
+          z-index: 1001;
+        }
+        /* The left arrow sits at the strip's left edge, so its hint anchors left. */
+        .tabs_btnTip.tabs_scrollTipLeft {
+          left: 0;
+          right: auto;
         }
 
         .tabs_borderShim {
