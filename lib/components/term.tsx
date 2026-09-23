@@ -174,6 +174,8 @@ export default class Term extends React.PureComponent<
     navigatorLeft: number;
     navigatorWidth: number;
     navigatorTop: number;
+    // Room below the path bar inside the pane (px); 0 = not measured, no cap.
+    navigatorMaxHeight: number;
     isGlimmerActive?: boolean;
     showCopied?: boolean;
     // Pixel offset (within term_fit) to anchor the "Copied!" toast under the
@@ -254,6 +256,7 @@ export default class Term extends React.PureComponent<
     navigatorLeft: 95,
     navigatorWidth: 280,
     navigatorTop: 38,
+    navigatorMaxHeight: 0,
     isGlimmerActive: false,
     showCopied: false,
     copiedPos: undefined as {left: number; top: number} | undefined,
@@ -1681,6 +1684,7 @@ export default class Term extends React.PureComponent<
       let navigatorLeft = 8;
       let navigatorWidth = 320;
       let navigatorTop = 38;
+      let navigatorMaxHeight = 0;
 
       if (this.pathBarRef.current) {
         const rect = this.pathBarRef.current.getBoundingClientRect();
@@ -1689,6 +1693,9 @@ export default class Term extends React.PureComponent<
           const parentRect = termFit.getBoundingClientRect();
           navigatorLeft = rect.left - parentRect.left;
           navigatorTop = rect.bottom - parentRect.top + 4; // 4px margin below the path bar
+          // Cap the popup to the pane's remaining height so its bottom (the
+          // recent quick-jump row) can't run past the pane edge and get clipped.
+          navigatorMaxHeight = Math.max(120, parentRect.height - navigatorTop - 8);
 
           const widthToUse = Math.min(Math.max(rect.width, 320), parentRect.width - 16);
           navigatorWidth = widthToUse;
@@ -1707,7 +1714,8 @@ export default class Term extends React.PureComponent<
           isDirNavigatorOpen: true,
           navigatorLeft,
           navigatorWidth,
-          navigatorTop
+          navigatorTop,
+          navigatorMaxHeight
         },
         () => {
           setTimeout(() => {
@@ -2015,7 +2023,13 @@ export default class Term extends React.PureComponent<
       <div
         style={{
           borderTop: '0.5px solid var(--border-neutral)',
-          padding: 'var(--space-6) var(--space-8)'
+          padding: 'var(--space-6) var(--space-8)',
+          // Shrinks (with the dir list) when the popup is height-capped, so the
+          // chip row below scrolls instead of being clipped by the pane edge.
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+          flex: '0 1 auto'
         }}
       >
         <div
@@ -2037,7 +2051,13 @@ export default class Term extends React.PureComponent<
             display: 'flex',
             flexWrap: 'wrap',
             gap: 'var(--space-6)',
-            paddingBottom: '2px'
+            paddingBottom: '2px',
+            // Up to 13 chips wrap into a tall column in a narrow pane; cap at
+            // ~4 rows and scroll the rest.
+            maxHeight: '96px',
+            overflowY: 'auto',
+            minHeight: 0,
+            flex: '0 1 auto'
           }}
         >
           {items.map(({path: itemPath, accent}) => (
@@ -2374,7 +2394,10 @@ export default class Term extends React.PureComponent<
     }
 
     return (
-      <div style={{maxHeight: '220px', overflowY: 'auto'}} className="term_navigatorDirList">
+      <div
+        style={{maxHeight: '220px', overflowY: 'auto', minHeight: 0, flex: '0 1 auto'}}
+        className="term_navigatorDirList"
+      >
         {filteredDirs.map((dir, index) => {
           const isMatched = index === focusedIndex;
           const showFocus = isMatched;
@@ -3565,6 +3588,7 @@ export default class Term extends React.PureComponent<
               top: `${this.state.navigatorTop}px`,
               left: `${this.state.navigatorLeft}px`,
               width: `${this.state.navigatorWidth}px`,
+              maxHeight: this.state.navigatorMaxHeight ? `${this.state.navigatorMaxHeight}px` : undefined,
               background: 'var(--bg-secondary)',
               border: '0.5px solid var(--border-neutral)',
               borderRadius: '4px',
