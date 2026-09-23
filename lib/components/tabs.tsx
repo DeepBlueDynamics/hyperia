@@ -1,4 +1,4 @@
-import React, {forwardRef, useEffect, useMemo, useRef, useCallback, useState} from 'react';
+import React, {forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useState} from 'react';
 
 import type {TabsProps} from '../../typings/hyper';
 import rpc from '../rpc';
@@ -34,46 +34,127 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
     setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
   }, []);
 
-  // Scroll active tab into view
-  useEffect(() => {
-    if (listRef.current) {
-      const active = listRef.current.querySelector('.tab_active');
-      if (active) {
-        active.scrollIntoView({block: 'nearest', inline: 'nearest'});
-      }
+  // Keep the active tab fully visible. Adjusts ONLY the list's scrollLeft:
+  // scrollIntoView also scrolls every scrollable ancestor (overflow:hidden header
+  // containers included), which shifted the whole strip and left the first tab
+  // half cut off. And one pass right after render isn't enough: that same render
+  // turns the 20px scroll arrows on, which narrows and shifts the list AFTER the
+  // scroll, leaving the new tab half hidden. So the reveal stays pending briefly
+  // and is re-applied after the arrows render and on resize, until the user
+  // scrolls by hand. A tab added at the end pins the strip to the far right.
+  const pendingReveal = useRef<{mode: 'end' | 'active'; until: number} | null>(null);
+  const prevTabCount = useRef(tabs.length);
+  const applyReveal = useCallback(() => {
+    const el = listRef.current;
+    const pending = pendingReveal.current;
+    if (!el || !pending) return;
+    if (Date.now() > pending.until) {
+      pendingReveal.current = null;
+      return;
     }
-    updateScrollState();
-  }, [tabs.find((t) => t.isActive)?.uid, tabs.length, updateScrollState]);
+    if (pending.mode === 'end') {
+      el.scrollLeft = el.scrollWidth - el.clientWidth;
+      return;
+    }
+    const active = el.querySelector<HTMLElement>('.tab_active');
+    if (!active) return;
+    const listRect = el.getBoundingClientRect();
+    const tabRect = active.getBoundingClientRect();
+    if (tabRect.left < listRect.left) {
+      el.scrollLeft += tabRect.left - listRect.left;
+    } else if (tabRect.right > listRect.right) {
+      el.scrollLeft += tabRect.right - listRect.right;
+    }
+  }, []);
+  const cancelReveal = useCallback(() => {
+    pendingReveal.current = null;
+  }, []);
 
-  // Update scroll arrows on resize
+  const activeUid = tabs.find((t) => t.isActive)?.uid;
+  useLayoutEffect(() => {
+    const added = tabs.length > prevTabCount.current;
+    prevTabCount.current = tabs.length;
+    const activeIsLast = tabs.length > 0 && !!tabs[tabs.length - 1].isActive;
+    pendingReveal.current = {mode: added && activeIsLast ? 'end' : 'active', until: Date.now() + 600};
+    applyReveal();
+    updateScrollState();
+    const raf = requestAnimationFrame(() => {
+      applyReveal();
+      updateScrollState();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [activeUid, tabs.length, applyReveal, updateScrollState]);
+
+  // The scroll arrows appearing/disappearing resizes the list; re-apply after that render.
+  useLayoutEffect(() => {
+    applyReveal();
+  }, [canScrollLeft, canScrollRight, applyReveal]);
+
+  // Update scroll arrows (and any pending reveal) on resize
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(updateScrollState);
+    const ro = new ResizeObserver(() => {
+      applyReveal();
+      updateScrollState();
+    });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [updateScrollState]);
+  }, [applyReveal, updateScrollState]);
 
-  // Horizontal scroll with mouse wheel
+  // Whole-tab scrolling. Arrows and the wheel move exactly one tab and land the
+  // strip's left edge on a tab boundary, whatever the tabs' widths — a fixed
+  // pixel step used to stop mid-tab one click and a whole tab the next. The
+  // last stop is the scroll end, where the final tab is flush right.
+  // `scrollTarget` is where an in-flight smooth scroll is headed, so rapid
+  // clicks step from there instead of from a half-animated scrollLeft.
+  const scrollTarget = useRef<number | null>(null);
+  const scrollTargetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tabStops = (el: HTMLUListElement): number[] => {
+    const max = el.scrollWidth - el.clientWidth;
+    const origin = el.getBoundingClientRect().left - el.scrollLeft;
+    const stops = Array.from(el.querySelectorAll<HTMLElement>('.tab_tab'))
+      .map((tab) => Math.round(tab.getBoundingClientRect().left - origin))
+      .filter((x) => x > 0 && x < max);
+    return [0, ...stops, Math.max(0, max)];
+  };
+  const stepTabs = useCallback(
+    (dir: 1 | -1) => {
+      const el = listRef.current;
+      if (!el) return;
+      cancelReveal();
+      const from = scrollTarget.current ?? el.scrollLeft;
+      const stops = tabStops(el);
+      const next = dir > 0 ? stops.find((x) => x > from + 1) : [...stops].reverse().find((x) => x < from - 1);
+      if (next === undefined) return;
+      scrollTarget.current = next;
+      el.scrollTo({left: next, behavior: 'smooth'});
+      if (scrollTargetTimer.current) clearTimeout(scrollTargetTimer.current);
+      scrollTargetTimer.current = setTimeout(() => {
+        scrollTarget.current = null;
+        updateScrollState();
+      }, 350);
+    },
+    [cancelReveal, updateScrollState]
+  );
+
+  // Mouse wheel: one tab per notch. Trackpads send many small deltas, so they
+  // accumulate until they amount to a notch before stepping.
+  const wheelAccum = useRef(0);
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
-      if (listRef.current) {
-        listRef.current.scrollLeft += e.deltaY;
-        updateScrollState();
-      }
+      const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      if (!delta) return;
+      if (Math.sign(delta) !== Math.sign(wheelAccum.current)) wheelAccum.current = 0;
+      wheelAccum.current += delta;
+      if (Math.abs(wheelAccum.current) < 40) return;
+      wheelAccum.current = 0;
+      stepTabs(delta > 0 ? 1 : -1);
     },
-    [updateScrollState]
+    [stepTabs]
   );
 
-  const scrollBy = useCallback(
-    (dir: 1 | -1) => {
-      if (listRef.current) {
-        listRef.current.scrollBy({left: dir * 120, behavior: 'smooth'});
-        setTimeout(updateScrollState, 150);
-      }
-    },
-    [updateScrollState]
-  );
+  const scrollBy = stepTabs;
 
   // Tab drag-to-reorder.
   //
