@@ -1,0 +1,16 @@
+# Canonical mailbox implementation contract
+
+Coordinator accepts secure dual-credential/system binding, rejects untrusted pane claims. Begin implementation in `sidecar/src/msgbus.rs` and a new `sidecar/src/mailbox.rs` as needed; do not edit main.rs/bridge.rs/perms.rs/mcp.rs yet. Use nuts tools. Publish API + tests/status in plan/aardvark-implementation-status.md. No credentials in files/output.
+
+Corrections to your proposal:
+
+- Use namespaced stable principal keys: `agent:<registered immutable name>`, `pane:<full UUID>`, `system`. A display label never grants ownership. New messages carry ONE canonical toPrincipal and fromPrincipal; matching an unrelated toPane OR label must not override those keys. If pane is bound to a verified agent, resolve that recipient to agent principal at send time; changing the occupant later must not expose old agent mail. For old pane-only mail, document a restricted compatibility policy; never broad display-name fallback.
+- A receipt is for the message's canonical recipient, after ownership verification. Agent and pane notification unread checks resolve the same recipient key. Do not OR-match readerPane across an identity change.
+- Record authentication principal separately from human display labels, transport pane and delivery status.
+- Provide a safe binding store associating registered agent with current pane only after caller proves pane token or system authorization. Keep verification in coordinator HTTP handler using resolve_caller/pane_for_token, not accepting bool trust from arbitrary requests. Binding lookup should not make pane creators its occupants. Single current binding per pane and agent; revoke prior reverse map on rebind. Persistence errors returned. No raw tokens persisted in binding records.
+- Registered agent mint/list endpoints currently expose tokens without auth: inspect and propose hardening to coordinator, but do not mutate them yet. These can defeat ACLs otherwise.
+- Preserve existing two-file JSONL layout for mail, but serialize read/append/ack/idempotency operations and surface IO errors; unique IDs use local getrandom, not util::random_token's optional network entropy. At least 128 random bits. Test actual write failure/reopen/concurrent IDs.
+- Add idempotency key with requester scope. Same key/different payload or target conflicts. Acknowledgement checks message exists and authenticated recipient matches, repeated acknowledgement succeeds without growing receipts.
+- Inbox/search remain pure; add explicit check operation that acknowledges only returned messages (coordinator wires tool/API). Fetch all limit defaults and clamp safely; notify uses same canonical recipient. Old functions may be retained temporarily as wrappers for baseline compilation; expose safe new APIs clearly.
+
+Tests: arbitrary label/pane bypass cannot read new envelopes; two identities sharing display label stay isolated; recipient-only acknowledgement; duplicate ID/idempotency/conflict; read state survives reopen; binding reattach/revoke semantics; IO failure propagation. Filesystem fixtures stay under /workspace. Baseline cargo test completed, so you may run focused tests after module declarations are coordinated. Agent reviewer agreement is required after integration, not merely on your module.

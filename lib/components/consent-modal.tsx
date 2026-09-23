@@ -39,20 +39,15 @@ const actionStyle = (primary: boolean, busy: boolean): React.CSSProperties => ({
   opacity: busy ? 0.55 : 1
 });
 
-function respond(
+async function respond(
   req: PermRequest,
   decision: 'allow' | 'deny',
   scope: 'pane' | 'tab' | 'any',
   durationSecs: number | null
-): void {
-  const port = (process.env.HYPERIA_PORT as string) || '9800';
-  fetch(`http://localhost:${port}/api/perms/respond`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({id: req.id, decision, scope, durationSecs})
-  })
-    .catch((err) => console.error('permission respond failed:', err))
-    .finally(() => clearRequest(req.targetPane));
+): Promise<void> {
+  const result = await ipcRenderer.invoke('consent:respond', {id: req.id, decision, scope, durationSecs});
+  if (!result?.ok) throw new Error(result?.error || 'Approval was not recorded. Please retry.');
+  clearRequest(req.targetPane, req.id);
 }
 
 /**
@@ -72,12 +67,14 @@ export default function ConsentModal(): React.ReactElement | null {
   const [scope, setScope] = React.useState<'pane' | 'tab' | 'any'>('pane');
   const [duration, setDuration] = React.useState<number | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState('');
 
   // Reset choices to friendly defaults whenever a new prompt opens.
   React.useEffect(() => {
     setScope('pane');
     setDuration(null);
     setBusy(false);
+    setError('');
   }, [req?.id]);
 
   // Native web panes paint above the DOM, so this full-window prompt would sit
@@ -108,7 +105,7 @@ export default function ConsentModal(): React.ReactElement | null {
     const first = expiredReqs[0];
     return (
       <div
-        onClick={() => reviveRequest(first.targetPane)}
+        onClick={() => reviveRequest(first.targetPane, first.id)}
         title="Click to review"
         style={{
           position: 'fixed',
@@ -149,7 +146,11 @@ export default function ConsentModal(): React.ReactElement | null {
 
   const act = (decision: 'allow' | 'deny') => {
     setBusy(true);
-    respond(req, decision, scope, duration);
+    setError('');
+    void respond(req, decision, scope, duration).catch((err: unknown) => {
+      setError(err instanceof Error ? err.message : 'Approval was not recorded. Please retry.');
+      setBusy(false);
+    });
   };
 
   return (
@@ -169,7 +170,7 @@ export default function ConsentModal(): React.ReactElement | null {
       // click anywhere in the window was killing agents' requests (and while
       // the prompt was up, this full-window layer ate every hover/click — the
       // "all the icons are broken" reports). Only the explicit buttons decide.
-      onClick={() => expireRequest(req.targetPane)}
+      onClick={() => expireRequest(req.targetPane, req.id)}
     >
       <style>{`
         @keyframes hyConsentBg{from{opacity:0}to{opacity:1}}
@@ -195,11 +196,17 @@ export default function ConsentModal(): React.ReactElement | null {
           <span style={{fontSize: '20px', lineHeight: 1}}>🛂</span>
           <div style={{fontSize: '13.5px', lineHeight: 1.4}}>
             <b>{req.requesterName || req.requester}</b>
-            <span style={{color: 'var(--text-secondary, #9a9aa2)'}}> wants to control </span>
+            <span style={{color: 'var(--text-secondary, #9a9aa2)'}}>
+              {req.action?.startsWith('message:')
+                ? ' wants to send a message to '
+                : req.action?.startsWith('bind:')
+                  ? ' wants to associate its mailbox with '
+                  : ' wants to control '}
+            </span>
             <b>{paneName}</b>
             <span style={{color: 'var(--text-secondary, #9a9aa2)'}}>
               {' '}
-              — its tab is flashing 🔔. Approving runs the command it’s holding.
+              — its tab is flashing 🔔. Approving releases the waiting operation.
             </span>
             {req.purpose ? (
               <div
@@ -219,45 +226,59 @@ export default function ConsentModal(): React.ReactElement | null {
           </div>
         </div>
 
-        {/* Scope */}
-        <div style={{display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px'}}>
-          <span style={{fontSize: '11px', color: 'var(--text-secondary, #9a9aa2)', width: '54px', flexShrink: 0}}>
-            Access
-          </span>
-          <div style={{display: 'flex', gap: '5px'}}>
-            {(
-              [
-                ['pane', 'This pane'],
-                ['tab', 'This tab'],
-                ['any', 'Any pane']
-              ] as const
-            ).map(([val, lbl]) => (
-              <button key={val} type="button" onClick={() => setScope(val)} style={segStyle(scope === val)}>
-                {lbl}
-              </button>
-            ))}
-          </div>
-        </div>
+        {req.action?.startsWith('message:') || req.action?.startsWith('bind:') ? (
+          <p style={{fontSize: '12px'}}>Access applies only to this recipient.</p>
+        ) : (
+          <>
+            <div style={{display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px'}}>
+              <span style={{fontSize: '11px', color: 'var(--text-secondary, #9a9aa2)', width: '54px', flexShrink: 0}}>
+                Access
+              </span>
+              <div style={{display: 'flex', gap: '5px'}}>
+                {(
+                  [
+                    ['pane', 'This pane'],
+                    ['tab', 'This tab'],
+                    ['any', 'Any pane']
+                  ] as const
+                ).map(([val, lbl]) => (
+                  <button key={val} type="button" onClick={() => setScope(val)} style={segStyle(scope === val)}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
 
-        {/* Duration */}
-        <div style={{display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '18px'}}>
-          <span style={{fontSize: '11px', color: 'var(--text-secondary, #9a9aa2)', width: '54px', flexShrink: 0}}>
-            For
-          </span>
-          <div style={{display: 'flex', gap: '5px'}}>
-            {(
-              [
-                ['15 min', 900],
-                ['1 hour', 3600],
-                ['Always', null]
-              ] as const
-            ).map(([lbl, secs]) => (
-              <button key={lbl} type="button" onClick={() => setDuration(secs)} style={segStyle(duration === secs)}>
-                {lbl}
-              </button>
-            ))}
+        {req.action?.startsWith('bind:') ? null : (
+          <>
+            <div style={{display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '18px'}}>
+              <span style={{fontSize: '11px', color: 'var(--text-secondary, #9a9aa2)', width: '54px', flexShrink: 0}}>
+                For
+              </span>
+              <div style={{display: 'flex', gap: '5px'}}>
+                {(
+                  [
+                    ['15 min', 900],
+                    ['1 hour', 3600],
+                    ['Always', null]
+                  ] as const
+                ).map(([lbl, secs]) => (
+                  <button key={lbl} type="button" onClick={() => setDuration(secs)} style={segStyle(duration === secs)}>
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {error ? (
+          <div role="alert" style={{color: 'var(--accent-danger, #f85149)', marginBottom: 12}}>
+            {error}
           </div>
-        </div>
+        ) : null}
 
         {/* Actions */}
         <div style={{display: 'flex', gap: '10px', justifyContent: 'flex-end'}}>

@@ -1,0 +1,7 @@
+# Next independent review
+First review received. Root fixed cleanup_pane message grants and anonymous spoofed requester on /api/perms/request. Binding association now applied before consent removal so disk failure preserves the prompt. Identity registration regression test added. Next:
+- Review System-only /ws boundary + Electron Bearer header; unauthenticated bridge formerly could forge sessions/tokens, undermining all ACLs.
+- Review canonical requester authority: messaging currently requester=id.label; this collides for names like "pane abcd1234" vs real Pane label. Propose fix to message requester only using principal.to_key; binding consent remains exact registered name validated. Existing legacy drive labels outside new messaging need clear risk assessment.
+- Research safe automatic binding bootstrap within Hyperia repository only: Session injects pane token HYPERIA_AGENT_TOKEN but n8 replaces it with persistent agent token. Need preserve pane credential or authenticate registration with it; do not assume n8 currently does this. External runtime unavailable in workspace. Can expose pane_bind and explicit actionable unbound inbox state now, but cannot pretend startup is automatically fixed.
+- Review app/guarded-input.ts and app/bridge.ts GuardedInput: focus protection and pending input isolation; tests already 6 pass combined consent+input.
+Please implement extra binding-no-drive test in sidecar/src/message_acl_tests.rs only. No other code edits without coordination. Publish findings in same report append or separate.

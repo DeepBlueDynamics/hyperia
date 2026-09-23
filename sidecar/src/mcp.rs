@@ -170,6 +170,78 @@ pub struct ConsentLogRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct MsgSendRequest {
+    /// Recipient PANE — window id (from terminal_status).
+    pub window: Option<u32>,
+    /// Recipient pane's tab name.
+    pub tab: Option<String>,
+    /// Recipient pane — name or paneId. Address by window+tab (omit pane) for a
+    /// restart-stable target, or by paneId for a specific pane.
+    pub pane: Option<String>,
+    /// OR address an exact registered agent identity. Display codenames use pane instead.
+    pub to_label: Option<String>,
+    /// Optional one-line subject.
+    pub subject: Option<String>,
+    /// The message body, up to 16384 characters.
+    pub body: String,
+    /// Reuse this key when retrying the identical send. Changed content conflicts.
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PaneSendRequest {
+    /// Explicit pane ID, unique prefix, or display name.
+    pub pane: String,
+    pub window: Option<u32>,
+    pub tab: Option<String>,
+    /// Plain text for the agent. Control sequences are refused.
+    pub text: String,
+    /// Submit the input after typing, default true. False never adds Enter.
+    pub submit: Option<bool>,
+    /// Requester-scoped retry key. Reuse only for the identical operation.
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PaneBindRequest {
+    /// Active pane ID to associate with your persistent agent identity.
+    pub pane: String,
+    /// Optional pane credential proving residency. Without it, human consent is requested.
+    pub pane_token: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DeliveryStatusRequest {
+    /// Operation ID returned by a send or terminal-run request.
+    pub id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct MsgInboxRequest {
+    /// Only return UNREAD messages. Default false (all, newest first).
+    pub unread_only: Option<bool>,
+    /// Max messages to return (newest first, default 100).
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct MsgReadRequest {
+    /// The message id (msg_...) to mark read.
+    pub id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct MsgSearchRequest {
+    /// Case-insensitive substring over the whole message (from, to, subject, body).
+    pub q: Option<String>,
+    /// Which box: "sent" (mail you sent), "received" (mail to you), or "all" (default).
+    #[serde(rename = "box")]
+    pub box_: Option<String>,
+    /// Max messages to return (newest first, default 100).
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct BugReportRequest {
     /// One-line summary of what went wrong (required).
     pub title: String,
@@ -194,18 +266,15 @@ pub struct BugLogRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct KeysRequest {
-    /// Keystrokes to type into the terminal. Use \n for Enter, \t for Tab, \x03 for Ctrl-C (interrupt).
+    /// Explicit key bytes or escaped controls (for example backslash-x03 for Ctrl-C).
     pub keys: String,
-    /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
     pub window: Option<u32>,
-    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Which pane in the tab — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
     pub pane: Option<String>,
-    /// Set true to send immediately even when the human is active in this pane — use this to interrupt a running process (e.g. Ctrl-C). When the human is active and this is false/omitted, the keys are queued and you get a notice telling you to resend with interrupt=true.
+    /// Explicit takeover for raw control input only. Plain agent text still protects human focus.
     pub interrupt: Option<bool>,
-    /// Set true to prepend "From: <your pane>:" so the recipient agent knows who's messaging it — Hyperia fills in YOUR origin pane, you never specify it. Opt-in (default off); only applied when the target is an agent/AI pane. Leave off for shell commands.
-    pub attribute: Option<bool>,
+    /// Requester-scoped retry key; changed input with the same key conflicts.
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -222,34 +291,25 @@ pub struct CdRequest {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RunRequest {
-    /// Shell command or text to type
+    /// Shell command. Agent input belongs in pane_send.
     pub command: String,
-    /// Window ID — the `id` field from terminal_status (not 0-based; first window is usually 1). Omit to use the focused window.
+    /// Explicit target window, tab or pane is required.
     pub window: Option<u32>,
-    /// Tab name (e.g. "Capybara"). Omit for active tab in the window.
     pub tab: Option<String>,
-    /// Which pane in the tab — its name (e.g. "Brilliant Peacock") or paneId (full UUID or 4+ char prefix) from terminal_status. Panes are addressed by name or id only. Omit for the first pane.
+    /// Pane ID, unique prefix, or display name.
     pub pane: Option<String>,
-    /// Milliseconds to wait for output before reading screen (default: 2000)
-    pub wait_ms: Option<u64>,
-    /// Whether to press Enter after typing the command (default: true). Set false to type text without submitting — lets the human review before pressing Enter.
+    /// Default true. False types the command without Enter, including after approval.
     pub submit: Option<bool>,
-    /// Maximum characters to return from command output (default: 12000). Increase if output is truncated.
-    pub max_output_chars: Option<usize>,
-    /// What you're looking for in the output — Maximus extracts just that and saves tokens. Example: "exit code", "error messages", "port number".
-    pub focus: Option<String>,
-    /// Pass true to bypass Maximus and receive the full unfiltered output. A [tokenmax:raw] header confirms the bypass.
-    pub raw: Option<bool>,
-    /// Acknowledge that you've read the Hyperia anti-pattern warning and intentionally want to run a shell-level backgrounding command (Start-Process, nohup, & at end, tmux). Default false. If false, commands matching those patterns are refused with guidance to use terminal_split / terminal_new_tab instead, which is almost always what you should do in Hyperia.
+    /// Explicitly permit shell backgrounding patterns. Prefer a separate visible pane.
     pub force: Option<bool>,
-    /// Set true to prepend "From: <your pane>:" so a recipient AGENT knows who's messaging it — Hyperia fills in YOUR origin pane, you never specify it. Opt-in (default off); only applied when the target is an agent/AI pane (a prefix would corrupt a shell command).
-    pub attribute: Option<bool>,
+    /// Requester-scoped retry key. Reuse only for the identical operation.
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RequestTokenRequest {
-    /// A name for this agent identity (e.g. "claude-code", "lume-claude"). Minting
-    /// the same name again returns the same token. Defaults to "external-agent".
+    /// A unique registered identity name. Retrieving an existing identity requires its credential.
+    /// Defaults to "external-agent".
     pub name: Option<String>,
 }
 
@@ -1078,38 +1138,23 @@ impl HyperiaMcp {
         lines.join("\n")
     }
 
-    #[tool(description = "Type keystrokes into a terminal pane. To send Enter, you must use a double-escaped \\\\n (backslash-n, written as \\\\\\\\n in JSON payloads). A single newline in the JSON payload is parsed into a literal newline character and will be ignored/dropped by the PTY. Use \\\\r for Return, \\\\t for Tab, \\\\x03 for Ctrl-C. Address panes with window/tab/pane (name or paneId from terminal_status). IMPORTANT for restartable agents: a paneId is NOT stable across restarts — a containerized/long-running agent that restarts comes back with a new paneId and name. To reliably reach 'the agent', address by window+tab and OMIT pane (the tab is stable; this hits the tab's current active pane). A write with NO window/tab/pane is refused (it will not default to the human's focused pane). If the human is currently active in the target pane, the keys are queued and the reply tells you so — resend with interrupt=true to send immediately (use this to interrupt a running process). The response includes a [hyperia:meta] envelope describing the target process so you can detect Ink/TUI agents that need LF (\\\\n) instead of CR (\\\\r) for submit.")]
+    #[tool(description = "Send explicitly requested terminal-control keys to an addressed pane. Input is retained before terminal-control consent; approval releases it automatically. Raw controls add no implicit Enter. interrupt=true bypasses focus protection only for raw control input. Prefer pane_send for agent text and terminal_run for shell commands. Use an idempotency key on retries and delivery_status for the outcome.")]
     async fn terminal_keys(
         &self,
         Parameters(req): Parameters<KeysRequest>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.focus_pane(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
-        let mut path = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
+        let mut path = self.pane_path("/api/terminal/keys", req.window, req.tab.as_deref(), req.pane.as_deref());
         if req.interrupt.unwrap_or(false) {
             let sep = if path.contains('?') { '&' } else { '?' };
-            path.push(sep);
-            path.push_str("interrupt=true");
+            path.push_str(&format!("{sep}interrupt=true"));
         }
-        if req.attribute.unwrap_or(false) {
+        if let Some(key) = req.idempotency_key {
             let sep = if path.contains('?') { '&' } else { '?' };
-            path.push(sep);
-            path.push_str("attribute=true");
+            path.push_str(&format!("{sep}idempotency_key={}", urlencoding::encode(&key)));
         }
         let resp = self.post_text_as(&path, &req.keys, None, forwarded_auth(&ctx).as_deref()).await?;
-        let target_process = self.pane_process_name(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
-        let mut out = resp;
-        if !target_process.is_empty() {
-            let extra = format!("\n[hyperia:meta] target_process={}", target_process);
-            out.push_str(&extra);
-            if Self::is_likely_ink_tui(&target_process) {
-                out.push_str(&format!(
-                    "\n[hyperia:hint] target_process='{}' is a Node/Ink TUI — it reads LF for submit. If your keys contained \\r and the target didn't react, you must use a double-escaped \\\\n (backslash-n, written as \\\\\\\\n in JSON payloads).",
-                    target_process,
-                ));
-            }
-        }
-        Ok(CallToolResult::success(vec![Content::text(out)]))
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
     #[tool(description = "Change the working directory of a shell. If a foreground process is running, the change is queued and applied automatically when the shell returns to the prompt. If the shell is idle, it is applied immediately. Only works on local shells.")]
@@ -1130,105 +1175,26 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Type text into a terminal pane and press Enter. Works for shell commands and interactive programs (Codex, Python REPL, vim, etc.). Picks the submit byte per target: CR for shells (PowerShell, bash, cmd), LF for Node/Ink TUI agents (claude-code, codex, aider, gemini-cli) — so neither a phantom continuation prompt nor a silently-absorbed Enter occurs. Set submit=false to type without pressing Enter — useful to let the human review before submitting. Pass focus= to receive only the relevant part of the output — Maximus filters the result so you only see what you asked for. Pass raw=true to bypass Maximus and see the full output. Refuses shell-level backgrounding patterns (Start-Process, nohup, & at end, tmux) and points you to terminal_split / terminal_new_tab; set force=true to bypass. The response includes a [hyperia:meta] envelope when the target didn't appear to respond — telling you whether the input is still sitting unsubmitted and what to do next.")]
+    #[tool(description = "Run a command only in a verified open shell prompt. Agent panes, busy shells, and unknown foregrounds are refused; use pane_send for agent input. An explicit target is required. The operation is retained before requesting terminal-control permission; approval runs it automatically. Focus protection may keep it queued. submit=false stages text without Enter. Use delivery_status to inspect a retained operation and terminal_screen or terminal_scrollback for output.")]
     async fn terminal_run(
         &self,
         Parameters(req): Parameters<RunRequest>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.focus_pane(req.window, req.tab.as_deref(), req.pane.as_deref()).await;
-        let submit = req.submit.unwrap_or(true);
-        let wait = req.wait_ms.unwrap_or(if submit { 2000 } else { 200 });
         let cmd = strip_trailing_returns(&req.command).to_string();
-
-        // Anti-pattern guardrail. Hyperia is a multi-pane terminal — agents
-        // should split a pane or open a new tab to host long-running tasks
-        // (servers, watchers, REPLs) instead of using shell-level
-        // backgrounding hacks. We bounce the common offenders with a clear
-        // message; the agent can set force=true to override.
         if !req.force.unwrap_or(false) {
-            if let Some(pat) = looks_like_background_hack(&cmd) {
-                return Ok(CallToolResult::success(vec![Content::text(format!(
-                    "REFUSED ({pat}). Hyperia gives you unlimited panes — don't background processes with shell hacks. Instead:\n  1. terminal_split (or terminal_new_tab) to create a fresh pane\n  2. terminal_run your long-running command in that new pane (it stays visible, the human can see it, you can read its output any time with terminal_screen)\nIf you genuinely need shell backgrounding and not a Hyperia pane, resend with force=true."
-                ))]));
+            if let Some(pattern) = looks_like_background_hack(&cmd) {
+                return Err(ErrorData::invalid_params(
+                    format!("Shell backgrounding ({pattern}) requires force=true; prefer a separate pane."), None));
             }
         }
-
-        // Foreground process — used for the diagnostics envelope and the
-        // submit=false staging path below. The SUBMIT mechanics themselves now
-        // live server-side in Bridge::deliver_keys / type_and_collect: body
-        // delivered first (bracketed paste for TUI targets), then Enter as its
-        // own isolated write, verified + nudged once. A trailing `\r` on the
-        // POSTed body is the submit signal; no per-target byte-picking here.
-        let target_process = self
-            .pane_process_name(req.window, req.tab.as_deref(), req.pane.as_deref())
-            .await;
-        let is_ink = Self::is_likely_ink_tui(&target_process);
-        let needs_paste = is_ink && (cmd.chars().count() > 120 || cmd.contains('\n'));
-
-        if submit {
-            // Use type-and-collect: sends the command, streams all PTY output until
-            // wait_ms of silence (up to 8s hard cap). Returns full output, not just
-            // the visible screen — avoids silent truncation of long command output.
-            // raw=true on the server side bypasses unescape_keys so Windows paths
-            // like `\research` aren't shredded into a CR + `esearch`.
-            let base = self.pane_path("/api/type-and-collect", req.window, req.tab.as_deref(), req.pane.as_deref());
-            let sep = if base.contains('?') { '&' } else { '?' };
-            let attr = if req.attribute.unwrap_or(false) { "&attribute=true" } else { "" };
-            let collect_path = format!("{}{sep}quiet_ms={}&raw=true{}", base, wait, attr);
-            // Give the HTTP client headroom over the server's quiet window so it doesn't
-            // time out before /api/type-and-collect finishes draining PTY output.
-            let req_timeout = std::time::Duration::from_millis(wait + 15_000);
-            let raw_output = self
-                .post_text_as(
-                    &collect_path,
-                    &format!("{cmd}\r"),
-                    Some(req_timeout),
-                    forwarded_auth(&ctx).as_deref(),
-                )
-                .await?;
-            let max_chars = req.max_output_chars.unwrap_or(12_000);
-            let text = clean_terminal_output(&raw_output, max_chars);
-            let mut out = self.maximus_filter(&text, req.focus.as_deref(), req.raw.unwrap_or(false)).await;
-
-            // --- Runtime feedback envelope ---
-            // The trimmed text (after Maximus + cleaning) is what the agent
-            // actually saw. If it's empty / pure whitespace AND the target's
-            // last screen lines still hold our command tail, the input never
-            // made it past the target's input buffer.
-            let trimmed_visible = text.trim();
-            let quiet_silent = trimmed_visible.is_empty();
-            let screen_held_input = if quiet_silent {
-                self.screen_likely_holds_unsubmitted(
-                    req.window, req.tab.as_deref(), req.pane.as_deref(), &cmd,
-                ).await
-            } else {
-                false
-            };
-            let diag = Self::build_run_diagnostic(
-                &target_process, wait, quiet_silent, screen_held_input, &cmd,
-            );
-            if !diag.is_empty() {
-                if !out.is_empty() && !out.ends_with('\n') { out.push('\n'); }
-                out.push_str(&diag);
-            }
-            Ok(CallToolResult::success(vec![Content::text(out)]))
-        } else {
-            // submit=false: just type the text without waiting for output. raw=true
-            // for the same reason — preserve Windows backslash-paths verbatim.
-            let base = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
-            let sep = if base.contains('?') { '&' } else { '?' };
-            let pane_path = format!("{}{sep}raw=true", base);
-            // Same bracketed-paste atomic ingest for large/multi-line Ink input,
-            // minus the Enter (the human submits after review).
-            let body = if needs_paste {
-                format!("\u{1b}[200~{}\u{1b}[201~", cmd)
-            } else {
-                cmd.clone()
-            };
-            self.post_text(&pane_path, &body).await?;
-            Ok(CallToolResult::success(vec![Content::text(String::from("Typed (not submitted). Press Enter to run."))]))
-        }
+        let body = serde_json::json!({
+            "window": req.window, "tab": req.tab, "pane": req.pane,
+            "text": cmd, "submit": req.submit.unwrap_or(true),
+            "idempotency_key": req.idempotency_key,
+        });
+        let resp = self.post_json_as("/api/terminal/run", &body, forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
     #[tool(description = "Read the current screen content of a terminal pane. Address panes with window/tab/pane. Panes are addressed by name or paneId (from terminal_status). Pass focus= to receive only the relevant part — Maximus filters the output. Pass raw=true to bypass Maximus.")]
@@ -1988,6 +1954,118 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
+    #[tool(description = "Send durable mail to an explicit pane or registered agent identity. Recipient message ACL applies independently of terminal-control permissions. Approval retains and automatically releases this operation. A supported unfocused agent receives a short notice without waiting for output silence; fetch the body using msg_inbox or msg_check. Returns operation state; stored mail does not mean the recipient has read it. Use an idempotency_key for retries.")]
+    async fn msg_send(
+        &self,
+        Parameters(req): Parameters<MsgSendRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if req.body.trim().is_empty() {
+            return Err(ErrorData::invalid_params("body must not be empty", None));
+        }
+        let body = serde_json::json!({
+            "window": req.window,
+            "tab": req.tab,
+            "pane": req.pane,
+            "to_label": req.to_label,
+            "subject": req.subject.unwrap_or_default(),
+            "body": req.body,
+            "idempotency_key": req.idempotency_key,
+        });
+        let resp = self.post_json_as("/api/msg/send", &body, forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "List your authenticated inbox without changing read state. Addresses use a verified agent-to-pane binding, never display-name authority. unread_only filters unread messages. Use msg_check to fetch and acknowledge returned unread mail, or msg_read for a single receipt.")]
+    async fn msg_inbox(
+        &self,
+        Parameters(req): Parameters<MsgInboxRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut parts: Vec<String> = Vec::new();
+        if req.unread_only.unwrap_or(false) {
+            parts.push("unread_only=true".to_string());
+        }
+        if let Some(l) = req.limit {
+            parts.push(format!("limit={l}"));
+        }
+        let path = if parts.is_empty() {
+            "/api/msg/inbox".to_string()
+        } else {
+            format!("/api/msg/inbox?{}", parts.join("&"))
+        };
+        let resp = self.get_as(&path, forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Mark a message-bus message read (by its msg_ id) once you've acted on it, so it drops out of your unread inbox. Reading is per-recipient — it only affects your own inbox view, not the sender's.")]
+    async fn msg_read(
+        &self,
+        Parameters(req): Parameters<MsgReadRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if req.id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("id must not be empty", None));
+        }
+        let body = serde_json::json!({ "id": req.id });
+        let resp = self.post_json_as("/api/msg/read", &body, forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Search YOUR message-bus mail — messages you sent or received — newest first. q is a case-insensitive substring over the whole message. box='sent', 'received', or 'all' (default). Use it to find an earlier message, a request you sent, or what someone told you to do.")]
+    async fn msg_search(
+        &self,
+        Parameters(req): Parameters<MsgSearchRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(g) = &req.q {
+            parts.push(format!("q={}", urlencoding::encode(g)));
+        }
+        if let Some(b) = &req.box_ {
+            parts.push(format!("box={}", urlencoding::encode(b)));
+        }
+        if let Some(l) = req.limit {
+            parts.push(format!("limit={l}"));
+        }
+        let path = if parts.is_empty() {
+            "/api/msg/search".to_string()
+        } else {
+            format!("/api/msg/search?{}", parts.join("&"))
+        };
+        let resp = self.get_as(&path, forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Deliver plain text directly to a supported agent pane. This is agent input, not a shell command and not mailbox storage. Requires recipient message permission; approval automatically releases the retained operation. Human focus defers delivery; an unfocused working agent does not need to become idle. Returns an operation ID and state, not an acknowledgement that the agent read it.")]
+    async fn pane_send(&self, Parameters(req): Parameters<PaneSendRequest>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"pane": req.pane, "window": req.window, "tab": req.tab,
+            "text": req.text, "submit": req.submit.unwrap_or(true), "idempotency_key": req.idempotency_key});
+        let resp = self.post_json_as("/api/pane/send", &body, forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Associate your authenticated persistent agent inbox with an active pane. Prove residency with the pane credential or request human consent. Approval applies this stored association automatically. A pane ID or display name alone cannot claim another agent's inbox.")]
+    async fn pane_bind(&self, Parameters(req): Parameters<PaneBindRequest>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"pane": req.pane, "pane_token": req.pane_token});
+        let resp = self.post_json_as("/api/pane/bind-agent", &body, forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Fetch your unread mail and acknowledge exactly the messages returned. The response marks them read. Use msg_inbox for a read-only preview. No other caller can acknowledge your mail.")]
+    async fn msg_check(&self, Parameters(req): Parameters<MsgInboxRequest>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"limit": req.limit});
+        let resp = self.post_json_as("/api/msg/check", &body, forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Read the state and outcome of your own retained delivery operation. Submitted means transport submission, not recipient read acknowledgement. Failed or indeterminate operations are never silently replayed.")]
+    async fn delivery_status(&self, Parameters(req): Parameters<DeliveryStatusRequest>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let path = format!("/api/delivery/status?id={}", urlencoding::encode(&req.id));
+        let resp = self.get_as(&path, forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
     #[tool(description = "Get the current Hyperia version. Returns the sidecar version and the Electron app version.")]
     async fn hyperia_version(&self) -> Result<CallToolResult, ErrorData> {
         let sidecar_version = env!("CARGO_PKG_VERSION");
@@ -2137,19 +2215,23 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Get a persistent Hyperia identity token — call this the moment a state-changing tool returns 'No identity' (reads never needed one). Mints (or returns) a persistent hyp_agent_… token; the same name always returns the same token, and it survives restarts in ~/.hyperia/agents.json. The reply tells you how to use it IMMEDIATELY — the sidecar honors it on direct HTTP calls to its /api/... routes right away, no restart — and the exact `claude mcp add` command to hand your human so future sessions are born with it. Only your CURRENT MCP connection's header stays frozen until the session restarts; use the direct-HTTP path in the meantime.")]
+    #[tool(description = "Register a persistent Hyperia agent identity. A new name creates a credential; retrieving an existing identity requires its current credential or the Hyperia application. An authenticated pane registering a new identity gets a verified mailbox binding. Configure the returned token as your MCP Authorization header; pane_bind associates an existing identity with a new pane.")]
     async fn request_token(
         &self,
         Parameters(req): Parameters<RequestTokenRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let raw = req.name.unwrap_or_default();
         let name = if raw.trim().is_empty() { "external-agent".to_string() } else { raw.trim().to_string() };
         let body = serde_json::json!({"name": name});
-        let resp = self.post_json("/api/identity/agent", &body).await?;
+        let resp = self.post_json_as("/api/identity/agent", &body, forwarded_auth(&ctx).as_deref()).await?;
         let token = serde_json::from_str::<serde_json::Value>(&resp)
             .ok()
             .and_then(|v| v["token"].as_str().map(String::from))
             .unwrap_or_default();
+        if token.is_empty() {
+            return Ok(CallToolResult::error(vec![Content::text(resp)]));
+        }
         let msg = crate::messages::render(
             crate::messages::Msg::RequestTokenMinted,
             &[("name", &name), ("token", &token), ("base", &self.base_url)],
@@ -2165,7 +2247,7 @@ impl HyperiaMcp {
             {
                 "name": "terminal",
                 "description": "Drive terminal panes: open windows/tabs, split panes, run commands, read screens, and send keystrokes. Hyperia gives unlimited visible panes — prefer a dedicated pane over shell backgrounding.",
-                "tools": ["terminal_status", "terminal_cd", "terminal_new_tab", "terminal_new_window", "terminal_split", "terminal_run", "terminal_keys", "terminal_screen", "terminal_focus", "terminal_rename", "terminal_close"]
+                "tools": ["pane_send", "pane_bind", "delivery_status", "terminal_status", "terminal_cd", "terminal_new_tab", "terminal_new_window", "terminal_split", "terminal_run", "terminal_keys", "terminal_screen", "terminal_focus", "terminal_rename", "terminal_close"]
             },
             {
                 "name": "web",
@@ -2217,10 +2299,11 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(out)]))
     }
 
-    #[tool(description = "Send a keyboard event directly to a Hyperia window's UI layer — bypasses the PTY and hits React/Electron's event system. Use this to send keys like Escape, Ctrl+C, Alt+Up that are handled as UI shortcuts rather than terminal input. keyCode uses Electron key names (e.g. 'Escape', 'c', 'Up'). modifiers is an array like ['ctrl'], ['alt'], ['shift'], ['ctrl','shift'].")]
+    #[tool(description = "Application-only window UI keyboard events. Requires the internal Hyperia application identity; ordinary agents cannot drive consent dialogs through UI shortcuts. For explicitly authorized terminal controls use terminal_keys with an addressed pane. For agent text use pane_send.")]
     async fn terminal_ui_key(
         &self,
         Parameters(req): Parameters<UIKeyRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let mut body = serde_json::json!({
             "keyCode": req.key_code,
@@ -2230,7 +2313,7 @@ impl HyperiaMcp {
             body["windowId"] = serde_json::json!(w);
         }
         let resp = self
-            .post_json("/api/ui/key", &body)
+            .post_json_as("/api/ui/key", &body, forwarded_auth(&ctx).as_deref())
             .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
@@ -4045,9 +4128,23 @@ impl ServerHandler for HyperiaMcp {
                  \n\nSticky notes: sticky_note_list, sticky_note_create, sticky_note_create_code, \
                  sticky_note_update, sticky_note_close, sticky_note_delete. \
                  \n\nAgent: agent_status, auto_describe. \
+                 \n\nMessage bus: msg_send, msg_inbox, msg_read, msg_search. \
                  \n\nStyles: style_list, style_create, style_delete. \
                  \n\nTelemetry: telemetry_toggle, telemetry_snapshot, telemetry_record, telemetry_reset. \
-                 \n\nLogs: sidecar_logs."
+                 \n\nLogs: sidecar_logs. \
+                 \n\nMESSAGING OTHER AGENTS: open the messaging tool group when needed. Use pane_send for \
+                 direct input to a supported agent pane, and terminal_run only for a verified shell prompt. \
+                 msg_send stores durable mail for an explicit pane or registered agent identity. Message \
+                 permission is separate from terminal control. Approval releases the retained operation \
+                 automatically; inspect delivery_status and reuse the same idempotency key for a retry. \
+                 An unfocused supported agent can receive input and a short mailbox notice while working; \
+                 human focus defers delivery. msg_inbox and msg_search are read-only; msg_check fetches and \
+                 acknowledges returned unread mail; msg_read acknowledges one message. Persistent identities \
+                 need a verified pane_bind association to read pane-addressed mail. Submitted does not mean read. \
+                 \n\nAUTO-POKE: if a pane looks idle, Hyperia may re-send its last input as an automated \
+                 watchdog nudge, prefixed `[Hyperia auto-poke …]`. That marker means a MACHINE re-sent it, \
+                 NOT a person messaging you — do not read human intent or distress into it. Stop it with \
+                 `pane_pulse_clear` on that pane (inspect with `pane_pulse_status`)."
                     .into(),
             ),
             capabilities: {

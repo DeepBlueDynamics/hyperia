@@ -12,6 +12,7 @@ import isDev from 'electron-is-dev';
 import WebSocket from 'ws';
 
 import {getProfiles, getConfig} from './config';
+import {submitInput} from './guarded-input';
 import type Session from './session';
 import {
   createStickyNote,
@@ -21,6 +22,7 @@ import {
   scheduleSticky,
   unscheduleSticky
 } from './sticky';
+import {SYSTEM_TOKEN} from './system-token';
 import {capturePaneJpeg} from './web-pane-manager';
 import {captureAllWindows, restoreWorkspace} from './workspace';
 
@@ -79,6 +81,7 @@ interface QueuedWrite {
   seq: number | undefined;
 }
 const agentQueues = new Map<string, QueuedWrite[]>();
+const inputAttempts = new Set<string>();
 let drainTimer: NodeJS.Timeout | null = null;
 
 // Callback for downstream commands from sidecar
@@ -108,7 +111,7 @@ function clearPendingSessionCallback() {
 function connect() {
   if (stopped) return;
   try {
-    ws = new WebSocket(`ws://127.0.0.1:${sidecarPort}/ws`);
+    ws = new WebSocket(`ws://127.0.0.1:${sidecarPort}/ws`, {headers: {Authorization: `Bearer ${SYSTEM_TOKEN}`}});
   } catch (err) {
     console.warn('[bridge] WebSocket create error:', err);
     scheduleReconnect();
@@ -230,10 +233,25 @@ function isUserActive(uid: string): boolean {
   return Date.now() - last < getAgentDeferMs();
 }
 
+function inputReserved(uid: string): boolean {
+  return inputAttempts.has(uid);
+}
+
 function enqueueOrWrite(uid: string, keys: string, seq: number | undefined, interrupt = false) {
   const tracked = trackedSessions.get(uid);
   if (!tracked) {
     sendResult(seq, `No session: ${uid}`);
+    return;
+  }
+
+  // A guarded input owns this pane through its settle and Enter. Do not write,
+  // and do not park the text on the human-activity queue: that queue would
+  // drain into the same composer. interrupt does not bypass the reservation.
+  if (inputReserved(uid)) {
+    sendResult(
+      seq,
+      'deferred: this pane has an in-flight guarded input — keys were not written. Retry when it finishes.'
+    );
     return;
   }
 
@@ -321,12 +339,12 @@ function drainQueues() {
       continue;
     }
 
-    if (isUserActive(uid)) {
+    if (isUserActive(uid) || inputReserved(uid)) {
       anyRemaining = true;
       continue;
     }
 
-    // User went idle — execute queued agent input now
+    // User went idle and no guarded input owns the pane — execute queued agent input now
     const tracked = trackedSessions.get(uid);
     if (tracked) {
       for (const entry of queue) {
@@ -386,6 +404,44 @@ function handleCommand(msg: Record<string, unknown>) {
       }
       break;
     }
+    case 'GuardedInput': {
+      const uid = String(msg.uid || '');
+      const tracked = trackedSessions.get(uid);
+      const pid = Number(msg.pid);
+      const text = msg.text;
+      if (!tracked || !pid || tracked.session.pty?.pid !== pid || typeof text !== 'string') {
+        sendResult(
+          seq,
+          JSON.stringify({state: 'failed', detail: 'Target pane incarnation changed or input is invalid.'})
+        );
+        break;
+      }
+      if (inputAttempts.has(uid) || (agentQueues.get(uid)?.length || 0) > 0) {
+        sendResult(
+          seq,
+          JSON.stringify({state: 'deferred', detail: 'Another input operation is pending for this pane.'})
+        );
+        break;
+      }
+      inputAttempts.add(uid);
+      void submitInput(
+        {text, submit: msg.submit === true, agent: msg.agent === true},
+        {
+          alive: () => trackedSessions.get(uid) === tracked && tracked.session.pty?.pid === pid,
+          protected: () => {
+            if (msg.control === true && msg.interrupt === true) return false;
+            const win = getHyperiaWindowById(tracked.windowId);
+            return isUserActive(uid) || !!(win?.isFocused() && tracked.tabActive && tracked.paneActive);
+          },
+          write: (bytes) => tracked.session.pty!.write(bytes),
+          settle: () => new Promise((resolve) => setTimeout(resolve, 150))
+        }
+      )
+        .then((result) => sendResult(seq, JSON.stringify(result)))
+        .finally(() => inputAttempts.delete(uid));
+      break;
+    }
+
     case 'Keys': {
       const uid = msg.uid as string;
       const keys = msg.keys as string;
@@ -598,6 +654,7 @@ function handleCommand(msg: Record<string, unknown>) {
         requesterName: (msg.requesterName as string) || '',
         requesterPane: (msg.requesterPane as string) || '',
         targetPane: msg.targetPane as string,
+        action: (msg.action as string) || 'drive',
         purpose: (msg.purpose as string) || ''
       };
       for (const w of (app as any).getWindows?.() || []) {

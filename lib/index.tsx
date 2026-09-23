@@ -286,8 +286,8 @@ rpc.on('permission request', (req) => {
 });
 
 rpc.on('permission resolved', ({targetPane, id}: {targetPane: string; decision: string; id?: string}) => {
-  permissionsBus.clearRequest(targetPane);
-  if (targetPane) store_.dispatch(uiActions.clearTabBell(targetPane));
+  permissionsBus.clearRequest(targetPane, id);
+  if (targetPane && !permissionsBus.hasRequests(targetPane)) store_.dispatch(uiActions.clearTabBell(targetPane));
   if (id) permissionsBus.clearToast(id);
 });
 

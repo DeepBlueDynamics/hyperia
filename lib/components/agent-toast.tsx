@@ -1,3 +1,4 @@
+import {ipcRenderer} from 'electron';
 import React from 'react';
 
 import {subscribeToasts, subscribeExpiredToasts, reviveToast, clearToast, type ToastRequest} from '../permissions-bus';
@@ -28,14 +29,13 @@ function actionPhrase(action: string): string {
 }
 
 function respond(id: string, body: Record<string, unknown>): void {
-  const port = (process.env.HYPERIA_PORT as string) || '9800';
-  fetch(`http://localhost:${port}/api/perms/respond`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({id, action: 'create', ...body})
-  })
-    .catch((err) => console.error('create-consent respond failed:', err))
-    .finally(() => clearToast(id));
+  void ipcRenderer
+    .invoke('consent:respond', {id, action: 'create', ...body})
+    .then((result) => {
+      if (!result?.ok) throw new Error(result?.error || 'Approval was not recorded.');
+      clearToast(id);
+    })
+    .catch((err) => console.error('create-consent respond failed:', err));
 }
 
 const btn: React.CSSProperties = {

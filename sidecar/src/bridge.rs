@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +11,14 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::screen::ScreenBuffer;
 use crate::AppState;
+#[path = "pane_class.rs"]
+mod pane_class;
+
+pub use pane_class::{
+    ClassEvidence, Classification, DeliveryCandidate, FocusFacts, InputDisposition, NoticeDisposition,
+    PaneClass,
+};
+
 
 // ---------------------------------------------------------------------------
 // Session info tracked per Electron PTY session
@@ -85,15 +93,6 @@ pub struct Bridge {
     inner: Arc<BridgeInner>,
 }
 
-/// An agent's keystroke payload held while the human decides on a consent
-/// prompt. Flushed to the target pane on approval, dropped on denial.
-#[derive(Clone)]
-struct HeldAction {
-    #[allow(dead_code)]
-    requester: String,
-    keys: String,
-}
-
 /// A capped, edge-triggered self-poke an agent armed for its OWN pane: when the
 /// pane next goes running->idle, deliver `keys` to it. Can't run away — it fires
 /// once per running->idle edge, at most `max_fires` times, throttled to one fire
@@ -115,6 +114,24 @@ struct IdleCallback {
     #[allow(dead_code)]
     creator: String,
 }
+
+/// A pending "you've got mail" notice for a pane, delivered idle-gated by the
+/// idle monitor. Separate from IdleCallback/Pulse so a message notice never
+/// clobbers the pane's own pane_on_idle callback or trips the poke rate-limiter,
+/// and many messages collapse into ONE notice (the count is recomputed at fire
+/// time from the bus, so it self-heals if the recipient already read them).
+struct MsgNotify {
+    pending: bool,
+    armed_at: std::time::Instant,
+    last_fire: Option<std::time::Instant>,
+}
+
+/// Min seconds between two message-notice fires for a pane — coalesces a burst of
+/// arriving mail into one short notice.
+const MSG_NOTIFY_COOLDOWN_SECS: u64 = 45;
+/// Retire completed notice bookkeeping after this interval. Pending notices survive
+/// focus delays; closing the pane removes its entry.
+const MSG_NOTIFY_TTL_SECS: u64 = 3600;
 
 /// Minimum seconds between two fires of the same idle callback. An edge that
 /// lands inside the cooldown is NOT consumed (running_seen stays set) — if the
@@ -217,9 +234,8 @@ struct BridgeInner {
     /// Whether a Hyperia window is the OS-foreground app (false → the human is in
     /// another app, e.g. Chrome). Set from the renderer's AppFocus messages.
     app_foreground: Mutex<bool>,
-    /// Keystrokes an agent tried to send to a pane it doesn't own yet, held while
-    /// the human decides. Flushed on approval, dropped on denial. Key = target uid.
-    held_actions: Mutex<HashMap<String, HeldAction>>,
+    /// Serializes complete body/Enter transactions across legacy and retained transports.
+    input_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// CREATE commands (Split/NewTab/OpenWebPane) held while the human decides on
     /// the create-consent prompt. Parity with held keys: approving EXECUTES the
     /// create instead of merely granting permission the agent must re-chase
@@ -250,6 +266,10 @@ struct BridgeInner {
     idle_fire_log: Mutex<HashMap<String, Vec<std::time::Instant>>>,
     /// Panes whose idle pokes are suspended for rate abuse (pane -> unblock time).
     idle_blocked: Mutex<HashMap<String, std::time::Instant>>,
+    /// Pending message-bus notices: pane uid -> state. Set when mail is addressed
+    /// to a pane; the idle monitor delivers ONE coalesced "you've got mail" line
+    /// the next time that pane is idle (never mid-turn), then clears it.
+    msg_notify: Mutex<HashMap<String, MsgNotify>>,
     /// Per-session output subscribers: uid → list of senders waiting for PTY bytes
     output_subs: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>,
     /// Lume-backed per-shell log store (BM25 search + pickle-to-disk).
@@ -279,7 +299,7 @@ impl Bridge {
                 sessions: Mutex::new(HashMap::new()),
                 focused_window_id: Mutex::new(None),
                 app_foreground: Mutex::new(true),
-                held_actions: Mutex::new(HashMap::new()),
+                input_locks: Mutex::new(HashMap::new()),
                 held_creates: Mutex::new(HashMap::new()),
                 resolved_creates: Mutex::new(HashMap::new()),
                 idle_callbacks: Mutex::new(Vec::new()),
@@ -287,6 +307,7 @@ impl Bridge {
                 pulses: Mutex::new(load_pulses()),
                 idle_fire_log: Mutex::new(HashMap::new()),
                 idle_blocked: Mutex::new(HashMap::new()),
+                msg_notify: Mutex::new(HashMap::new()),
                 output_subs: Mutex::new(HashMap::new()),
                 lume: crate::lume_store::LumeStore::new(),
                 perms: crate::perms::PermStore::default(),
@@ -422,7 +443,7 @@ impl Bridge {
             CallerIdentity::Pane { pane, .. } if pane == target_pane => AuthDecision::RefuseHome,
             CallerIdentity::Anonymous => AuthDecision::SoftWall,
             _ => {
-                let label = id.label();
+                let label = id.principal_key();
                 let owned =
                     self.inner.perms.owner_of(target_pane).await.as_deref() == Some(label.as_str());
                 if owned || self.caller_has_grant(&label, target_pane).await {
@@ -457,7 +478,7 @@ impl Bridge {
             CallerIdentity::System => AuthDecision::Allow,
             CallerIdentity::Anonymous => AuthDecision::SoftWall,
             _ => {
-                let label = id.label();
+                let label = id.principal_key();
                 if self.inner.perms.has_create(&label).await {
                     AuthDecision::Allow
                 } else if self.inner.perms.recently_denied(&label, crate::perms::CREATE_KEY).await {
@@ -490,7 +511,7 @@ impl Bridge {
             CallerIdentity::System => AuthDecision::Allow,
             CallerIdentity::Anonymous => AuthDecision::SoftWall,
             _ => {
-                let label = id.label();
+                let label = id.principal_key();
                 if self.inner.perms.has_cap(&label, cap).await {
                     AuthDecision::Allow
                 } else if self.inner.perms.recently_denied(&label, &format!("cap:{cap}")).await {
@@ -542,26 +563,6 @@ impl Bridge {
                 "note": "no active pane resolved for the focused window",
             }),
         }
-    }
-
-    /// Hold an agent's keystrokes for a pane it doesn't own yet, pending the
-    /// human's consent decision. Overwrites any prior held action for the pane.
-    pub async fn hold_action(&self, target_uid: &str, requester: &str, keys: &str) {
-        self.inner.held_actions.lock().await.insert(
-            target_uid.to_string(),
-            HeldAction { requester: requester.to_string(), keys: keys.to_string() },
-        );
-    }
-
-    /// Take (remove + return) any keystrokes held for a pane — called when the
-    /// human resolves the consent prompt. Returns the held keys, if any.
-    pub async fn take_action(&self, target_uid: &str) -> Option<String> {
-        self.inner
-            .held_actions
-            .lock()
-            .await
-            .remove(target_uid)
-            .map(|h| h.keys)
     }
 
     /// Hold a CREATE command (Split/NewTab/OpenWebPane bridge json) pending the
@@ -647,6 +648,26 @@ impl Bridge {
         cbs.retain(|c| c.pane != pane);
         cbs.push(cb);
         Ok((id, replaced))
+    }
+
+    /// Arm a coalesced, idle-gated "you've got mail" notice for a pane (called
+    /// when a bus message is addressed to it). The idle monitor delivers ONE line
+    /// the next time the pane is idle — never mid-turn, never clobbering the
+    /// pane's own idle callback, never counted against the poke rate-limiter.
+    /// Repeated arms before it fires collapse into a single notice.
+    pub async fn arm_msg_notify(&self, pane: &str) {
+        if pane.is_empty() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let mut m = self.inner.msg_notify.lock().await;
+        let e = m.entry(pane.to_string()).or_insert(MsgNotify {
+            pending: false,
+            armed_at: now,
+            last_fire: None,
+        });
+        e.pending = true;
+        e.armed_at = now;
     }
 
     /// Record a self-reported liveness pulse. busy=true marks the pane busy until
@@ -822,22 +843,76 @@ impl Bridge {
             .unwrap_or(false)
     }
 
-    /// True if the pane is running an agent / Ink TUI (prose input), so a "From:"
-    /// attribution header is appropriate. False for a plain shell (a prefix would
-    /// corrupt a command). Keys off the foreground app name (shell_app), which is
-    /// None for a bare shell.
+    /// Classify a live pane and decide `pane_send` vs a mail notice.
+    ///
+    /// Does not write to the PTY and does not read or update held approvals.
+    /// `None` when `uid` is not a registered session. Alt-screen stays `None`
+    /// until the renderer reports the buffer type.
+    pub async fn classification_for(&self, uid: &str) -> Option<DeliveryCandidate> {
+        let (
+            pid,
+            shell_binary,
+            shell_has_integration,
+            shell_state,
+            shell_app_name,
+            shell_app_cmdline,
+            window_id,
+            pane_active,
+            last_user_activity,
+        ) = {
+            let sessions = self.inner.sessions.lock().await;
+            let info = sessions.get(uid)?;
+            (
+                info.pid,
+                info.name.clone(),
+                info.shell_has_integration,
+                info.shell_state.clone(),
+                info.shell_app
+                    .as_ref()
+                    .map(|app| app.name.clone())
+                    .unwrap_or_default(),
+                info.shell_app
+                    .as_ref()
+                    .map(|app| app.cmdline.clone())
+                    .unwrap_or_default(),
+                info.window_id,
+                info.pane_active,
+                info.last_user_activity,
+            )
+        };
+        let obs = pane_class::observe_process(pid);
+        let evidence = ClassEvidence {
+            pid,
+            process_alive: obs.alive,
+            shell_binary,
+            foreground_name: obs.foreground_name,
+            foreground_cmdline: obs.foreground_cmdline,
+            shell_has_integration,
+            shell_state,
+            shell_app_name,
+            shell_app_cmdline,
+            alt_screen: None,
+            process_ambiguous: obs.ambiguous,
+        };
+        let classification = pane_class::classify(&evidence);
+        let focused_window = *self.inner.focused_window_id.lock().await;
+        let hyperia_foreground = *self.inner.app_foreground.lock().await;
+        let actively_typed = last_user_activity
+            .map(|t| t.elapsed().as_secs() < 15)
+            .unwrap_or(false);
+        let focus = FocusFacts {
+            pane_is_keyboard_focus: focused_window == Some(window_id) && pane_active,
+            hyperia_foreground,
+            actively_typed,
+        };
+        Some(pane_class::decide(classification, focus))
+    }
+
+    /// True only for a supported agent confirmed by the shared foreground classifier.
+    /// Attribution is prose; never prefix a shell command with it.
     pub async fn is_agent_pane(&self, uid: &str) -> bool {
-        const AGENTS: &[&str] = &[
-            "claude", "codex", "aider", "gemini", "ollama", "node", "n8",
-            "nemesis8", "antigravity", "opencode", "grok", "sakana", "pi",
-        ];
-        let sessions = self.inner.sessions.lock().await;
-        let name = sessions
-            .get(uid)
-            .and_then(|s| s.shell_app.as_ref())
-            .map(|a| a.name.to_lowercase())
-            .unwrap_or_default();
-        !name.is_empty() && AGENTS.iter().any(|a| name.contains(a))
+        self.classification_for(uid).await
+            .is_some_and(|candidate| candidate.classification.accepts_direct_input())
     }
 
     /// The friendly display name (shell_name) of a pane, for attribution headers.
@@ -910,8 +985,10 @@ impl Bridge {
         let panes: Vec<String> = {
             let cbs = self.inner.idle_callbacks.lock().await;
             let pulses = self.inner.pulses.lock().await;
+            let notif = self.inner.msg_notify.lock().await;
             let mut v: Vec<String> = cbs.iter().map(|c| c.pane.clone()).collect();
             v.extend(pulses.iter().filter(|p| !p.paused).map(|p| p.pane.clone()));
+            v.extend(notif.iter().filter(|(_, n)| n.pending).map(|(p, _)| p.clone()));
             v.sort();
             v.dedup();
             v
@@ -1060,31 +1137,68 @@ impl Bridge {
             self.persist_pulses().await;
         }
 
-        // Fire outside the locks — through the ONE shared delivery routine
-        // (deliver_keys: bracketed paste for TUIs, isolated Enter, verify +
-        // one nudge, honest queue notices). Pulses get a "From: <creator>:"
-        // header into agent panes; self-callbacks don't (you're poking
-        // yourself).
+        // Mail notices protect human focus but do not wait for agent output silence.
+        // Keep a batch armed until accepted; a concurrent new message arms a new batch.
+        let notify_candidates: Vec<(String, std::time::Instant)> = {
+            let already: HashSet<String> = to_fire.iter().map(|(p, _, _, _)| p.clone()).collect();
+            let notif = self.inner.msg_notify.lock().await;
+            notif.iter().filter(|(pane, st)| st.pending && !already.contains(*pane)
+                && st.last_fire.map(|t| t.elapsed().as_secs() >= MSG_NOTIFY_COOLDOWN_SECS).unwrap_or(true))
+                .map(|(pane, st)| (pane.clone(), st.armed_at)).collect()
+        };
+        for (pane, armed_at) in notify_candidates {
+            let Some(candidate) = self.classification_for(&pane).await else { continue };
+            if !matches!(candidate.notice, NoticeDisposition::Arm { .. }) { continue; }
+            let unread = match crate::messaging::unread_for_pane(self, &pane).await {
+                Ok(count) => count,
+                Err(_) => continue, // Do not consume a notice on storage failure.
+            };
+            let mut consumed = unread == 0;
+            if unread > 0 {
+                let pid = self.inner.sessions.lock().await.get(&pane).map(|s| s.pid).unwrap_or(0);
+                let notice = format!("[Hyperia] You have {unread} unread messages. Use msg_check to fetch and acknowledge, or msg_inbox to preview. Automated mailbox notice.");
+                let response = self.guarded_input(&pane, serde_json::json!({
+                    "type": "GuardedInput", "uid": pane, "pid": pid,
+                    "text": notice, "submit": true, "agent": true,
+                })).await;
+                let definitely_not_sent = matches!(&response, Err(error)
+                    if error == "No Electron client connected" || error == "Electron disconnected");
+                if definitely_not_sent { continue; }
+                match response.ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()) {
+                    Some(result) if result["state"] == "submitted" || result["state"] == "indeterminate" => consumed = true,
+                    Some(result) if result["state"] == "deferred" || result["state"] == "failed" => {},
+                    _ => {
+                        // Unknown transport result may follow a successful write: never replay blindly.
+                        consumed = true;
+                        tracing::warn!("Mail notice outcome indeterminate for pane {pane}");
+                    }
+                }
+            }
+            if consumed {
+                let mut notif = self.inner.msg_notify.lock().await;
+                if let Some(st) = notif.get_mut(&pane) {
+                    if st.armed_at == armed_at { st.pending = false; }
+                    if unread > 0 { st.last_fire = Some(now); }
+                }
+            }
+        }
+        {
+            let mut notif = self.inner.msg_notify.lock().await;
+            notif.retain(|_, st| st.pending || st.armed_at.elapsed().as_secs() < MSG_NOTIFY_TTL_SECS);
+        }
+
+        // Retire orphaned lock entries only when no transaction or waiter owns the Arc.
+        let live: std::collections::HashSet<String> = self.inner.sessions.lock().await.keys().cloned().collect();
+        self.inner.input_locks.lock().await.retain(|pane, lock| live.contains(pane) || Arc::strong_count(lock) > 1);
+
+        // Internal pulses/callbacks share guarded input; never infer submission from screen text.
         for (pane, keys, from_creator, submit) in to_fire {
             let is_agent = self.is_agent_pane(&pane).await;
             let payload = match &from_creator {
-                Some(creator) if is_agent => format!("From: {creator}: {keys}"),
+                Some(creator) if is_agent => format!("[Hyperia auto-poke — automated re-nudge because this pane looked idle (armed by {creator}); NOT a person messaging you. Stop it: pane_pulse_clear this pane. Details: the Hyperia MCP server instructions.]
+{keys}"),
                 _ => keys,
             };
-            // Anti-stack: if the PREVIOUS poke is still sitting unsubmitted in
-            // the target's composer, don't pile another copy on top — submit
-            // what's already there and try again next interval.
-            if submit
-                && self.pane_is_tui(&pane).await
-                && self.screen_tail_holds(&pane, &payload).await
-            {
-                tracing::info!(
-                    target: "pulse",
-                    "previous poke still unsubmitted in {pane}; submitting it instead of stacking"
-                );
-                let _ = self.deliver_keys(&pane, "", true).await;
-                continue;
-            }
             let notice = self.deliver_keys(&pane, &payload, submit).await;
             if notice.starts_with("warning") {
                 tracing::warn!(target: "pulse", "fire into {pane}: {notice}");
@@ -1196,247 +1310,50 @@ impl Bridge {
         rx
     }
 
-    /// Returns the raw text that came back, or falls back to a screen snapshot.
-    pub async fn type_and_collect(&self, uid: &str, keys: &str, quiet_ms: u64) -> String {
-        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        // Register subscriber before sending keys
-        {
-            let mut subs = self.inner.output_subs.lock().await;
-            subs.entry(uid.to_string()).or_default().push(tx);
-        }
-
-        // Two-phase delivery for submit-terminated text (see deliver_keys): a
-        // terminator glued into the same write as the body is a paste-race in
-        // Ink TUIs and randomly fails to submit. Body first (bracketed paste
-        // for TUI targets), settle, then Enter as its own isolated write.
-        let body_text = keys.trim_end_matches(['\r', '\n']);
-        let wants_submit = body_text.len() < keys.len() && !body_text.is_empty();
-        if wants_submit && self.pane_is_tui(uid).await {
-            let wrapped = if body_text.chars().count() > 1 {
-                format!("\u{1b}[200~{body_text}\u{1b}[201~")
-            } else {
-                body_text.to_string()
-            };
-            let body_notice = self
-                .send_command(serde_json::json!({"type": "Keys", "uid": uid, "keys": wrapped}))
-                .await
-                .unwrap_or_else(|e| e);
-            let body_queued = body_notice.to_lowercase().contains("queued");
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            // Body queued → still send the Enter: the renderer glues a bare
-            // terminator onto the pending queued message so the drain delivers a
-            // COMPLETE submit. Body delivered live → only send the isolated
-            // Enter if the human hasn't taken the pane during the settle
-            // window; a bare CR racing their typing lands in their composer as
-            // a stray newline (the cursor-drops-a-line bug).
-            if body_queued || !self.user_active_recently(uid).await {
-                let _ = self
-                    .send_command(serde_json::json!({"type": "Keys", "uid": uid, "keys": "\r"}))
-                    .await;
-            } else {
-                tracing::info!("type_and_collect: human took {uid} during settle; Enter withheld");
-            }
-        } else {
-            let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys});
-            let _ = self.send_command(cmd).await;
-        }
-
-        // Collect output until quiet_ms of silence, cap at 8s total
-        let mut collected: Vec<u8> = Vec::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-        loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() { break; }
-            match tokio::time::timeout(Duration::from_millis(quiet_ms), rx.recv()).await {
-                Ok(Some(chunk)) => collected.extend_from_slice(&chunk),
-                Ok(None) => break, // channel closed
-                Err(_) => break,   // quiet_ms elapsed with no new data
-            }
-        }
-
-        // Clean up subscriber
-        {
-            let mut subs = self.inner.output_subs.lock().await;
-            if let Some(txs) = subs.get_mut(uid) {
-                txs.retain(|t| !t.is_closed());
-            }
-        }
-
-        // Verify-then-nudge: nothing came back AND our text is still sitting
-        // unsubmitted in the target's input box AND the human hasn't taken the
-        // pane → one bare Enter, then a short second collection window. (Even
-        // an isolated CR can occasionally land while an Ink TUI is mid-layout.)
-        if wants_submit
-            && collected.is_empty()
-            && !self.user_active_recently(uid).await
-            && self.screen_tail_holds(uid, body_text).await
-        {
-            tracing::info!("type_and_collect: input unsubmitted in {uid}; nudging Enter");
-            let _ = self
-                .send_command(serde_json::json!({"type": "Keys", "uid": uid, "keys": "\r"}))
-                .await;
-            let deadline2 = tokio::time::Instant::now() + Duration::from_secs(3);
-            loop {
-                let remaining = deadline2.saturating_duration_since(tokio::time::Instant::now());
-                if remaining.is_zero() {
-                    break;
-                }
-                match tokio::time::timeout(Duration::from_millis(quiet_ms), rx.recv()).await {
-                    Ok(Some(chunk)) => collected.extend_from_slice(&chunk),
-                    Ok(None) => break,
-                    Err(_) => break,
-                }
-            }
-        }
-
-        if collected.is_empty() {
-            // Nothing came back — return screen snapshot
-            self.get_screen_text_by_uid(uid).await
-        } else {
-            String::from_utf8_lossy(&collected).into_owned()
-        }
+    /// Serialize one complete input transaction, including any separated Enter.
+    pub async fn lock_input(&self, pane: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = self.inner.input_locks.lock().await.entry(pane.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(()))).clone();
+        lock.lock_owned().await
     }
 
-    /// Is this pane's foreground a TUI-style stdin consumer (agent CLI / Ink app)
-    /// rather than a cooked-mode shell? TUIs classify rapid input bursts as
-    /// "paste" and treat an Enter byte INSIDE the burst as a composer newline —
-    /// so submits must be delivered as their own isolated write (see
-    /// [`Self::deliver_keys`]).
-    pub async fn pane_is_tui(&self, pane: &str) -> bool {
-        if self.is_agent_pane(pane).await {
-            return true;
+    pub async fn guarded_input(&self, pane: &str, command: serde_json::Value) -> Result<String, String> {
+        let _input = self.lock_input(pane).await;
+        // A legacy transaction may have changed the foreground while this call waited.
+        if command["control"] != true {
+            let compatible = self.classification_for(pane).await.is_some_and(|candidate| {
+                if command["agent"] == true { candidate.classification.accepts_direct_input() }
+                else { candidate.classification.terminal_run_allowed() }
+            });
+            if !compatible {
+                return Ok(serde_json::json!({"state":"failed","detail":"Foreground changed before the input transaction."}).to_string());
+            }
         }
-        let pid = {
-            let sessions = self.inner.sessions.lock().await;
-            sessions.get(pane).map(|s| s.pid).unwrap_or(0)
-        };
-        if pid == 0 {
-            return false;
-        }
-        let n = crate::process::foreground_process(pid).to_lowercase();
-        ["node", "claude", "claude-code", "codex", "aider", "gemini", "ollama", "agy", "opencode", "grok"]
-            .iter()
-            .any(|needle| n.contains(needle))
+        self.send_command(command).await
     }
 
-    /// Does the pane's visible tail still contain `payload` — i.e. is our text
-    /// sitting UNSUBMITTED in the target's input box? Compares a distinctive
-    /// payload snippet against the last screen lines, whitespace-normalized
-    /// (TUI composers re-wrap long text across lines).
-    pub async fn screen_tail_holds(&self, pane: &str, payload: &str) -> bool {
-        let norm = |s: &str| {
-            s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
-        };
-        let p = norm(payload);
-        if p.chars().count() < 8 {
-            // Too short to be a distinctive marker — treat as submitted.
-            return false;
-        }
-        let text = self.get_screen_text_by_uid(pane).await;
-        let tail_src: Vec<&str> = text.lines().rev().take(14).collect();
-        let tail = norm(&tail_src.into_iter().rev().collect::<Vec<_>>().join(" "));
-        let snippet: String = {
-            let chars: Vec<char> = p.chars().collect();
-            let start = chars.len().saturating_sub(48);
-            chars[start..].iter().collect()
-        };
-        tail.contains(&snippet)
-    }
-
-    /// Deliver text + submit to a pane the way a HUMAN would — the ONE routine
-    /// every sender (pulse, /api/type, terminal_run) should go through.
-    ///
-    /// Why: Ink TUIs (claude-code, codex, agy, …) classify a multi-byte burst
-    /// as a "paste" and treat an Enter byte INSIDE the burst as a composer
-    /// newline, NOT a submit — so a glued `text+\r` submitting or not is a
-    /// ConPTY chunk-boundary race (the "pokes sometimes never send" bug).
-    /// Deterministic recipe: body first (bracketed paste so it ingests
-    /// atomically), settle, then ONE isolated CR — mechanically identical to a
-    /// human finger. Shells keep the glued single write (cooked line
-    /// discipline is deterministic).
-    ///
-    /// After submitting into a TUI, verifies the composer actually cleared and
-    /// nudges ONCE with a bare CR if our text still sits there — unless the
-    /// human has become active in the pane (never type under the human's
-    /// cursor). Returns an honest, agent-facing summary string.
+    /// Internal pulses and callbacks use the same guarded transaction as retained input.
     pub async fn deliver_keys(&self, pane: &str, payload: &str, submit: bool) -> String {
-        let send = |keys: String| {
-            let this = self.clone();
-            let pane = pane.to_string();
-            async move {
-                this.send_command(serde_json::json!({
-                    "type": "Keys", "uid": pane, "keys": keys, "interrupt": false
-                }))
-                .await
-                .unwrap_or_else(|e| e)
-            }
+        let Some(candidate) = self.classification_for(pane).await else {
+            return "warning: target pane closed".into();
         };
-
-        if !self.pane_is_tui(pane).await {
-            // Shell: glued terminator is deterministic under cooked line discipline.
-            let enter_char = if cfg!(target_os = "windows") { "\r" } else { "\n" };
-            let body =
-                if submit { format!("{payload}{enter_char}") } else { payload.to_string() };
-            return send(body).await;
+        let agent = candidate.classification.accepts_direct_input();
+        if !agent && !candidate.classification.terminal_run_allowed() {
+            return "warning: target is neither a supported agent nor a verified shell prompt".into();
         }
-
-        // TUI target — paste the body atomically (skip for empty/one-char).
-        let mut first_notice = String::new();
-        if !payload.is_empty() {
-            let wrapped = if payload.chars().count() > 1 {
-                format!("\u{1b}[200~{payload}\u{1b}[201~")
-            } else {
-                payload.to_string()
-            };
-            first_notice = send(wrapped).await;
+        let pid = self.inner.sessions.lock().await.get(pane).map(|s| s.pid).unwrap_or(0);
+        let result = self.guarded_input(pane, serde_json::json!({
+            "type": "GuardedInput", "uid": pane, "pid": pid,
+            "text": payload, "submit": submit, "agent": agent,
+        })).await;
+        match result {
+            Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
+                Ok(outcome) if outcome["state"] == "submitted" => "ok (transport accepted; recipient read unverified)".into(),
+                Ok(outcome) => format!("warning: {}: {}", outcome["state"], outcome["detail"]),
+                Err(_) => "warning: indeterminate input outcome; do not replay".into(),
+            },
+            Err(error) => format!("warning: indeterminate input outcome: {error}; do not replay"),
         }
-        if !submit {
-            return if first_notice.is_empty() { "ok".into() } else { first_notice };
-        }
-
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        // Body queued → still send the Enter (the renderer glues a bare
-        // terminator onto the pending message so the drain delivers a complete
-        // submit). Body delivered live but the human took the pane during the
-        // settle → withhold the Enter: delivered late it lands in their typing
-        // as a stray CR (composer newline in Ink TUIs).
-        let body_queued = first_notice.to_lowercase().contains("queued");
-        if !body_queued && self.user_active_recently(pane).await {
-            return "warning: text typed but NOT submitted — the human became active in this pane during delivery, so the Enter was withheld (it would have landed inside their typing). Re-send when the pane is free, or use interrupt=true.".into();
-        }
-        let enter_notice = send("\r".to_string()).await;
-
-        // If the renderer queued the writes (human active), they'll drain in
-        // order later — verification is meaningless now, so report the queue
-        // notice honestly and stop.
-        if first_notice.to_lowercase().contains("queued")
-            || enter_notice.to_lowercase().contains("queued")
-        {
-            return if first_notice.to_lowercase().contains("queued") {
-                first_notice
-            } else {
-                enter_notice
-            };
-        }
-        if payload.trim().is_empty() {
-            return "ok".into();
-        }
-
-        // Verify-then-nudge, once.
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        if self.user_active_recently(pane).await {
-            return "ok (submit unverified: the human became active in the pane)".into();
-        }
-        if self.screen_tail_holds(pane, payload).await {
-            tracing::info!(target: "deliver", "input unsubmitted in {pane}; nudging with bare CR");
-            let _ = send("\r".to_string()).await;
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            if !self.user_active_recently(pane).await && self.screen_tail_holds(pane, payload).await {
-                return "warning: the text was typed but appears to still be sitting UNSUBMITTED in the target's input box after two Enter presses — the target may be blocking input (dialog/confirm) or need a different key.".into();
-            }
-            return "ok (input needed a second Enter to submit; sent)".into();
-        }
-        "ok".into()
     }
 
     /// Set description for a pane by uid.
@@ -2160,6 +2077,9 @@ impl Bridge {
                 self.inner.sessions.lock().await.remove(uid);
                 // Revoke any cross-pane grants/prompts tied to the closed pane.
                 self.inner.perms.cleanup_pane(uid).await;
+                // Drop a pending "you've got mail" notice for the closed pane
+                // (it will never go idle again). The mail itself stays on the bus.
+                self.inner.msg_notify.lock().await.remove(uid);
             }
 
             "Resize" => {
@@ -2434,4 +2354,42 @@ mod tests {
             assert_eq!(panes[0]["active"].as_bool(), Some(true));
         });
     }
+    #[test]
+    fn classification_for_missing_pane_is_none_and_dead_pid_refuses_input() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let bridge = Bridge::new();
+            assert!(bridge.classification_for("missing").await.is_none());
+
+            {
+                let mut sessions = bridge.inner.sessions.lock().await;
+                let mut info = session_info(10, "tab-0", "a", true, true);
+                info.pid = 0;
+                info.name = "bash".into();
+                info.shell_has_integration = true;
+                info.shell_state = "running".into();
+                info.shell_app = Some(ShellAppInfo {
+                    name: "codex".into(),
+                    path: String::new(),
+                    cmdline: String::new(),
+                    pid: 0,
+                });
+                sessions.insert("dead".into(), info);
+            }
+            *bridge.inner.focused_window_id.lock().await = Some(10);
+            *bridge.inner.app_foreground.lock().await = true;
+
+            let candidate = bridge.classification_for("dead").await.expect("session");
+            assert!(candidate.focus_protected);
+            assert!(matches!(candidate.classification.class, PaneClass::Unknown { .. }));
+            assert!(matches!(candidate.pane_send, InputDisposition::Refuse { .. }));
+            assert!(matches!(candidate.notice, NoticeDisposition::Skip { .. }));
+
+            *bridge.inner.app_foreground.lock().await = false;
+            let background = bridge.classification_for("dead").await.expect("session");
+            assert!(!background.focus_protected);
+            assert!(matches!(background.pane_send, InputDisposition::Refuse { .. }));
+        });
+    }
+
 }

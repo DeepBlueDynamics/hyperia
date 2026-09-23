@@ -116,6 +116,12 @@ pub fn core_tools(surface: Surface) -> &'static [&'static str] {
 // ---------------------------------------------------------------------------
 
 pub const DOORS: &[Door] = &[
+    Door {
+        name: "messaging",
+        description: "Agent input, verified pane bindings, retained delivery status and recipient mailboxes",
+        ghost_tools: &["pane_send", "pane_bind", "delivery_status", "msg_send", "msg_inbox", "msg_check", "msg_read", "msg_search"],
+        mcp_tools: &["pane_send", "pane_bind", "delivery_status", "msg_send", "msg_inbox", "msg_check", "msg_read", "msg_search"],
+    },
     // ---- shared-name doors -------------------------------------------------
     Door {
         name: "inspect",

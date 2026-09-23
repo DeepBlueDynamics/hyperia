@@ -20,6 +20,7 @@ import throttle from 'lodash/throttle';
 import type {TermProps} from '../../typings/hyper';
 import rpc from '../rpc';
 import terms from '../terms';
+import {altArrowSequence} from '../utils/alt-arrow-sequence';
 import {toNavigableUrl} from '../utils/navigable-url';
 import processClipboard from '../utils/paste';
 import {translatePath} from '../utils/path-translate';
@@ -1449,6 +1450,18 @@ export default class Term extends React.PureComponent<
     if (e.altKey && e.key === 'ArrowRight') {
       e.preventDefault();
       this.navigateForward();
+      return false;
+    }
+    // xterm 5.5 rewrites non-Mac Alt+Up/Down to Ctrl+Up/Down before the PTY.
+    // On keydown only, emit the standard Alt sequence and return false so
+    // xterm does not encode a second one. keyup falls through. Alt+Left/Right
+    // already returned above.
+    const altArrow = altArrowSequence(e);
+    if (altArrow) {
+      e.preventDefault();
+      if (this.props.onData) {
+        this.props.onData(altArrow);
+      }
       return false;
     }
     // Intercept Ctrl+Shift+O to toggle the directory navigator. Bare Ctrl+O is

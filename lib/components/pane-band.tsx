@@ -319,9 +319,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               new MenuItem({
                 label: 'Copy Pane Token + ID',
                 click: () => {
-                  const port = (process.env.HYPERIA_PORT as string) || '9800';
-                  fetch(`http://localhost:${port}/api/perms/token?pane=${encodeURIComponent(paneId)}`)
-                    .then((r) => r.json())
+                  ipcRenderer
+                    .invoke('consent:pane-token', paneId)
                     .then((d) => {
                       if (d?.token) {
                         // Hand the agent everything it needs in one paste: the
