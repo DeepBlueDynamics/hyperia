@@ -1,0 +1,148 @@
+/* hljs bg always transparent — note background is set by JS */
+.hljs { background: transparent !important; }
+.ai-highlight-banner {
+  font-size: 10px;
+  opacity: 0.6;
+  padding: 2px 8px;
+  flex-shrink: 0;
+  font-style: italic;
+}
+.ai-highlight-banner.loading { opacity: 0.8; }
+.ai-spinner { display: inline-block; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+:root {
+  --sticky-font-size: 22px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  /* color set dynamically by textColorForBg() */
+  font-family: 'Cascadia Code', 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
+  font-size: var(--sticky-font-size);
+  display: flex;
+  flex-direction: column;
+}
+.titlebar {
+  min-height: 22px;
+  height: auto;
+  display: flex;
+  align-items: center;
+  padding: 4px 4px 4px 8px;
+  -webkit-app-region: drag;
+  flex-shrink: 0;
+  font-size: var(--sticky-title-font-size, 14px);
+  user-select: none;
+  background: rgba(0,0,0,0.08);
+}
+.titlebar-text {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: inherit;
+  font-size: var(--sticky-title-font-size, 14px);
+  font-weight: bold;
+  opacity: 0.7;
+  /* Clickable (copy name) — must NOT be in the window-drag region, or the
+     OS eats single clicks for window-dragging. The spacer below keeps the
+     window draggable. */
+  -webkit-app-region: no-drag;
+  cursor: pointer;
+}
+/* Draggable filler between the title and the buttons so the frameless window
+   can still be moved (the title + buttons are all no-drag). */
+.titlebar-spacer {
+  flex: 1;
+  align-self: stretch;
+  min-width: 16px;
+}
+.titlebar-input {
+  flex: 0 1 auto;
+  min-width: 120px;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: inherit;
+  font-size: var(--sticky-title-font-size, 14px);
+  font-weight: bold;
+  color: inherit;
+  padding: 0;
+  margin: 0;
+  height: 100%;
+  -webkit-app-region: no-drag;
+  opacity: 0.9;
+}
+.titlebar-btn {
+  width: calc(var(--sticky-title-font-size, 14px) + 8px);
+  height: calc(var(--sticky-title-font-size, 14px) + 8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  font-size: calc(var(--sticky-title-font-size, 14px) + 3px);
+  opacity: 0.7;
+  transition: opacity 0.15s, background 0.15s;
+  z-index: 100;
+  line-height: 1;
+}
+.titlebar-btn:hover { opacity: 1; }
+.close-btn { font-weight: bold; }
+.close-btn:hover { background: rgba(180, 0, 0, 0.25); }
+.lines-btn:hover { background: rgba(128, 128, 128, 0.2); }
+.search-btn:hover { background: rgba(128, 128, 128, 0.2); }
+
+/* Link bar */
+.link-bar {
+  display: none;
+  flex-direction: column;
+  flex-shrink: 0;
+  background: rgba(0,0,0,0.06);
+  border-bottom: 1px solid rgba(0,0,0,0.08);
+  font-size: 10px;
+  padding: 2px 4px;
+  gap: 1px;
+}
+.link-bar.visible { display: flex; }
+.link-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 16px;
+}
+.link-icon { opacity: 0.5; flex-shrink: 0; font-size: 9px; }
+.link-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.75;
+  cursor: pointer;
+  font-family: inherit;
+}
+.link-label:hover { opacity: 1; text-decoration: underline; }
+.link-action {
+  flex-shrink: 0;
+  cursor: pointer;
+  opacity: 0.45;
+  font-size: 10px;
+  padding: 0 2px;
+  border-radius: 2px;
+  transition: opacity 0.1s;
+  -webkit-app-region: no-drag;
+}
+.link-action:hover { opacity: 1; background: rgba(128,128,128,0.2); }
+.link-action.disabled { opacity: 0.2; cursor: default; }
+.link-action.disabled:hover { background: none; }
+
+/* Armed (scheduled) note gets a visible border so you know it's "live". */
+body.sched-armed { box-shadow: inset 0 0 0 2px rgba(255,145,0,0.9); }
+/* And the ⏰ pulses while ANY schedule is armed (reminders too) — the
+   always-visible "this note is live" signal the border alone wasn't. */
+@keyframes stickySchedPulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.75); } }
+.schedule-btn.armed { color: #ff9100; opacity: 1; animation: stickySchedPulse 1.4s ease-in-out infinite; }
+/* File-bound note: a thin blue accent under the titlebar — edits write to disk. */
+body.file-bound .titlebar { box-shadow: inset 0 -2px 0 rgba(43,125,233,0.7); }

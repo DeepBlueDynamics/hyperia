@@ -51,8 +51,10 @@ if (!filesAreInSync) {
 
 // 4. Git status & tag analysis
 try {
-  // Find last tag
-  const lastTag = execSync('git tag --sort=-version:refname | head -n 1', { encoding: 'utf8' }).trim();
+  // Find last tag — use `--sort` and take the first line in JS so this works
+  // on Windows where `head` does not exist.
+  const tagOutput = execSync('git tag --sort=-version:refname', { encoding: 'utf8' }).trim();
+  const lastTag = tagOutput ? tagOutput.split('\n')[0].trim() : '';
   if (!lastTag) {
     console.log('No git tags found. Proceeding with initial version.');
     process.exit(0);

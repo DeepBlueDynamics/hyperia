@@ -14,6 +14,7 @@ import {
   TERM_GROUP_SET_WEB_NAME,
   TERM_GROUP_SET_TAB_NAME,
   TERM_GROUP_SET_PINNED,
+  RESTORE_TAB_STATE,
   TERM_GROUP_TOGGLE_TITLE_INHERITANCE,
   RESTORE_LAYOUT_STATE,
   TERM_GROUP_POP_OUT_PANE
@@ -385,6 +386,33 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
         state = state.set('activeRootGroup', uid).set('activeTermGroup', uid);
       }
       return state;
+    }
+    case RESTORE_TAB_STATE: {
+      // Graft ONE saved tab into the live window (#183): merge its groups in
+      // (uids are pre-remapped, so no collisions) and focus it — the human
+      // clicked it in the + menu, so focus-follow is expected, like tab:new.
+      const {layout, name} = act;
+      let nextState = state;
+      for (const uid of Object.keys(layout.termGroups || {})) {
+        nextState = nextState.setIn(['termGroups', uid], Immutable(layout.termGroups[uid]));
+      }
+      const rootUid = layout.activeRootGroup;
+      if (!rootUid || !layout.termGroups?.[rootUid]) {
+        return state;
+      }
+      // #183: name the grafted tab after the SAVED entry (the action already
+      // disambiguated it against the names open tabs show, adding a "(n)" suffix
+      // if needed), not the tabName baked into the layout at save time. Pin it so
+      // it isn't auto-renamed back into a collision.
+      if (name) {
+        nextState = nextState
+          .setIn(['termGroups', rootUid, 'tabName'], name)
+          .setIn(['termGroups', rootUid, 'manualTabName'], true);
+      }
+      return nextState
+        .setIn(['activeSessions', rootUid], layout.activeSessions?.[rootUid] ?? null)
+        .set('activeRootGroup', rootUid)
+        .set('activeTermGroup', layout.activeTermGroup || rootUid);
     }
     case RESTORE_LAYOUT_STATE: {
       const {savedState} = act;

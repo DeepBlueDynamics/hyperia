@@ -26,6 +26,7 @@ import ConsentModal from './components/consent-modal';
 import {activeTerminals} from './components/term';
 import ToastStack, {pushToast, pushStickyToast, dismissStickyToast} from './components/toast-stack';
 import WebPaneDialog, {showWebPaneDialog} from './components/web-pane-dialog';
+import WorkspaceSaveToast from './components/workspace-save-toast';
 import HyperContainer from './containers/hyper';
 import * as permissionsBus from './permissions-bus';
 import rpc from './rpc';
@@ -33,7 +34,9 @@ import {getRootGroups} from './selectors';
 import configureStore from './store/configure-store';
 import * as config from './utils/config';
 import {getBase64FileData} from './utils/file';
+import {serializeLayoutState} from './utils/layout-serialize';
 import {toNavigableUrl} from './utils/navigable-url';
+import {installLayoutScrollPin} from './utils/pin-layout-scroll';
 import * as plugins from './utils/plugins';
 import {syncWebUrls} from './utils/web-url-sync';
 
@@ -54,10 +57,14 @@ Object.defineProperty(window, 'rpc', {get: () => rpc});
 Object.defineProperty(window, 'config', {get: () => config});
 Object.defineProperty(window, 'plugins', {get: () => plugins});
 
-// When the last tab (root term group) in this window closes, close the WINDOW
-// instead of leaving an empty frame with just a "+". Driven off the live
-// root-group count so it fires no matter HOW the tab emptied — pane ×, tab ×,
-// shell exit, or a desynced/ghost group — which the old per-action
+// When the last tab (root term group) in this window empties, the window would
+// normally close — but route the decision through main via 'close-no-confirm'
+// instead of closing here. Main knows the real window count: on the LAST window
+// it keeps the frame alive and resets it to a fresh picker (see the
+// 'close-no-confirm' handler in app/ui/window.ts) rather than quitting Hyperia;
+// on any other window it closes as before. Driven off the live root-group count
+// so it fires no matter HOW the tab emptied — pane ×, tab ×, shell exit, or a
+// desynced/ghost group — which the old per-action
 // `Object.keys(termGroups).length <= 1` guard missed (it counted split children
 // + ghosts off a stale snapshot). `hadTabsOnce` gates it so it never fires
 // before the first tab exists (root count is 0 at startup / during restore).
@@ -69,7 +76,7 @@ store_.subscribe(() => {
     hadTabsOnce = true;
   } else if (hadTabsOnce) {
     hadTabsOnce = false;
-    window.close();
+    rpc.emit('close-no-confirm');
   }
 });
 
@@ -215,7 +222,18 @@ rpc.on('session cwd', ({uid, cwd}: {uid: string; cwd: string}) => {
 
 rpc.on(
   'session shellstate',
-  ({uid, shellState}: {uid: string; shellState: {state: 'idle' | 'busy'; lastExit?: number; command?: string}}) => {
+  ({
+    uid,
+    shellState
+  }: {
+    uid: string;
+    shellState: {
+      state: 'idle' | 'busy' | 'running';
+      lastExit?: number;
+      command?: string;
+      app?: {name: string; path: string; cmdline: string; pid: number};
+    };
+  }) => {
     store_.dispatch(sessionActions.setSessionShellState(uid, shellState));
   }
 );
@@ -269,8 +287,8 @@ rpc.on('permission request', (req) => {
 });
 
 rpc.on('permission resolved', ({targetPane, id}: {targetPane: string; decision: string; id?: string}) => {
-  permissionsBus.clearRequest(targetPane);
-  if (targetPane) store_.dispatch(uiActions.clearTabBell(targetPane));
+  permissionsBus.clearRequest(targetPane, id);
+  if (targetPane && !permissionsBus.hasRequests(targetPane)) store_.dispatch(uiActions.clearTabBell(targetPane));
   if (id) permissionsBus.clearToast(id);
 });
 
@@ -357,30 +375,41 @@ rpc.on('session search close', () => {
   store_.dispatch(sessionActions.closeSearch());
 });
 
-rpc.on('termgroup add req', ({activeUid, profile, isAgentInitiated}) => {
-  store_.dispatch(termGroupActions.requestTermGroup(activeUid ?? undefined, profile ?? undefined, isAgentInitiated));
+rpc.on('termgroup add req', ({activeUid, profile, isAgentInitiated, cwd}) => {
+  store_.dispatch(
+    termGroupActions.requestTermGroup(activeUid ?? undefined, profile ?? undefined, isAgentInitiated, cwd)
+  );
 });
 
-rpc.on('split request horizontal', ({activeUid, profile, url, splitPlacement, isAgentInitiated}) => {
+// Main kept the LAST window alive after its last pane was closed (instead of
+// quitting Hyperia). Open a fresh picker tab so the emptied window lands back on
+// "pick a shell/agent" — the same tab the + button opens.
+rpc.on('reset-to-picker', () => {
+  store_.dispatch(termGroupActions.requestTermGroup(undefined, 'picker'));
+});
+
+rpc.on('split request horizontal', ({activeUid, profile, url, splitPlacement, isAgentInitiated, cwd}) => {
   store_.dispatch(
     termGroupActions.requestHorizontalSplit(
       activeUid ?? undefined,
       profile ?? undefined,
       url,
       splitPlacement,
-      isAgentInitiated
+      isAgentInitiated,
+      cwd
     )
   );
 });
 
-rpc.on('split request vertical', ({activeUid, profile, url, splitPlacement, isAgentInitiated}) => {
+rpc.on('split request vertical', ({activeUid, profile, url, splitPlacement, isAgentInitiated, cwd}) => {
   store_.dispatch(
     termGroupActions.requestVerticalSplit(
       activeUid ?? undefined,
       profile ?? undefined,
       url,
       splitPlacement,
-      isAgentInitiated
+      isAgentInitiated,
+      cwd
     )
   );
 });
@@ -736,6 +765,7 @@ store_.subscribe(() => {
   rpc.emit('session layout sync', tabs);
 });
 
+installLayoutScrollPin();
 const root = createRoot(document.getElementById('mount')!);
 
 root.render(
@@ -743,6 +773,7 @@ root.render(
     <HyperContainer />
     <WebPaneDialog />
     <AgentToast />
+    <WorkspaceSaveToast />
     <ToastStack />
     <ConsentModal />
     <CloseConfirmModal />
@@ -839,71 +870,33 @@ rpc.on('open web pane req', ({url, isAgentInitiated}: {url?: string; isAgentInit
   }
 });
 
+// The layout blob shape lives in utils/layout-serialize.ts — shared with the
+// tab-scoped save flow (#183) so the two capture paths can't drift.
+const getSessionCommandLine = (uid: string): string | undefined => activeTerminals.get(uid)?.getCurrentCommandLine();
+
 rpc.on('get-layout-state-req', (req) => {
-  const {termGroups, sessions} = store_.getState();
-
-  const serializedSessions: Record<string, any> = {};
-  Object.keys(sessions.sessions).forEach((uid) => {
-    const s = sessions.sessions[uid];
-    if (s) {
-      const activeTerm = activeTerminals.get(uid);
-      const lastCommand = activeTerm ? activeTerm.getCurrentCommandLine() : s.lastCommand || '';
-      serializedSessions[uid] = {
-        uid: s.uid,
-        title: s.title,
-        tabName: s.tabName,
-        description: s.description,
-        cols: s.cols,
-        rows: s.rows,
-        shell: s.shell,
-        pid: s.pid,
-        profile: s.profile,
-        cwd: s.cwd,
-        shellName: s.shellName,
-        manualTitle: !!s.manualTitle,
-        // The scraped command line is display-only metadata (epic #146):
-        // restore may show it, but typing it back is opt-in. Readers stay
-        // tolerant of the old bare `lastCommand` field.
-        annotations: lastCommand ? {lastCommand} : undefined
-      };
-    }
-  });
-
-  const serializedTermGroups: Record<string, any> = {};
-  Object.keys(termGroups.termGroups).forEach((uid) => {
-    const g = termGroups.termGroups[uid];
-    if (g) {
-      serializedTermGroups[uid] = {
-        uid: g.uid,
-        sessionUid: g.sessionUid,
-        parentUid: g.parentUid,
-        direction: g.direction,
-        sizes: g.sizes,
-        children: g.children ? g.children.asMutable() : [],
-        webUrl: (g as any).webUrl,
-        webName: (g as any).webName,
-        tabName: g.tabName,
-        manualTabName: !!(g as any).manualTabName,
-        pinned: (g as any).pinned
-      };
-    }
-  });
-
   const layoutState = {
     // Echo the correlation id so main can route this reply to a workspace
     // capture; absent for the legacy close-time save.
     requestId: req?.requestId,
-    activeUid: sessions.activeUid,
-    activeRootGroup: termGroups.activeRootGroup,
-    activeTermGroup: termGroups.activeTermGroup || null,
-    activeSessions: termGroups.activeSessions ? termGroups.activeSessions.asMutable() : {},
-    termGroups: serializedTermGroups,
-    sessions: serializedSessions
+    ...serializeLayoutState(store_.getState(), getSessionCommandLine)
   };
-
   rpc.emit('layout-state-reply', layoutState);
 });
 
 rpc.on('restore-layout-state', (savedState) => {
   store_.dispatch(termGroupActions.restoreLayoutState(savedState));
+});
+
+// Tab-scoped restore (#183): graft ONE saved tab (uids already remapped by
+// main) into the running window as a new tab — additive, never replacing.
+rpc.on('restore-tab-state', ({layout, name}) => {
+  store_.dispatch(termGroupActions.restoreTabState(layout, name) as any);
+});
+
+// n8 durable-session binding, captured main-side from OSC 777 (nemesis8#106)
+// and mirrored into redux so the save toast and the workspace serializer see
+// which panes host resumable agent sessions.
+rpc.on('session n8 binding', ({uid, binding}) => {
+  store_.dispatch({type: 'SESSION_SET_N8_BINDING', uid, binding} as any);
 });

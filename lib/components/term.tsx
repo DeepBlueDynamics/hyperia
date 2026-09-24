@@ -20,6 +20,8 @@ import throttle from 'lodash/throttle';
 import type {TermProps} from '../../typings/hyper';
 import rpc from '../rpc';
 import terms from '../terms';
+import {altArrowSequence} from '../utils/alt-arrow-sequence';
+import {isPlainShell, pickNativeShell} from '../utils/native-shell';
 import {toNavigableUrl} from '../utils/navigable-url';
 import processClipboard from '../utils/paste';
 import {translatePath} from '../utils/path-translate';
@@ -176,6 +178,14 @@ export default class Term extends React.PureComponent<
     // Bumped when the persisted recent-dir list is cleared, so the chip row
     // (which reads localStorage during render) re-renders.
     dirHistoryNonce: number;
+    // Measured room from navigatorTop to the bottom of the pane (see
+    // measureNavigatorGeometry). The popup never extends past it.
+    navigatorMaxHeight: number;
+    // Measured heights of one directory row / the RECENT section at one chip
+    // line: the floors the two scroll regions shrink to.
+    navigatorRowMin: number;
+    navigatorRecentMin: number;
+    navigatorDirMin: number;
     isGlimmerActive?: boolean;
     showCopied?: boolean;
     // Pixel offset (within term_fit) to anchor the "Copied!" toast under the
@@ -194,6 +204,7 @@ export default class Term extends React.PureComponent<
     isCustomModalOpen: boolean;
     customKind: 'shell' | 'agent';
     restoreNoticeDismissed: boolean;
+    dirTipPos: {left: number; top: number} | null;
     profileName: string;
     shellPath: string;
     shellArgs: string;
@@ -256,6 +267,10 @@ export default class Term extends React.PureComponent<
     navigatorWidth: 280,
     navigatorTop: 38,
     dirHistoryNonce: 0,
+    navigatorMaxHeight: 400,
+    navigatorRowMin: 27,
+    navigatorRecentMin: 48,
+    navigatorDirMin: 27,
     isGlimmerActive: false,
     showCopied: false,
     copiedPos: undefined as {left: number; top: number} | undefined,
@@ -273,6 +288,9 @@ export default class Term extends React.PureComponent<
     customKind: 'shell' as 'shell' | 'agent',
     // Workspace-restore substitution banner (#168) — dismissed per pane life.
     restoreNoticeDismissed: false,
+    // Viewport coords for the dir-bar tooltip (position:fixed so it can
+    // overhang neighboring panes instead of clipping at this pane's edge).
+    dirTipPos: null as {left: number; top: number} | null,
     profileName: '',
     shellPath: '',
     shellArgs: '',
@@ -287,6 +305,9 @@ export default class Term extends React.PureComponent<
   dirNavigatorRef = React.createRef<HTMLDivElement>();
   pathBarRef = React.createRef<HTMLDivElement>();
   navigatorSearchInputRef = React.createRef<HTMLInputElement>();
+  navigatorDirListRef = React.createRef<HTMLDivElement>();
+  navigatorRecentRef = React.createRef<HTMLDivElement>();
+  navigatorFitFrame: number | null = null;
   findInputRef = React.createRef<HTMLInputElement>();
   termOuterRef = React.createRef<HTMLDivElement>();
 
@@ -953,6 +974,65 @@ export default class Term extends React.PureComponent<
           return false;
         }
       });
+      // Bug S: intercept CSI 3 J (ED3 — clear scrollback) to capture the user's
+      // scroll position BEFORE xterm's default handler trims scrollback and
+      // adjusts ybase/ydisp. Return false so the default handler still runs.
+      // params[0] is number | number[] (sub-params); only a bare 3 is ED3.
+      this.term.parser.registerCsiHandler({final: 'J'}, (params) => {
+        if (params[0] === 3) {
+          const buf = this.term.buffer.active;
+          this._ed3Pending = true;
+          this._ed3WasScrolledBack = buf.viewportY < buf.baseY;
+          this._ed3DistanceFromBottom = buf.baseY - buf.viewportY;
+        }
+        return false;
+      });
+      // After a write containing ED3 settles, restore the viewport. If the user
+      // was at the bottom, scrollToBottom() clears the stale isUserScrolling
+      // flag that xterm 5.5 leaves set. If they were scrolled back, keep their
+      // distance from the bottom of the (now-trimmed) buffer. onWriteParsed
+      // fires after EVERY write — only act when our CSI J handler saw an ED3.
+      this.term.onWriteParsed(() => {
+        if (!this._ed3Pending) return;
+        if (this._ed3ScrollRestore) {
+          clearTimeout(this._ed3ScrollRestore);
+        }
+        this._ed3ScrollRestore = setTimeout(() => {
+          this._ed3ScrollRestore = null;
+          this._ed3Pending = false;
+          if (this._ed3WasScrolledBack) {
+            const buf = this.term.buffer.active;
+            const target = Math.max(0, buf.baseY - this._ed3DistanceFromBottom);
+            if (buf.viewportY !== target) {
+              this.term.scrollToLine(target);
+            }
+          } else {
+            this.term.scrollToBottom();
+          }
+          this._ed3WasScrolledBack = false;
+          this._ed3DistanceFromBottom = 0;
+        }, 80);
+      });
+      // Cancel a pending ED3 restore if the USER scrolls in the meantime —
+      // their input wins. xterm's onScroll also fires for its own programmatic
+      // scrolls during the redraw, so we can't use it; instead observe the
+      // actual inputs that cause user scrolls: wheel events (returning true so
+      // xterm's own wheel handling still runs) and Shift+PageUp/PageDown (the
+      // only key paths that scroll — Terminal.ts maps PAGE_UP/PAGE_DOWN from
+      // shifted Page keys; bare PageUp is an app key and goes to the PTY).
+      const cancelEd3Restore = () => {
+        if (this._ed3ScrollRestore) {
+          clearTimeout(this._ed3ScrollRestore);
+          this._ed3ScrollRestore = null;
+          this._ed3Pending = false;
+          this._ed3WasScrolledBack = false;
+          this._ed3DistanceFromBottom = 0;
+        }
+      };
+      this.term.attachCustomWheelEventHandler(() => {
+        cancelEd3Restore();
+        return true;
+      });
       this.term.open(this.termRef);
 
       if (useWebGL) {
@@ -1115,6 +1195,11 @@ export default class Term extends React.PureComponent<
             this.setState({isNarrow, paneWidth: width});
           }
         }
+        // Pane size changed (split drag, layout change, window resize): keep an
+        // open directory navigator fitted inside the pane instead of closing it.
+        if (this.state.isDirNavigatorOpen) {
+          this.scheduleNavigatorFit();
+        }
         if (this.termWrapperRef) {
           clearTimeout(this.resizeTimeout);
           this.resizeTimeout = setTimeout(() => {
@@ -1218,6 +1303,17 @@ export default class Term extends React.PureComponent<
   };
 
   _copiedTimer: ReturnType<typeof setTimeout> | null = null;
+  // Bug S: xterm 5.5's ED3 (CSI 3 J, clear scrollback) trims scrollback and
+  // adjusts ybase/ydisp but does NOT clear BufferService.isUserScrolling. So
+  // once the user has scrolled up at all, the viewport stays pinned at row 0
+  // through every later redraw (Codex's ESC[2J ESC[3J + redraw). We capture the
+  // user's scroll position BEFORE ED3 runs, then restore it after the write
+  // settles. If the user was at the bottom, scrollToBottom() clears the stale
+  // isUserScrolling; if they were scrolled back, we maintain their distance.
+  _ed3ScrollRestore: ReturnType<typeof setTimeout> | null = null;
+  _ed3Pending = false;
+  _ed3WasScrolledBack = false;
+  _ed3DistanceFromBottom = 0;
   _clearBtnRef = React.createRef<HTMLSpanElement>();
   // Flash a "Copied!" toast under the clear-buffer button when text hits the
   // clipboard. Its left edge lines up with the button's left edge (the button
@@ -1412,8 +1508,9 @@ export default class Term extends React.PureComponent<
   }
 
   onWindowResize = () => {
+    // Re-fit (never close) an open directory navigator to the new pane box.
     if (this.state.isDirNavigatorOpen) {
-      this.setState({isDirNavigatorOpen: false});
+      this.scheduleNavigatorFit();
     }
 
     // One trailing settle, not two. The 100ms + 300ms pair fired BOTH times,
@@ -1432,6 +1529,19 @@ export default class Term extends React.PureComponent<
   };
 
   keyboardHandler = (e: any) => {
+    // Bug S: Shift+PageUp/PageDown are the only key paths that scroll xterm
+    // (Terminal.ts maps PAGE_UP/PAGE_DOWN from shifted Page keys; bare PageUp
+    // goes to the PTY as an app key). If a pending ED3 scroll-restore is
+    // armed, the user's scroll wins — cancel it. Observe only; return true.
+    if (e.type === 'keydown' && e.shiftKey && (e.key === 'PageUp' || e.key === 'PageDown')) {
+      if (this._ed3ScrollRestore) {
+        clearTimeout(this._ed3ScrollRestore);
+        this._ed3ScrollRestore = null;
+        this._ed3Pending = false;
+        this._ed3WasScrolledBack = false;
+        this._ed3DistanceFromBottom = 0;
+      }
+    }
     let isSplitDownDisabled = false;
     if (this.props.groupUid && (this.props as any).allTermGroups) {
       const stacks = countPathHorizontalStacks(this.props.groupUid, (this.props as any).allTermGroups);
@@ -1449,6 +1559,18 @@ export default class Term extends React.PureComponent<
     if (e.altKey && e.key === 'ArrowRight') {
       e.preventDefault();
       this.navigateForward();
+      return false;
+    }
+    // xterm 5.5 rewrites non-Mac Alt+Up/Down to Ctrl+Up/Down before the PTY.
+    // On keydown only, emit the standard Alt sequence and return false so
+    // xterm does not encode a second one. keyup falls through. Alt+Left/Right
+    // already returned above.
+    const altArrow = altArrowSequence(e);
+    if (altArrow) {
+      e.preventDefault();
+      if (this.props.onData) {
+        this.props.onData(altArrow);
+      }
       return false;
     }
     // Intercept Ctrl+Shift+O to toggle the directory navigator. Bare Ctrl+O is
@@ -1642,6 +1764,169 @@ export default class Term extends React.PureComponent<
     return !!this.state.activeProgram;
   };
 
+  // ── Directory navigator geometry ────────────────────────────────────────
+  // The popup is position:absolute inside termOuterRef (the pane root,
+  // position:relative). Anchor: directly below the path button. Height cap:
+  // the MEASURED distance from the popup's top to the lowest visible edge of
+  // the pane — the pane root's bottom, clipped by any scrolling/clipping
+  // ancestor and by the window itself — minus a small margin.
+  measureNavigatorGeometry = (): {
+    navigatorLeft: number;
+    navigatorWidth: number;
+    navigatorTop: number;
+    navigatorMaxHeight: number;
+  } => {
+    const MARGIN = 8;
+    let navigatorLeft = 8;
+    let navigatorWidth = 320;
+    let navigatorTop = 38;
+    const outer =
+      this.termOuterRef.current || (this.pathBarRef.current?.closest('.term_fit') as HTMLElement | null) || null;
+    if (!outer) {
+      return {navigatorLeft, navigatorWidth, navigatorTop, navigatorMaxHeight: 0};
+    }
+    const parentRect = outer.getBoundingClientRect();
+
+    if (this.pathBarRef.current) {
+      const rect = this.pathBarRef.current.getBoundingClientRect();
+      navigatorLeft = rect.left - parentRect.left;
+      navigatorTop = rect.bottom - parentRect.top + 4; // 4px margin below the path bar
+
+      const widthToUse = Math.max(0, Math.min(Math.max(rect.width, 320), parentRect.width - 16));
+      navigatorWidth = widthToUse;
+      if (navigatorLeft + widthToUse > parentRect.width) {
+        // Shift left (right-justify) if it overflows the right edge
+        navigatorLeft = rect.right - parentRect.left - widthToUse;
+        if (navigatorLeft < 8) {
+          navigatorLeft = 8;
+        }
+      }
+    }
+
+    // Lowest pixel of the pane that is actually on screen.
+    let visibleBottom = Math.min(parentRect.bottom, window.innerHeight || document.documentElement.clientHeight);
+    for (let el = outer.parentElement; el && el !== document.documentElement; el = el.parentElement) {
+      const cs = getComputedStyle(el);
+      if (cs.overflowY !== 'visible' || cs.overflowX !== 'visible') {
+        visibleBottom = Math.min(visibleBottom, el.getBoundingClientRect().bottom);
+      }
+    }
+    const navigatorMaxHeight = Math.max(0, Math.floor(visibleBottom - (parentRect.top + navigatorTop) - MARGIN));
+
+    return {
+      navigatorLeft: Math.round(navigatorLeft),
+      navigatorWidth: Math.round(navigatorWidth),
+      navigatorTop: Math.round(navigatorTop),
+      navigatorMaxHeight
+    };
+  };
+
+  // Re-measure an OPEN navigator (window resize, pane resize, content change)
+  // and update only what moved. Also measures the region floors: one dir row,
+  // and the RECENT section's chrome (padding + label) + one chip line.
+  fitNavigator = () => {
+    if (!this.state.isDirNavigatorOpen) return;
+    const geo = this.measureNavigatorGeometry();
+    const next: Record<string, number> = {};
+    (Object.keys(geo) as (keyof typeof geo)[]).forEach((k) => {
+      if (this.state[k] !== geo[k]) next[k] = geo[k];
+    });
+
+    const firstRow = this.navigatorDirListRef.current?.querySelector('.term_navigatorDirRow') as HTMLElement | null;
+    if (firstRow && firstRow.offsetHeight > 0 && firstRow.offsetHeight !== this.state.navigatorRowMin) {
+      next.navigatorRowMin = firstRow.offsetHeight;
+    }
+    const recent = this.navigatorRecentRef.current;
+    const chipRow = recent?.querySelector('.term_navigatorRecentRow') as HTMLElement | null;
+    const firstChip = chipRow?.firstElementChild as HTMLElement | null;
+    if (recent && chipRow && firstChip && firstChip.offsetHeight > 0) {
+      // Floor = section padding/border + the label (and its margins) + one
+      // chip + the chip row's own vertical padding. Summed from computed
+      // styles, not offsetHeight differences, so the current min-height can't
+      // feed back into the measurement.
+      const px = (v: string) => parseFloat(v) || 0;
+      const secCs = getComputedStyle(recent);
+      const rowCs = getComputedStyle(chipRow);
+      const chrome =
+        px(secCs.paddingTop) + px(secCs.paddingBottom) + px(secCs.borderTopWidth) + px(secCs.borderBottomWidth);
+      // The label sits beside the chip row, so one line = the taller of the
+      // label and one chip.
+      let line = firstChip.offsetHeight + px(rowCs.paddingTop) + px(rowCs.paddingBottom);
+      Array.from(recent.children).forEach((child) => {
+        if (child === chipRow) return;
+        line = Math.max(line, (child as HTMLElement).offsetHeight);
+      });
+      const recentMin = Math.ceil(chrome + line);
+      if (recentMin > 0 && recentMin !== this.state.navigatorRecentMin) {
+        next.navigatorRecentMin = recentMin;
+      }
+    }
+    // Priority when the pane is short: RECENT keeps its one chip line; the dir
+    // list gives up its one-row floor first (it's still reachable by typing).
+    // Body room = popup max height minus the fixed rows (path, status, search).
+    const popup = this.dirNavigatorRef.current;
+    const body = popup?.querySelector('.term_navigatorBody') as HTMLElement | null;
+    if (popup && body) {
+      let fixed = 2; // popup border
+      Array.from(popup.children).forEach((child) => {
+        if (child !== body) fixed += (child as HTMLElement).offsetHeight;
+      });
+      const maxH = next.navigatorMaxHeight ?? this.state.navigatorMaxHeight;
+      const rowMin = next.navigatorRowMin ?? this.state.navigatorRowMin;
+      const recentMin = this.navigatorRecentRef.current ? next.navigatorRecentMin ?? this.state.navigatorRecentMin : 0;
+      const room = maxH - fixed;
+      const dirMin = Math.max(0, Math.min(rowMin, room - recentMin));
+      if (dirMin !== this.state.navigatorDirMin) next.navigatorDirMin = dirMin;
+    }
+    if (Object.keys(next).length > 0) {
+      this.setState(next as any);
+    }
+  };
+
+  scheduleNavigatorFit = () => {
+    if (this.navigatorFitFrame !== null) return;
+    this.navigatorFitFrame = requestAnimationFrame(() => {
+      this.navigatorFitFrame = null;
+      this.fitNavigator();
+    });
+  };
+
+  // Every navigator focus goes through here: preventScroll so focusing the
+  // search box can never scroll an ancestor (pane / layout / window).
+  focusNavigatorSearch = (selectAll = false) => {
+    const input = this.navigatorSearchInputRef.current;
+    if (!input) return;
+    input.focus({preventScroll: true});
+    if (selectAll) {
+      // setSelectionRange, not select(): select() may reveal-scroll.
+      try {
+        input.setSelectionRange(0, input.value.length);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
+  // Keep the keyboard-selected row visible by scrolling ONLY the list's own
+  // scrollTop (scrollIntoView would also scroll overflow:hidden ancestors).
+  scrollNavigatorSelectionIntoView = () => {
+    const list = this.navigatorDirListRef.current;
+    const idx = this.state.focusedIndex;
+    if (!list || idx < 0) return;
+    const rows = list.querySelectorAll('.term_navigatorDirRow');
+    const row = rows[idx] as HTMLElement | undefined;
+    if (!row) return;
+    const listRect = list.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const rowTop = rowRect.top - listRect.top - list.clientTop + list.scrollTop;
+    const rowBottom = rowTop + rowRect.height;
+    if (rowTop < list.scrollTop) {
+      list.scrollTop = rowTop;
+    } else if (rowBottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = rowBottom - list.clientHeight;
+    }
+  };
+
   toggleDirNavigator = () => {
     if (this.isTerminalBusy()) {
       // Browsing is locked while a program runs (the picker would fail mid-cd).
@@ -1665,42 +1950,17 @@ export default class Term extends React.PureComponent<
     const activePath = sessionCwd || '';
 
     if (!isDirNavigatorOpen) {
-      let navigatorLeft = 8;
-      let navigatorWidth = 320;
-      let navigatorTop = 38;
-
-      if (this.pathBarRef.current) {
-        const rect = this.pathBarRef.current.getBoundingClientRect();
-        const termFit = this.pathBarRef.current.closest('.term_fit');
-        if (termFit) {
-          const parentRect = termFit.getBoundingClientRect();
-          navigatorLeft = rect.left - parentRect.left;
-          navigatorTop = rect.bottom - parentRect.top + 4; // 4px margin below the path bar
-
-          const widthToUse = Math.min(Math.max(rect.width, 320), parentRect.width - 16);
-          navigatorWidth = widthToUse;
-          if (navigatorLeft + widthToUse > parentRect.width) {
-            // Shift left (right-justify) if it overflows the right edge
-            navigatorLeft = rect.right - parentRect.left - widthToUse;
-            if (navigatorLeft < 8) {
-              navigatorLeft = 8;
-            }
-          }
-        }
-      }
-
+      // Measure BEFORE the first paint so the popup is born fitted — it must
+      // never render taller than the pane, even for one frame (a focused input
+      // below the pane edge makes Chromium scroll overflow:hidden ancestors and
+      // shoves the whole window/tab bar up).
       this.setState(
         {
           isDirNavigatorOpen: true,
-          navigatorLeft,
-          navigatorWidth,
-          navigatorTop
+          ...this.measureNavigatorGeometry()
         },
         () => {
-          setTimeout(() => {
-            this.navigatorSearchInputRef.current?.focus();
-            this.navigatorSearchInputRef.current?.select();
-          }, 50);
+          setTimeout(() => this.focusNavigatorSearch(true), 50);
         }
       );
       // navigatorCurrentPath / navigatorDirs / searchBuffer / focusedIndex are
@@ -1776,17 +2036,16 @@ export default class Term extends React.PureComponent<
   baseShellOptions = (): Array<{name: string; shell: string}> => {
     const seen = new Set<string>();
     return ((this.props as any).profiles || [])
-      .filter((p: any) => p?.config?.shell && !p.kind && !seen.has(p.config.shell) && seen.add(p.config.shell))
+      .filter((p: any) => isPlainShell(p, isWindows) && !seen.has(p.config.shell) && seen.add(p.config.shell))
       .map((p: any) => ({name: p.name, shell: p.config.shell as string}));
   };
 
   // Sensible default base shell for a NEW custom shell: prefer PowerShell 7
   // (pwsh), then any PowerShell, else the first detected shell.
-  defaultBaseShellPath = (): string => {
-    const opts = this.baseShellOptions();
-    const pick = opts.find((o) => /pwsh/i.test(o.shell)) || opts.find((o) => /powershell/i.test(o.shell)) || opts[0];
-    return pick?.shell || '';
-  };
+  defaultBaseShellPath = (): string =>
+    pickNativeShell((this.props as any).profiles || [], isWindows)?.config?.shell ||
+    this.baseShellOptions()[0]?.shell ||
+    '';
 
   // Save is allowed with a name + either a base shell (base-shell mode) or a
   // raw shell path (direct mode).
@@ -1921,7 +2180,7 @@ export default class Term extends React.PureComponent<
         // Navigating into a folder (row/breadcrumb click) blurs the search input;
         // re-focus it so the user can keep typing to filter immediately.
         if (this.state.isDirNavigatorOpen) {
-          setTimeout(() => this.navigatorSearchInputRef.current?.focus(), 0);
+          setTimeout(() => this.focusNavigatorSearch(), 0);
         }
       })
       .catch((err) => {
@@ -1967,13 +2226,19 @@ export default class Term extends React.PureComponent<
       /* ignore quota / unavailable */
     }
     this.setState(({dirHistoryNonce}) => ({dirHistoryNonce: dirHistoryNonce + 1}));
+    // RECENT just shrank: re-fit so the dir list takes the freed height.
+    this.scheduleNavigatorFit();
   };
 
   // A single horizontal row of quick-jump buttons under the directory list:
   // HOME first (accent color), then most-recent dirs (excluding home + the
   // currently-browsed path). Clicking browses there (ctrl-enter still cds).
   renderNavigatorRecent = () => {
-    const home = (process.env.USERPROFILE || process.env.HOME || '').replace(/[\\/]+$/, '');
+    // os.homedir(), not process.env: webpack replaces process.env in the
+    // renderer bundle, so USERPROFILE/HOME read as undefined and the Home chip
+    // silently never rendered.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const home = (require('os').homedir() as string).replace(/[\\/]+$/, '');
     const current = this.normDir(this.state.navigatorCurrentPath || '');
     const history = this.loadDirHistory();
     const recents = history.filter(
@@ -2009,21 +2274,42 @@ export default class Term extends React.PureComponent<
 
     if (items.length === 0) return null;
 
+    // Layout: a shrinkable flex item of the navigator body. It never grows past
+    // its natural height (flex 0 1 auto), can shrink to the "recent" label +
+    // ONE chip line (measured navigatorRecentMin), and the chip row scrolls
+    // vertically inside it — every chip stays reachable, none are dropped.
     return (
       <div
+        ref={this.navigatorRecentRef}
+        className="term_navigatorRecent"
         style={{
           borderTop: '0.5px solid var(--border-neutral)',
-          padding: 'var(--space-6) var(--space-8)'
+          padding: 'var(--space-4) var(--space-8)',
+          flex: '0 1 auto',
+          minHeight: `${this.state.navigatorRecentMin}px`,
+          // Label sits INLINE left of the chips (not on its own line above) so
+          // the one-line floor is just one chip line — it has to fit short panes.
+          display: 'flex',
+          flexDirection: 'row',
+          // Only the chip row stretches (so it can scroll); the label keeps its
+          // natural height — a stretched label fed its own height back into
+          // the one-line floor measurement and RECENT grew without bound.
+          alignItems: 'flex-start',
+          gap: 'var(--space-6)',
+          overflow: 'hidden',
+          boxSizing: 'border-box'
         }}
       >
         <div
           style={{
+            flex: 'none',
+            alignSelf: 'flex-start',
             fontSize: '9px',
+            lineHeight: '18px',
             color: 'var(--text-tertiary)',
             fontFamily: 'var(--font-sans)',
             textTransform: 'uppercase',
             letterSpacing: '0.04em',
-            marginBottom: 'var(--space-4)',
             paddingLeft: 'var(--space-4)'
           }}
         >
@@ -2034,8 +2320,14 @@ export default class Term extends React.PureComponent<
           style={{
             display: 'flex',
             flexWrap: 'wrap',
-            gap: 'var(--space-6)',
-            paddingBottom: '2px'
+            alignContent: 'flex-start',
+            gap: 'var(--space-4) var(--space-6)',
+            flex: '1 1 auto',
+            alignSelf: 'stretch',
+            minWidth: 0,
+            minHeight: 0,
+            overflowY: 'auto',
+            overflowX: 'hidden'
           }}
         >
           {items.map(({path: itemPath, accent}) => (
@@ -2265,11 +2557,13 @@ export default class Term extends React.PureComponent<
       <div
         className="term_navigatorBreadcrumbs"
         style={{
+          // Pinned to the popup's top: never shrinks, never scrolls away.
+          flex: 'none',
           display: 'flex',
           flexWrap: 'wrap',
           alignItems: 'center',
           gap: 'var(--space-4)',
-          padding: 'var(--space-8) var(--space-12)',
+          padding: 'var(--space-6) var(--space-12)',
           borderBottom: '0.5px solid var(--border-neutral)'
         }}
       >
@@ -2380,11 +2674,36 @@ export default class Term extends React.PureComponent<
       this.loadNavigatorDirs(targetPath);
     };
 
+    // Region layout: shrinks to one measured row and scrolls on its own. The
+    // natural height is capped at 220px (keeps the popup compact in tall
+    // panes) via the flex-BASIS, not max-height: flex shrink is weighted by
+    // the unclamped base size, so a max-height'd 100-row list would freeze at
+    // its cap and starve/overflow RECENT. With basis = min(220, rows × row
+    // height) the list still gets the larger share when space is short.
+    const rowH = this.state.navigatorRowMin;
+    const listBasis = Math.min(220, Math.max(1, filteredDirs.length) * rowH);
+    const regionStyle: React.CSSProperties = {
+      flex: `1 1 ${listBasis}px`,
+      minHeight: `${this.state.navigatorDirMin}px`,
+      overflowY: 'auto',
+      overflowX: 'hidden',
+      boxSizing: 'border-box'
+    };
+
     if (filteredDirs.length === 0) {
       return (
         <div
+          ref={this.navigatorDirListRef}
+          className="term_navigatorDirList"
           style={{
-            padding: '24px 12px',
+            ...regionStyle,
+            // Same ~60px as before, but as a shrinkable basis (padding would
+            // not shrink below the one-row floor).
+            flex: '1 1 60px',
+            padding: '0 12px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
             textAlign: 'center',
             fontSize: '11px',
             color: 'var(--text-tertiary)',
@@ -2397,7 +2716,7 @@ export default class Term extends React.PureComponent<
     }
 
     return (
-      <div style={{maxHeight: '220px', overflowY: 'auto'}} className="term_navigatorDirList">
+      <div ref={this.navigatorDirListRef} style={regionStyle} className="term_navigatorDirList">
         {filteredDirs.map((dir, index) => {
           const isMatched = index === focusedIndex;
           const showFocus = isMatched;
@@ -2625,11 +2944,14 @@ export default class Term extends React.PureComponent<
   renderNavigatorFooter = () => {
     return (
       <div
+        className="term_navigatorFooter"
         style={{
+          // Pinned to the popup's bottom: never shrinks, never scrolls away.
+          flex: 'none',
           display: 'flex',
           alignItems: 'center',
           gap: 'var(--space-8)',
-          padding: 'var(--space-8) var(--space-12)',
+          padding: 'var(--space-6) var(--space-12)',
           borderTop: '0.5px solid var(--border-neutral)',
           background: 'var(--bg-primary)',
           borderBottomLeftRadius: '4px',
@@ -2752,6 +3074,31 @@ export default class Term extends React.PureComponent<
       document.addEventListener('mousedown', this.handleOutsideClick);
     } else if (!isActive && wasActive) {
       document.removeEventListener('mousedown', this.handleOutsideClick);
+      if (this.navigatorFitFrame !== null) {
+        cancelAnimationFrame(this.navigatorFitFrame);
+        this.navigatorFitFrame = null;
+      }
+    }
+
+    if (isActive) {
+      // Re-fit when the popup opens or its content changes shape (new listing
+      // → row height measurable; status bar toggles; filter changes the
+      // RECENT chips). fitNavigator only setStates on an actual change.
+      if (
+        !wasActive ||
+        prevState.navigatorDirs !== this.state.navigatorDirs ||
+        prevState.navigatorStatus !== this.state.navigatorStatus ||
+        prevState.searchBuffer !== this.state.searchBuffer
+      ) {
+        this.scheduleNavigatorFit();
+      }
+      // New directory → list starts at the top (own scrollTop only).
+      if (prevState.navigatorCurrentPath !== this.state.navigatorCurrentPath && this.navigatorDirListRef.current) {
+        this.navigatorDirListRef.current.scrollTop = 0;
+      }
+      if (prevState.focusedIndex !== this.state.focusedIndex) {
+        this.scrollNavigatorSelectionIntoView();
+      }
     }
 
     if (this.props.isTermActive && !prevProps.isTermActive) {
@@ -2836,8 +3183,19 @@ export default class Term extends React.PureComponent<
     }
     clearTimeout(this.resizeTimeout);
     clearTimeout(this.stabilizeResizeTimeout);
+    // Bug S: cancel a pending ED3 scroll-restore so it can't fire on a
+    // disposed terminal after unmount.
+    if (this._ed3ScrollRestore) {
+      clearTimeout(this._ed3ScrollRestore);
+      this._ed3ScrollRestore = null;
+      this._ed3Pending = false;
+    }
 
     this.resizeObserver?.disconnect();
+    if (this.navigatorFitFrame !== null) {
+      cancelAnimationFrame(this.navigatorFitFrame);
+      this.navigatorFitFrame = null;
+    }
     document.removeEventListener('mousedown', this.handleOutsideClick);
     terms[this.props.uid] = null;
     this.termWrapperRef?.removeChild(this.termRef!);
@@ -2917,12 +3275,62 @@ export default class Term extends React.PureComponent<
     }
 
     // Identical toolbar-collapse contract to the web pane (see web-pane.tsx):
-    // splits drop below ~400 (and hand their room back to the dir bar); the dir
-    // bar floors at ~11 chars and is hidden entirely below ~320 rather than
-    // shrinking to a stub. End state = title + nav + close.
+    // Responsive collapse ladder (per Clint's spec on top of #184). As the
+    // pane narrows, things give way in this order:
+    //   1. the dir-bar path text ellipsizes (flex, continuous) …
+    //   2. … and floors at its min-width (~first path segment);
+    //   3. header tools drop one per step, lowest-value first: split right/left,
+    //      split up/down, quick layout, screenshot — THEN the session label
+    //      shrinks (full → short → just its ">" icon) — and the nav arrows +
+    //      clear buffer are the last to go, so they survive as long as there's
+    //      room. The periodic pulse is NOT on the ladder (per Kord): it stays
+    //      through the narrowest state on shell panes. Once both splits are
+    //      gone the survivors close ranks: gaps/margins interpolate down
+    //      (squeeze below) so a removal never leaves dead space;
+    //   5. meanwhile the dir bar keeps flex:1 — it absorbs freed space and its
+    //      min-width floor eases 80px → 30px, so the path squeezes to a couple
+    //      of chars before, finally, it collapses to the folder icon alone
+    //      (the #184 hover tooltip still reveals the full path).
+    // End state: ">" (session icon) + folder icon + the close X. Thresholds
+    // live in one place so they're tunable as a set.
     const w = this.state.paneWidth;
-    const hideSplits = w < 300;
-    const showDirBar = w >= 240;
+    // Collapse order as the pane narrows (per Kord's spec): the split buttons go
+    // first, then the quick-layout picker, then the screenshot; only after that
+    // does the session name shrink (full → short → just its ">" / globe icon).
+    // The nav arrows and the clear-buffer button are the LAST to go — they're
+    // never dropped while there's room for them. The pulse has no threshold: it
+    // is always shown on shell panes (pane-band gates it off pickers and
+    // web/ai panes). Higher threshold = removed sooner.
+    const LADDER = {
+      splitRightLeft: 380,
+      splitUpDown: 360,
+      quickLayout: 340,
+      screenshot: 300,
+      labelShort: 280,
+      labelIconOnly: 260,
+      clearBuffer: 240,
+      navArrows: 220,
+      dirIconOnly: 90
+    };
+    // 0 at splitUpDown (both split icons just gone), 1 at splitUpDown-100 and
+    // below. sq(roomy, tight) interpolates a px value along that ramp.
+    const squeeze = w >= LADDER.splitUpDown ? 0 : Math.min(1, (LADDER.splitUpDown - w) / 100);
+    const sq = (roomy: number, tight: number) => `${Math.round(roomy + (tight - roomy) * squeeze)}px`;
+    // Dir-bar min-width floor: 80px (~11 chars) roomy, easing to 26px (icon +
+    // ~1 char) right before the icon-only collapse.
+    const dirMinWidth = Math.round(Math.max(26, Math.min(80, 26 + ((w - LADDER.dirIconOnly) * 54) / 210)));
+    const hideQuickLayout = w < LADDER.quickLayout;
+    const hideSplitRightLeft = w < LADDER.splitRightLeft;
+    const hideSplitUpDown = w < LADDER.splitUpDown;
+    // A picker pane has no terminal: nothing to navigate, clear or screenshot,
+    // and on the picker these rendered past the pane's left border. So the nav
+    // cluster (nav arrows, clear, screenshot) is hidden there; splits, quick
+    // layout and pulse stay on pickers, subject to the width ladder.
+    const onPicker = (this.props as any).sessionProfile === 'picker';
+    const hideNavArrows = onPicker || w < LADDER.navArrows;
+    const hideClearBuffer = onPicker || w < LADDER.clearBuffer;
+    const hideScreenshot = onPicker || w < LADDER.screenshot;
+    const dirIconOnly = w < LADDER.dirIconOnly;
     // Find-bar match counts (xterm reports a 0-based resultIndex).
     const sr = this.state.searchResults as {resultIndex: number; resultCount: number} | undefined;
     const findActive = sr ? sr.resultIndex + 1 : 0;
@@ -3163,8 +3571,10 @@ export default class Term extends React.PureComponent<
                     });
                   }
             }
-            isSplitRightDisabled={hideSplits}
-            isSplitDownDisabled={isSplitDownDisabled || hideSplits}
+            isSplitRightDisabled={hideSplitRightLeft}
+            isSplitDownDisabled={isSplitDownDisabled || hideSplitUpDown}
+            hideQuickLayout={hideQuickLayout}
+            squeeze={squeeze}
             isBusy={this.isTerminalBusy()}
             paneName={labelFull}
             label={
@@ -3202,211 +3612,249 @@ export default class Term extends React.PureComponent<
                   {/* Width switch lives in JS (state.paneWidth), NOT a CSS
                       @container query: styled-jsx flattens @container blocks,
                       leaking the narrow rules to every width — which rendered
-                      BOTH label variants glued together ("Name | zshName"). */}
-                  {w >= 380 ? labelFull : labelShort}
+                      BOTH label variants glued together ("Name | zshName").
+                      Third stage: below labelIconOnly the text vanishes and
+                      only the ">_" session icon remains (always visible). */}
+                  {w >= LADDER.labelShort ? labelFull : w >= LADDER.labelIconOnly ? labelShort : ''}
                 </span>
               )
             }
             icon={<span style={{fontFamily: 'var(--font-mono)', fontWeight: 700}}>{icon}</span>}
             navCluster={
+              hideNavArrows && hideClearBuffer && hideScreenshot ? null : (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: sq(4, 2),
+                    marginLeft: sq(6, 2),
+                    marginRight: sq(6, 2),
+                    flexShrink: 0
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {!hideNavArrows && (
+                    <>
+                      <span
+                        className="term_controlIcon term_tooltipTrigger"
+                        onClick={this.navigateBack}
+                        onContextMenu={this.handleBackContextMenu}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          cursor: this.state.cwdCursor <= 0 ? 'default' : 'pointer',
+                          opacity: this.state.cwdCursor <= 0 ? 0.4 : 1,
+                          pointerEvents: this.state.cwdCursor <= 0 ? 'none' : 'auto'
+                        }}
+                      >
+                        <i className="ti ti-arrow-left" style={{fontSize: '14px'}} aria-hidden="true" />
+                        <div className="term_tooltip" style={{minWidth: '160px'}}>
+                          <div
+                            style={{
+                              fontSize: '11px',
+                              color: 'var(--text-primary)',
+                              fontWeight: 500
+                            }}
+                          >
+                            Previous directory
+                          </div>
+                          <div
+                            style={{
+                              fontSize: '11px',
+                              fontFamily: 'var(--font-mono)',
+                              color: 'var(--text-secondary)',
+                              marginTop: 'var(--space-2)'
+                            }}
+                          >
+                            Alt+Left
+                          </div>
+                        </div>
+                      </span>
+                      <span
+                        className="term_controlIcon term_tooltipTrigger"
+                        onClick={this.navigateForward}
+                        onContextMenu={this.handleForwardContextMenu}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          cursor:
+                            this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
+                              ? 'default'
+                              : 'pointer',
+                          opacity:
+                            this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
+                              ? 0.4
+                              : 1,
+                          pointerEvents:
+                            this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
+                              ? 'none'
+                              : 'auto'
+                        }}
+                      >
+                        <i className="ti ti-arrow-right" style={{fontSize: '14px'}} aria-hidden="true" />
+                        <div className="term_tooltip" style={{minWidth: '160px'}}>
+                          <div
+                            style={{
+                              fontSize: '11px',
+                              color: 'var(--text-primary)',
+                              fontWeight: 500
+                            }}
+                          >
+                            Next directory
+                          </div>
+                          <div
+                            style={{
+                              fontSize: '11px',
+                              fontFamily: 'var(--font-mono)',
+                              color: 'var(--text-secondary)',
+                              marginTop: 'var(--space-2)'
+                            }}
+                          >
+                            Alt+Right
+                          </div>
+                        </div>
+                      </span>
+                    </>
+                  )}
+                  {!hideClearBuffer && (
+                    <span
+                      ref={this._clearBtnRef}
+                      className="term_controlIcon term_tooltipTrigger"
+                      onClick={() => {
+                        this.clear();
+                        this.focus();
+                      }}
+                      style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
+                    >
+                      <i className="ti ti-clear-all" style={{fontSize: '14px'}} aria-hidden="true" />
+                      <div className="term_tooltip" style={{minWidth: '160px'}}>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            color: 'var(--text-primary)',
+                            fontWeight: 500
+                          }}
+                        >
+                          Clear buffer
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            fontFamily: 'var(--font-mono)',
+                            color: 'var(--text-secondary)',
+                            marginTop: 'var(--space-2)'
+                          }}
+                        >
+                          Wipe scrollback — shell only, not TUIs
+                        </div>
+                      </div>
+                    </span>
+                  )}
+                  {!hideScreenshot && (
+                    <span
+                      className="term_controlIcon term_tooltipTrigger"
+                      onClick={(e) => void this.captureScreenshot(e)}
+                      style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
+                    >
+                      <i className="ti ti-camera" style={{fontSize: '14px'}} aria-hidden="true" />
+                      <div className="term_tooltip" style={{minWidth: '160px'}}>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            color: 'var(--text-primary)',
+                            fontWeight: 500
+                          }}
+                        >
+                          Screenshot
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            color: 'var(--text-secondary)',
+                            marginTop: 'var(--space-2)'
+                          }}
+                        >
+                          Copy PNG + save to ~/.hyperia/snapshots
+                        </div>
+                      </div>
+                    </span>
+                  )}
+                </div>
+              )
+            }
+            locationBar={
               <div
+                ref={this.pathBarRef}
+                className="term_locationBar term_tooltipTrigger"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  this.toggleDirNavigator();
+                }}
+                onMouseEnter={() => {
+                  // Pane containers clip with overflow:hidden (rounded
+                  // corners), so the tooltip goes position:fixed, placed from
+                  // the bar's viewport rect — free to overhang the neighbor
+                  // pane. Anchor at the bar first, then re-clamp by the
+                  // tooltip's ACTUAL rendered width so short tooltips stay by
+                  // the bar and long ones never run off the window edge.
+                  const rect = this.pathBarRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+                  const anchored = Math.max(8, rect.left - 6);
+                  this.setState({dirTipPos: {left: anchored, top: Math.round(rect.bottom) + 4}}, () => {
+                    requestAnimationFrame(() => {
+                      const tip = this.pathBarRef.current?.querySelector('.term_tooltip');
+                      if (!tip) return;
+                      const width = tip.getBoundingClientRect().width;
+                      const clamped = Math.max(8, Math.min(anchored, window.innerWidth - width - 8));
+                      if (Math.abs(clamped - anchored) > 1) {
+                        this.setState({dirTipPos: {left: clamped, top: Math.round(rect.bottom) + 4}});
+                      }
+                    });
+                  });
+                }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 'var(--space-4)',
-                  marginLeft: 'var(--space-6)',
-                  marginRight: 'var(--space-6)',
-                  flexShrink: 0
+                  gap: sq(4, 2),
+                  background: 'var(--bg-primary)',
+                  border: '0.5px solid var(--border-focus)',
+                  borderRadius: 'var(--radius-3)',
+                  padding: `0 ${sq(6, 3)}`,
+                  height: '24px',
+                  // Fill the row (flex:1 absorbs space freed by hidden icons —
+                  // never a dead gap); the floor eases 80px → 26px (dirMinWidth)
+                  // so the path squeezes to a char or two before the ladder's
+                  // last step collapses it to a COMPACT folder-icon pill (per
+                  // Clint: no stretched empty pill — the #184 tooltip still
+                  // reveals the full path on hover).
+                  ...(dirIconOnly ? {flex: '0 0 auto', minWidth: 'auto'} : {flex: 1, minWidth: `${dirMinWidth}px`}),
+                  cursor: this.isTerminalBusy() ? 'not-allowed' : 'pointer',
+                  opacity: this.isTerminalBusy() ? 0.5 : 1,
+                  boxSizing: 'border-box',
+                  marginLeft: sq(4, 2),
+                  marginRight: sq(8, 2),
+                  // Anchor for the styled hover tooltip (replaces the old
+                  // native title=, which couldn't show the full path AND
+                  // the action notice as distinct lines — #182).
+                  position: 'relative'
                 }}
-                onClick={(e) => e.stopPropagation()}
               >
-                <span
-                  className="term_controlIcon term_tooltipTrigger"
-                  onClick={this.navigateBack}
-                  onContextMenu={this.handleBackContextMenu}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    cursor: this.state.cwdCursor <= 0 ? 'default' : 'pointer',
-                    opacity: this.state.cwdCursor <= 0 ? 0.4 : 1,
-                    pointerEvents: this.state.cwdCursor <= 0 ? 'none' : 'auto'
-                  }}
-                >
-                  <i className="ti ti-arrow-left" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <div className="term_tooltip" style={{minWidth: '160px'}}>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        color: 'var(--text-primary)',
-                        fontWeight: 500
-                      }}
-                    >
-                      Previous directory
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontFamily: 'var(--font-mono)',
-                        color: 'var(--text-secondary)',
-                        marginTop: 'var(--space-2)'
-                      }}
-                    >
-                      Alt+Left
-                    </div>
-                  </div>
-                </span>
-                <span
-                  className="term_controlIcon term_tooltipTrigger"
-                  onClick={this.navigateForward}
-                  onContextMenu={this.handleForwardContextMenu}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    cursor:
-                      this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
-                        ? 'default'
-                        : 'pointer',
-                    opacity:
-                      this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1 ? 0.4 : 1,
-                    pointerEvents:
-                      this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
-                        ? 'none'
-                        : 'auto'
-                  }}
-                >
-                  <i className="ti ti-arrow-right" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <div className="term_tooltip" style={{minWidth: '160px'}}>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        color: 'var(--text-primary)',
-                        fontWeight: 500
-                      }}
-                    >
-                      Next directory
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontFamily: 'var(--font-mono)',
-                        color: 'var(--text-secondary)',
-                        marginTop: 'var(--space-2)'
-                      }}
-                    >
-                      Alt+Right
-                    </div>
-                  </div>
-                </span>
-                <span
-                  ref={this._clearBtnRef}
-                  className="term_controlIcon term_tooltipTrigger"
-                  onClick={() => {
-                    this.clear();
-                    this.focus();
-                  }}
-                  style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
-                >
-                  <i className="ti ti-clear-all" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <div className="term_tooltip" style={{minWidth: '160px'}}>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        color: 'var(--text-primary)',
-                        fontWeight: 500
-                      }}
-                    >
-                      Clear buffer
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontFamily: 'var(--font-mono)',
-                        color: 'var(--text-secondary)',
-                        marginTop: 'var(--space-2)'
-                      }}
-                    >
-                      Wipe scrollback — shell only, not TUIs
-                    </div>
-                  </div>
-                </span>
-                <span
-                  className="term_controlIcon term_tooltipTrigger"
-                  onClick={(e) => void this.captureScreenshot(e)}
-                  style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
-                >
-                  <i className="ti ti-camera" style={{fontSize: '14px'}} aria-hidden="true" />
-                  <div className="term_tooltip" style={{minWidth: '160px'}}>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        color: 'var(--text-primary)',
-                        fontWeight: 500
-                      }}
-                    >
-                      Screenshot
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        color: 'var(--text-secondary)',
-                        marginTop: 'var(--space-2)'
-                      }}
-                    >
-                      Copy PNG + save to ~/.hyperia/snapshots
-                    </div>
-                  </div>
-                </span>
-              </div>
-            }
-            locationBar={
-              showDirBar ? (
-                <div
-                  ref={this.pathBarRef}
-                  className="term_locationBar"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    this.toggleDirNavigator();
-                  }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-4)',
-                    background: 'var(--bg-primary)',
-                    border: '0.5px solid var(--border-focus)',
-                    borderRadius: 'var(--radius-3)',
-                    padding: '0 var(--space-6)',
-                    height: '24px',
-                    // Fill the row; hard floor ~11 chars; hidden (not stubbed)
-                    // below ~320 via showDirBar. Matches the web-pane URL bar.
-                    flex: 1,
-                    minWidth: '80px',
-                    cursor: this.isTerminalBusy() ? 'not-allowed' : 'pointer',
-                    opacity: this.isTerminalBusy() ? 0.5 : 1,
-                    boxSizing: 'border-box',
-                    marginLeft: 'var(--space-4)',
-                    marginRight: 'var(--space-8)'
-                  }}
-                  title={
+                <i
+                  className={
                     this.isTerminalBusy()
-                      ? `Directory browsing locked while a process is running`
-                      : 'Click to browse directories (Ctrl+Shift+O)'
+                      ? 'ti ti-lock'
+                      : this.state.isDirNavigatorOpen
+                        ? 'ti ti-folder-open'
+                        : 'ti ti-folder'
                   }
-                >
-                  <i
-                    className={
-                      this.isTerminalBusy()
-                        ? 'ti ti-lock'
-                        : this.state.isDirNavigatorOpen
-                          ? 'ti ti-folder-open'
-                          : 'ti ti-folder'
-                    }
-                    style={{
-                      fontSize: '12px',
-                      color: 'var(--info-text)',
-                      flexShrink: 0
-                    }}
-                    aria-hidden="true"
-                  />
+                  style={{
+                    fontSize: '12px',
+                    color: 'var(--info-text)',
+                    flexShrink: 0
+                  }}
+                  aria-hidden="true"
+                />
+                {!dirIconOnly && (
                   <span
                     style={{
                       fontFamily: 'var(--font-mono)',
@@ -3421,8 +3869,55 @@ export default class Term extends React.PureComponent<
                       ? this.state.navigatorCurrentPath || '/'
                       : this.props.sessionCwd || '/'}
                   </span>
-                </div>
-              ) : null
+                )}
+                {/* Hover: FULL untruncated cwd + the action notice (#182).
+                      Suppressed while the navigator popup is open — it sits
+                      right below this bar and already shows where you're
+                      browsing. */}
+                {!this.state.isDirNavigatorOpen && (
+                  <div
+                    className="term_tooltip"
+                    style={
+                      this.state.dirTipPos
+                        ? {
+                            position: 'fixed',
+                            minWidth: '160px',
+                            left: this.state.dirTipPos.left,
+                            top: this.state.dirTipPos.top,
+                            right: 'auto'
+                          }
+                        : {minWidth: '160px', left: '-6px', right: 'auto'}
+                    }
+                  >
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        fontFamily: 'var(--font-mono)',
+                        color: 'var(--text-primary)',
+                        fontWeight: 500,
+                        // Deep paths wrap instead of clipping at the window
+                        // edge; break-all because paths have no spaces.
+                        whiteSpace: 'normal',
+                        wordBreak: 'break-all',
+                        maxWidth: 'min(60ch, 70vw)'
+                      }}
+                    >
+                      {(this.props as any).sessionCwd || '/'}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        color: 'var(--text-secondary)',
+                        marginTop: 'var(--space-2)'
+                      }}
+                    >
+                      {this.isTerminalBusy()
+                        ? 'Directory browsing locked while a process is running'
+                        : 'Click to browse directories · Ctrl+Shift+O'}
+                    </div>
+                  </div>
+                )}
+              </div>
             }
             onSplitRight={() => rpc.emit('split request vertical', {activeUid: this.props.uid})}
             onSplitDown={() =>
@@ -3456,6 +3951,11 @@ export default class Term extends React.PureComponent<
               top: `${this.state.navigatorTop}px`,
               left: `${this.state.navigatorLeft}px`,
               width: `${this.state.navigatorWidth}px`,
+              // Measured room to the pane's bottom edge (measureNavigatorGeometry);
+              // the popup NEVER extends below its pane, so focusing the search
+              // box can never make Chromium scroll a layout ancestor.
+              maxHeight: `${this.state.navigatorMaxHeight}px`,
+              overflow: 'hidden',
               background: 'var(--bg-secondary)',
               border: '0.5px solid var(--border-neutral)',
               borderRadius: '4px',
@@ -3467,19 +3967,35 @@ export default class Term extends React.PureComponent<
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Breadcrumbs Header */}
+            {/* Breadcrumbs Header — flex:none, pinned top */}
             {this.renderNavigatorBreadcrumbs()}
 
-            {/* Directory list */}
-            {this.renderNavigatorDirectoryList()}
+            {/* Body — the ONLY part that gives up height. min-height:0 lets it
+                shrink to nothing so the header and search footer always fit;
+                inside, the dir list (larger share) and RECENT each scroll on
+                their own down to one row / one chip line. */}
+            <div
+              className="term_navigatorBody"
+              style={{
+                flex: '1 1 auto',
+                minHeight: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden'
+              }}
+            >
+              {/* Directory list */}
+              {this.renderNavigatorDirectoryList()}
 
-            {/* Recent dirs — quick-jump button row */}
-            {this.renderNavigatorRecent()}
+              {/* Recent dirs — quick-jump chips */}
+              {this.renderNavigatorRecent()}
+            </div>
 
             {/* Status bar */}
             {this.state.navigatorStatus && (
               <div
                 style={{
+                  flex: 'none',
                   padding: '6px var(--space-12)',
                   fontSize: '10px',
                   color: this.state.navigatorStatus.startsWith('Directory change refused')
@@ -3557,6 +4073,7 @@ export default class Term extends React.PureComponent<
           <div
             ref={this.onTermWrapperRef}
             className={'term_fit term_wrapper ' + (this.state.isDirNavigatorOpen ? 'term_dimmed' : '')}
+            style={{background: (this.props as any).backgroundColor}}
           />
         )}
 
@@ -4096,6 +4613,24 @@ export default class Term extends React.PureComponent<
             box-sizing: border-box;
           }
 
+          .term_wrapper.term_fit {
+            background: transparent;
+          }
+
+          .term_wrapper .term_term {
+            width: 100%;
+            height: 100%;
+            background: inherit;
+          }
+
+          .term_wrapper .xterm {
+            height: 100%;
+          }
+
+          .term_wrapper .xterm-viewport {
+            height: 100%;
+          }
+
           /* Thin dark scrollbar */
           .term_wrapper .xterm-viewport {
             scrollbar-width: thin;
@@ -4331,7 +4866,8 @@ export default class Term extends React.PureComponent<
              OFF LIMITS in styled-jsx blocks: it flattens them, leaking the
              narrow-width rules to every width. The dir bar stays floored
              (border + ~11 chars) by inline styles down to ~320px and hidden
-             below that (showDirBar), matching the web pane's URL bar. */
+             it collapses to the folder icon alone at the ladder's last
+             step (dirIconOnly), tooltip still carrying the full path. */
         `}</style>
       </div>
     );

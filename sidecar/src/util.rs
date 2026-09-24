@@ -238,52 +238,72 @@ async fn fetch_sdrrand(n: usize) -> Option<Vec<u8>> {
 }
 
 #[cfg(test)]
+/// Run one environment-sensitive test in a fresh process. The parent never
+/// mutates its environment, and fixture cleanup still runs if the child panics.
+pub(crate) fn isolated_test(name: &str) -> bool {
+    const CHILD: &str = "HYPERIA_ISOLATED_TEST";
+    if std::env::var(CHILD).as_deref() == Ok(name) {
+        return true;
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target/test-fixtures")
+        .join(format!("isolated-{}-{stamp}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", name, "--nocapture", "--test-threads=1"])
+        .env(CHILD, name)
+        .env("HOME", &dir)
+        .env("USERPROFILE", &dir)
+        .env("HYPERIA_CONFIG_PATH", dir.join("nested/hyperia.json"))
+        .env("HYPERIA_PORT", "0");
+    for key in [
+        "HYPERIA_MOCK_HOME", "OLLAMA_HOST", "MAXIMUS_MODEL", "MAXIMUS_DISABLED",
+        "ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN", "OPENAI_API_KEY", "OPENAI_TOKEN",
+        "GEMINI_API_KEY", "GEMINI_TOKEN", "XAI_API_KEY", "GROK_API_KEY",
+    ] {
+        command.env_remove(key);
+    }
+    let output = command.output();
+    let _ = std::fs::remove_dir_all(&dir);
+    let output = output.expect("isolated test should start");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed; 0 failed"),
+        "isolated test {name} did not pass exactly one test:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    false
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    fn restore_env(key: &str, value: Option<String>) {
-        if let Some(value) = value {
-            std::env::set_var(key, value);
-        } else {
-            std::env::remove_var(key);
-        }
-    }
 
     #[test]
     fn shared_config_path_prefers_explicit_env() {
-        let _guard = env_lock().lock().unwrap();
-        let old_path = std::env::var("HYPERIA_CONFIG_PATH").ok();
-        let old_mock = std::env::var("HYPERIA_MOCK_HOME").ok();
-        let explicit = std::env::temp_dir().join("hyperia-explicit-config.json");
+        if !isolated_test("util::tests::shared_config_path_prefers_explicit_env") {
+            return;
+        }
+        let explicit = shared_config_path().unwrap();
 
         std::env::set_var("HYPERIA_CONFIG_PATH", &explicit);
-        std::env::set_var("HYPERIA_MOCK_HOME", "/tmp/ignored-mock-home");
+        std::env::set_var("HYPERIA_MOCK_HOME", explicit.parent().unwrap().join("ignored"));
 
         assert_eq!(shared_config_path().as_deref(), Some(explicit.as_path()));
-
-        restore_env("HYPERIA_CONFIG_PATH", old_path);
-        restore_env("HYPERIA_MOCK_HOME", old_mock);
     }
 
     #[test]
     fn shared_config_writer_creates_parent_and_round_trips_json() {
-        let _guard = env_lock().lock().unwrap();
-        let old_path = std::env::var("HYPERIA_CONFIG_PATH").ok();
-        let old_mock = std::env::var("HYPERIA_MOCK_HOME").ok();
-        let dir = std::env::temp_dir().join(format!(
-            "hyperia-config-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let path = dir.join("nested").join("hyperia.json");
+        if !isolated_test("util::tests::shared_config_writer_creates_parent_and_round_trips_json") {
+            return;
+        }
+        let path = shared_config_path().unwrap();
+        assert!(!path.parent().unwrap().exists());
         let value = serde_json::json!({"config": {"fontSize": 18}});
 
         std::env::set_var("HYPERIA_CONFIG_PATH", &path);
@@ -291,9 +311,5 @@ mod tests {
 
         write_shared_config_atomic(&value).expect("write should succeed");
         assert_eq!(read_shared_config().expect("read should succeed"), value);
-
-        let _ = std::fs::remove_dir_all(&dir);
-        restore_env("HYPERIA_CONFIG_PATH", old_path);
-        restore_env("HYPERIA_MOCK_HOME", old_mock);
     }
 }

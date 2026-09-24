@@ -15,6 +15,8 @@ export type PermRequest = {
   targetPane: string;
   /** Caller-supplied rationale (from request_access purpose=); shown on the prompt. */
   purpose?: string;
+  /** Capability being approved; messaging must not imply terminal control. */
+  action?: string;
 };
 
 type Listener = (req: PermRequest | null) => void;
@@ -45,7 +47,7 @@ function emitAll(): void {
 }
 
 function emit(paneId: string): void {
-  const req = current.get(paneId) || null;
+  const req = Array.from(current.values()).find((item) => item.targetPane === paneId) || null;
   listeners.get(paneId)?.forEach((cb) => cb(req));
   emitAll();
   emitOverlay();
@@ -84,14 +86,14 @@ const reqTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 /** A request arrived for a pane — show its prompt. */
 export function setRequest(req: PermRequest): void {
-  if (!req.targetPane) return;
-  if (expired.delete(req.targetPane)) emitExpired();
-  current.set(req.targetPane, req);
-  const prev = reqTimers.get(req.targetPane);
+  if (!req.targetPane || !req.id) return;
+  if (expired.delete(req.id)) emitExpired();
+  current.set(req.id, req);
+  const prev = reqTimers.get(req.id);
   if (prev) clearTimeout(prev);
   reqTimers.set(
-    req.targetPane,
-    setTimeout(() => expireRequest(req.targetPane), OVERLAY_TTL_MS)
+    req.id,
+    setTimeout(() => expireRequest(req.targetPane, req.id), OVERLAY_TTL_MS)
   );
   emit(req.targetPane);
 }
@@ -101,38 +103,52 @@ export function setRequest(req: PermRequest): void {
  * The overlay releases (web panes un-hide, the #156 safety net stays intact)
  * but the request survives; reviveRequest() brings the modal back.
  */
-export function expireRequest(paneId: string): void {
-  const req = current.get(paneId);
-  if (!req) return;
-  const t = reqTimers.get(paneId);
+export function expireRequest(paneId: string, requestId?: string): void {
+  const req = requestId
+    ? current.get(requestId)
+    : Array.from(current.values()).find((item) => item.targetPane === paneId);
+  if (!req || req.targetPane !== paneId) return;
+  const t = reqTimers.get(req.id);
   if (t) {
     clearTimeout(t);
-    reqTimers.delete(paneId);
+    reqTimers.delete(req.id);
   }
-  current.delete(paneId);
-  expired.set(paneId, req);
+  current.delete(req.id);
+  expired.set(req.id, req);
   emit(paneId);
   emitExpired();
 }
 
 /** Re-open the full prompt for a collapsed (expired/snoozed) request. */
-export function reviveRequest(paneId: string): void {
-  const req = expired.get(paneId);
-  if (!req) return;
-  expired.delete(paneId);
+export function reviveRequest(paneId: string, requestId?: string): void {
+  const req = requestId
+    ? expired.get(requestId)
+    : Array.from(expired.values()).find((item) => item.targetPane === paneId);
+  if (!req || req.targetPane !== paneId) return;
+  expired.delete(req.id);
   emitExpired();
   setRequest(req);
 }
 
 /** The request for a pane was answered (or the pane closed) — dismiss it. */
-export function clearRequest(paneId: string): void {
-  const t = reqTimers.get(paneId);
-  if (t) {
-    clearTimeout(t);
-    reqTimers.delete(paneId);
+export function clearRequest(paneId: string, requestId?: string): void {
+  let changed = false;
+  let expiredChanged = false;
+  for (const req of [...current.values(), ...expired.values()]) {
+    if (req.targetPane !== paneId || (requestId && req.id !== requestId)) continue;
+    const timer = reqTimers.get(req.id);
+    if (timer) clearTimeout(timer);
+    reqTimers.delete(req.id);
+    expiredChanged = expired.delete(req.id) || expiredChanged;
+    changed = current.delete(req.id) || changed;
   }
-  if (expired.delete(paneId)) emitExpired();
-  if (current.delete(paneId)) emit(paneId);
+  if (expiredChanged) emitExpired();
+  if (changed) emit(paneId);
+}
+
+/** Keep a pane's approval indicator until all its requests are resolved. */
+export function hasRequests(paneId: string): boolean {
+  return [...current.values(), ...expired.values()].some((req) => req.targetPane === paneId);
 }
 
 /**
@@ -167,7 +183,7 @@ export function subscribe(paneId: string, cb: Listener): () => void {
     listeners.set(paneId, set);
   }
   set.add(cb);
-  cb(current.get(paneId) || null);
+  cb(Array.from(current.values()).find((req) => req.targetPane === paneId) || null);
   return () => {
     set.delete(cb);
     if (set.size === 0) listeners.delete(paneId);

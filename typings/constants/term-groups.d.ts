@@ -42,6 +42,12 @@ export interface TermGroupAddWebTabAction {
   url: string;
 }
 
+export const TERM_GROUP_SET_ACTIVE = 'TERM_GROUP_SET_ACTIVE';
+export interface TermGroupSetActiveAction {
+  type: typeof TERM_GROUP_SET_ACTIVE;
+  uid: string;
+}
+
 export const TERM_GROUP_ACTIVATE_WEB_TAB = 'TERM_GROUP_ACTIVATE_WEB_TAB';
 export interface TermGroupActivateWebTabAction {
   type: typeof TERM_GROUP_ACTIVATE_WEB_TAB;
@@ -82,6 +88,13 @@ export interface RestoreLayoutStateAction {
   savedState: any;
 }
 
+export const RESTORE_TAB_STATE = 'RESTORE_TAB_STATE';
+export interface RestoreTabStateAction {
+  type: typeof RESTORE_TAB_STATE;
+  /** A tab-scoped layout blob (one root group + subtree), uids pre-remapped. */
+  layout: any;
+}
+
 export const TERM_GROUP_POP_OUT_PANE = 'TERM_GROUP_POP_OUT_PANE';
 export interface TermGroupPopOutPaneAction {
   type: typeof TERM_GROUP_POP_OUT_PANE;
@@ -97,9 +110,11 @@ export type TermGroupActions =
   | TermGroupSetWebUrlAction
   | TermGroupAddWebTabAction
   | TermGroupActivateWebTabAction
+  | TermGroupSetActiveAction
   | TermGroupSetWebNameAction
   | TermGroupSetTabNameAction
   | TermGroupToggleTitleInheritanceAction
   | TermGroupSetPinnedAction
   | RestoreLayoutStateAction
+  | RestoreTabStateAction
   | TermGroupPopOutPaneAction;

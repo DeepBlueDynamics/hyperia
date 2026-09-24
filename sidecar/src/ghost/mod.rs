@@ -35,7 +35,7 @@ fn default_endpoint(provider: &str) -> String {
 
 /// Load Ghost config from the shared Hyperia config file.
 ///
-/// Schema (the source of truth, no string-prefix magic):
+/// Example schema (omit model to use crate::models::default_model):
 ///   {
 ///     "config": {
 ///       "agent":     { "provider": "anthropic", "model": "claude-sonnet-4-6" },
@@ -58,6 +58,14 @@ pub fn load_config() -> Option<GhostConfig> {
     let content = std::fs::read_to_string(&cfg_path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
     let cfg = &json["config"];
+    // Agent fallback must not discard independent compressor settings.
+    let fallback = || {
+        let mut config = default_local_ollama();
+        config.maximus_model = cfg["maximus"]["model"].as_str().map(str::to_owned);
+        config.maximus_url = cfg["maximus"]["url"].as_str().map(str::to_owned);
+        config.maximus_disabled = cfg["maximus"]["disabled"].as_bool().unwrap_or(false);
+        config
+    };
 
     // -- Resolve agent.provider + agent.model with legacy migration ----
 
@@ -84,7 +92,7 @@ pub fn load_config() -> Option<GhostConfig> {
 
     // Final fallback if still nothing.
     if provider.is_empty() {
-        return Some(default_local_ollama());
+        return Some(fallback());
     }
 
     // -- Resolve token + endpoint for that provider --------------------
@@ -167,7 +175,7 @@ pub fn load_config() -> Option<GhostConfig> {
             "agent.provider = '{}' but no token configured at config.providers.{}.token — falling back to local Ollama. Use the settings agent to paste a key.",
             provider, provider
         );
-        return Some(default_local_ollama());
+        return Some(fallback());
     }
 
     if model.is_empty() {

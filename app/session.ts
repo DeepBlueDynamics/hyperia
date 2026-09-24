@@ -98,6 +98,11 @@ interface SessionOptions {
 }
 export default class Session extends EventEmitter {
   pty: IPty | null;
+  // Last size we resized the pty to, so a two-axis resize can be detected and
+  // split into single-axis steps (see resize() — the 2x2 quick-layout scrollback fix).
+  lastResize?: {cols: number; rows: number};
+  private resizeTimer?: NodeJS.Timeout;
+  private resizePty?: IPty;
   batcher: DataBatcher | null;
   shell: string | null;
   ended: boolean;
@@ -107,6 +112,8 @@ export default class Session extends EventEmitter {
   shellState?: {
     state: 'idle' | 'running';
     lastExit?: number;
+    /** Shell-integration-reported command line of the running command (OSC 697). */
+    command?: string;
     app?: {
       name: string;
       path: string;
@@ -177,6 +184,7 @@ export default class Session extends EventEmitter {
       TERM_PROGRAM: productName,
       TERM_PROGRAM_VERSION: version,
       HYPERIA_AGENT_TOKEN: this.agentToken,
+      HYPERIA_PANE_TOKEN: this.agentToken,
       HYPERIA_MCP_URL: `http://localhost:${hyperiaPort}/mcp`,
       HYPERIA_PANE: uid,
       ...envFromConfig
@@ -317,6 +325,7 @@ fi
           'HYPERIA_INTEGRATION_DIR/p',
           'HYPERIA_CTL_DIR/p',
           'HYPERIA_AGENT_TOKEN',
+          'HYPERIA_PANE_TOKEN',
           'HYPERIA_MCP_URL',
           'HYPERIA_PANE'
         ];
@@ -378,6 +387,17 @@ fi
       }
     }
 
+    // Emit the spawn cwd immediately so the renderer's path bar / directory
+    // picker and sessionCwd prop are correct from the very first render — before
+    // any shell-integration OSC 7 cwd report arrives (which only fires at a
+    // prompt). Without this, a pane spawned with a startup command that takes
+    // over the PTY (e.g. n8/docker) never reports its cwd via OSC 7, so the
+    // path bar stays on home / terminal_status reports empty. The OSC 7 handler
+    // below still updates cwd on every real prompt change.
+    if (this.cwd) {
+      this.emit('cwd', this.cwd);
+    }
+
     this.batcher = new DataBatcher(uid);
     let oscBuffer = '';
     this.pty.onData((chunk) => {
@@ -429,25 +449,19 @@ fi
         } else if (code === '133') {
           const parts = content.split(';');
           const action = parts[0].trim();
-          if (action === 'A' || action === 'B') {
+          if (action === 'A' || action === 'B' || action === 'C' || action === 'D') {
+            // Prompt redraws emit 133 D then A then B (hyperia.ps1 prompt).
+            // Those marks update idle/running and lastExit only. 697 is what
+            // replaces the app record; dropping it here made a live n8 look
+            // like a busy shell after the first redraw.
+            const exitCodeStr = action === 'D' ? parts[1]?.trim() : undefined;
+            const parsedExit = exitCodeStr ? parseInt(exitCodeStr, 10) : undefined;
+            const previous = this.shellState;
             this.shellState = {
-              state: 'idle',
-              lastExit: this.shellState?.lastExit
-            };
-            this.emit('shellstate', this.shellState);
-          } else if (action === 'C') {
-            this.shellState = {
-              state: 'running',
-              lastExit: this.shellState?.lastExit
-            };
-            this.emit('shellstate', this.shellState);
-          } else if (action === 'D') {
-            const exitCodeStr = parts[1]?.trim();
-            const lastExit = exitCodeStr ? parseInt(exitCodeStr, 10) : undefined;
-            this.shellState = {
-              state: 'idle',
-              lastExit: !isNaN(lastExit as any) ? lastExit : this.shellState?.lastExit,
-              app: undefined
+              state: action === 'C' ? 'running' : 'idle',
+              lastExit: action === 'D' && !isNaN(parsedExit as any) ? parsedExit : previous?.lastExit,
+              command: previous?.command,
+              app: previous?.app
             };
             this.emit('shellstate', this.shellState);
           }
@@ -485,6 +499,11 @@ fi
           this.shellState = {
             state: this.shellState?.state || 'idle',
             lastExit: this.shellState?.lastExit,
+            // The shell-integration-REPORTED command line (preexec), the only
+            // trustworthy "what is this pane running" — workspace save offers
+            // it as a resume-once candidate. Cleared with the rest of the state
+            // at the next prompt (133;A/B) or command end (133;D).
+            command: cmd || undefined,
             app:
               appPath || cmd || name
                 ? {
@@ -594,15 +613,50 @@ No fallback available, please check the shell config.
   }
 
   resize({cols, rows}: {cols: number; rows: number}) {
-    if (this.pty) {
-      try {
-        this.pty.resize(cols, rows);
-      } catch (_err) {
-        const err = _err as {stack: any};
-        console.error(err.stack);
+    // Every new request supersedes the delayed height step, even a no-op.
+    if (this.resizeTimer) {
+      clearTimeout(this.resizeTimer);
+      this.resizeTimer = undefined;
+    }
+    const pty = this.pty;
+    if (!pty || this.ended) {
+      return;
+    }
+    // Track the last size accepted by this PTY (node-pty can queue calls during
+    // startup). Seed from spawn dimensions, and reset for a replacement shell.
+    const prev = this.resizePty === pty && this.lastResize ? this.lastResize : {cols: pty.cols, rows: pty.rows};
+    this.resizePty = pty;
+    this.lastResize = prev;
+    if (prev.cols === cols && prev.rows === rows) {
+      return;
+    }
+    // Preserve the idle-shell two-step workaround for ConPTY reflow during
+    // quick layouts. The delay is a workaround, not an acknowledgement from
+    // ConPTY: renderer resize ordering still matters for prompt duplication.
+    const bothAxes = prev.cols !== cols && prev.rows !== rows;
+    const idle = this.shellState?.state !== 'running';
+    try {
+      if (bothAxes && idle) {
+        pty.resize(cols, prev.rows);
+        this.lastResize = {cols, rows: prev.rows};
+        this.resizeTimer = setTimeout(() => {
+          this.resizeTimer = undefined;
+          // A closed session or fallback shell must not receive the old size.
+          if (this.ended || this.pty !== pty) return;
+          try {
+            pty.resize(cols, rows);
+            this.lastResize = {cols, rows};
+          } catch (_e) {
+            /* pane closed between the two resize steps */
+          }
+        }, 50);
+      } else {
+        pty.resize(cols, rows);
+        this.lastResize = {cols, rows};
       }
-    } else {
-      console.warn('Warning: Attempted to resize a session with no pty');
+    } catch (_err) {
+      const err = _err as {stack: any};
+      console.error(err.stack);
     }
   }
 

@@ -17,7 +17,7 @@ contracts; our agents target those.
 of each phase for review.
 
 - `H` = `hyperia` (this repo)
-- `N` = `nemesis8` (`C:\Users\kordl\Code\DeepBlueDynamics\nemesis8`)
+- `N` = `nemesis8` (`C:\Users\<you>\Code\DeepBlueDynamics\nemesis8`)
 
 ---
 

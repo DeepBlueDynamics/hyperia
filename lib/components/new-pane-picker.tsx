@@ -1,6 +1,7 @@
 import React from 'react';
 
 import rpc from '../rpc';
+import {isPowerShell, pickNativeShell, profileFitsPlatform as fitsPlatform} from '../utils/native-shell';
 
 import UrlPicker from './url-picker';
 
@@ -9,19 +10,7 @@ const isWindows = ['Windows', 'Win16', 'Win32', 'WinCE'].includes(navigator.plat
 // A shell whose path is a Windows path (.exe / backslashes / "C:") only fits a
 // Windows host, and vice-versa — a config synced between machines can carry the
 // other platform's shells, which we hide here. (Mirrors the helper in term.tsx.)
-const profileFitsPlatform = (p: any): boolean => {
-  const shell = String(p?.config?.shell || '');
-  if (!shell) return true;
-  // Hide a profile ONLY when its shell path clearly belongs to the OTHER platform
-  // (e.g. a config synced from Windows onto macOS carries `C:\...\pwsh.exe`). A
-  // bare command like `ssh`, `wsl`, or `docker` — no extension, no absolute path —
-  // is valid on any platform and MUST stay visible. The old check required a
-  // Windows-looking path to show on Windows, which silently dropped every
-  // user-created `ssh` shell from the list.
-  const looksWindows = /\.exe$|\\|^[A-Za-z]:/.test(shell);
-  const looksUnix = /^\//.test(shell);
-  return isWindows ? !looksUnix : !looksWindows;
-};
+const profileFitsPlatform = (p: any): boolean => fitsPlatform(p, isWindows);
 
 // Built-in agent names that live under "New Agent", not the shell list. These
 // mirror the harness catalog in app/config/detect.ts (the agents nemesis8 knows
@@ -98,6 +87,9 @@ const INSTALL_CATALOG: InstallEntry[] = [
 // quick keys keep working across sessions.
 const LS_DEFAULT_SHELL = 'hyperia.picker.defaultShell';
 const LS_DEFAULT_AGENT = 'hyperia.picker.defaultAgent';
+// The saved tab the R hotkey / Saved Tabs box defaults to = the last
+// one restored from the picker.
+const LS_DEFAULT_SESSION = 'hyperia.picker.defaultSession';
 const readStoredDefault = (key: string): string | undefined => {
   try {
     return window.localStorage.getItem(key) || undefined;
@@ -115,9 +107,14 @@ const writeStoredDefault = (key: string, value: string) => {
 
 // Self-update command shown in the picker footer. Like the install catalog,
 // it never auto-runs: [run] opens a shell with it typed but NOT submitted.
-const UPDATE_COMMAND = isWindows
-  ? 'powershell -c "irm https://hyperia.nuts.services/install.ps1 | iex"'
-  : 'curl -fsSL https://hyperia.nuts.services/install.sh | sh';
+// On Windows the [run] shell is the newest detected PowerShell, so the command
+// runs as-is there; only a cmd-only machine needs the powershell -c wrapper.
+const updateCommandFor = (nativeIsPowerShell: boolean): string =>
+  isWindows
+    ? nativeIsPowerShell
+      ? 'irm https://hyperia.nuts.services/install.ps1 | iex'
+      : 'powershell -c "irm https://hyperia.nuts.services/install.ps1 | iex"'
+    : 'curl -fsSL https://hyperia.nuts.services/install.sh | sh';
 
 // Version strings compare with or without a leading "v" ("0.15.11" == "v0.15.11").
 const normalizeVersion = (v?: string): string => (v || '').trim().replace(/^v/i, '');
@@ -170,6 +167,8 @@ interface ComboItem {
   onEdit?: () => void;
   // Rows with a config surface (Hyperia) get a gear button on the right.
   onConfigure?: () => void;
+  // Saved-session rows get a trash button (two-click confirm) on the right.
+  onDelete?: () => void;
 }
 
 interface ComboboxProps {
@@ -180,12 +179,14 @@ interface ComboboxProps {
   // Field value when the user hasn't typed anything (e.g. last-used shell).
   defaultText: string;
   placeholder: string;
-  // First dropdown row — always present (e.g. "add a shell").
-  addLabel: string;
+  // First dropdown row (e.g. "add a shell"). Omit for a pure list (Saved
+  // Sessions) that has no "add" affordance — the row is then not rendered.
+  addLabel?: string;
   // Bottom row shown only when the typed text matches nothing (e.g. "create
   // new shell"). Both this and the add row route to the parent's `onAdd`.
-  createLabel: string;
-  onAdd: () => void;
+  // Omit (with onAdd) for a list that can't create new entries by typing.
+  createLabel?: string;
+  onAdd?: () => void;
   isGlimmerActive?: boolean;
   // Hotkey chip (e.g. "S") shown next to the label; `keyHintTitle` explains
   // what pressing the key launches.
@@ -203,6 +204,9 @@ interface ComboboxState {
   dirty: boolean;
   // Index into rows(); -1 means "nothing highlighted, resolve from text".
   focusedIndex: number;
+  // Which row's trash is armed for a two-click delete confirm (its item key),
+  // or null. Reset whenever the dropdown closes.
+  armedDeleteKey: string | null;
 }
 
 type ComboRow = {type: 'add'} | {type: 'item'; item: ComboItem} | {type: 'create'};
@@ -291,7 +295,13 @@ const pickerDropdownStyle: React.CSSProperties = {
 
 class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
   inputRef = React.createRef<HTMLInputElement>();
-  state: ComboboxState = {text: this.props.defaultText, open: false, dirty: false, focusedIndex: -1};
+  state: ComboboxState = {
+    text: this.props.defaultText,
+    open: false,
+    dirty: false,
+    focusedIndex: -1,
+    armedDeleteKey: null
+  };
 
   componentDidUpdate(prev: ComboboxProps) {
     // Refresh the field when the caller's default changes (e.g. "last used"
@@ -313,19 +323,23 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
   // Show the "create new …" fallback only when the user has typed something
   // that matches no existing item (mirrors the URL box's search fallback).
   private showCreate(): boolean {
-    return this.state.dirty && this.state.text.trim() !== '' && this.filteredItems().length === 0;
+    return (
+      !!this.props.createLabel && this.state.dirty && this.state.text.trim() !== '' && this.filteredItems().length === 0
+    );
   }
 
   private rows(): ComboRow[] {
-    const rows: ComboRow[] = [{type: 'add'}];
+    // The "add" row is optional — a pure list (Saved Tabs) omits it.
+    const rows: ComboRow[] = this.props.addLabel ? [{type: 'add'}] : [];
     for (const item of this.filteredItems()) rows.push({type: 'item', item});
     if (this.showCreate()) rows.push({type: 'create'});
     return rows;
   }
 
   // Closing resets the field back to the default name so a half-typed, un-
-  // committed value never lingers.
-  private close = () => this.setState({open: false, dirty: false, focusedIndex: -1, text: this.props.defaultText});
+  // committed value never lingers, and disarms any pending delete.
+  private close = () =>
+    this.setState({open: false, dirty: false, focusedIndex: -1, armedDeleteKey: null, text: this.props.defaultText});
 
   // Enter / badge with no explicit highlight: resolve from typed text. Exact
   // name match wins; else the first substring (type-ahead) match; else the text
@@ -349,13 +363,15 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
       }
     }
     this.close();
-    this.props.onAdd();
+    // A list with no "add" affordance (Saved Tabs) simply closes when the
+    // text matches nothing.
+    this.props.onAdd?.();
   };
 
   private commitRow = (row: ComboRow) => {
     this.close();
     if (row.type === 'item') row.item.onSelect();
-    else this.props.onAdd(); // 'add' and 'create' both open the custom modal
+    else this.props.onAdd?.(); // 'add' and 'create' both open the custom modal
   };
 
   private commit = () => {
@@ -551,6 +567,55 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                           aria-hidden="true"
                         />
                       )}
+                      {it.onDelete &&
+                        (this.state.armedDeleteKey === it.key ? (
+                          <span
+                            title="Click again to delete"
+                            // mousedown + preventDefault keeps the input focused
+                            // so the dropdown doesn't blur-close between the two
+                            // clicks of the confirm.
+                            onMouseDown={(ev) => {
+                              if (ev.button !== 0) return;
+                              ev.preventDefault();
+                              ev.stopPropagation();
+                              this.setState({armedDeleteKey: null});
+                              it.onDelete!();
+                            }}
+                            style={{
+                              fontSize: '10px',
+                              fontWeight: 600,
+                              color: 'var(--danger-text, #ff5c57)',
+                              flexShrink: 0,
+                              minWidth: '48px',
+                              textAlign: 'right',
+                              whiteSpace: 'nowrap',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Delete?
+                          </span>
+                        ) : (
+                          <i
+                            className="ti ti-trash"
+                            title="Delete this saved tab"
+                            onMouseDown={(ev) => {
+                              if (ev.button !== 0) return;
+                              ev.preventDefault();
+                              ev.stopPropagation();
+                              this.setState({armedDeleteKey: it.key});
+                            }}
+                            style={{
+                              fontSize: '13px',
+                              color: 'var(--text-tertiary)',
+                              flexShrink: 0,
+                              display: 'inline-block',
+                              minWidth: '48px',
+                              textAlign: 'right',
+                              cursor: 'pointer'
+                            }}
+                            aria-hidden="true"
+                          />
+                        ))}
                     </div>
                   );
                 })}
@@ -616,6 +681,12 @@ interface NewPanePickerState {
   // Whether the Hyperia agent is configured (provider+model+key) — adds it to
   // the agent pulldown. Fetched from the sidecar on mount.
   hyperiaConfigured?: boolean;
+  // Saved tab-workspaces (#183) — the "Saved Tabs" combobox, mirroring the
+  // + menu. Fetched on mount + refreshed when main echoes a fresh list.
+  savedWorkspaces?: Array<{name: string; savedAt: string; panes: number; webPanes: number}>;
+  // The last session restored from the picker — what the R hotkey and the
+  // Saved Tabs box pre-fill. Seeded from localStorage.
+  lastUsedSession?: string;
 }
 
 // The "New Webpane" chooser shown when a pane has the synthetic `picker`
@@ -624,7 +695,8 @@ interface NewPanePickerState {
 export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePickerState> {
   state: NewPanePickerState = {
     lastUsedShell: readStoredDefault(LS_DEFAULT_SHELL),
-    lastUsedAgent: readStoredDefault(LS_DEFAULT_AGENT)
+    lastUsedAgent: readStoredDefault(LS_DEFAULT_AGENT),
+    lastUsedSession: readStoredDefault(LS_DEFAULT_SESSION)
   };
 
   // The picker's own focusable root. We pull keyboard focus here on mount so the
@@ -633,6 +705,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
   // swallows the letters until you click the pane.
   private rootRef = React.createRef<HTMLDivElement>();
   private focusTimer: ReturnType<typeof setTimeout> | undefined;
+  private onWsList?: (payload: {rows: NewPanePickerState['savedWorkspaces']}) => void;
 
   componentDidMount() {
     // Is the Hyperia agent configured? (provider+model+key in config.agent.*)
@@ -666,6 +739,16 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         if (/^v?\d+\.\d+(\.\d+)?$/.test(v)) this.setState({latestVersion: v});
       })
       .catch(() => {});
+
+    // Saved tab-workspaces for the "Saved Tabs" list. Main echoes the fresh
+    // list after any save/delete, so this stays current without store plumbing.
+    this.onWsList = ({rows}) => this.setState({savedWorkspaces: rows || []});
+    rpc.on('tab workspaces list', this.onWsList);
+    try {
+      rpc.emit('list tab workspaces');
+    } catch {
+      /* rpc not ready yet — harmless; user can reopen the picker */
+    }
 
     // W/S/A quick-launch hotkeys — window-level; gated on this pane being the
     // active session (hotkeysEnabled) and on focus not being in a text field.
@@ -701,6 +784,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
   componentWillUnmount() {
     window.removeEventListener('keydown', this.handleHotkey);
     if (this.focusTimer) clearTimeout(this.focusTimer);
+    if (this.onWsList) rpc.removeListener('tab workspaces list', this.onWsList);
   }
 
   // W/S/A quick paths. Only in the main view (the hints live on its section
@@ -725,6 +809,12 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
       e.preventDefault();
       e.stopPropagation();
       this.launchDefaultAgent();
+    } else if (key === 'r') {
+      // R restores the default saved tab (last one loaded). No-op when
+      // there are no saved tabs.
+      e.preventDefault();
+      e.stopPropagation();
+      this.launchDefaultSession();
     }
   };
 
@@ -752,6 +842,12 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     const remembered = this.state.lastUsedAgent && items.find((i) => i.key === this.state.lastUsedAgent);
     if (remembered) remembered.onSelect();
     else this.launchHyperiaShell();
+  };
+
+  // R: restore the default saved tab (last one loaded → else the first).
+  private launchDefaultSession = () => {
+    const item = this.resolveDefaultSession(this.buildSessionItems());
+    item?.onSelect();
   };
 
   // Open the Hyperia Agent configuration pane (sidecar-served) in this pane.
@@ -786,6 +882,32 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     this.newWithProfile(name);
   };
 
+  // Restore a saved tab-workspace into a new tab (main grafts it in). Remember
+  // it as the default so R / the box pre-select the last one you loaded.
+  private restoreSession = (name: string) => {
+    this.setState({lastUsedSession: name});
+    writeStoredDefault(LS_DEFAULT_SESSION, name);
+    try {
+      rpc.emit('restore tab workspace', {name});
+    } catch {
+      /* rpc not ready yet — harmless */
+    }
+  };
+
+  // Delete a saved tab-workspace. Main echoes a fresh list back to every open
+  // picker/+ menu. If it was the remembered default, forget it.
+  private deleteSession = (name: string) => {
+    try {
+      rpc.emit('delete tab workspace', {name});
+    } catch {
+      /* rpc not ready yet — harmless */
+    }
+    if (readStoredDefault(LS_DEFAULT_SESSION) === name) {
+      writeStoredDefault(LS_DEFAULT_SESSION, '');
+      this.setState({lastUsedSession: undefined});
+    }
+  };
+
   // Dashboard link: swap THIS picker pane into the sidecar-served /dashboard —
   // same exit + setWebPaneUrl pattern the guide (W) uses.
   private openDashboardPane = () => {
@@ -813,16 +935,34 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
   // "Open in shell" from the install view: open the default shell in this pane
   // with the install command TYPED at the prompt but NOT submitted — the user
   // reviews it and presses Enter themselves.
+  // Always the platform's own plain shell (newest pwsh on Windows, the login
+  // shell elsewhere) picked from the detected profiles. NOT the config default:
+  // that can be a custom agent shell, which would swallow the install command.
   private openInstallShell = (command: string) => {
     const {groupUid, uid, sessionCwd, cwd} = this.props;
+    const native = this.nativeShell();
     rpc.emit('new', {
       isNewGroup: false,
       cwd: sessionCwd || cwd,
       activeUid: uid,
       groupUid,
+      ...(native ? {profile: native.name} : {}),
       prefillCommand: command
     } as any);
   };
+
+  private nativeShell = () => {
+    let loginShell = '';
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      loginShell = (require('os').userInfo().shell as string) || '';
+    } catch {
+      /* not available on Windows */
+    }
+    return pickNativeShell((this.props as any).profiles || [], isWindows, loginShell);
+  };
+
+  private updateCommand = () => updateCommandFor(isPowerShell(this.nativeShell()));
 
   private copyInstall = (command: string) => {
     try {
@@ -934,7 +1074,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                       title="Configure the Hyperia agent"
                       style={{...pickerEnterBadgeStyle, cursor: 'pointer', color: 'var(--info-text)'}}
                     >
-                      configure
+                      Configure
                     </span>
                   )}
                   {(command || referenceOnly) && (
@@ -1029,6 +1169,29 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     );
   }
 
+  // --- Saved session items (#183) — the tab-workspace library as combo rows.
+  // Each row restores on select and carries a two-click trash (onDelete). ---
+  private buildSessionItems(): ComboItem[] {
+    return (this.state.savedWorkspaces || []).map((ws) => {
+      const total = ws.panes + ws.webPanes;
+      return {
+        key: ws.name,
+        label: ws.name + (total ? `  ·  ${total}▢` : ''),
+        iconClass: 'ti ti-bookmark',
+        iconStyle: {color: 'var(--info-text)'},
+        onSelect: () => this.restoreSession(ws.name),
+        onDelete: () => this.deleteSession(ws.name)
+      };
+    });
+  }
+
+  // Default saved tab: remembered LAST-LOADED → else the first saved one.
+  private resolveDefaultSession(sessionItems: ComboItem[]): ComboItem | undefined {
+    return (
+      (this.state.lastUsedSession && sessionItems.find((i) => i.key === this.state.lastUsedSession)) || sessionItems[0]
+    );
+  }
+
   // --- Agent items — detection-driven (app/config/detect.ts catalog) ---
   // INSTALLED harnesses arrive as profiles named exactly per AGENT_NAMES
   // (Nemesis8 installed also brings "Nemesis8 Danger" = `nemesis8 --danger`).
@@ -1101,12 +1264,19 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     const defaultAgentItem = rememberedAgentItem || agentItems[0];
     const agentDefaultText = defaultAgentItem ? defaultAgentItem.label : '';
 
+    // Saved Tabs box — only when there's at least one saved tab. Its
+    // default (pre-fill + what R restores) is the last-loaded session, else the
+    // first. defaultText is the bare name (the row label carries the pane count).
+    const sessionItems = this.buildSessionItems();
+    const defaultSessionItem = this.resolveDefaultSession(sessionItems);
+    const sessionDefaultText = defaultSessionItem ? defaultSessionItem.key : '';
+
     // Footer version status. "Up to date" only when BOTH versions resolved and
     // match — an unreachable check leaves the run button enabled.
     const {currentVersion, latestVersion} = this.state;
     const upToDate =
       !!currentVersion && !!latestVersion && normalizeVersion(currentVersion) === normalizeVersion(latestVersion);
-    const updateCopied = this.state.copiedInstall === UPDATE_COMMAND;
+    const updateCopied = this.state.copiedInstall === this.updateCommand();
 
     if (this.state.view === 'install') {
       return this.renderInstallView();
@@ -1137,9 +1307,16 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
           if (!e.defaultPrevented && !typing) this.rootRef.current?.focus({preventScroll: true});
         }}
         onContextMenu={(e) => {
+          // A picker pane is still a pane — right-click gives the regular app
+          // context menu (Split, New Tab/Window, Stickys, …), same as a shell.
+          // No text selection in a picker, so pass an empty selection.
           e.preventDefault();
           e.stopPropagation();
-          this.props.onTriggerGlimmer();
+          try {
+            rpc.emit('open context menu', '');
+          } catch {
+            /* rpc not ready yet — harmless */
+          }
         }}
       >
         <div
@@ -1229,6 +1406,23 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             keyHintTitle={`Press A — launch ${rememberedAgentItem ? rememberedAgentItem.label : 'the Hyperia Agent'}`}
           />
 
+          {/* Saved Tabs (#183) — the tab-workspace library as a combobox,
+              the SAME shape as New Shell / New Agent. Select restores into a new
+              tab; each row's trash deletes (two-click). R restores the default
+              (last-loaded). Shown only when at least one session is saved. */}
+          {sessionItems.length > 0 && (
+            <InlineCombobox
+              label="Saved Tabs"
+              leadingIcon="ti ti-bookmark"
+              items={sessionItems}
+              defaultText={sessionDefaultText}
+              placeholder="Type to filter sessions…"
+              isGlimmerActive={isGlimmerActive}
+              keyHint="R"
+              keyHintTitle={`Press R — restore ${sessionDefaultText || 'the last session'}`}
+            />
+          )}
+
           {/* Quick page links — below the pickers, above the version footer.
               Styled to match the sidecar pages (agent config): quiet text
               links, info accent, no chrome. */}
@@ -1254,8 +1448,8 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             </span>
             <span style={{fontSize: '11px', color: 'var(--text-tertiary)'}}>·</span>
             <span
-              onClick={this.launchHyperiaShell}
-              title="Open the Hyperia Agent tab"
+              onClick={this.openAgentConfig}
+              title="Open the Hyperia agent configuration in this pane"
               style={{
                 fontSize: '11px',
                 fontFamily: 'var(--font-sans)',
@@ -1263,7 +1457,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                 cursor: 'pointer'
               }}
             >
-              Hyperia Agent
+              configure
             </span>
           </div>
 
@@ -1294,7 +1488,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
               ) : null}
               <span style={{flex: 1}} />
               <span
-                onClick={() => this.copyInstall(UPDATE_COMMAND)}
+                onClick={() => this.copyInstall(this.updateCommand())}
                 title="Copy the update command"
                 style={{...pickerEnterBadgeStyle, cursor: 'pointer'}}
               >
@@ -1306,7 +1500,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                 </span>
               ) : (
                 <span
-                  onClick={() => this.openInstallShell(UPDATE_COMMAND)}
+                  onClick={() => this.openInstallShell(this.updateCommand())}
                   title="Open a shell with the update command typed — press Enter yourself"
                   style={{...pickerEnterBadgeStyle, cursor: 'pointer', color: 'var(--info-text)'}}
                 >
@@ -1328,7 +1522,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                 userSelect: 'text'
               }}
             >
-              {UPDATE_COMMAND}
+              {this.updateCommand()}
             </div>
           </div>
         </div>

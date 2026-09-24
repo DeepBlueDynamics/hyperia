@@ -133,10 +133,13 @@ mod tests {
 
     #[test]
     fn home_is_used_when_path_missing_or_bad() {
+        if !crate::util::isolated_test("fsnav::tests::home_is_used_when_path_missing_or_bad") { return; }
         let h = home_dir().to_string_lossy().into_owned();
+        assert!(home_dir().is_dir());
         assert_eq!(list_dirs(None).path, h);
         assert_eq!(list_dirs(Some("")).path, h);
-        assert_eq!(list_dirs(Some("/this/does/not/exist/anywhere")).path, h);
+        let missing = home_dir().join("nonexistent");
+        assert_eq!(list_dirs(Some(&missing.to_string_lossy())).path, h);
     }
 
     #[test]
@@ -150,11 +153,15 @@ mod tests {
 
     #[test]
     fn lists_only_dirs_sorted() {
-        // Home should exist and contain at least zero entries; result sorted.
+        if !crate::util::isolated_test("fsnav::tests::lists_only_dirs_sorted") { return; }
+        for name in ["Zoo", "apple", ".hidden", "$system", "apple/child"] {
+            std::fs::create_dir_all(home_dir().join(name)).unwrap();
+        }
+        std::fs::write(home_dir().join("plain-file"), "not a directory").unwrap();
         let listing = list_dirs(None);
-        let mut sorted = listing.dirs.clone();
-        sorted.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-        assert_eq!(listing.dirs, sorted);
-        assert!(listing.dirs.iter().all(|d| !d.name.starts_with('.') && !d.name.starts_with('$')));
+        assert_eq!(listing.dirs, vec![
+            SubdirInfo { name: "apple".into(), count: 1 },
+            SubdirInfo { name: "Zoo".into(), count: 0 },
+        ]);
     }
 }

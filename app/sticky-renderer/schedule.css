@@ -1,0 +1,57 @@
+/* Scheduling panel overlay */
+.sched-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  z-index: 500;
+  padding: 8px;
+  /* The panel sits over the titlebar's drag region; without this the OS
+     drag region punches through and eats clicks on the top-row × (Cancel),
+     exactly like the title-copy bug. Mark the whole modal no-drag. */
+  -webkit-app-region: no-drag;
+}
+.sched-panel {
+  width: 100%;
+  max-width: 340px;
+  background: #fbfbf6;
+  color: #1a1a1a;
+  border: 1px solid rgba(0,0,0,0.2);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.3);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+.sched-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-weight: bold; font-size: 13px;
+}
+.sched-close { cursor: pointer; opacity: 0.6; font-size: 16px; line-height: 1; }
+.sched-close:hover { opacity: 1; }
+.sched-row { display: flex; align-items: center; gap: 6px; }
+.sched-row label { width: 38px; flex-shrink: 0; opacity: 0.65; text-align: right; }
+.sched-row select, .sched-row input {
+  flex: 1; min-width: 0; height: 26px; padding: 0 6px;
+  border: 1px solid rgba(0,0,0,0.2); border-radius: 4px;
+  background: #fff; color: inherit; font-family: inherit; font-size: 12px;
+}
+.sched-row input[type=number] { flex: 0 0 64px; }
+.sched-pick { cursor: pointer; padding: 3px; border-radius: 4px; }
+.sched-pick:hover { background: rgba(0,0,0,0.08); }
+.sched-note {
+  font-size: 11px; opacity: 0.75; background: rgba(255,170,0,0.12);
+  border: 1px solid rgba(255,170,0,0.35); border-radius: 4px; padding: 5px 7px;
+}
+.sched-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+.sched-btn {
+  cursor: pointer; padding: 4px 12px; border-radius: 5px; font-weight: 600;
+  background: #2b7de9; color: #fff;
+}
+.sched-btn:hover { background: #1c6fd6; }
+.sched-btn.ghost { background: transparent; color: #c0392b; border: 1px solid rgba(192,57,43,0.4); font-weight: 500; }
+.sched-btn.ghost:hover { background: rgba(192,57,43,0.08); }

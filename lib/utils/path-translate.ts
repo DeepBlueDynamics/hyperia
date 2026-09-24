@@ -9,7 +9,7 @@ export function translatePath(windowsPath: string, config?: PathTranslate): stri
 
   switch (config.kind) {
     case 'wsl': {
-      // Convert C:\Users\kordl\.hyperia\assets\foo.png to /mnt/c/Users/kordl/.hyperia/assets/foo.png
+      // Convert C:\Users\alice\.hyperia\assets\foo.png to /mnt/c/Users/alice/.hyperia/assets/foo.png
       const p = windowsPath.replace(/\\/g, '/');
       const driveMatch = p.match(/^([a-zA-Z]):\/(.*)/);
       if (driveMatch) {

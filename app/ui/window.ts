@@ -48,7 +48,17 @@ import {getAppIcon} from '../utils/icon';
 import {setRendererType, unsetRendererType} from '../utils/renderer-utils';
 import toElectronBackgroundColor from '../utils/to-electron-background-color';
 import {initWebPaneManager, destroyPanesForWindow, setWindowWebPanesSuppressed} from '../web-pane-manager';
-import {deliverLayoutReply, saveLastSession} from '../workspace';
+import {
+  deliverLayoutReply,
+  saveLastSession,
+  saveTabWorkspaceViaSidecar,
+  toWorkspaceLayout,
+  listTabWorkspaces,
+  readTabWorkspaceForRestore,
+  deleteTabWorkspace,
+  remapUids,
+  annotateMissingResources
+} from '../workspace';
 
 import contextMenuTemplate from './contextmenu';
 
@@ -394,6 +404,18 @@ export function newWindow(
 
   // Poll the sidecar for THIS window's running panes — the signal the renderer
   // heuristic can't see (ssh→remote agent). Cheap anonymous GET; every 2s.
+  //
+  // We DELIBERATELY do NOT trust the sidecar's `state` field here. For a pane
+  // without shell integration the sidecar reports `state:"running"` whenever the
+  // human typed in it within the last 15s (bridge.rs is_fallback_idle) — so a
+  // freshly-touched IDLE shell or picker reads as "running" the instant you
+  // click the window's X. That produced a phantom "a pane is still running"
+  // prompt on the first close click that vanished on the second (the recency
+  // window lapsed / a startup command settled), which is the "why is close so
+  // odd" bug. The close guard must reflect ACTUAL work-in-flight, so we key off
+  // a real foreground program instead: `process` is present and is not just the
+  // pane's own shell (agent / ssh / build / any child). Idle shells, pickers,
+  // and just-touched shells never match; a genuine ssh→remote agent does.
   const pollSidecarBusy = async () => {
     try {
       const port = process.env.HYPERIA_PORT || '9800';
@@ -404,7 +426,11 @@ export function newWindow(
       for (const w of data?.windows || []) {
         for (const t of w?.tabs || []) {
           for (const p of t?.panes || []) {
-            if (p?.state === 'running' && localUids.has(p.paneId)) {
+            if (!localUids.has(p.paneId)) continue;
+            const proc = String(p.process || '').toLowerCase();
+            const paneShell = String(p.shell || '').toLowerCase();
+            const hasForegroundProgram = proc.length > 0 && proc !== paneShell;
+            if (hasForegroundProgram) {
               found.push({name: p.name || p.title || p.process || 'a shell'});
             }
           }
@@ -610,7 +636,7 @@ export function newWindow(
 
     // remove the rows and cols, the wrong value of them will break layout when init create
     // Validate the cwd before it reaches node-pty. An agent running in a
-    // container/another machine can pass a path like /workspace/kordl that does
+    // container/another machine can pass a path like /workspace/alice that does
     // not exist on this host; node-pty's WindowsPtyAgent then throws "File not
     // found" as an UNCAUGHT exception and crashes the whole main process. Fall
     // back to a known-good directory instead.
@@ -687,6 +713,9 @@ export function newWindow(
       isNewGroup: extraOptions.isNewGroup,
       isRestore: extraOptions.isRestore,
       lastCommand: extraOptions.lastCommand,
+      // Tab-workspace resume-once (#183): human-checked at save time; the
+      // renderer EXECUTES it once after the restored shell settles.
+      resumeOnce: (extraOptions as any).resumeOnce,
       prefillCommand: (extraOptions as any).prefillCommand,
       layoutPattern: (extraOptions as any).layoutPattern,
       shellState: (session as any).shellState,
@@ -725,6 +754,13 @@ export function newWindow(
 
     session.on('shellstate', (shellState: any) => {
       rpc.emit('session shellstate', {uid: options.uid, shellState});
+    });
+
+    // Mirror the OSC-777 n8 session binding (nemesis8#106) into the renderer
+    // so the tab-workspace save flow (#183) knows which panes host resumable
+    // agent sessions.
+    session.on('n8-binding', (binding: any) => {
+      rpc.emit('session n8 binding', {uid: options.uid, binding});
     });
 
     session.on('exit', () => {
@@ -888,10 +924,10 @@ export function newWindow(
     // — the window keeps the proper Hyperia icon set at creation (winOpts.icon).
     window.setTitle(title ? `${title} — Hyperia` : 'Hyperia');
   });
-  rpc.on('split request vertical', (options: {activeUid?: string | null; profile?: string | null}) => {
+  rpc.on('split request vertical', (options: {activeUid?: string | null; profile?: string | null; cwd?: string}) => {
     rpc.emit('split request vertical', options);
   });
-  rpc.on('split request horizontal', (options: {activeUid?: string | null; profile?: string | null}) => {
+  rpc.on('split request horizontal', (options: {activeUid?: string | null; profile?: string | null; cwd?: string}) => {
     rpc.emit('split request horizontal', options);
   });
   rpc.on(
@@ -962,7 +998,13 @@ export function newWindow(
         const tabCount = (window as any).tabCount || 1;
         const paneCount = (window as any).paneCount || 1;
         let ok = true;
-        if (active.length > 0 || tabCount > 1 || paneCount > 1) {
+        // Prompt ONLY when a pane is genuinely running a foreground program —
+        // that's the sole case where closing loses live work. Idle shells,
+        // pickers, and multi-pane/tab layouts are captured by saveLastSession()
+        // below and restored on next launch, so nagging about "N panes still
+        // running" for an idle window was both untrue and the reason close felt
+        // erratic. A truthful, deterministic gate: real work → ask; otherwise go.
+        if (active.length > 0) {
           ok = await confirmCloseModal({
             scope: 'window',
             names: active.map((a) => a.name),
@@ -980,14 +1022,19 @@ export function newWindow(
     e.preventDefault();
     isClosingAndWaitingForSave = true;
     (window as any).isClosing = true;
+    const closeT0 = Date.now();
+    const clog = (s: string) => console.log(`[close +${Date.now() - closeT0}ms] ${s}`);
+    clog('window close: saving last-session');
     // Save the WHOLE app as the 'last-session' workspace through the sidecar's
     // correlated pipeline (#171) — every window + geometry, not just this one.
     // If the sidecar is unreachable, fall back to the legacy single-window
     // savedLayoutState write (the no-requestId reply path below).
     void saveLastSession('close').then((ok) => {
+      clog(`last-session save ok=${ok}`);
       if (ok) {
         if (isClosingAndWaitingForSave && !window.isDestroyed()) {
           deleteSessions();
+          clog('sessions deleted; destroying window');
           window.destroy();
         }
       } else {
@@ -1000,10 +1047,54 @@ export function newWindow(
     // period (capture itself is bounded at 2.5s).
     setTimeout(() => {
       if (isClosingAndWaitingForSave && !window.isDestroyed()) {
+        clog('failsafe: save never settled — destroying window');
         deleteSessions();
         window.destroy();
       }
     }, 4000);
+  });
+
+  // ---- tab-scoped workspaces (#183) --------------------------------------
+
+  rpc.on('save tab workspace', ({name, overwrite, layout}) => {
+    void (async () => {
+      const bounds = window.getBounds();
+      const geometry = {
+        ...bounds,
+        isMaximized: window.isMaximized(),
+        isFullScreen: window.isFullScreen()
+      };
+      // Same normalization the window-level capture applies: strip pids
+      // (the sidecar rejects them) and fold any bare lastCommand into
+      // annotations. resumeOnce passes through untouched.
+      const result = await saveTabWorkspaceViaSidecar({name, overwrite, geometry, layout: toWorkspaceLayout(layout)});
+      rpc.emit('save tab workspace result', {name, ...result});
+    })();
+  });
+
+  rpc.on('list tab workspaces', () => {
+    rpc.emit('tab workspaces list', {rows: listTabWorkspaces()});
+  });
+  rpc.on('delete tab workspace', ({name}) => {
+    deleteTabWorkspace(name);
+    // Echo the fresh list back so every open picker/+ menu updates immediately.
+    rpc.emit('tab workspaces list', {rows: listTabWorkspaces()});
+  });
+
+  rpc.on('restore tab workspace', ({name}) => {
+    const ws = readTabWorkspaceForRestore(name);
+    if (!ws) {
+      console.warn(`[workspace] tab-workspace '${name}' missing or invalid — nothing restored`);
+      return;
+    }
+    // Additive graft into THIS window: fresh uids (no collisions with live
+    // sessions), loud placeholders for vanished cwds, same as any restore.
+    const remapped = remapUids(ws.windows[0].layout || {});
+    const {layout, notices} = annotateMissingResources(remapped);
+    if (notices.length > 0) {
+      console.log('[workspace] tab restore substitutions:', notices);
+    }
+    rpc.emit('restore-tab-state', {layout, name});
   });
 
   rpc.on('layout-state-reply', (layoutState) => {
@@ -1033,11 +1124,16 @@ export function newWindow(
   rpc.on('close', () => {
     window.close();
   });
-  // The renderer exited the window's LAST pane (already past the per-pane guard);
-  // close without re-prompting about active processes. (#148)
+  // The renderer emptied the window's LAST pane. ALWAYS reset it to a fresh
+  // picker rather than closing — a window is closed only by its own controls
+  // (the X / Quit), never by closing its last pane. This is deliberately not
+  // gated on the window count: the earlier "close when other windows are open,
+  // picker only on the last window" split was both surprising (closing a pane
+  // shouldn't take the whole window) and fragile (a stale/phantom entry in the
+  // tracked window set inflated the count, so even a lone window took the close
+  // branch). One path now: emptied window → picker.
   rpc.on('close-no-confirm', () => {
-    skipNextCloseConfirm = true;
-    window.close();
+    rpc.emit('reset-to-picker');
   });
   // #148: the renderer wants to close a TAB whose panes are running foreground
   // programs — confirm via the in-app modal (native fallback) and echo back
@@ -1245,7 +1341,9 @@ export function newWindow(
 
   // the window can be closed by the browser process itself
   window.clean = () => {
-    app.config.winRecord(window);
+    // Runs on 'closed' (index.ts) — the window is gone; geometry was
+    // recorded on the close pass while it was still alive.
+    if (!window.isDestroyed()) app.config.winRecord(window);
     rpc.destroy();
     deleteSessions();
     cfgUnsubscribe();

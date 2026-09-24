@@ -92,14 +92,56 @@ function nativeVisible(entry: WebPaneEntry): boolean {
   return entry.visible && !suppressedWins.has(entry.win.id);
 }
 
-// Force-hide (or restore) all web panes in a window — used to clear a native
-// view out from over a DOM overlay (e.g. the close-confirm modal).
+// Force-hide (or restore) all web panes in a window so a DOM overlay (the
+// close-confirm modal, the consent/ACL prompt, the Save-Workspace toast) paints
+// ABOVE them — native WebContentsViews otherwise paint over all DOM regardless
+// of z-index. Uses the SAME freeze-swap as a per-pane overlay: hand the renderer
+// a still of the live page BEFORE pulling the native view, so the pane shows a
+// frozen frame, not a blank white rectangle (the #195 blank-on-save regression).
 export function setWindowWebPanesSuppressed(win: BrowserWindow, suppressed: boolean): void {
   if (suppressed) suppressedWins.add(win.id);
   else suppressedWins.delete(win.id);
-  for (const entry of panes.values()) {
-    if (entry.win !== win) continue;
-    if (!entry.view.webContents.isDestroyed()) entry.view.setVisible(nativeVisible(entry));
+  for (const [uid, entry] of panes) {
+    if (entry.win !== win || entry.view.webContents.isDestroyed()) continue;
+    const token = (entry.swapToken = (entry.swapToken ?? 0) + 1);
+    if (suppressed) {
+      if (!entry.visible) {
+        // Already hidden (inactive tab / off-screen) — nothing to freeze.
+        entry.view.setVisible(false);
+      } else {
+        void (async () => {
+          let shot: string | null = null;
+          try {
+            shot = (await entry.view.webContents.capturePage()).toDataURL();
+          } catch {
+            /* keep null — falls back to the pane bg, same as before */
+          }
+          if (panes.get(uid) !== entry) return;
+          entrySend(uid, 'web-pane:frozen', {uid, shot});
+          // Hide the native view only after the renderer has had a couple frames
+          // to paint the still, so there's no one-frame blank hole.
+          setTimeout(() => {
+            if (
+              panes.get(uid) === entry &&
+              entry.swapToken === token &&
+              suppressedWins.has(win.id) &&
+              !entry.view.webContents.isDestroyed()
+            ) {
+              entry.view.setVisible(false);
+            }
+          }, SWAP_BRIDGE_MS);
+        })();
+      }
+    } else {
+      // Restore: show the live view, then clear the still a couple frames later
+      // (once the native view has re-composited) so the pane bg never flashes.
+      entry.view.setVisible(nativeVisible(entry));
+      setTimeout(() => {
+        if (panes.get(uid) === entry && entry.swapToken === token && !suppressedWins.has(win.id)) {
+          entrySend(uid, 'web-pane:frozen', {uid, shot: null});
+        }
+      }, SWAP_BRIDGE_MS);
+    }
     if (entry.devtools) entry.devtools.setVisible(nativeVisible(entry));
   }
 }
@@ -725,7 +767,11 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
     if (!wc) return;
     switch (action) {
       case 'load':
-        if (url) void wc.loadURL(url).catch(() => {});
+        // Same-URL guard (#160, mirrors createPane): loading a URL the view is
+        // already at is always a full reload — the renderer's redux echo of a
+        // page-driven replaceState (Maps drag) landed here and flashed/reset
+        // the page. Explicit reloads use the 'reload' action instead.
+        if (url && wc.getURL() !== url) void wc.loadURL(url).catch(() => {});
         break;
       case 'back':
         if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
@@ -788,5 +834,50 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
     } catch {
       return null;
     }
+  });
+
+  // Capture every LIVE, on-screen web pane in the SENDER's window — its pixels
+  // plus its window-DIP bounds. A whole-tab screenshot is taken in the renderer
+  // via capturePage, which can't see native WebContentsViews, so it composites
+  // these in at their bounds to fill the otherwise-blank web-pane areas. Panes
+  // parked far off-screen (inactive tabs sit at a large negative x) are skipped,
+  // so only the active tab's panes come back.
+  ipcMain.handle('web-panes:capture-for-window', async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win) return [];
+    const out: Array<{
+      uid: string;
+      bounds: {x: number; y: number; width: number; height: number};
+      dataURL: string;
+    }> = [];
+    for (const [uid, entry] of panes) {
+      if (entry.win !== win || entry.view.webContents.isDestroyed()) continue;
+      let bounds: {x: number; y: number; width: number; height: number};
+      try {
+        bounds = entry.view.getBounds();
+      } catch {
+        continue;
+      }
+      if (!bounds || bounds.width < 1 || bounds.height < 1) continue;
+      if (bounds.x < -1000 || bounds.y < -1000) continue; // parked off-screen
+      try {
+        const img = await entry.view.webContents.capturePage();
+        if (img.isEmpty()) continue;
+        out.push({uid, bounds, dataURL: img.toDataURL()});
+      } catch {
+        /* skip a pane that won't capture */
+      }
+    }
+    return out;
+  });
+
+  // A renderer-side overlay (e.g. the Save Workspace toast) needs the window's
+  // native web panes pulled off-screen while it's up — native WebContentsViews
+  // always paint ABOVE the DOM, so a web pane would sit on top of the toast.
+  // Mirrors the main-side suppression the close-confirm modal already uses; the
+  // overlay sends true on open and false on close.
+  ipcMain.on('web-panes:suppress', (e, {suppressed}: {suppressed: boolean}) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (win && !win.isDestroyed()) setWindowWebPanesSuppressed(win, !!suppressed);
   });
 }

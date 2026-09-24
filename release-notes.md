@@ -1,19 +1,20 @@
-# Hyperia v0.17.51 — no more WebRTC leak 🕵️
+# Hyperia v0.20.12 — install runs in a real shell 🐚
 
-A privacy fix that matters most if you drive web panes through a proxy.
+A small follow-up to v0.20.11: the install and update **run** buttons in the new-pane picker now open a plain shell instead of whatever your default profile happens to be.
 
-## Web panes stop leaking your LAN IP over WebRTC
+## Install and update open the right shell
 
-Real Chrome hides your private (LAN) addresses behind mDNS `.local` ICE candidates by default. Electron's `WebContentsView` — what Hyperia's web panes are — left the raw private IP exposed, so any page's `RTCPeerConnection` could read the host's `172.x` / `192.168.x` address even when the page's HTTP traffic was routed through a proxy.
+The picker's **run** button (for the Hyperia update line and the agent installers) opens a new pane with the command typed in, waiting for you to press Enter. It used to open your *default* profile. If that was a custom shell, say one that launches Claude, the install command went into Claude instead of a shell.
 
-That's a direct deanonymization signal: anti-bot systems cross-check the WebRTC address against your HTTP exit IP, and a mismatch — or a raw LAN address showing through — flags you instantly. Caught in the wild by nodemaven's connection checker running in a Hyperia pane: *"WebRTC exposed a raw LAN address, mDNS obfuscation is disabled."*
+Now **run** always opens your system's own shell, picked from the shells Hyperia already detected. Nothing is hardcoded:
 
-Each web pane now sets `default_public_interface_only`, binding WebRTC to the same public interface as the page's HTTP exit. No private-IP leak, and WebRTC still works — chosen over the nuclear `disable_non_proxied_udp`, which would break legitimate calls.
+- **Windows:** the newest PowerShell 7 (`pwsh`) Hyperia finds, whether it's installed under Program Files, as a 32-bit install, or from the Store or winget. Without one it falls back to Windows PowerShell, then cmd.
+- **macOS / Linux:** your login shell, then zsh, then bash.
 
-**Verify:** run any WebRTC leak test (e.g. nodemaven's connection checker) in a web pane — the WebRTC section should match your exit IP with no LAN address, instead of flagging a leak.
+Custom shells and agents are never picked. In PowerShell, the update command is now plain `irm https://hyperia.nuts.services/install.ps1 | iex` rather than the `powershell -c "…"` wrapper, which forced Windows PowerShell 5.1.
 
-## Also
+## No Windows shells on a Mac
 
-- `.claude/` (agent memory, subagent defs, local settings) is now untracked — local machine state, not repo material.
+A config synced from a Windows machine can carry Windows-only shells such as `C:\…\pwsh.exe`. The custom-shell setup used to list them as base shells on macOS and Linux, and could even pick one as the default. It now offers only plain shells that exist on the current platform.
 
-Coming from further back? [v0.17.50](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.17.50) added live tab-drag reordering and welcomed our newest committer.
+Coming from further back? [v0.20.11](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.20.11) is the big one: a directory picker that fits any pane, correctly sized terminals, two-level bells, and a separate identity for every agent session. [v0.20.2](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.20.2) gave agents a mailbox and made "Allow" actually run the approved action.

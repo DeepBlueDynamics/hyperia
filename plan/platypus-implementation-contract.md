@@ -1,0 +1,13 @@
+# Platypus implementation contract
+
+Proceed with keyboard fix/helper/tests as previously assigned. Also implement `sidecar/src/pane_class.rs` and a Bridge classification method using authoritative session/process evidence. Own bridge.rs ONLY for the new classification method and notification focus candidate policy; do not touch held_actions or approval code. Do not edit main.rs/mcp.rs/app/index.ts/lib/index.tsx/consent UI: coordinator integrates routes and tools. Publish method/API and tests in plan/platypus-implementation-status.md.
+
+Coordinator decision after optional user clarification window: pane_send is full agent-input delivery, msg_send is durable mailbox + notification. Both share recipient ACL and canonical identity. Your proposal of aliasing pane_send to stored mail conflicts with the requested direct-pane operation and would reproduce ambiguous acceptance. Reflect the difference and give a safety review: Agent target only, no shell; use shared delivery queue and explicit submit; focused/actively typed target defers; working unfocused supported agent receives input without idle silence. Refuse unknown recipient transport rather than typing into arbitrary process. Record submitted vs read separately. Coordinator owns actual pane_send route.
+
+Classification ShellPrompt: authoritative live shell/integration prompt, no agent/foreign foreground, no unknown/missing pid. Do not infer safe shell from empty process alone. Exact agent executable/cmdline tokens, not substring pi/node. Include n8 wrapper with docker foreground when integration identifies n8. Integration can disappear temporarily: document conservative behavior; no output-text guessing. Return evidence-rich enum/result and refusal reason. If additional renderer alt-screen metadata is necessary, propose plumbing separately first.
+
+Mail notification focus predicate should protect foreground human focused pane independently of recent typing and should not require 10s silence for agent panes that accept queued input. Do not claim all foreground processes are safe merely because focus is elsewhere. Your helper/tests must distinguish shell, unknown, safe agent. Coordinator will wire canonical unread counts to the mailbox module.
+
+Alt+Up: demonstrate installed xterm encoder bytes in a reproducible isolated test if live human capture unavailable. Do not send keys into coordinator's active pane. Preserve existing Alt+Left/Right and Ctrl+Up/Down behavior, modifiers, keydown-only; do not swallow keyup incorrectly. Add keyboard helper regression tests. Report live user-pane validation as not run until it happens.
+
+Use nuts tools. All tests/artifacts in /workspace. Need independent final review of other modules once integration lands.

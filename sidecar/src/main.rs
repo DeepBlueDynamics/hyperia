@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 #![allow(dead_code, unused_imports, unused_variables)]
 
 mod audio;
@@ -13,9 +14,14 @@ mod ghost;
 mod render;
 mod logs;
 mod mcp;
+mod mcp_sessions;
 /// Agent-facing prose, keyed and per-locale — see `messages/mod.rs`.
 mod messages;
 mod models;
+mod msgbus;
+mod messaging;
+mod delivery;
+mod delivery_service;
 mod perms;
 mod process;
 mod lume_store;
@@ -80,6 +86,7 @@ pub(crate) struct AppState {
 
 #[derive(Debug, Default, Deserialize)]
 struct PaneAddress {
+    idempotency_key: Option<String>,
     window: Option<u32>,
     tab: Option<String>,
     pane: Option<String>,
@@ -94,7 +101,9 @@ struct PaneAddress {
     /// command string that may contain Windows paths like `\research` —
     /// the default unescape behavior would turn `\r` into a literal CR
     /// and shred the path. `terminal_keys` keeps raw=false (default) so
-    /// `\x03` still maps to Ctrl-C.
+    /// `\x03` still maps to Ctrl-C. CAUTION: raw control bytes / escape
+    /// sequences delivered into ANOTHER agent's pane can crash or detach it
+    /// (e.g. nemesis8) — reserve raw/control bytes for your own shell.
     raw: Option<bool>,
     /// When true, prepend a "From: <your pane>:" header so the recipient agent
     /// knows who's messaging it. Opt-in (default off) — the caller decides; Hyperia
@@ -102,6 +111,11 @@ struct PaneAddress {
     /// applied when the target is an agent/AI pane (a prefix would corrupt a shell
     /// command).
     attribute: Option<bool>,
+    /// Override the 512-char pane-injection cap on attributed agent→pane messages.
+    /// Default off: an attributed message longer than 512 chars is rejected with a
+    /// pointer to the message bus (msg_send), which carries long/persistent text
+    /// without flooding the pane. Ignored for shell commands (attribute=false).
+    allow_long: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -921,155 +935,92 @@ async fn maybe_attribute(state: &AppState, headers: &HeaderMap, uid: &str, keys:
     attribute_keys(keys, &from)
 }
 
-async fn post_type(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(addr): Query<PaneAddress>,
-    body: String,
-) -> (StatusCode, String) {
-    if body.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Empty body".into());
-    }
-    // A write must name its target. Refuse to default to the human's focused
-    // pane — that's how stray keystrokes end up typed into whatever the human is
-    // using. Require an explicit window/tab/pane (see focus-never-steal).
-    if addr.window.is_none() && addr.tab.is_none() && addr.pane.is_none() {
-        return (StatusCode::BAD_REQUEST, "No pane addressed. Keystrokes will NOT default to the focused pane (that risks typing into whatever the human is using). Pass an explicit window/tab/pane — pane is a name or paneId from terminal_status.".into());
-    }
-    // raw=true sends the body byte-for-byte. raw=false (default) treats the
-    // body as containing escape sequences (\x03 → Ctrl-C etc.). terminal_run
-    // uses raw=true so Windows paths like `\research` aren't shredded by the
-    // `\r` → CR rule; terminal_keys uses raw=false so \x.. still works.
-    let keys = if addr.raw.unwrap_or(false) { body.clone() } else { unescape_keys(&body) };
-    let uid = match state
-        .bridge
-        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
-        .await
-    {
-        Some(u) => u,
-        None => {
-            let session_count = state.bridge.session_count().await;
-            tracing::warn!("post_type 404: window={:?} tab={:?} pane={:?} (sessions={})",
-                addr.window, addr.tab, addr.pane, session_count);
-            return (StatusCode::NOT_FOUND, format!(
-                "No pane at that address (window={:?} tab={:?} pane={:?}; {} panes registered). \
-A paneId is NOT stable across restarts: a pane that closed — or an agent that restarted — comes back \
-with a NEW paneId (and a new name), so a held id stops resolving. Call terminal_status to get current ids. \
-For a long-running or restartable agent, address by window+tab and OMIT pane — that always targets that \
-tab's current active pane, no matter how many times the pane inside it has restarted.",
-                addr.window, addr.tab, addr.pane, session_count
-            ));
+/// The pane-injection cap on ATTRIBUTED agent→pane messages (chars, not bytes).
+/// Only applies to attribute=true sends (agent messaging another agent), never to
+/// shell commands. Long attributed messages flood the recipient's pane and have no
+/// reply/persistence — the message bus (msg_send) is the channel for those.
+const MSG_INJECT_CAP: usize = 512;
+
+/// One-line nudge appended to a successful attributed send's notice, so agents
+/// learn the better channel exists.
+const BUS_NUDGE: &str =
+    "\n[hyperia] tip: for anything but a quick nudge, prefer the message bus (msg_send) — it's searchable, persistent, and doesn't flood the recipient's pane.";
+
+/// Enforce the 512-char cap on attributed agent→pane messages. `keys` is the
+/// agent's own text (pre-attribution — the "From:" header doesn't count). Returns
+/// the reject response when over cap and allow_long isn't set; Ok otherwise.
+fn check_inject_cap(addr: &PaneAddress, keys: &str) -> Result<(), (StatusCode, String)> {
+    if addr.attribute.unwrap_or(false) && !addr.allow_long.unwrap_or(false) {
+        let n = keys.chars().count();
+        if n > MSG_INJECT_CAP {
+            return Err((StatusCode::BAD_REQUEST, format!(
+                "This agent message is {n} chars; the pane-inject cap is {MSG_INJECT_CAP}. Long messages flood the recipient's pane and can't be replied to or searched. Use the message bus instead: msg_send delivers durable, searchable mail (up to 16 KB) to a pane or agent without flooding it. If you truly need to type this into the pane, resend with allow_long=true."
+            )));
         }
-    };
-    // Opt-in attribution: stamp "From: <caller>:" only when the caller asked
-    // (attribute=true). Applied before hold/send so held/flushed and the immediate
-    // send stay consistent. Hyperia fills in the caller's origin pane.
-    let keys = if addr.attribute.unwrap_or(false) {
-        maybe_attribute(&state, &headers, &uid, &keys).await
-    } else {
-        keys
-    };
-    if let Err(resp) = enforce_drive(&state, &headers, &uid).await {
-        // Pending (202): the human hasn't decided yet. HOLD these keys so they
-        // flush to the pane automatically the instant they approve — the agent
-        // does NOT need to re-call (see pending_202's message).
-        if resp.0 == StatusCode::ACCEPTED {
-            let requester = state
-                .bridge
-                .resolve_caller(bearer_token(&headers).as_deref())
-                .await
-                .label();
-            state.bridge.hold_action(&uid, &requester, &keys).await;
-        }
-        return resp;
     }
-    let interrupt = addr.interrupt.unwrap_or(false);
-    // The human-activity gate now lives in the renderer (enqueueOrWrite): when
-    // the human is active in this pane it QUEUES the keys and replies with a
-    // "queued — resend with interrupt=true" notice instead of silently
-    // swallowing them. interrupt=true bypasses the queue and writes now (for
-    // Ctrl-C and other take-overs). We forward the flag and let the renderer
-    // decide, so the agent always gets an honest result.
-    if let Some((tab, pane, win)) = state.bridge.pane_address_for_log(&uid).await {
-        tracing::info!(
-            "type win={} tab={:?} pane={} bytes={} interrupt={} preview={:?}",
-            win, tab, pane, keys.len(), interrupt, crate::util::safe_prefix(&keys, 120)
-        );
-    }
-    // Deterministic submit (Bridge::deliver_keys): text ending in Enter is
-    // delivered as body-then-isolated-CR so an Ink TUI can't eat the terminator
-    // inside a paste burst (the "sometimes it just sits there" race). Control
-    // sequences, bare terminators, and interrupt take-overs pass through
-    // unchanged on the legacy path.
-    let body_text = keys.trim_end_matches(['\r', '\n']);
-    if !interrupt && body_text.len() < keys.len() && !body_text.is_empty() {
-        let notice = state.bridge.deliver_keys(&uid, body_text, true).await;
-        return (StatusCode::OK, notice);
-    }
-    let cmd = serde_json::json!({"type": "Keys", "uid": uid, "keys": keys, "interrupt": interrupt});
-    match state.bridge.send_command(cmd).await {
-        Ok(r) => (StatusCode::OK, r),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    Ok(())
+}
+
+fn delivery_http(result: Result<delivery::Operation, messaging::ApiError>) -> (StatusCode, String) {
+    match result {
+        Ok(operation) => (if operation.state.is_active() { StatusCode::ACCEPTED } else { StatusCode::OK }, serde_json::json!({
+            "ok": true, "operation": operation,
+            "message": "Operation retained. Approval releases it automatically; inspect delivery_status for the outcome."
+        }).to_string()),
+        Err((status, Json(body))) => (status, body.to_string()),
     }
 }
 
-async fn post_type_and_collect(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(addr): Query<PaneAddress>,
-    body: String,
+async fn post_terminal_keys(
+    State(state): State<AppState>, headers: HeaderMap, Query(addr): Query<PaneAddress>, body: String,
 ) -> (StatusCode, String) {
-    if body.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Empty body".into());
-    }
-    if addr.window.is_none() && addr.tab.is_none() && addr.pane.is_none() {
-        return (StatusCode::BAD_REQUEST, "No pane addressed. Keystrokes will NOT default to the focused pane (that risks typing into whatever the human is using). Pass an explicit window/tab/pane — pane is a name or paneId from terminal_status.".into());
-    }
-    let uid = match state
-        .bridge
-        .resolve_pane_uid(addr.window, addr.tab.as_deref(), addr.pane.as_deref())
-        .await
-    {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                "No pane at that address. A paneId is not stable across restarts (a closed/restarted pane comes back with a new id) — call terminal_status to refresh, or address by window+tab and omit pane to always hit that tab's current active pane.".into(),
-            );
-        }
+    let text = if addr.raw.unwrap_or(false) { body } else { unescape_keys(&body) };
+    let req = delivery_service::InputRequest {
+        window: addr.window, tab: addr.tab, pane: addr.pane, text,
+        submit: Some(false), idempotency_key: addr.idempotency_key,
     };
-    if let Err(resp) = enforce_drive(&state, &headers, &uid).await {
-        return resp;
-    }
-    // No activity gate: another caller (human OR agent) being active is not
-    // grounds to refuse this call. Agents can see per-pane userActiveSecsAgo
-    // via terminal_status and decide for themselves whether to defer/warn.
-    let quiet_ms = addr.quiet_ms.unwrap_or(400).clamp(100, 10_000);
-    // raw=true: send body verbatim (no \r/\n/\x.. interpretation). Needed
-    // for terminal_run so Windows paths with `\research`, `\new`, `\test`
-    // aren't shredded by the unescape rule.
-    let keys = if addr.raw.unwrap_or(false) { body.clone() } else { unescape_keys(&body) };
-    // Opt-in attribution (attribute=true) — stamp "From: <caller>:" only on request.
-    let keys = if addr.attribute.unwrap_or(false) {
-        maybe_attribute(&state, &headers, &uid, &keys).await
-    } else {
-        keys
+    delivery_http(delivery_service::raw_keys(&state.bridge, &headers, req, addr.interrupt.unwrap_or(false)).await)
+}
+
+async fn post_type(
+    State(state): State<AppState>, headers: HeaderMap, Query(addr): Query<PaneAddress>, body: String,
+) -> (StatusCode, String) {
+    let keys = if addr.raw.unwrap_or(false) { body } else { unescape_keys(&body) };
+    let controls = keys.chars().any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t');
+    let submit = keys.ends_with('\r') || keys.ends_with('\n');
+    let text = if controls { keys.clone() } else { keys.trim_end_matches(['\r', '\n']).to_string() };
+    let req = delivery_service::InputRequest {
+        window: addr.window, tab: addr.tab, pane: addr.pane, text,
+        submit: Some(submit), idempotency_key: addr.idempotency_key,
     };
-    let log_addr = state.bridge.pane_address_for_log(&uid).await;
-    if let Some((tab, pane, win)) = &log_addr {
-        tracing::info!(
-            "type-and-collect ▶ win={} tab={:?} pane={} quiet_ms={} bytes_in={} preview={:?}",
-            win, tab, pane, quiet_ms, keys.len(), crate::util::safe_prefix(&keys, 120)
-        );
+    if controls || req.text.is_empty() {
+        let mut raw = req;
+        raw.text = keys;
+        return delivery_http(delivery_service::raw_keys(&state.bridge, &headers, raw, addr.interrupt.unwrap_or(false)).await);
     }
-    let output = state.bridge.type_and_collect(&uid, &keys, quiet_ms).await;
-    if let Some((tab, pane, win)) = &log_addr {
-        tracing::info!(
-            "type-and-collect ◀ win={} tab={:?} pane={} bytes_out={}",
-            win, tab, pane, output.len()
-        );
-    }
-    (StatusCode::OK, output)
+    let address = messaging::SendRequest { window: req.window, tab: req.tab.clone(), pane: req.pane.clone(),
+        to_label: None, subject: String::new(), body: req.text.clone(), idempotency_key: None };
+    let pane = match messaging::resolve_target(&state.bridge, &address).await {
+        Ok(pane) => pane,
+        Err((status, Json(body))) => return (status, body.to_string()),
+    };
+    let agent = state.bridge.classification_for(&pane).await
+        .is_some_and(|c| c.classification.accepts_direct_input());
+    delivery_http(delivery_service::submit_input(&state.bridge, &headers, req, agent).await)
+}
+
+/// Compatibility shell endpoint. Agent input must use /api/pane/send.
+async fn post_type_and_collect(
+    State(state): State<AppState>, headers: HeaderMap, Query(addr): Query<PaneAddress>, body: String,
+) -> (StatusCode, String) {
+    let keys = if addr.raw.unwrap_or(false) { body } else { unescape_keys(&body) };
+    let submit = keys.ends_with('\r') || keys.ends_with('\n');
+    let req = delivery_service::InputRequest {
+        window: addr.window, tab: addr.tab, pane: addr.pane,
+        text: keys.trim_end_matches(['\r', '\n']).to_string(),
+        submit: Some(submit), idempotency_key: addr.idempotency_key,
+    };
+    delivery_http(delivery_service::submit_input(&state.bridge, &headers, req, false).await)
 }
 
 async fn post_split(
@@ -1129,7 +1080,7 @@ async fn post_split(
     if let Err(resp) = enforce_create(&state, &headers, "create_pane").await {
         if resp.0 == StatusCode::ACCEPTED {
             let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
-            state.bridge.hold_create(&id.label(), cmd).await;
+            state.bridge.hold_create(&id.principal_key(), cmd).await;
         }
         return resp;
     }
@@ -1154,7 +1105,7 @@ async fn stamp_created_pane(state: &AppState, headers: &HeaderMap, result: &str)
         .ok()
         .and_then(|v| v["paneId"].as_str().map(|s| s.to_string()))
     {
-        state.bridge.perms().stamp_owner(&pane, &id.label()).await;
+        state.bridge.perms().stamp_owner(&pane, &id.principal_key()).await;
     }
 }
 
@@ -1247,7 +1198,7 @@ async fn post_request_access(
     // Since this is an explicit request for access (e.g. from the request_access tool),
     // clear any recent denial cooldown to allow prompting the user again (re-authentication).
     let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
-    let label = id.label();
+    let label = id.principal_key();
     state.bridge.perms().clear_denial(&label, &uid).await;
 
     // Same gate as a real drive: Allow / RefuseHome / SoftWall(401) / Denied(403)
@@ -1393,26 +1344,34 @@ fn bearer_token(headers: &HeaderMap) -> Option<String> {
 // identity that survives restarts (unlike pane tokens, which die with panes).
 // ---------------------------------------------------------------------------
 
-async fn post_identity_agent(State(state): State<AppState>, body: String) -> (StatusCode, String) {
+async fn post_identity_agent(State(state): State<AppState>, headers: HeaderMap, body: String) -> (StatusCode, String) {
     let p = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let name = p["name"].as_str().unwrap_or("").trim().to_string();
     if name.is_empty() {
         return (StatusCode::BAD_REQUEST, "name required".into());
     }
-    let rec = state.bridge.identity().mint(&name).await;
+    let caller = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    let may_retrieve = caller.is_system()
+        || matches!(&caller, identity::CallerIdentity::Agent { name: own, .. } if own == &name);
+    let rec = match state.bridge.identity().register(&name, may_retrieve).await {
+        Ok(rec) => rec,
+        // `code` is the stable, machine-readable reason (clients such as
+        // nemesis8 retry with a new name on "identity_exists"); `error` stays prose.
+        Err(error) => return (StatusCode::FORBIDDEN, serde_json::json!({"ok": false, "code": identity::register_error_code(error), "error": error}).to_string()),
+    };
+    // Registration from an authenticated pane proves residency without trusting a pane ID in the body.
+    let binding = if let identity::CallerIdentity::Pane { pane, .. } = &caller {
+        match messaging::context().and_then(|store| store.bindings.verify_and_bind(
+            &rec.name, pane, msgbus::mailbox::ProofOfResidency::System, |_, _| false
+        ).map_err(messaging::mailbox_error)) {
+            Ok(binding) => Some(binding),
+            Err((status, Json(error))) => return (status, error.to_string()),
+        }
+    } else { None };
     (
         StatusCode::OK,
-        serde_json::json!({"name": rec.name, "token": rec.token, "createdMs": rec.created_ms}).to_string(),
+        serde_json::json!({"name": rec.name, "token": rec.token, "createdMs": rec.created_ms, "binding": binding}).to_string(),
     )
-}
-
-async fn get_identity_whoami(State(state): State<AppState>, headers: HeaderMap) -> Json<serde_json::Value> {
-    let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
-    Json(serde_json::json!({
-        "kind": id.kind(),
-        "label": id.label(),
-        "anonymous": id.is_anonymous(),
-    }))
 }
 
 /// Middleware: resolve the caller identity from the Authorization header for
@@ -1468,15 +1427,51 @@ async fn identity_mw(
                 .to_string()
         })
         .filter(|s| !s.is_empty());
+    // Child proxy credentials are accepted only on a verified loopback socket.
+    // Missing peer metadata fails closed (including tests that omit ConnectInfo).
+    let mut child_lease = if bearer.as_deref().is_some_and(|t| t.starts_with("hyp_mcp_")) {
+        let loopback = req.extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .is_some_and(|peer| peer.0.ip().is_loopback());
+        if !loopback {
+            return axum::response::IntoResponse::into_response((StatusCode::UNAUTHORIZED, "Internal credential is loopback-only"));
+        }
+        match bridge.identity().sessions.lease_token(bearer.as_deref().unwrap()) {
+            Some(lease) => Some(lease),
+            None => return axum::response::IntoResponse::into_response((StatusCode::UNAUTHORIZED, "MCP session is revoked or expired")),
+        }
+    } else { None };
     let method = req.method().as_str().to_string();
     let path = req.uri().path().to_string();
     let id = bridge.resolve_caller(bearer.as_deref()).await;
+    if child_lease.is_some() && id.is_anonymous() {
+        return axum::response::IntoResponse::into_response((StatusCode::UNAUTHORIZED, "MCP parent identity is no longer active"));
+    }
     let (label, kind, anon) = (id.label(), id.kind(), id.is_anonymous());
     if !anon {
         tracing::info!("call from {label} ({kind}) -> {path}");
     }
+    // Approval decisions, enforcement switches and pane credentials belong to
+    // the human UI (authenticated by Electron main), never an agent caller.
+    if matches!(path.as_str(), "/api/perms/respond" | "/api/perms/enforce" | "/api/perms/token" | "/ws" | "/api/ui/key")
+        && !id.is_system()
+    {
+        crate::audit::record_call(&label, kind, &method, &path, 403);
+        return axum::response::IntoResponse::into_response((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"ok": false, "error": "This operation requires the Hyperia application."})),
+        ));
+    }
     req.extensions_mut().insert(id);
-    let resp = next.run(req).await;
+    let resp = if let Some(lease) = child_lease.as_mut() {
+        tokio::select! {
+            biased;
+            _ = lease.cancelled() => axum::response::IntoResponse::into_response((StatusCode::UNAUTHORIZED, "MCP session revoked or expired during request")),
+            response = next.run(req) => response,
+        }
+    } else {
+        next.run(req).await
+    };
     // Audit: every identified call, plus every mutation attempt (non-GET) — but
     // not anonymous GET polls (renderer status/log polling), /health, or /ws.
     let auditable = (path.starts_with("/api/") || path.starts_with("/mcp"))
@@ -1492,7 +1487,7 @@ async fn get_identity_agents(State(state): State<AppState>) -> Json<serde_json::
     let agents = state.bridge.identity().list().await;
     let list: Vec<_> = agents
         .iter()
-        .map(|a| serde_json::json!({"name": a.name, "token": a.token, "createdMs": a.created_ms}))
+        .map(|a| serde_json::json!({"name": a.name, "createdMs": a.created_ms}))
         .collect();
     Json(serde_json::json!({"agents": list}))
 }
@@ -1551,7 +1546,7 @@ async fn enforce_drive_with_purpose(
                 .to_string(),
         )),
         AuthDecision::NeedConsent => {
-            let label = id.label();
+            let label = id.principal_key();
             // Raise the consent prompt once; a retry arriving while one is
             // already pending skips re-raising and just resumes waiting below.
             if !state.bridge.perms().has_pending(&label, target_uid).await {
@@ -1648,7 +1643,7 @@ async fn enforce_audio(
                 .to_string(),
         )),
         AuthDecision::NeedConsent => {
-            let label = id.label();
+            let label = id.principal_key();
             if !state.bridge.perms().has_pending(&label, AUDIO_SENTINEL).await {
                 let requester_pane = match &id {
                     CallerIdentity::Pane { pane, .. } => pane.clone(),
@@ -1754,7 +1749,7 @@ async fn enforce_create(
                 .to_string(),
         )),
         AuthDecision::NeedConsent => {
-            let label = id.label();
+            let label = id.principal_key();
             // Reuse the pending request if one exists (dedupe), but ALWAYS
             // (re-)notify the toast: the renderer's prompt collapses after 45s,
             // and the old silent-resume meant a retry could never bring it back
@@ -1806,7 +1801,7 @@ async fn enforce_create(
                 // so an immediate approval used to burn this whole 8s window and
                 // then silently DROP the command (the decision handler had
                 // already consumed the approval before the hold landed).
-                if let Some(allow) = state.bridge.take_resolved_create(&id.label()).await {
+                if let Some(allow) = state.bridge.take_resolved_create(&id.principal_key()).await {
                     if allow {
                         return Ok(());
                     }
@@ -1881,7 +1876,7 @@ async fn enforce_capability(
             format!("The '{cap}' capability was denied by the user. Don't retry."),
         )),
         AuthDecision::NeedConsent => {
-            let label = id.label();
+            let label = id.principal_key();
             // Raise the capability-consent toast once; a retry while one is
             // already pending skips re-raising and resumes waiting below.
             if !state.bridge.perms().has_pending_cap(&label, cap).await {
@@ -1999,17 +1994,14 @@ async fn post_perm_request(
     body: String,
 ) -> (StatusCode, String) {
     let p = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
-    // Prefer the authenticated caller identity; fall back to an explicit body
-    // requester (test/manual), then a generic label.
     let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
-    let requester = if id.is_anonymous() {
-        p["requester"].as_str().unwrap_or("Unknown agent").to_string()
-    } else {
-        id.label()
-    };
+    if id.is_anonymous() {
+        return (StatusCode::UNAUTHORIZED, "Authentication required.".into());
+    }
+    let requester = id.principal_key();
     let requester_pane = match &id {
         identity::CallerIdentity::Pane { pane, .. } => pane.clone(),
-        _ => p["requesterPane"].as_str().unwrap_or("").to_string(),
+        _ => String::new(),
     };
     let target = p["targetPane"].as_str().unwrap_or("").to_string();
     if target.is_empty() {
@@ -2044,11 +2036,97 @@ async fn post_perm_request(
 }
 
 async fn post_perm_respond(State(state): State<AppState>, body: String) -> (StatusCode, String) {
+    let _gate = delivery_service::WORKFLOW.lock().await;
     let p = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
     let id = p["id"].as_str().unwrap_or("");
     let allow = p["decision"].as_str().unwrap_or("deny") == "allow";
     let scope = p["scope"].as_str().unwrap_or("pane");
     let duration_secs = p["durationSecs"].as_u64();
+    let mut delivery_operations = Vec::new();
+    // Persist the exact retained operations' decision before consuming the prompt.
+    if let Some(req) = state.bridge.perms().pending_request(id).await {
+        if req.action == "drive" || req.action.starts_with("message:") {
+            // An empty exact lookup means this is a legacy explicit-access prompt. Store
+            // inspection failure is not equivalent: fail closed before creating a grant.
+            let linked_operations = match delivery_service::consent_operations(&req.id, &req.requester).await {
+                Ok(operations) => operations,
+                Err((status, Json(body))) => return (status, body.to_string()),
+            };
+            let delivery_linked = !linked_operations.is_empty();
+            let operations = match delivery_service::resolve_approval(&req, allow).await {
+                Ok(operations) => operations,
+                Err((status, Json(body))) => return (status, body.to_string()),
+            };
+            // resolve_approval is the authoritative expiry check. If an Allow resolved
+            // no linked operation to Queued, the prompt is stale: consume it without a
+            // grant or denial cooldown, clear the UI, and explain the expired outcome.
+            if allow
+                && delivery_linked
+                && !operations.iter().any(|op| op.state == delivery::State::Queued)
+            {
+                let expired_req = match state.bridge.perms().respond(id, false, scope, duration_secs).await {
+                    Some(req) => req,
+                    None => {
+                        return (
+                            StatusCode::NOT_FOUND,
+                            serde_json::json!({"ok": false, "error": "unknown request id"}).to_string(),
+                        );
+                    }
+                };
+                let denial_key = if expired_req.action == "drive" {
+                    expired_req.target_pane.as_str()
+                } else {
+                    expired_req.action.as_str()
+                };
+                state.bridge.perms().clear_denial(&expired_req.requester, denial_key).await;
+                consent_log::record_decision(
+                    &expired_req.id,
+                    "expired",
+                    scope,
+                    &expired_req.requester,
+                    &expired_req.action,
+                    &expired_req.target_pane,
+                );
+                let _ = state
+                    .bridge
+                    .notify(serde_json::json!({
+                        "type": "PermissionResolved",
+                        "id": expired_req.id,
+                        "targetPane": expired_req.target_pane,
+                        "requesterPane": expired_req.requester_pane,
+                        "action": expired_req.action,
+                        "decision": "expired",
+                        "reason": "The retained operation expired before approval. Submit a new request.",
+                    }))
+                    .await;
+                let stale_operations = if operations.is_empty() {
+                    &linked_operations
+                } else {
+                    &operations
+                };
+                return (
+                    StatusCode::GONE,
+                    serde_json::json!({
+                        "ok": false,
+                        "error": "The retained operation expired before approval. Submit a new request.",
+                        "operations": stale_operations,
+                    })
+                    .to_string(),
+                );
+            }
+            delivery_operations = operations;
+        }
+    }
+    // Apply the fallible association before consuming its consent request.
+    if allow {
+        if let Some(req) = state.bridge.perms().pending_request(id).await {
+            if req.action.starts_with("bind:") {
+                if let Err((status, Json(body))) = messaging::approve_binding(&state.bridge, &req).await {
+                    return (status, body.to_string());
+                }
+            }
+        }
+    }
     match state.bridge.perms().respond(id, allow, scope, duration_secs).await {
         Some(req) => {
             consent_log::record_decision(
@@ -2059,29 +2137,7 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
                 &req.action,
                 &req.target_pane,
             );
-            // Flush or drop any keystrokes the agent had held pending this decision.
-            if allow {
-                if let Some(mut keys) = state.bridge.take_action(&req.target_pane).await {
-                    // Guarantee the held command runs: terminal_run keys already end
-                    // with Enter, terminal_keys may not — append a CR only if needed.
-                    if !keys.ends_with('\n') && !keys.ends_with('\r') {
-                        keys.push('\r');
-                    }
-                    // interrupt=true: the human just approved, so write immediately
-                    // even if they're currently active in the target pane.
-                    let _ = state
-                        .bridge
-                        .send_command(serde_json::json!({
-                            "type": "Keys",
-                            "uid": req.target_pane,
-                            "keys": keys,
-                            "interrupt": true,
-                        }))
-                        .await;
-                }
-            } else {
-                let _ = state.bridge.take_action(&req.target_pane).await;
-            }
+            // Retained terminal/mail operations are resolved above and executed by the worker.
             // A held CREATE (split/new-tab/web-pane) executes on approval — the
             // human said "ok, that's fine", so DO the thing, don't just grant
             // permission the agent has to come back and re-use. Denial drops it.
@@ -2111,16 +2167,66 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
                     state.bridge.resolve_create_early(&req.requester, false).await;
                 }
             }
+            // Tell the REQUESTING agent the outcome so it learns without the human
+            // relaying it. Gated tool calls return 202 "held — wait", but third-party
+            // CLIs (codex / antigravity) treat that as a hard failure and never retry,
+            // then act as if they still lack access they've since been granted.
+            let outcome = if allow {
+                format!(
+                    "[Hyperia] Your request was approved ({}). Retained operations proceed automatically when eligible. Inspect delivery_status; do not resend with a new key.",
+                    req.action
+                )
+            } else {
+                format!(
+                    "[Hyperia] ⛔ Your access request was denied ({}). Don't retry — ask the human if you still need it.",
+                    req.action
+                )
+            };
+            if let Some(operation) = delivery_operations.first() {
+                if let Ok(recipient) = msgbus::mailbox::Principal::parse(&operation.requester) {
+                    let notice = messaging::PreparedMessage {
+                        sender: messaging::MailActor { principal: msgbus::mailbox::Principal::System,
+                            label: "Hyperia".into(), pane: None, requester: "system".into() },
+                        recipient, recipient_label: req.requester.clone(),
+                        target_pane: if req.requester_pane.is_empty() { None } else { Some(req.requester_pane.clone()) },
+                        subject: "Delivery approval outcome".into(),
+                        body: format!("{outcome} Operation IDs: {}",
+                            delivery_operations.iter().map(|op| op.id.as_str()).collect::<Vec<_>>().join(", ")),
+                        idempotency_key: Some(format!("approval:{}", req.id)),
+                    };
+                    if messaging::store_approved(&state.bridge, &notice).await.is_err() {
+                        tracing::warn!("Could not store approval outcome for request {}", req.id);
+                    }
+                }
+            } else if req.requester.starts_with("agent:") || req.requester.starts_with("pane:") || req.requester == "system" {
+                // A terminal/expired retained operation is observed through delivery_status.
+                // Never reinterpret canonical requester keys as legacy display labels.
+            } else if !req.requester_pane.is_empty() && req.requester_pane != req.target_pane {
+                // In-pane requester: deliver through the two-phase submit
+                // (deliver_keys) — a raw Keys write with a glued \r races an
+                // Ink/TUI submit and can be swallowed. interrupt=false so it
+                // defers if the human is actively typing there.
+                let _ = state.bridge.deliver_keys(&req.requester_pane, &outcome, true).await;
+            } else if req.requester_pane.is_empty() && !req.requester.is_empty() {
+                // External / agent-token requester: no pane to poke, so the old
+                // code silently dropped the outcome — the very agents request_access
+                // serves never learned they were approved. Drop it in their
+                // message-bus inbox; they'll see it on their next msg_inbox.
+                let subject = if allow { "access request approved" } else { "access request denied" };
+                msgbus::record("Hyperia", "system", "", "", &req.requester, subject, &outcome);
+            }
             let _ = state
                 .bridge
                 .notify(serde_json::json!({
                     "type": "PermissionResolved",
                     "id": req.id,
                     "targetPane": req.target_pane,
+                    "requesterPane": req.requester_pane,
+                    "action": req.action,
                     "decision": if allow { "allow" } else { "deny" },
                 }))
                 .await;
-            (StatusCode::OK, serde_json::json!({"ok": true}).to_string())
+            (StatusCode::OK, serde_json::json!({"ok": true, "operations": delivery_operations}).to_string())
         }
         None => (
             StatusCode::NOT_FOUND,
@@ -2453,6 +2559,24 @@ async fn get_bug_log(
     Json(serde_json::json!({ "count": results.len(), "results": results }))
 }
 
+// ---- Message bus (email for agents) ---------------------------------------
+
+/// Resolve the calling identity into (display label, kind, pane_uid). Mirrors
+/// the (reporter, kind) derivation in post_bug; pane callers also expose their uid.
+async fn caller_parts(state: &AppState, headers: &HeaderMap) -> (String, String, String) {
+    let id = state.bridge.resolve_caller(bearer_token(headers).as_deref()).await;
+    match &id {
+        identity::CallerIdentity::Pane { pane, .. } => (
+            state.bridge.pane_display_name(pane).await.unwrap_or_else(|| id.label()),
+            "pane".into(),
+            pane.clone(),
+        ),
+        identity::CallerIdentity::Agent { name, .. } => (name.clone(), "agent".into(), String::new()),
+        identity::CallerIdentity::System => ("Hyperia".into(), "system".into(), String::new()),
+        identity::CallerIdentity::Anonymous => ("anonymous".into(), "anonymous".into(), String::new()),
+    }
+}
+
 /// Mint/return the access token for a pane. The pane menu copies this and the
 /// human hands it to an external agent (→ MCP Authorization header).
 async fn get_perm_token(
@@ -2469,10 +2593,14 @@ async fn get_perm_token(
 
 async fn post_perm_check(State(state): State<AppState>, body: String) -> (StatusCode, String) {
     let p = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
-    let requester = p["requester"].as_str().unwrap_or("");
+    let names = identity::IdentityStore::registered_names_from_disk();
+    let requester = match identity::cutover_requester(p["requester"].as_str().unwrap_or(""), &names) {
+        identity::RequesterCutover::Key(key) => key,
+        identity::RequesterCutover::Invalidate => String::new(),
+    };
     let target = p["targetPane"].as_str().unwrap_or("");
     // Tab-aware, identical to real enforcement (authorize_drive) — no divergence.
-    let allowed = state.bridge.grant_allows(requester, target).await;
+    let allowed = state.bridge.grant_allows(&requester, target).await;
     (StatusCode::OK, serde_json::json!({"allowed": allowed}).to_string())
 }
 
@@ -2740,7 +2868,7 @@ async fn post_new_tab(
     if let Err(resp) = enforce_create(&state, &headers, "create_tab").await {
         if resp.0 == StatusCode::ACCEPTED {
             let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
-            state.bridge.hold_create(&id.label(), cmd).await;
+            state.bridge.hold_create(&id.principal_key(), cmd).await;
         }
         return resp;
     }
@@ -2885,6 +3013,13 @@ struct WorkspaceSaveBody {
     name: String,
     #[serde(default)]
     overwrite: bool,
+    /// "tab" for single-tab snapshots (#183); absent = whole-app.
+    #[serde(default)]
+    scope: Option<String>,
+    /// Pre-captured snapshot pushed by Electron (tab saves capture renderer-
+    /// side); when present the bridge CaptureWorkspace round trip is skipped.
+    #[serde(default)]
+    snapshot: Option<serde_json::Value>,
 }
 
 async fn post_workspace_save(
@@ -2895,18 +3030,26 @@ async fn post_workspace_save(
         Ok(d) => d,
         Err(e) => return e,
     };
-    // Correlated capture: every window's geometry + layout, or a missing list.
-    let raw = match state
-        .bridge
-        .send_command(serde_json::json!({"type": "CaptureWorkspace"}))
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("capture failed: {e}")),
-    };
-    let snapshot: serde_json::Value = match serde_json::from_str(&raw) {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("capture returned invalid JSON: {e}")),
+    // Correlated capture: every window's geometry + layout, or a missing
+    // list. A pushed snapshot (tab-scoped saves, captured renderer-side)
+    // skips the round trip.
+    let snapshot: serde_json::Value = if let Some(pushed) = body.snapshot {
+        pushed
+    } else {
+        let raw = match state
+            .bridge
+            .send_command(serde_json::json!({"type": "CaptureWorkspace"}))
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return (StatusCode::BAD_GATEWAY, format!("capture failed: {e}")),
+        };
+        match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                return (StatusCode::BAD_GATEWAY, format!("capture returned invalid JSON: {e}"))
+            }
+        }
     };
     if let Some(err) = snapshot.get("error").and_then(|e| e.as_str()) {
         return (StatusCode::BAD_GATEWAY, format!("capture failed: {err}"));
@@ -2933,6 +3076,7 @@ async fn post_workspace_save(
     match workspace::save(
         &dir,
         &body.name,
+        body.scope.clone(),
         windows,
         stickys,
         Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -3292,7 +3436,7 @@ async fn post_render(
     if let Err(resp) = enforce_create(&state, &headers, "create_web").await {
         if resp.0 == StatusCode::ACCEPTED {
             let caller = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
-            state.bridge.hold_create(&caller.label(), cmd).await;
+            state.bridge.hold_create(&caller.principal_key(), cmd).await;
         }
         return resp;
     }
@@ -4205,7 +4349,9 @@ async fn main() -> anyhow::Result<()> {
     if args.mcp {
         tracing_subscriber::fmt()
             .with_env_filter(
-                EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()),
+                EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into())
+                .add_directive("rmcp=warn".parse().unwrap()),
             )
             .with_writer(std::io::stderr)
             .with_ansi(false)
@@ -4246,7 +4392,9 @@ async fn main() -> anyhow::Result<()> {
     let writer = logs::LogBufferMakeWriter::new(log_buffer.clone()).and(file_writer);
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()),
+            EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into())
+                .add_directive("rmcp=warn".parse().unwrap()),
         )
         .with_writer(writer)
         .with_ansi(false)
@@ -4306,6 +4454,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/edit/apply", axum::routing::post(post_edit_apply))
         // Write endpoints
         .route("/api/type", axum::routing::post(post_type))
+        .route("/api/terminal/keys", axum::routing::post(post_terminal_keys))
         .route("/api/pulse/on-idle", axum::routing::post(post_pane_on_idle))
         .route("/api/pulse/liveness", axum::routing::post(post_pane_liveness))
         .route("/api/pulse/set", axum::routing::post(post_pulse_set))
@@ -4326,11 +4475,19 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/consent/log", axum::routing::get(get_consent_log))
         .route("/api/bug", axum::routing::post(post_bug))
         .route("/api/bug/log", axum::routing::get(get_bug_log))
+        .route("/api/msg/send", axum::routing::post(delivery_service::send_mail))
+        .route("/api/pane/send", axum::routing::post(delivery_service::pane_send))
+        .route("/api/terminal/run", axum::routing::post(delivery_service::terminal_run))
+        .route("/api/delivery/status", axum::routing::get(delivery_service::status))
+        .route("/api/msg/inbox", axum::routing::get(messaging::inbox))
+        .route("/api/msg/read", axum::routing::post(messaging::read))
+        .route("/api/msg/check", axum::routing::post(messaging::check))
+        .route("/api/pane/bind-agent", axum::routing::post(messaging::bind))
+        .route("/api/msg/search", axum::routing::get(messaging::search))
         .route("/api/perms/check", axum::routing::post(post_perm_check))
         .route("/api/perms/token", axum::routing::get(get_perm_token))
         .route("/api/perms/enforce", axum::routing::post(post_perm_enforce))
         .route("/api/identity/agent", axum::routing::post(post_identity_agent))
-        .route("/api/identity/whoami", axum::routing::get(get_identity_whoami))
         .route("/api/identity/agents", axum::routing::get(get_identity_agents))
         .route("/api/pane/close", axum::routing::post(post_close))
         .route("/api/pane/cd", axum::routing::post(post_cd))
@@ -4448,7 +4605,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(dash_routes)
         .merge(ghost_routes)
         .merge(settings_routes)
-        .nest_service("/mcp", mcp::streamable_http_service(args.port))
+        .merge(mcp_sessions::routes(bridge_for_mw.clone(), args.port))
         // Resolve caller identity from the Authorization header for every route
         // (incl. /mcp) — attribution now, enforcement next (#59).
         .layer(axum::middleware::from_fn_with_state(bridge_for_mw, identity_mw));
@@ -4506,6 +4663,14 @@ async fn main() -> anyhow::Result<()> {
     // a running->idle edge. Independent of any agent's loop.
     {
         let bridge = bridge_for_monitor;
+        let delivery_bridge = bridge.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+            loop {
+                tick.tick().await;
+                delivery_service::tick(&delivery_bridge).await;
+            }
+        });
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
             tick.tick().await; // consume the immediate first tick
@@ -4516,7 +4681,7 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
+    let serve = axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(async move {
         let _ = tokio::signal::ctrl_c().await;
         lume_for_shutdown.persist().await;
     });

@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  actions: read # notify-discord reads this run's per-job conclusions
 
 jobs:
   build:
@@ -20,7 +21,7 @@ jobs:
           # (native-process-working-directory) fails in install-app-deps.
           - os: windows-2022
             rust_target: x86_64-pc-windows-msvc
-          - os: macos-latest
+          - os: macos-14
             rust_target: x86_64-apple-darwin
           - os: ubuntu-latest
             rust_target: x86_64-unknown-linux-gnu
@@ -46,7 +47,7 @@ jobs:
 
       # macOS: also build arm64 sidecar
       - name: Setup Rust ARM64 target (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-14'
         run: rustup target add aarch64-apple-darwin
 
       - name: Install Yarn
@@ -80,18 +81,18 @@ jobs:
       # A bare `cargo build --release` puts it at target/release/ and the
       # packaging step doesn't find it ("Sidecar binary not found …").
       - name: Build sidecar (release, default target)
-        if: matrix.os != 'macos-latest'
+        if: matrix.os != 'macos-14'
         run: cargo build --release --manifest-path sidecar/Cargo.toml
 
       # Intel mac: --no-default-features drops the `tts` feature — ort provides
       # no prebuilt ONNX Runtime for x86_64-apple-darwin, so this leg ships
       # without voice (the /api/tts route reports unavailable).
       - name: Build sidecar x86_64 (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-14'
         run: cargo build --release --manifest-path sidecar/Cargo.toml --target x86_64-apple-darwin --no-default-features
 
       - name: Build sidecar ARM64 (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-14'
         run: cargo build --release --manifest-path sidecar/Cargo.toml --target aarch64-apple-darwin
 
       # Build Electron app
@@ -103,10 +104,16 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y rpm snapd
 
-      # Package installer
+      # Package installer.
+      # --publish never: electron-builder must NOT create/publish the GitHub
+      # release itself (electron-builder.json has publish:github). It used to,
+      # during the build phase, which created the release named bare "0.17.69"
+      # with no notes — and the release job below then couldn't own the name/body.
+      # Now electron-builder only BUILDS (+ generates latest*.yml); the release
+      # job is the single publisher (proper name + release-notes.md body).
       - name: Build installer (Windows)
         if: matrix.os == 'windows-2022'
-        run: npx electron-builder --win
+        run: npx electron-builder --win --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Azure Trusted Signing — build/win/sign.js reads AZURE_CLIENT_SECRET
@@ -115,13 +122,13 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
       - name: Build installer (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-14'
         # Signs with the Developer ID cert from CSC_LINK and notarizes via
         # Apple's notary service (electron-builder does both in this one step;
         # mac.notarize.teamId in electron-builder.json triggers notarization).
         # NOTE secret naming: the cert is CSC_LINK but the p12 password secret
         # is MAC_CSC_KEY_PASSWORD.
-        run: npx electron-builder --mac
+        run: npx electron-builder --mac --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -132,7 +139,7 @@ jobs:
 
       - name: Build installer (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: npx electron-builder --linux AppImage deb
+        run: npx electron-builder --linux AppImage deb --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -158,15 +165,47 @@ jobs:
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
 
     steps:
+      # Checkout the tagged commit so we can read release-notes.md — the single
+      # source of truth for BOTH the release name and body. The release-cut PR
+      # (release/vX.Y.Z) always lands one; its first "# " heading is the name.
+      - name: Checkout (for release-notes.md)
+        uses: actions/checkout@v5
+
       - name: Download all artifacts
         uses: actions/download-artifact@v5
         with:
           path: artifacts
 
+      # Release name + body come from release-notes.md:
+      #   - name  = the first "# " heading (e.g. "Hyperia v0.17.69 — save a tab 📑")
+      #   - body  = everything after that heading (the heading isn't repeated —
+      #     GitHub shows the name above the body).
+      # If release-notes.md is missing (a quick tag with no release-cut PR), the
+      # name falls back to "Hyperia <tag>" and the body is empty — so a release
+      # can never publish as just "0.17.69" with no name again.
+      - name: Compose release name + body from release-notes.md
+        id: relnotes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          name=""
+          : > release-body.md
+          if [ -f release-notes.md ]; then
+            name="$(sed -n 's/^#[[:space:]]\+//p' release-notes.md | head -n1)"
+            # Body = file minus its first H1 line (+ a leading blank line).
+            tail -n +2 release-notes.md | sed '1{/^[[:space:]]*$/d}' > release-body.md
+          fi
+          [ -z "${name// /}" ] && name="Hyperia ${TAG}"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "Release name → ${name}"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           draft: false
+          name: ${{ steps.relnotes.outputs.name }}
+          body_path: release-body.md
           files: |
             artifacts/**/*.exe
             artifacts/**/*.dmg
@@ -177,3 +216,94 @@ jobs:
             artifacts/**/latest*.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Post a single release summary to Discord with each platform's build status.
+  # Runs after build + release, on tag releases only. always() so it still fires
+  # when a platform (or the release) failed — a partial release is exactly when
+  # the ping matters.
+  notify-discord:
+    needs: [build, release]
+    runs-on: ubuntu-latest
+    if: always() && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Post release status to Discord
+        env:
+          # Discord bot API (not a webhook): posts as the bot into the channel.
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_BOT_TOKEN:-}" ] || [ -z "${DISCORD_CHANNEL_ID:-}" ]; then
+            echo "DISCORD_BOT_TOKEN / DISCORD_CHANNEL_ID not set — skipping Discord post."
+            exit 0
+          fi
+
+          # Every job's name + conclusion for THIS run (the three build legs +
+          # the release job). --jq streams objects; jq -s collects them.
+          jobs_json="$(gh api --paginate "repos/${REPO}/actions/runs/${RUN_ID}/jobs" \
+            --jq '.jobs[] | {name, conclusion}' | jq -s '.')"
+
+          emoji() {
+            case "$1" in
+              success)   printf '✅' ;;
+              failure)   printf '❌' ;;
+              cancelled) printf '⏹️' ;;
+              skipped)   printf '⏭️' ;;
+              *)         printf '❔' ;;
+            esac
+          }
+          # Conclusion of the job whose name CONTAINS $1. Matrix legs are named
+          # "build (windows-2022, x86_64-…)", so we substring-match on the OS.
+          conc() { echo "$jobs_json" | jq -r --arg n "$1" \
+            'map(select(.name | contains($n))) | (.[0].conclusion // "unknown")'; }
+
+          win="$(conc 'windows-2022')"
+          mac="$(conc 'macos-14')"
+          lin="$(conc 'ubuntu-latest')"
+          rel="$(conc 'release')"
+
+          # green all-pass · red all-fail · gold mixed
+          passes=0; fails=0
+          for c in "$win" "$mac" "$lin"; do
+            if [ "$c" = success ]; then passes=$((passes+1)); else fails=$((fails+1)); fi
+          done
+          if   [ "$fails" -eq 0 ]; then color=3066993
+          elif [ "$passes" -eq 0 ]; then color=15158332
+          else color=15844367
+          fi
+
+          subject="$(printf '%s' "${COMMIT_MSG:-}" | head -n1)"
+          release_url="https://github.com/${REPO}/releases/tag/${TAG}"
+
+          payload="$(jq -n \
+            --arg title "🚀 Hyperia ${TAG}" \
+            --arg url "$release_url" \
+            --argjson color "$color" \
+            --arg win "$(emoji "$win") Windows (x64) — ${win}" \
+            --arg mac "$(emoji "$mac") macOS — ${mac}" \
+            --arg lin "$(emoji "$lin") Linux (x64) — ${lin}" \
+            --arg rel "$(emoji "$rel") ${rel}" \
+            --arg footer "${SHA:0:7} — ${subject}" \
+            '{embeds: [{
+               title: $title, url: $url, color: $color,
+               fields: [
+                 {name: "Windows", value: $win, inline: true},
+                 {name: "macOS",   value: $mac, inline: true},
+                 {name: "Linux",   value: $lin, inline: true},
+                 {name: "Release", value: $rel, inline: false}
+               ],
+               footer: {text: $footer}
+             }]}')"
+
+          curl -sf -X POST \
+            -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "https://discord.com/api/v10/channels/${DISCORD_CHANNEL_ID}/messages"
+          echo "Posted release status to Discord channel ${DISCORD_CHANNEL_ID}."

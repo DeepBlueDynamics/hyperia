@@ -21,11 +21,18 @@ export type Session = {
   isNewGroup?: boolean;
   isRestore?: boolean;
   lastCommand?: string;
+  /** Tab-workspace resume-once (#183): human-checked at save; EXECUTED once on restore. */
+  resumeOnce?: {command: string; source: string};
   // Typed into the fresh PTY WITHOUT a newline (user reviews, presses Enter).
   prefillCommand?: string;
   splitPlacement?: 'BEFORE' | 'AFTER';
   layoutPattern?: string;
-  shellState?: {state: 'idle' | 'busy'; lastExit?: number; command?: string};
+  shellState?: {
+    state: 'idle' | 'busy' | 'running';
+    lastExit?: number;
+    command?: string;
+    app?: {name: string; path: string; cmdline: string; pid: number};
+  };
   isAgentInitiated?: boolean;
 };
 
@@ -116,6 +123,7 @@ export type MainEvents = {
     url?: string;
     splitPlacement?: 'BEFORE' | 'AFTER';
     isAgentInitiated?: boolean;
+    cwd?: string;
   };
   'split request horizontal': {
     activeUid?: string | null;
@@ -123,6 +131,7 @@ export type MainEvents = {
     url?: string;
     splitPlacement?: 'BEFORE' | 'AFTER';
     isAgentInitiated?: boolean;
+    cwd?: string;
   };
   'split web pane req': {
     activeUid?: string | null;
@@ -142,9 +151,19 @@ export type MainEvents = {
   'session-cd': {uid: string; path: string};
   /** Copy OS-dragged files into an idle terminal pane's cwd (drag-and-drop). */
   'pane copy files': {uid: string; cwd: string; paths: string[]};
+  /** Tab-scoped workspace save (#183): renderer-captured tab layout + choices. */
+  'save tab workspace': {name: string; overwrite: boolean; layout: any};
+  /** Ask main for the tab-scoped workspace library (the + menu's list). */
+  'list tab workspaces': never;
+  /** Restore a saved tab-workspace into THIS window as a new tab (#183). */
+  'restore tab workspace': {name: string};
+  /** Delete a saved tab-workspace by name; main echoes back a fresh list. */
+  'delete tab workspace': {name: string};
 };
 
 export type RendererEvents = {
+  /** Last window's last pane closed — open a fresh picker instead of quitting. */
+  'reset-to-picker': never;
   'session-cd-reply': {uid: string; applied?: boolean; queued?: boolean; refused?: boolean; reason?: string};
   /** Result of a drag-and-drop file copy into a pane's cwd. */
   'pane copy files done': {uid: string; ok: boolean; dir: string; count: number; names?: string[]; error?: string};
@@ -194,6 +213,7 @@ export type RendererEvents = {
     url?: string;
     splitPlacement?: 'BEFORE' | 'AFTER';
     isAgentInitiated?: boolean;
+    cwd?: string;
   };
   'split web pane req': {
     activeUid?: string | null;
@@ -207,17 +227,26 @@ export type RendererEvents = {
     url?: string;
     splitPlacement?: 'BEFORE' | 'AFTER';
     isAgentInitiated?: boolean;
+    cwd?: string;
   };
   'clone request vertical': any;
   'clone request horizontal': any;
-  'termgroup add req': {activeUid?: string | null; profile?: string | null; isAgentInitiated?: boolean};
+  'termgroup add req': {activeUid?: string | null; profile?: string | null; isAgentInitiated?: boolean; cwd?: string};
   'termgroup close req': never;
   'web-pane-reload': string;
   'session add': Session;
   'session data': string;
   'session cwd': {uid: string; cwd: string};
   'session exit': {uid: string};
-  'session shellstate': {uid: string; shellState: {state: 'idle' | 'busy'; lastExit?: number; command?: string}};
+  'session shellstate': {
+    uid: string;
+    shellState: {
+      state: 'idle' | 'busy' | 'running';
+      lastExit?: number;
+      command?: string;
+      app?: {name: string; path: string; cmdline: string; pid: number};
+    };
+  };
   'permission request': {id: string; requester: string; requesterPane: string; targetPane: string; purpose?: string};
   'permission resolved': {targetPane: string; decision: string; id?: string};
   'agent toast': {id: string; requester: string; action: string};
@@ -244,6 +273,11 @@ export type RendererEvents = {
   // close-time save passes undefined and its reply routes to the old writer.
   'get-layout-state-req': {requestId?: string} | undefined;
   'restore-layout-state': any;
+  /** Graft one saved tab into the running window (#183); uids pre-remapped. */
+  'restore-tab-state': {layout: any; name?: string};
+  'session n8 binding': {uid: string; binding: {kind: string; sessionId: string; workspace: string; resume: string}};
+  'save tab workspace result': {ok: boolean; name: string; error?: string; conflict?: boolean};
+  'tab workspaces list': {rows: Array<{name: string; savedAt: string; panes: number; webPanes: number}>};
   'web-pane-zoom-in': {uid: string};
   'web-pane-zoom-out': {uid: string};
   'web-pane-zoom-reset': {uid: string};

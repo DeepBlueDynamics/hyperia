@@ -116,6 +116,7 @@ import * as plugins from './plugins';
 import {initSettings} from './settings';
 import {initSticky} from './sticky';
 import {SYSTEM_TOKEN} from './system-token';
+import {showStartupWindows} from './ui/startup-windows';
 import {newWindow} from './ui/window';
 import {installCLI} from './utils/cli-install';
 import * as windowUtils from './utils/window-utils';
@@ -197,6 +198,29 @@ ipcMain.handle('pulse:set', (_e, body) => pulseFetch('POST', '/api/pulse/set', b
 ipcMain.handle('pulse:clear', (_e, body) => pulseFetch('POST', '/api/pulse/clear', body));
 ipcMain.handle('pulse:pause', (_e, body) => pulseFetch('POST', '/api/pulse/pause', body));
 ipcMain.handle('pulse:status', () => pulseFetch('GET', '/api/pulse/status'));
+
+// Human-only consent operations. Only a top-level Hyperia renderer may invoke
+// these; web panes and agent HTTP clients never receive the System credential.
+async function consentFetch(event: Electron.IpcMainInvokeEvent, apiPath: string, body?: unknown): Promise<unknown> {
+  if (
+    !Array.from(windowSet).some((win) => win.webContents === event.sender) ||
+    event.senderFrame !== event.sender.mainFrame
+  ) {
+    throw new Error('Consent requires the Hyperia application window.');
+  }
+  const response = await fetch(`http://localhost:${SIDECAR_PORT}${apiPath}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: {'Content-Type': 'application/json', Authorization: `Bearer ${SYSTEM_TOKEN}`},
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(`Consent request failed (${response.status}).`);
+  return response.json();
+}
+ipcMain.handle('consent:respond', (event, body) => consentFetch(event, '/api/perms/respond', body));
+ipcMain.handle('consent:pane-token', (event, pane: string) => {
+  if (typeof pane !== 'string' || !pane) throw new Error('Pane is required.');
+  return consentFetch(event, `/api/perms/token?pane=${encodeURIComponent(pane)}`);
+});
 
 function findSidecarBinary(): string | null {
   const exeDir = process.platform === 'win32' ? resolve(process.execPath, '..') : __dirname;
@@ -369,10 +393,14 @@ app.getWindows = () => new Set([...windowSet]); // return a clone
 // function to retrieve the last focused window in windowSet;
 // added to app object in order to expose it to plugins.
 app.getLastFocusedWindow = () => {
-  if (!windowSet.size) {
+  // Never hand back a destroyed window: a dead entry lingering in windowSet
+  // makes callers (tray click, new-window, bridge) throw "Object has been
+  // destroyed" on win.show()/focus instead of opening a fresh window.
+  const live = Array.from(windowSet).filter((win) => !win.isDestroyed());
+  if (!live.length) {
     return null;
   }
-  return Array.from(windowSet).reduce((lastWindow, win) => {
+  return live.reduce((lastWindow, win) => {
     return win.focusTime > lastWindow.focusTime ? win : lastWindow;
   });
 };
@@ -605,16 +633,36 @@ app.on('ready', () => {
         }
 
         const hwin = newWindow({width, height, x: startX, y: startY}, cfg, fn, profileName);
+        const winId = hwin.id; // capture while alive; hwin.id throws once destroyed
         windowSet.add(hwin);
         if (stateAttach) stateAttach(hwin);
         void hwin.loadURL(url);
 
-        // the window can be closed by the browser process itself
+        // 'close' fires on the FIRST, prevented pass too (window.ts holds the
+        // close to save last-session first). Tearing the window down here —
+        // rpc destroyed, PTYs killed, dropped from windowSet — used to run
+        // BEFORE that save: the capture then saw zero windows, the sidecar
+        // refused the empty workspace, the legacy fallback emitted on a dead
+        // rpc, and only the 4s failsafe closed the window. Every last-window
+        // close took 4 seconds and saved nothing. Record geometry here (needs
+        // a live window); everything else waits for 'closed'.
         hwin.on('close', () => {
-          if ((hwin as any).isClosing || (app as any).isQuitting) {
-            hwin.clean();
-            windowSet.delete(hwin);
+          try {
+            if (!hwin.isDestroyed()) config.winRecord(hwin);
+          } catch {
+            /* window already tearing down */
           }
+        });
+        hwin.on('closed', () => {
+          // Cleanup MUST run first. Touching a native prop like hwin.id after the
+          // window is destroyed throws "Object has been destroyed", which used to
+          // abort this handler before the delete — leaving a dead window in
+          // windowSet. getLastFocusedWindow() then handed that destroyed window to
+          // the tray/new-window path, so a tray click no longer opened a window and
+          // "new window" failed. Use the id captured while the window was alive.
+          hwin.clean();
+          windowSet.delete(hwin);
+          console.log(`[window] closed: id=${winId}; ${windowSet.size} window(s) remain`);
         });
 
         return hwin;
@@ -635,7 +683,9 @@ app.on('ready', () => {
         const lastSession = readLastSessionForBoot();
         if (lastSession) {
           restoreWorkspace(lastSession as any);
-          bootWins = BrowserWindow.getAllWindows();
+          // Only terminal windows belong to the app startup presenter. Hidden
+          // stickies are also BrowserWindows, but must never be shown here.
+          bootWins = Array.from(windowSet);
           clearLegacySavedLayoutState(cfgPath);
           console.log(`[workspace] restored last-session (${bootWins.length} window(s))`);
         }
@@ -648,20 +698,7 @@ app.on('ready', () => {
         bootWins = [createWindow()];
       }
 
-      // Show each window when its content loads. (The once-per-version update
-      // splash was removed — it added a confusing extra window to first-boot
-      // and nobody missed it.)
-      for (const bootWin of bootWins) {
-        bootWin.webContents.once('did-finish-load', () => {
-          if (!bootWin.isDestroyed() && !bootWin.isVisible()) bootWin.show();
-        });
-      }
-      // Failsafe in case did-finish-load doesn't fire.
-      setTimeout(() => {
-        for (const bootWin of bootWins) {
-          if (!bootWin.isDestroyed() && !bootWin.isVisible()) bootWin.show();
-        }
-      }, 2000);
+      showStartupWindows(bootWins);
 
       // renderer can request a new window via IPC
       ipcMain.on('new-window', () => createWindow());
@@ -689,11 +726,20 @@ app.on('ready', () => {
       });
 
       let quitSaveInFlight = false;
+      // Quit clock: every stage of the quit path logs its offset from the first
+      // before-quit, so a slow shutdown can be attributed to a stage.
+      let quitT0 = 0;
+      const qlog = (s: string) => console.log(`[quit +${quitT0 ? Date.now() - quitT0 : 0}ms] ${s}`);
+      app.on('will-quit', () => qlog('will-quit'));
+      app.on('quit', (_e, code) => qlog(`quit (exit code ${code})`));
       app.on('before-quit', (e) => {
+        if (!quitT0) quitT0 = Date.now();
         // Already confirmed / mid-teardown — let it proceed.
         if ((app as {isQuitting?: boolean}).isQuitting) {
+          qlog('before-quit (re-entry, proceeding)');
           return;
         }
+        qlog('before-quit');
         // A save is already running for an earlier quit gesture — hold this
         // one; the pending save's finally() will quit for real.
         if (quitSaveInFlight) {
@@ -719,9 +765,13 @@ app.on('ready', () => {
         // process actually exits (the "still running" bug otherwise).
         const teardown = () => {
           (app as {isQuitting?: boolean}).isQuitting = true;
+          qlog('teardown: tray');
           destroyTray();
+          qlog('teardown: bridge');
           stopBridge();
+          qlog('teardown: sidecar');
           killSidecar();
+          qlog(`teardown: destroying ${BrowserWindow.getAllWindows().length} window(s)`);
           for (const w of BrowserWindow.getAllWindows()) {
             try {
               w.destroy();
@@ -729,15 +779,27 @@ app.on('ready', () => {
               /* already gone */
             }
           }
+          qlog('teardown: done');
         };
+        qlog(`active panes: ${running.length}`);
+        // Nothing left to snapshot (every window already closed and saved
+        // itself) — the sidecar would refuse an empty workspace anyway.
+        if (running.length === 0 && BrowserWindow.getAllWindows().length === 0) {
+          qlog('no windows open — skipping last-session save');
+          teardown();
+          return;
+        }
         if (running.length === 0) {
           // Save the whole session BEFORE teardown destroys windows — quit
           // used to save nothing at all (this early-return path predates the
           // workspace pipeline). Bounded: a wedged sidecar can't hold the quit.
           e.preventDefault();
           quitSaveInFlight = true;
+          qlog('saving last-session');
           void saveLastSession('quit').finally(() => {
+            qlog('last-session save settled');
             teardown();
+            qlog('app.quit()');
             app.quit();
           });
           return;
@@ -757,8 +819,11 @@ app.on('ready', () => {
         void confirmFn({scope: 'quit', names: running}).then((ok) => {
           if (ok) {
             quitSaveInFlight = true;
+            qlog('confirmed; saving last-session');
             void saveLastSession('quit').finally(() => {
+              qlog('last-session save settled');
               teardown();
+              qlog('app.quit()');
               app.quit();
             });
           }

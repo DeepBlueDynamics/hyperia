@@ -1,4 +1,4 @@
-import React, {forwardRef, useEffect, useMemo, useRef, useCallback, useState} from 'react';
+import React, {forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useState} from 'react';
 
 import type {TabsProps} from '../../typings/hyper';
 import rpc from '../rpc';
@@ -6,6 +6,8 @@ import {ipcRenderer} from '../utils/ipc';
 import {decorate, getTabProps} from '../utils/plugins';
 import {dropIndexForX, reorderOffsets} from '../utils/tab-drag';
 import type {TabMetrics} from '../utils/tab-drag';
+import {nextScrollStop} from '../utils/tab-scroll';
+import type {TabSpan} from '../utils/tab-scroll';
 
 import Tab_ from './tab';
 
@@ -34,45 +36,163 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
     setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
   }, []);
 
-  // Scroll active tab into view
-  useEffect(() => {
-    if (listRef.current) {
-      const active = listRef.current.querySelector('.tab_active');
-      if (active) {
-        active.scrollIntoView({block: 'nearest', inline: 'nearest'});
-      }
+  // Keep the active tab fully visible. Adjusts ONLY the list's scrollLeft:
+  // scrollIntoView also scrolls every scrollable ancestor (overflow:hidden header
+  // containers included), which shifted the whole strip and left the first tab
+  // half cut off. And one pass right after render isn't enough: that same render
+  // turns the 20px scroll arrows on, which narrows and shifts the list AFTER the
+  // scroll, leaving the new tab half hidden. So the reveal stays pending briefly
+  // and is re-applied after the arrows render and on resize, until the user
+  // scrolls by hand. A tab added at the end pins the strip to the far right.
+  const pendingReveal = useRef<{mode: 'end' | 'active'; until: number} | null>(null);
+  const prevTabCount = useRef(tabs.length);
+  const applyReveal = useCallback(() => {
+    const el = listRef.current;
+    const pending = pendingReveal.current;
+    if (!el || !pending) return;
+    if (Date.now() > pending.until) {
+      pendingReveal.current = null;
+      return;
     }
-    updateScrollState();
-  }, [tabs.find((t) => t.isActive)?.uid, tabs.length, updateScrollState]);
+    if (pending.mode === 'end') {
+      el.scrollLeft = el.scrollWidth - el.clientWidth;
+      return;
+    }
+    const active = el.querySelector<HTMLElement>('.tab_active');
+    if (!active) return;
+    const listRect = el.getBoundingClientRect();
+    const tabRect = active.getBoundingClientRect();
+    if (tabRect.left < listRect.left) {
+      el.scrollLeft += tabRect.left - listRect.left;
+    } else if (tabRect.right > listRect.right) {
+      el.scrollLeft += tabRect.right - listRect.right;
+    }
+  }, []);
+  const cancelReveal = useCallback(() => {
+    pendingReveal.current = null;
+  }, []);
 
-  // Update scroll arrows on resize
+  const activeUid = tabs.find((t) => t.isActive)?.uid;
+  useLayoutEffect(() => {
+    const added = tabs.length > prevTabCount.current;
+    prevTabCount.current = tabs.length;
+    const activeIsLast = tabs.length > 0 && !!tabs[tabs.length - 1].isActive;
+    pendingReveal.current = {mode: added && activeIsLast ? 'end' : 'active', until: Date.now() + 600};
+    applyReveal();
+    updateScrollState();
+    const raf = requestAnimationFrame(() => {
+      applyReveal();
+      updateScrollState();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [activeUid, tabs.length, applyReveal, updateScrollState]);
+
+  // The scroll arrows appearing/disappearing resizes the list; re-apply after that render.
+  useLayoutEffect(() => {
+    applyReveal();
+  }, [canScrollLeft, canScrollRight, applyReveal]);
+
+  // Update scroll arrows (and any pending reveal) on resize
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(updateScrollState);
+    const ro = new ResizeObserver(() => {
+      applyReveal();
+      updateScrollState();
+    });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [updateScrollState]);
+  }, [applyReveal, updateScrollState]);
 
-  // Horizontal scroll with mouse wheel
-  const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
-      if (listRef.current) {
-        listRef.current.scrollLeft += e.deltaY;
+  // Whole-tab scrolling. Arrows and the wheel land the strip's left edge on a
+  // tab boundary, whatever the tabs' widths (a fixed pixel step used to stop
+  // mid-tab one click and a whole tab the next). Each step fully reveals the
+  // tab cut off at that edge, plus the one after it when more than half of the
+  // cut-off tab was already showing: see nextScrollStop.
+  // `scrollTarget` is where an in-flight smooth scroll is headed, so rapid
+  // clicks step from there instead of from a half-animated scrollLeft.
+  const scrollTarget = useRef<number | null>(null);
+  const scrollTargetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tabSpans = (el: HTMLUListElement): TabSpan[] => {
+    const origin = el.getBoundingClientRect().left - el.scrollLeft;
+    return Array.from(el.querySelectorAll<HTMLElement>('.tab_tab')).map((tab) => {
+      const r = tab.getBoundingClientRect();
+      return {left: Math.round(r.left - origin), right: Math.round(r.right - origin)};
+    });
+  };
+  const stepTabs = useCallback(
+    (dir: 1 | -1) => {
+      const el = listRef.current;
+      if (!el) return;
+      cancelReveal();
+      const from = scrollTarget.current ?? el.scrollLeft;
+      const next = nextScrollStop(tabSpans(el), from, el.clientWidth, el.scrollWidth - el.clientWidth, dir);
+      if (next === null) return;
+      scrollTarget.current = next;
+      el.scrollTo({left: next, behavior: 'smooth'});
+      if (scrollTargetTimer.current) clearTimeout(scrollTargetTimer.current);
+      scrollTargetTimer.current = setTimeout(() => {
+        scrollTarget.current = null;
         updateScrollState();
-      }
+      }, 350);
     },
-    [updateScrollState]
+    [cancelReveal, updateScrollState]
   );
 
-  const scrollBy = useCallback(
-    (dir: 1 | -1) => {
-      if (listRef.current) {
-        listRef.current.scrollBy({left: dir * 120, behavior: 'smooth'});
-        setTimeout(updateScrollState, 150);
-      }
+  // Mouse wheel: one tab per notch. Trackpads send many small deltas, so they
+  // accumulate until they amount to a notch before stepping.
+  const wheelAccum = useRef(0);
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      if (!delta) return;
+      if (Math.sign(delta) !== Math.sign(wheelAccum.current)) wheelAccum.current = 0;
+      wheelAccum.current += delta;
+      if (Math.abs(wheelAccum.current) < 40) return;
+      wheelAccum.current = 0;
+      stepTabs(delta > 0 ? 1 : -1);
     },
-    [updateScrollState]
+    [stepTabs]
+  );
+
+  const scrollBy = stepTabs;
+
+  // Scroll-arrow hover hints. They're DOM and drop over the pane area, where a
+  // native web pane would paint on top of them, so web panes are suppressed
+  // (frozen still) while an arrow is hovered, the same as the +/window/sticky
+  // cluster below. An arrow can unmount under the cursor (scrolled to the end),
+  // which skips mouseleave, so its disappearance also releases the suppression.
+  const hoveredArrow = useRef<'left' | 'right' | null>(null);
+  const setWebPanesSuppressed = useCallback((suppressed: boolean) => {
+    try {
+      ipcRenderer.send('web-panes:suppress', {suppressed});
+    } catch {
+      /* ipc not ready */
+    }
+  }, []);
+  const arrowHover = (dir: 'left' | 'right') => ({
+    onMouseEnter: () => {
+      hoveredArrow.current = dir;
+      setWebPanesSuppressed(true);
+    },
+    onMouseLeave: () => {
+      hoveredArrow.current = null;
+      setWebPanesSuppressed(false);
+    }
+  });
+  useEffect(() => {
+    const gone =
+      (hoveredArrow.current === 'left' && !canScrollLeft) || (hoveredArrow.current === 'right' && !canScrollRight);
+    if (gone) {
+      hoveredArrow.current = null;
+      setWebPanesSuppressed(false);
+    }
+  }, [canScrollLeft, canScrollRight, setWebPanesSuppressed]);
+  useEffect(
+    () => () => {
+      if (hoveredArrow.current) setWebPanesSuppressed(false);
+    },
+    [setWebPanesSuppressed]
   );
 
   // Tab drag-to-reorder.
@@ -123,6 +243,36 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   // Pinned tabs occupy the leftmost slots and sit outside drag-to-reorder:
   // they can't be picked up, and an unpinned tab can't drop among them.
   const pinnedCount = useMemo(() => tabs.filter((t) => t.pinned).length, [tabs]);
+
+  // Tab-scoped saved workspaces for the + menu (#183) — bookmark-style rows
+  // beneath the layout presets. Refreshed on hover so a save made moments ago
+  // shows up without any store plumbing.
+  const [savedTabWorkspaces, setSavedTabWorkspaces] = useState<
+    Array<{name: string; savedAt: string; panes: number; webPanes: number}>
+  >([]);
+  // Two-click delete: first click on a row's trash arms it (name here), second
+  // confirms. Reset when the + menu closes (mouseleave) so it never lingers.
+  const [confirmDeleteWs, setConfirmDeleteWs] = useState<string | null>(null);
+  // rpc.emit THROWS 'Not ready' until the ipc channel id arrives (see
+  // web-url-sync.ts) — and this component mounts before that. Guard every
+  // emit; the hover refresh covers whatever an early fetch misses.
+  const requestWorkspaceList = useCallback(() => {
+    try {
+      rpc.emit('list tab workspaces');
+    } catch {
+      /* rpc not ready yet — the next hover will fetch */
+    }
+  }, []);
+  useEffect(() => {
+    const onList = ({rows}: {rows: Array<{name: string; savedAt: string; panes: number; webPanes: number}>}) => {
+      setSavedTabWorkspaces(rows);
+    };
+    rpc.on('tab workspaces list', onList);
+    requestWorkspaceList();
+    return () => {
+      rpc.removeListener('tab workspaces list', onList);
+    };
+  }, [requestWorkspaceList]);
 
   const handleDragStart = useCallback(
     (uid: string, index: number, e: React.DragEvent) => {
@@ -188,9 +338,14 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
     <nav className="tabs_nav" ref={ref}>
       {props.customChildrenBefore}
       {canScrollLeft && (
-        <button className="tabs_scrollBtn tabs_scrollLeft" onClick={() => scrollBy(-1)} aria-label="Scroll tabs left">
-          ‹
-        </button>
+        <div className="tabs_newTab_tooltip_trigger tabs_scrollTrigger" {...arrowHover('left')}>
+          <button className="tabs_scrollBtn tabs_scrollLeft" onClick={() => scrollBy(-1)} aria-label="Scroll tabs left">
+            ‹
+          </button>
+          <div className="tabs_newTab_tooltip tabs_btnTip tabs_scrollTip tabs_scrollTipLeft">
+            Scroll tabs left, or use the scroll wheel
+          </div>
+        </div>
       )}
       <ul
         key="list"
@@ -256,19 +411,54 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         })}
       </ul>
       {canScrollRight && (
-        <button className="tabs_scrollBtn tabs_scrollRight" onClick={() => scrollBy(1)} aria-label="Scroll tabs right">
-          ›
-        </button>
+        <div className="tabs_newTab_tooltip_trigger tabs_scrollTrigger" {...arrowHover('right')}>
+          <button
+            className="tabs_scrollBtn tabs_scrollRight"
+            onClick={() => scrollBy(1)}
+            aria-label="Scroll tabs right"
+          >
+            ›
+          </button>
+          <div className="tabs_newTab_tooltip tabs_btnTip tabs_scrollTip">
+            Scroll tabs right, or use the scroll wheel
+          </div>
+        </div>
       )}
 
-      <div className="tabs_newTabPair">
+      {/* These tab-bar buttons' hover menus (the + layout/workspace dropdown,
+          New Window, New Stickys tooltips) drop DOWN over the pane area, where a
+          native web pane would paint on top of them. Suppress the window's web
+          panes (frozen-still — no blank) while the cursor is over the cluster, so
+          the menus render above; restore on leave. */}
+      <div
+        className="tabs_newTabPair"
+        onMouseEnter={() => {
+          try {
+            ipcRenderer.send('web-panes:suppress', {suppressed: true});
+          } catch {
+            /* ipc not ready */
+          }
+        }}
+        onMouseLeave={() => {
+          setConfirmDeleteWs(null);
+          try {
+            ipcRenderer.send('web-panes:suppress', {suppressed: false});
+          } catch {
+            /* ipc not ready */
+          }
+        }}
+      >
         {/* New-tab "+" with its quick-layout hover menu (#140). The menu was
             dropped when 6a93c13e redesigned this cluster into the +/window/sticky
             trio — it deleted the JSX but left the CSS (.tabs_newTab_tooltip /
             .tabs_layout_grid …) orphaned. Restored here: hovering + reveals the
             layout presets; each opens a new grouped tab pre-split via the same
             rpc('new', {layoutPattern}) path (sessions.ts → openLayout), still wired. */}
-        <div className="tabs_newTab_tooltip_trigger" style={{position: 'relative', display: 'inline-flex'}}>
+        <div
+          className="tabs_newTab_tooltip_trigger"
+          style={{position: 'relative', display: 'inline-flex'}}
+          onMouseEnter={requestWorkspaceList}
+        >
           <button
             className="tabs_newTabBtn"
             onClick={() => props.openNewTab('picker')}
@@ -325,6 +515,94 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                 </div>
               </div>
             </div>
+            {/* Bookmark-style tab-workspaces (#183): saved via a tab's
+                right-click menu, restored ADDITIVELY into a new tab here. */}
+            {savedTabWorkspaces.length > 0 && (
+              <>
+                <div
+                  style={{
+                    fontSize: '11px',
+                    color: 'var(--text-primary)',
+                    fontWeight: 600,
+                    margin: '10px 0 6px',
+                    textAlign: 'center'
+                  }}
+                >
+                  Saved Tabs
+                </div>
+                <div style={{maxHeight: '160px', overflowY: 'auto'}}>
+                  {savedTabWorkspaces.map((ws) => (
+                    <div
+                      key={ws.name}
+                      onClick={() => rpc.emit('restore tab workspace', {name: ws.name})}
+                      title={`Restore into a new tab · ${ws.panes} pane${ws.panes === 1 ? '' : 's'}${
+                        ws.webPanes ? ` + ${ws.webPanes} web` : ''
+                      }`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '4px 6px',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                        color: 'var(--text-primary)'
+                      }}
+                      onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--bg-tertiary)')}
+                      onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
+                    >
+                      <i className="ti ti-bookmark" style={{fontSize: '12px', color: 'var(--info-text)'}} />
+                      <span style={{flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                        {ws.name}
+                      </span>
+                      <span style={{color: 'var(--text-tertiary)', flexShrink: 0}}>{ws.panes + ws.webPanes}▢</span>
+                      {confirmDeleteWs === ws.name ? (
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            try {
+                              rpc.emit('delete tab workspace', {name: ws.name});
+                            } catch {
+                              /* ipc not ready */
+                            }
+                            setConfirmDeleteWs(null);
+                          }}
+                          title="Confirm delete"
+                          style={{
+                            color: 'var(--danger-text, #ff5c57)',
+                            flexShrink: 0,
+                            minWidth: '52px',
+                            textAlign: 'right',
+                            whiteSpace: 'nowrap',
+                            cursor: 'pointer',
+                            fontWeight: 600
+                          }}
+                        >
+                          Delete?
+                        </span>
+                      ) : (
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmDeleteWs(ws.name);
+                          }}
+                          title="Delete this saved tab"
+                          style={{
+                            color: 'var(--text-tertiary)',
+                            flexShrink: 0,
+                            minWidth: '52px',
+                            textAlign: 'right',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <i className="ti ti-trash" style={{fontSize: '12px'}} />
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -794,6 +1072,24 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           border-left: 0.5px solid var(--border-neutral);
         }
 
+        /* Arrow + its hover hint. The wrapper takes the arrow's place as a
+           fixed-size flex item; the hint drops below the tab bar. */
+        .tabs_scrollTrigger {
+          flex: 0 0 auto;
+          -webkit-app-region: no-drag;
+        }
+        /* Compound selectors: .tabs_newTab_tooltip / .tabs_btnTip are declared
+           later in this sheet and would otherwise win at equal specificity. */
+        .tabs_newTab_tooltip.tabs_scrollTip {
+          pointer-events: none;
+          z-index: 1001;
+        }
+        /* The left arrow sits at the strip's left edge, so its hint anchors left. */
+        .tabs_btnTip.tabs_scrollTipLeft {
+          left: 0;
+          right: auto;
+        }
+
         .tabs_borderShim {
           position: absolute;
           width: 76px;
@@ -923,7 +1219,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           background: var(--bg-primary);
           border: 0.5px solid var(--border-neutral);
           border-radius: var(--radius-4);
-          padding: var(--space-8) var(--space-12);
+          padding: var(--space-8, 8px) var(--space-12, 12px);
           white-space: nowrap;
           z-index: 1000;
           text-align: left;
@@ -962,7 +1258,8 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         /* Layouts grid */
         .tabs_layout_grid {
           display: grid;
-          grid-template-columns: repeat(3, 1fr);
+          grid-template-columns: repeat(3, max-content);
+          justify-content: center;
           gap: 8px;
           padding: 4px;
         }

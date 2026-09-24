@@ -75,7 +75,7 @@ pub const GHOST_CORE: &[&str] = &[
     "close_tools",
 ];
 
-/// External MCP core — 12 defs (plan §3.2). `open_tools`/`close_tools`/
+/// External MCP core — 14 defs (plan §3.2). `open_tools`/`close_tools`/
 /// `search_tools` are new meta-tools (added in Phase 4).
 pub const MCP_CORE: &[&str] = &[
     "terminal_status",
@@ -87,6 +87,8 @@ pub const MCP_CORE: &[&str] = &[
     "request_access",
     "request_token",
     "hyperia_version",
+    "whoami",
+    "set_label",
     // meta:
     "open_tools",
     "close_tools",
@@ -116,6 +118,12 @@ pub fn core_tools(surface: Surface) -> &'static [&'static str] {
 // ---------------------------------------------------------------------------
 
 pub const DOORS: &[Door] = &[
+    Door {
+        name: "messaging",
+        description: "Agent input, verified pane bindings, retained delivery status and recipient mailboxes",
+        ghost_tools: &["pane_send", "pane_bind", "delivery_status", "msg_send", "msg_inbox", "msg_check", "msg_read", "msg_search"],
+        mcp_tools: &["pane_send", "pane_bind", "delivery_status", "msg_send", "msg_inbox", "msg_check", "msg_read", "msg_search"],
+    },
     // ---- shared-name doors -------------------------------------------------
     Door {
         name: "inspect",
@@ -144,7 +152,6 @@ pub const DOORS: &[Door] = &[
         description: "Open web panes, read/eval/click pages, fetch URLs",
         ghost_tools: &[
             "open_web_pane",
-            "render",
             "web_pane_content",
             "web_pane_eval",
             "web_pane_mouse",
@@ -721,14 +728,11 @@ mod tests {
 
     #[test]
     fn expected_door_counts_per_surface() {
-        // Plan §3.1 table: 8 ghost doors (header says "7", table lists 8 —
-        // the table is authoritative). Plan §3.2: 9 MCP doors + the local-TTS
-        // `media` door (hyperia_spoken_summary) + the `workspace` door
-        // (epic #146) = 11.
-        assert_eq!(doors_for(Surface::Ghost).count(), 8, "ghost door count");
-        assert_eq!(doors_for(Surface::Mcp).count(), 11, "mcp door count");
+        // The shared messaging door extends the original 8 Ghost / 11 MCP doors.
+        assert_eq!(doors_for(Surface::Ghost).count(), 9, "ghost door count");
+        assert_eq!(doors_for(Surface::Mcp).count(), 12, "mcp door count");
         assert_eq!(GHOST_CORE.len(), 11, "ghost core count");
-        assert_eq!(MCP_CORE.len(), 12, "mcp core count");
+        assert_eq!(MCP_CORE.len(), 14, "mcp core count");
     }
 
     /// Every ghost catalog tool (registry `tool_defs`) belongs to exactly one
@@ -806,13 +810,16 @@ mod tests {
 
     #[test]
     fn opening_second_door_evicts_oldest_when_over_cap() {
-        // core 11 + terminal 9 = 20; adding web (7) → 27 > 20 → evict terminal.
-        let mut s = DoorState::with_cap(Surface::Ghost, 20);
-        s.open_door("terminal");
+        let core_n = core_tools(Surface::Ghost).len();
+        let terminal_n = door_by_name("terminal").unwrap().ghost_tools.len();
+        let web_n = door_by_name("web").unwrap().ghost_tools.len();
+        // Either door fits alone; both together exceed the cap.
+        let mut s = DoorState::with_cap(Surface::Ghost, core_n + terminal_n.max(web_n));
+        assert!(s.open_door("terminal").is_empty());
         let evicted = s.open_door("web");
         assert_eq!(evicted, vec!["terminal".to_string()]);
         assert_eq!(s.open_doors(), &["web".to_string()]);
-        assert_eq!(s.live_tool_count(), 18); // 11 + 7
+        assert_eq!(s.live_tool_count(), core_n + web_n);
     }
 
     #[test]

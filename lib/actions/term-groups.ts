@@ -9,11 +9,14 @@ import {
   TERM_GROUP_ADD_WEB_TAB,
   TERM_GROUP_ACTIVATE_WEB_TAB,
   RESTORE_LAYOUT_STATE,
+  RESTORE_TAB_STATE,
   TERM_GROUP_POP_OUT_PANE
 } from '../../typings/constants/term-groups';
 import type {ITermState, ITermGroup, HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
 import {getRootGroups} from '../selectors';
+import {restoredTabName} from '../utils/restored-tab-name';
+import {openTabDisplayNames} from '../utils/tab-display-name';
 import findBySession, {countPathHorizontalStacks} from '../utils/term-groups';
 
 import {setActiveSession, ptyExitSession, userExitSession} from './sessions';
@@ -24,7 +27,8 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
       _profile: string | undefined,
       url?: string,
       splitPlacement?: 'BEFORE' | 'AFTER',
-      isAgentInitiated?: boolean
+      isAgentInitiated?: boolean,
+      _cwd?: string
     ) =>
     (dispatch: HyperDispatch, getState: () => HyperState): void => {
       const {sessions, termGroups} = getState();
@@ -69,7 +73,7 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
             }
           }
           const activeSession = currentActiveUid ? currentSessions.sessions[currentActiveUid] : null;
-          const cwd = (activeSession && activeSession.cwd) || ui.cwd;
+          const cwd = _cwd || (activeSession && activeSession.cwd) || ui.cwd;
           // UI-initiated splits ALWAYS show the pane-type PICKER — you pick what
           // goes in the new pane (both directions, any source). An explicit
           // `_profile` still wins: agent terminal_split passes a real profile so
@@ -103,7 +107,8 @@ export function resizeTermGroup(uid: string, sizes: number[]): HyperActions {
 export function requestTermGroup(
   _activeUid: string | undefined,
   _profile: string | undefined,
-  isAgentInitiated?: boolean
+  isAgentInitiated?: boolean,
+  _cwd?: string
 ) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     dispatch({
@@ -112,7 +117,7 @@ export function requestTermGroup(
         const {ui, sessions} = getState();
         const activeUid = _activeUid ? _activeUid : sessions.activeUid;
         const activeSession = activeUid && sessions.sessions[activeUid] ? sessions.sessions[activeUid] : null;
-        const cwd = (activeSession && activeSession.cwd) || ui.cwd;
+        const cwd = _cwd || (activeSession && activeSession.cwd) || ui.cwd;
         // A new tab opens the CONFIGURED DEFAULT profile — NOT whatever the
         // currently-focused pane happens to be running. Inheriting the active
         // pane's profile meant that focusing a special profile (e.g. the
@@ -258,17 +263,14 @@ export function userExitTermGroup(uid: string) {
         const group = termGroups.termGroups[uid];
         if (!group) return;
         if (Object.keys(termGroups.termGroups).length <= 1) {
-          // Last group — exit the session if there is one, and close the window
-          // immediately. Route through main so it doesn't re-prompt about active
-          // processes: the user already closed this pane deliberately (#148).
+          // Last group in this window: exit its session if there is one. Removing
+          // the group drops the window's root-count to 0, and the single
+          // rootCount subscribe in lib/index.tsx then routes 'close-no-confirm'
+          // through main, which decides whether to close the window or (on the
+          // last window) reset it to a fresh picker. We deliberately DON'T close
+          // here too — a second close-no-confirm would reset twice → two pickers.
           if (group.sessionUid) {
             dispatch(userExitSession(group.sessionUid));
-          }
-          const windowRpc = (window as any).rpc;
-          if (windowRpc && typeof windowRpc.emit === 'function') {
-            windowRpc.emit('close-no-confirm');
-          } else {
-            window.close();
           }
           return;
         }
@@ -365,6 +367,43 @@ export function exitActiveTermGroup() {
   };
 }
 
+// Tab-scoped restore (#183): graft one saved tab (uids pre-remapped by main)
+// into the live window, then spawn its terminal sessions. Web panes need no
+// spawn — their groups render from state. resumeOnce carries the human's
+// save-time checkbox choices; the session actions execute it once.
+export function restoreTabState(layout: any, name?: string) {
+  return (dispatch: HyperDispatch, getState: () => HyperState) => {
+    // #183: disambiguate against the names OTHER open tabs actually SHOW. A
+    // non-renamed tab has no tabName (its name comes from the session), so read
+    // resolved display names here, not tabName — otherwise a restored copy kept
+    // the original's name when the original stayed open.
+    let finalName = name;
+    if (name) {
+      const s = getState();
+      finalName = restoredTabName(name, openTabDisplayNames(s.termGroups.termGroups, s.sessions.sessions));
+    }
+    dispatch({
+      type: RESTORE_TAB_STATE,
+      layout,
+      name: finalName
+    } as any);
+
+    Object.keys(layout.sessions || {}).forEach((uid) => {
+      const session = layout.sessions[uid];
+      if (session) {
+        rpc.emit('new', {
+          uid,
+          cwd: session.cwd,
+          profile: session.profile,
+          isRestore: true,
+          lastCommand: session.annotations?.lastCommand ?? session.lastCommand,
+          resumeOnce: session.resumeOnce
+        } as any);
+      }
+    });
+  };
+}
+
 export function restoreLayoutState(savedState: any) {
   return (dispatch: HyperDispatch) => {
     dispatch({
@@ -383,8 +422,12 @@ export function restoreLayoutState(savedState: any) {
             isRestore: true,
             // New saves carry the scraped command under annotations
             // (display-only, epic #146); old blobs had it bare.
-            lastCommand: session.annotations?.lastCommand ?? session.lastCommand
-          });
+            lastCommand: session.annotations?.lastCommand ?? session.lastCommand,
+            // Human-checked at save time (the tab save toast); the ONE field
+            // restore executes. Whole-app restore of a file that carries it
+            // must behave exactly like the tab restore does.
+            resumeOnce: session.resumeOnce
+          } as any);
         }
       });
     }

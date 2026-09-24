@@ -38,6 +38,8 @@ interface WebPaneProps {
   onSplitWebPane?: (url: string, direction: 'HORIZONTAL' | 'VERTICAL') => void;
   // True when this pane's ROOT term group is the active tab (mapped from redux).
   isTabActive?: boolean;
+  // Only the pane that receives focus clears its persistent pane-band bell.
+  isPaneActive?: boolean;
   // Standard tab-bell plumbing (ui.bellMarkers — the same store terminal BELs use).
   onTabBell?: (uid: string) => void;
   onTabBellClear?: (uid: string) => void;
@@ -319,6 +321,13 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
   // view; ai/seeker render pure DOM the native view must not occlude.
   isNativeWeb = (url = this.props.url): boolean => !!url && !url.startsWith('ai://');
 
+  // Last URL the PAGE reported (did-navigate / did-navigate-in-page →
+  // web-pane:state). When that URL is persisted to redux and comes back as
+  // props.url, componentDidUpdate must NOT echo it into a loadURL — a Maps
+  // drag fires replaceState continuously and the echo force-reloaded the page
+  // mid-drag: white flash + the map snapping back (#160).
+  _lastPageReportedUrl: string | null = null;
+
   // Push the current pixel rect of bodyRef to main so it can position the native
   // view. Hidden while the URL navigator / find bar is open (so those DOM
   // overlays aren't occluded) or on an error screen. Coalesced to one send/frame.
@@ -508,7 +517,11 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     if (!targetUrl.startsWith('ai://')) {
       const full = /^[a-z]+:\/\//i.test(targetUrl) ? targetUrl : 'https://' + targetUrl;
 
-      ipcRenderer.send('web-pane:nav', {uid: this.props.groupUid, action: 'load', url: full});
+      // The manager now skips same-URL loads (#160 echo guard), so Enter on
+      // the URL you're already at asks for a reload explicitly — matching the
+      // old loadURL behavior (and Chrome's).
+      const action = full === this.state.activeUrl ? 'reload' : 'load';
+      ipcRenderer.send('web-pane:nav', {uid: this.props.groupUid, action, url: full});
     }
   };
 
@@ -1037,7 +1050,14 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         ipcRenderer.send('web-pane:create', {uid: this.props.groupUid, url: this.props.url});
         this.reportBounds();
       } else if (isNative && wasNative) {
-        ipcRenderer.send('web-pane:nav', {uid: this.props.groupUid, action: 'load', url: this.props.url});
+        // Echo guard (#160): if this props.url change is just the page's own
+        // navigation coming back through redux (onSetUrl → TERM_GROUP_SET_WEB_URL
+        // → props), the view is ALREADY there — pushing a loadURL would force a
+        // full reload (white flash; Google Maps re-centers off the URL coords
+        // and loses the drag). Only push loads that originate outside the page.
+        if (this.props.url !== this._lastPageReportedUrl) {
+          ipcRenderer.send('web-pane:nav', {uid: this.props.groupUid, action: 'load', url: this.props.url});
+        }
       } else if (!isNative && wasNative) {
         ipcRenderer.send('web-pane:destroy', {uid: this.props.groupUid});
       }
@@ -1095,10 +1115,11 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       this.reportBounds();
     }
 
-    // The human switched TO this pane's tab → the shell-update bell has served
-    // its purpose (mirror of SESSION_SET_ACTIVE clearing terminal bells).
-    if (!prevProps.isTabActive && this.props.isTabActive) {
+    if (!prevProps.isPaneActive && this.props.isPaneActive) {
       this.clearPendingBell();
+    }
+    // Selecting a tab acknowledges its tab bell; sibling pane bells remain.
+    if (!prevProps.isTabActive && this.props.isTabActive) {
       // Self-heal: re-assert the native view on activation. If it's alive,
       // createPane is a no-op (cancels any pending teardown); if it was
       // reaped (window close, delayed-destroy, crash-restore, or dedupe
@@ -1243,6 +1264,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         // Don't clobber what the user is typing into the URL bar.
         if (!this.state.isEditingUrl) patch.urlInputVal = payload.url;
         navigatedUrl = payload.url;
+        this._lastPageReportedUrl = payload.url;
       }
 
       // did-fail-load equivalent.
@@ -3461,7 +3483,8 @@ const mapStateToProps = (state: any, ownProps: WebPaneProps) => {
         : state.ui.profiles
       : [],
     webName: termGroup ? termGroup.webName : undefined,
-    isTabActive: rootUid === state.termGroups.activeRootGroup
+    isTabActive: rootUid === state.termGroups.activeRootGroup,
+    isPaneActive: rootUid === state.termGroups.activeRootGroup && ownProps.groupUid === state.termGroups.activeTermGroup
   };
 };
 

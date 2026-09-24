@@ -23,7 +23,7 @@ import type {BrowserWindow} from 'electron';
 
 import {v4 as uuidv4} from 'uuid';
 
-import {createStickyNote, listOpenStickyRefs, readAllNotes} from './sticky';
+import {createStickyNote, listOpenStickyRefs, readAllNotes, readStickyHidden} from './sticky';
 import {boundsAreVisible} from './window-state';
 
 export type WindowGeometry = {
@@ -49,6 +49,7 @@ export type CaptureResult = {
 };
 
 type PendingCapture = {
+  startedAt: number;
   expected: Set<number>;
   collected: Map<number, CapturedWindow>;
   resolve: (result: CaptureResult) => void;
@@ -124,6 +125,11 @@ const finish = (requestId: string) => {
   pending.delete(requestId);
   clearTimeout(capture.timer);
   const missing = [...capture.expected].filter((id) => !capture.collected.has(id));
+  console.log(
+    `[workspace] capture ${requestId}: ${capture.collected.size}/${capture.expected.size} window(s) in ${
+      Date.now() - capture.startedAt
+    }ms${missing.length ? ` (missing: ${missing.join(',')})` : ''}`
+  );
   let stickys: StickyRefSnapshot[] = [];
   try {
     stickys = listOpenStickyRefs();
@@ -278,13 +284,18 @@ export const restoreWorkspace = (ws: {
   const refs = ws.stickys || [];
   if (refs.length > 0) {
     const known = new Set(readAllNotes().map((n) => n.id));
+    // If the user had stickies hidden (Hide-All) when they quit, keep them
+    // hidden on restore — otherwise every launch reopens them shown. sticky.ts's
+    // own restore already passes this; the workspace restore path (which runs on
+    // boot as last-session) was missing it, so hidden notes came back visible.
+    const hidden = readStickyHidden();
     for (const ref of refs) {
       if (!known.has(ref.id)) {
         stickysSkipped.push(ref.id);
         continue;
       }
       try {
-        createStickyNote({id: ref.id, x: ref.x, y: ref.y, width: ref.width, height: ref.height});
+        createStickyNote({id: ref.id, x: ref.x, y: ref.y, width: ref.width, height: ref.height, startHidden: hidden});
         stickysReopened += 1;
       } catch (err) {
         stickysSkipped.push(ref.id);
@@ -321,6 +332,7 @@ export const lastSessionPath = (): string => join(homedir(), '.hyperia', 'worksp
  * Returns false on any failure so callers can fall back to the legacy write.
  */
 export const saveLastSession = async (reason: 'close' | 'quit', timeoutMs = 2500): Promise<boolean> => {
+  const t0 = Date.now();
   try {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), timeoutMs);
@@ -332,11 +344,13 @@ export const saveLastSession = async (reason: 'close' | 'quit', timeoutMs = 2500
     });
     clearTimeout(timer);
     if (!res.ok) {
-      console.warn(`[workspace] last-session save (${reason}) failed: HTTP ${res.status}`);
+      console.warn(`[workspace] last-session save (${reason}) failed: HTTP ${res.status} after ${Date.now() - t0}ms`);
+    } else {
+      console.log(`[workspace] last-session save (${reason}) ok in ${Date.now() - t0}ms`);
     }
     return res.ok;
   } catch (err) {
-    console.warn(`[workspace] last-session save (${reason}) unreachable:`, String(err));
+    console.warn(`[workspace] last-session save (${reason}) unreachable after ${Date.now() - t0}ms:`, String(err));
     return false;
   }
 };
@@ -360,6 +374,114 @@ export const readWorkspaceForBoot = (path: string): Record<string, any> | null =
 };
 
 export const readLastSessionForBoot = (): Record<string, any> | null => readWorkspaceForBoot(lastSessionPath());
+
+// ---------------------------------------------------------------------------
+// Tab-scoped workspaces (#183): saved from a tab's context menu, listed in
+// the + menu, restored into a NEW TAB of the requesting window. Files live in
+// the same library with scope:"tab"; the sidecar owns writes (validation +
+// atomic), main owns reads (boot-style light checks — no sidecar dependency
+// on the read path, so the + menu works even with the sidecar down).
+// ---------------------------------------------------------------------------
+
+export const workspacesDir = (): string => join(homedir(), '.hyperia', 'workspaces');
+
+const countTabPanes = (layout: Record<string, any>): {panes: number; webPanes: number} => {
+  let panes = 0;
+  let webPanes = 0;
+  for (const g of Object.values<any>(layout?.termGroups || {})) {
+    const isLeaf = !Array.isArray(g?.children) || g.children.length === 0;
+    if (!isLeaf) continue;
+    if (g.webUrl) webPanes += 1;
+    else panes += 1;
+  }
+  return {panes, webPanes};
+};
+
+/** The + menu's rows: tab-scoped workspaces, newest first. Best-effort reads. */
+export const listTabWorkspaces = (): Array<{name: string; savedAt: string; panes: number; webPanes: number}> => {
+  let entries: string[] = [];
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    entries = (require('fs') as typeof import('fs')).readdirSync(workspacesDir());
+  } catch {
+    return [];
+  }
+  const rows: Array<{name: string; savedAt: string; panes: number; webPanes: number}> = [];
+  for (const f of entries) {
+    if (!f.endsWith('.json')) continue;
+    const ws = readWorkspaceForBoot(join(workspacesDir(), f));
+    if (!ws || ws.scope !== 'tab') continue;
+    const {panes, webPanes} = countTabPanes(ws.windows[0]?.layout || {});
+    rows.push({name: ws.name || f.replace(/\.json$/, ''), savedAt: ws.savedAt || '', panes, webPanes});
+  }
+  rows.sort((a, b) => (a.savedAt < b.savedAt ? 1 : -1));
+  return rows;
+};
+
+/** Full read of one tab-workspace for restore; null on any problem. */
+export const readTabWorkspaceForRestore = (name: string): Record<string, any> | null => {
+  if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) {
+    return null;
+  }
+  const ws = readWorkspaceForBoot(join(workspacesDir(), `${name}.json`));
+  return ws && ws.scope === 'tab' ? ws : null;
+};
+
+/** Delete one saved TAB workspace by name. Name is path-sanitized and the file
+ *  must actually be a tab-scoped workspace, so this can't touch app-level saves
+ *  or escape the workspaces dir. Returns true if a file was removed. */
+export const deleteTabWorkspace = (name: string): boolean => {
+  if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) {
+    return false;
+  }
+  // Only delete if it's genuinely a tab workspace (not a whole-app save).
+  if (!readTabWorkspaceForRestore(name)) {
+    return false;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    (require('fs') as typeof import('fs')).unlinkSync(join(workspacesDir(), `${name}.json`));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Persist a renderer-captured tab snapshot through the sidecar (single
+ * writer: validation + atomic write + the workspace safety checks). Returns
+ * conflict=true on a name collision so the save toast can offer overwrite.
+ */
+export const saveTabWorkspaceViaSidecar = async (args: {
+  name: string;
+  overwrite: boolean;
+  geometry: Record<string, any>;
+  layout: Record<string, any>;
+}): Promise<{ok: boolean; error?: string; conflict?: boolean}> => {
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 4000);
+    const res = await fetch(`http://127.0.0.1:${sidecarPort()}/api/workspace/save`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        name: args.name,
+        overwrite: args.overwrite,
+        scope: 'tab',
+        snapshot: {windows: [{geometry: args.geometry, layout: args.layout}], missing: []}
+      }),
+      signal: ctl.signal
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      return {ok: true};
+    }
+    const text = await res.text();
+    return {ok: false, error: text, conflict: text.includes('already exists')};
+  } catch (err) {
+    return {ok: false, error: `sidecar unreachable: ${String(err)}`};
+  }
+};
 
 /**
  * Retire a leftover legacy `savedLayoutState` blob once a last-session
@@ -388,6 +510,7 @@ export const captureAllWindows = (windows: BrowserWindow[], timeoutMs = 3000): P
   const requestId = randomBytes(8).toString('hex');
   return new Promise<CaptureResult>((resolve) => {
     pending.set(requestId, {
+      startedAt: Date.now(),
       expected: new Set(live.map((w) => w.id)),
       collected: new Map(),
       resolve,

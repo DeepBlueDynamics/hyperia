@@ -130,6 +130,12 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
             </div>
           </div>
         )}
+        {/* Windows uses Electron's native titleBarOverlay (app/ui/window.ts).
+            Reserve the overlay safe area beside the native caption buttons so tabs,
+            scroll arrows, and the new-tab cluster do not slide underneath them. */}
+        {process.platform === 'win32' && !props.fullScreen && (
+          <div className="header_windowControlsOverlayShim" aria-hidden="true" />
+        )}
       </div>
 
       {props.customChildrenBefore}
@@ -185,6 +191,15 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
         .header_windowControls {
           display: flex;
           flex-shrink: 0;
+        }
+
+        .header_windowControlsOverlayShim {
+          display: flex;
+          flex-shrink: 0;
+          width: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 138px)));
+          min-width: 138px;
+          height: 34px;
+          -webkit-app-region: drag;
         }
 
         .header_winBtn {
