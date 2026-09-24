@@ -1355,7 +1355,9 @@ async fn post_identity_agent(State(state): State<AppState>, headers: HeaderMap, 
         || matches!(&caller, identity::CallerIdentity::Agent { name: own, .. } if own == &name);
     let rec = match state.bridge.identity().register(&name, may_retrieve).await {
         Ok(rec) => rec,
-        Err(error) => return (StatusCode::FORBIDDEN, serde_json::json!({"ok": false, "error": error}).to_string()),
+        // `code` is the stable, machine-readable reason (clients such as
+        // nemesis8 retry with a new name on "identity_exists"); `error` stays prose.
+        Err(error) => return (StatusCode::FORBIDDEN, serde_json::json!({"ok": false, "code": identity::register_error_code(error), "error": error}).to_string()),
     };
     // Registration from an authenticated pane proves residency without trusting a pane ID in the body.
     let binding = if let identity::CallerIdentity::Pane { pane, .. } = &caller {

@@ -24,6 +24,8 @@ const SESSION_HEADER: &str = "mcp-session-id";
 const MAX_SESSIONS: usize = 10_000;
 const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 const PANE_CLAIM_QUIET_MS: u64 = 60_000;
+/// How stale the PERSISTED last_used_ms may get before resume() rewrites the store.
+const RESUME_PERSIST_EVERY_MS: u64 = 30_000;
 const PANE_CONFLICT: &str = "Pane token is already bound to another live MCP session";
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -45,6 +47,9 @@ pub(crate) struct LogicalSession {
     // Internal proxy credential, never returned by whoami or initialize.
     #[serde(skip)]
     pub forward_token: String,
+    // When last_used_ms was last written to disk (memory-only; see resume()).
+    #[serde(skip)]
+    pub persisted_used_ms: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -227,6 +232,8 @@ impl SessionStore {
                 revoked: false,
                 expires_ms: None,
                 forward_token: format!("hyp_mcp_{}", random_hex(32)?),
+                // Written by the persist() right below.
+                persisted_used_ms: now_ms(),
             };
         };
         let mut next = records.clone();
@@ -240,15 +247,29 @@ impl SessionStore {
         Ok((record, previous.is_some()))
     }
 
+    /// clientInfo.name of the session currently holding `pane`'s token, if any.
+    pub fn active_pane_client(&self, pane: &str) -> Option<String> {
+        let records = self.records().ok()?;
+        records.iter().find(|r| r.parent_is_pane && r.parent == pane && r.active())
+            .map(|r| client_name(&r.client))
+    }
+
     pub fn resume(&self, parent: &str, parent_is_pane: bool, id: &str) -> Result<LogicalSession, String> {
         let mut records = self.records()?;
         let mut next = records.clone();
         let record = next.iter_mut().find(|r| r.session_id == id && r.parent == parent
             && r.parent_is_pane == parent_is_pane && r.active())
             .ok_or("Unknown, revoked, or foreign MCP session")?;
-        record.last_used_ms = now_ms();
+        // resume() runs on EVERY session request. The claim rule reads
+        // last_used_ms from memory, so only write the store (an fsync'd full
+        // rewrite, done under this lock) when the persisted value is stale.
+        // Writing per request stalled every MCP call under disk load.
+        let now = now_ms();
+        let stale = now.saturating_sub(record.persisted_used_ms) >= RESUME_PERSIST_EVERY_MS;
+        record.last_used_ms = now;
+        if stale { record.persisted_used_ms = now; }
         let result = record.clone();
-        self.persist(&next)?;
+        if stale { self.persist(&next)?; }
         *records = next;
         Ok(result)
     }
@@ -349,12 +370,31 @@ fn failure(status: StatusCode, error: impl ToString) -> Response {
     (status, Json(json!({"ok": false, "error": error.to_string()}))).into_response()
 }
 
-async fn pane_notice(bridge: &Bridge, pane: &str, conflict: bool) {
-    let text = if conflict {
-        format!("pane token for {pane} used by two live sessions — possible token crossing")
+/// `clientInfo.name` from an MCP initialize's params (what the client calls itself).
+pub(crate) fn client_name(client: &Value) -> String {
+    client["clientInfo"]["name"].as_str().filter(|s| !s.is_empty()).unwrap_or("an unnamed client").to_owned()
+}
+
+/// Human-facing text for the pane-claim notice. Names both clients and the
+/// usual cause, so the user isn't left guessing at a "token crossing": in
+/// practice it is one agent with two Hyperia MCP servers configured, often
+/// because its container fell back to the pane token.
+pub(crate) fn pane_notice_text(pane: &str, conflict: bool, newcomer: &str, holder: Option<&str>) -> String {
+    let short = &pane[..pane.len().min(8)];
+    if conflict {
+        format!(
+            "Pane {short}: two MCP clients presented this pane's token. {} holds the session; {newcomer} was refused. \
+             Usually one agent configured with two Hyperia MCP servers, or a container that fell back to the pane \
+             token because its agent name was already taken.",
+            holder.unwrap_or("another client")
+        )
     } else {
-        format!("pane {pane} re-bound to a new session")
-    };
+        format!("Pane {short}: {newcomer} took over this pane's session after the previous client went quiet.")
+    }
+}
+
+async fn pane_notice(bridge: &Bridge, pane: &str, conflict: bool, newcomer: &str, holder: Option<String>) {
+    let text = pane_notice_text(pane, conflict, newcomer, holder.as_deref());
     crate::audit::record(json!({"ts": now_ms(), "identity": format!("pane:{pane}"),
         "kind": "pane", "path": "/mcp", "event": if conflict { "pane_token_conflict" } else { "pane_session_takeover" },
         "status": if conflict { 409 } else { 200 }, "text": text}));
@@ -458,6 +498,7 @@ async fn handle(State(state): State<HttpState>, mut request: Request<Body>) -> R
         }
     } else { pending.await.into_response() };
     if let Some(((parent, is_pane), client)) = new_session {
+        let newcomer = client_name(&client);
         if response.status().is_success() {
             let result = if is_pane {
                 // Serialize takeovers with queued work, just like DELETE.
@@ -472,11 +513,12 @@ async fn handle(State(state): State<HttpState>, mut request: Request<Body>) -> R
                         state.bridge.perms().set_parent(&format!("agent:{}", record.name), &format!("agent:{}", parent));
                     }
                     lease = state.bridge.identity().sessions.lease_token(&record.forward_token);
-                    if takeover { pane_notice(&state.bridge, &parent, false).await; }
+                    if takeover { pane_notice(&state.bridge, &parent, false, &newcomer, None).await; }
                     response.headers_mut().insert(SESSION_HEADER, HeaderValue::from_str(&record.session_id).unwrap());
                 }
                 Err(error) if is_pane && error == PANE_CONFLICT => {
-                    pane_notice(&state.bridge, &parent, true).await;
+                    let holder = state.bridge.identity().sessions.active_pane_client(&parent);
+                    pane_notice(&state.bridge, &parent, true, &newcomer, holder).await;
                     return failure(StatusCode::CONFLICT, error);
                 }
                 Err(error) => return failure(StatusCode::INTERNAL_SERVER_ERROR, error),
