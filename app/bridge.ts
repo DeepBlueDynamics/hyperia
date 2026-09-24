@@ -91,6 +91,22 @@ let commandHandler: CommandHandler | null = null;
 // Pending startup command for next new session
 let pendingCommand: ((uid: string, session: Session) => void) | null = null;
 
+// Parse a leading `cd <dir>` from a startup command so the pane spawns IN that
+// directory instead of home. Without this, the cd runs inside the shell after
+// spawn — but a TUI (n8/docker) takes over before the shell's OSC 7 cwd report
+// fires, so session.cwd and the path bar stay on home. Only matches ABSOLUTE
+// paths (Windows drive C:\... or POSIX /...); a relative `cd foo` is left for
+// the shell to resolve. Returns the parsed directory (unquoted, trimmed) or ''.
+function parseStartupCwd(command: string): string {
+  const trimmed = command.trim();
+  const m = /^cd\s+("([^"]+)"|'([^']+)'|([^\s;|&]+))\s*(?:[;|&\n]|$)/i.exec(trimmed);
+  if (!m) return '';
+  const dir = (m[2] || m[3] || m[4] || '').trim();
+  // Only use absolute paths: Windows drive (C:\...) or POSIX (/...).
+  if (!/^(?:[a-zA-Z]:[\\/]|[\\/])/.test(dir)) return '';
+  return dir;
+}
+
 interface PendingSessionCallback {
   seq: number;
   timer: NodeJS.Timeout;
@@ -616,7 +632,13 @@ function handleCommand(msg: Record<string, unknown>) {
           // Web pane has no PTY to wait on — acknowledge the open immediately.
           sendResult(seq, JSON.stringify({ok: true, type: 'web-pane', url}));
         } else {
-          const splitOpts = {profile, activeUid: splitTargetUid ?? undefined, isAgentInitiated: true};
+          const startupCwd = parseStartupCwd(command);
+          const splitOpts = {
+            profile,
+            activeUid: splitTargetUid ?? undefined,
+            isAgentInitiated: true,
+            cwd: startupCwd || undefined
+          };
           if (dir === 'horizontal') {
             win.rpc.emit('split request horizontal', splitOpts);
           } else {
@@ -809,9 +831,11 @@ function handleCommand(msg: Record<string, unknown>) {
           pendingSessionCallback = {seq: currentSeq, timer};
         }
 
+        const startupCwd = parseStartupCwd(command);
         win.rpc.emit('termgroup add req', {
           profile: profile || undefined,
-          isAgentInitiated: true
+          isAgentInitiated: true,
+          cwd: startupCwd || undefined
         });
 
         // If a startup command was provided, write it to the new session once it's ready

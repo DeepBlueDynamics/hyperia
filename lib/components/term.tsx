@@ -954,6 +954,65 @@ export default class Term extends React.PureComponent<
           return false;
         }
       });
+      // Bug S: intercept CSI 3 J (ED3 — clear scrollback) to capture the user's
+      // scroll position BEFORE xterm's default handler trims scrollback and
+      // adjusts ybase/ydisp. Return false so the default handler still runs.
+      // params[0] is number | number[] (sub-params); only a bare 3 is ED3.
+      this.term.parser.registerCsiHandler({final: 'J'}, (params) => {
+        if (params[0] === 3) {
+          const buf = this.term.buffer.active;
+          this._ed3Pending = true;
+          this._ed3WasScrolledBack = buf.viewportY < buf.baseY;
+          this._ed3DistanceFromBottom = buf.baseY - buf.viewportY;
+        }
+        return false;
+      });
+      // After a write containing ED3 settles, restore the viewport. If the user
+      // was at the bottom, scrollToBottom() clears the stale isUserScrolling
+      // flag that xterm 5.5 leaves set. If they were scrolled back, keep their
+      // distance from the bottom of the (now-trimmed) buffer. onWriteParsed
+      // fires after EVERY write — only act when our CSI J handler saw an ED3.
+      this.term.onWriteParsed(() => {
+        if (!this._ed3Pending) return;
+        if (this._ed3ScrollRestore) {
+          clearTimeout(this._ed3ScrollRestore);
+        }
+        this._ed3ScrollRestore = setTimeout(() => {
+          this._ed3ScrollRestore = null;
+          this._ed3Pending = false;
+          if (this._ed3WasScrolledBack) {
+            const buf = this.term.buffer.active;
+            const target = Math.max(0, buf.baseY - this._ed3DistanceFromBottom);
+            if (buf.viewportY !== target) {
+              this.term.scrollToLine(target);
+            }
+          } else {
+            this.term.scrollToBottom();
+          }
+          this._ed3WasScrolledBack = false;
+          this._ed3DistanceFromBottom = 0;
+        }, 80);
+      });
+      // Cancel a pending ED3 restore if the USER scrolls in the meantime —
+      // their input wins. xterm's onScroll also fires for its own programmatic
+      // scrolls during the redraw, so we can't use it; instead observe the
+      // actual inputs that cause user scrolls: wheel events (returning true so
+      // xterm's own wheel handling still runs) and Shift+PageUp/PageDown (the
+      // only key paths that scroll — Terminal.ts maps PAGE_UP/PAGE_DOWN from
+      // shifted Page keys; bare PageUp is an app key and goes to the PTY).
+      const cancelEd3Restore = () => {
+        if (this._ed3ScrollRestore) {
+          clearTimeout(this._ed3ScrollRestore);
+          this._ed3ScrollRestore = null;
+          this._ed3Pending = false;
+          this._ed3WasScrolledBack = false;
+          this._ed3DistanceFromBottom = 0;
+        }
+      };
+      this.term.attachCustomWheelEventHandler(() => {
+        cancelEd3Restore();
+        return true;
+      });
       this.term.open(this.termRef);
 
       if (useWebGL) {
@@ -1219,6 +1278,17 @@ export default class Term extends React.PureComponent<
   };
 
   _copiedTimer: ReturnType<typeof setTimeout> | null = null;
+  // Bug S: xterm 5.5's ED3 (CSI 3 J, clear scrollback) trims scrollback and
+  // adjusts ybase/ydisp but does NOT clear BufferService.isUserScrolling. So
+  // once the user has scrolled up at all, the viewport stays pinned at row 0
+  // through every later redraw (Codex's ESC[2J ESC[3J + redraw). We capture the
+  // user's scroll position BEFORE ED3 runs, then restore it after the write
+  // settles. If the user was at the bottom, scrollToBottom() clears the stale
+  // isUserScrolling; if they were scrolled back, we maintain their distance.
+  _ed3ScrollRestore: ReturnType<typeof setTimeout> | null = null;
+  _ed3Pending = false;
+  _ed3WasScrolledBack = false;
+  _ed3DistanceFromBottom = 0;
   _clearBtnRef = React.createRef<HTMLSpanElement>();
   // Flash a "Copied!" toast under the clear-buffer button when text hits the
   // clipboard. Its left edge lines up with the button's left edge (the button
@@ -1433,6 +1503,19 @@ export default class Term extends React.PureComponent<
   };
 
   keyboardHandler = (e: any) => {
+    // Bug S: Shift+PageUp/PageDown are the only key paths that scroll xterm
+    // (Terminal.ts maps PAGE_UP/PAGE_DOWN from shifted Page keys; bare PageUp
+    // goes to the PTY as an app key). If a pending ED3 scroll-restore is
+    // armed, the user's scroll wins — cancel it. Observe only; return true.
+    if (e.type === 'keydown' && e.shiftKey && (e.key === 'PageUp' || e.key === 'PageDown')) {
+      if (this._ed3ScrollRestore) {
+        clearTimeout(this._ed3ScrollRestore);
+        this._ed3ScrollRestore = null;
+        this._ed3Pending = false;
+        this._ed3WasScrolledBack = false;
+        this._ed3DistanceFromBottom = 0;
+      }
+    }
     let isSplitDownDisabled = false;
     if (this.props.groupUid && (this.props as any).allTermGroups) {
       const stacks = countPathHorizontalStacks(this.props.groupUid, (this.props as any).allTermGroups);
@@ -2813,6 +2896,13 @@ export default class Term extends React.PureComponent<
     }
     clearTimeout(this.resizeTimeout);
     clearTimeout(this.stabilizeResizeTimeout);
+    // Bug S: cancel a pending ED3 scroll-restore so it can't fire on a
+    // disposed terminal after unmount.
+    if (this._ed3ScrollRestore) {
+      clearTimeout(this._ed3ScrollRestore);
+      this._ed3ScrollRestore = null;
+      this._ed3Pending = false;
+    }
 
     this.resizeObserver?.disconnect();
     document.removeEventListener('mousedown', this.handleOutsideClick);
@@ -3666,6 +3756,7 @@ export default class Term extends React.PureComponent<
           <div
             ref={this.onTermWrapperRef}
             className={'term_fit term_wrapper ' + (this.state.isDirNavigatorOpen ? 'term_dimmed' : '')}
+            style={{background: (this.props as any).backgroundColor}}
           />
         )}
 
@@ -4203,6 +4294,24 @@ export default class Term extends React.PureComponent<
             position: relative;
             overflow: hidden;
             box-sizing: border-box;
+          }
+
+          .term_wrapper.term_fit {
+            background: transparent;
+          }
+
+          .term_wrapper .term_term {
+            width: 100%;
+            height: 100%;
+            background: inherit;
+          }
+
+          .term_wrapper .xterm {
+            height: 100%;
+          }
+
+          .term_wrapper .xterm-viewport {
+            height: 100%;
           }
 
           /* Thin dark scrollbar */

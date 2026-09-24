@@ -123,6 +123,7 @@ export type MainEvents = {
     url?: string;
     splitPlacement?: 'BEFORE' | 'AFTER';
     isAgentInitiated?: boolean;
+    cwd?: string;
   };
   'split request horizontal': {
     activeUid?: string | null;
@@ -130,6 +131,7 @@ export type MainEvents = {
     url?: string;
     splitPlacement?: 'BEFORE' | 'AFTER';
     isAgentInitiated?: boolean;
+    cwd?: string;
   };
   'split web pane req': {
     activeUid?: string | null;
@@ -211,6 +213,7 @@ export type RendererEvents = {
     url?: string;
     splitPlacement?: 'BEFORE' | 'AFTER';
     isAgentInitiated?: boolean;
+    cwd?: string;
   };
   'split web pane req': {
     activeUid?: string | null;
@@ -224,10 +227,11 @@ export type RendererEvents = {
     url?: string;
     splitPlacement?: 'BEFORE' | 'AFTER';
     isAgentInitiated?: boolean;
+    cwd?: string;
   };
   'clone request vertical': any;
   'clone request horizontal': any;
-  'termgroup add req': {activeUid?: string | null; profile?: string | null; isAgentInitiated?: boolean};
+  'termgroup add req': {activeUid?: string | null; profile?: string | null; isAgentInitiated?: boolean; cwd?: string};
   'termgroup close req': never;
   'web-pane-reload': string;
   'session add': Session;
