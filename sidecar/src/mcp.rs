@@ -752,8 +752,10 @@ pub struct AutoDescribeRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NoteCreateRequest {
     /// Initial text content for the note (optional)
+    #[serde(alias = "content", alias = "body")]
     pub text: Option<String>,
     /// Background color hex (e.g. "#fff9c4" for yellow). Omit to auto-assign.
     pub color: Option<String>,
@@ -796,10 +798,12 @@ pub struct StickyNoteCreateCodeRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StickyNoteUpdateRequest {
     /// Note ID from sticky_note_list output
     pub id: String,
     /// New text content for the note
+    #[serde(alias = "content", alias = "body")]
     pub text: String,
 }
 
@@ -4294,4 +4298,25 @@ pub fn streamable_http_service(
             ..Default::default()
         },
     )
+}
+
+#[cfg(test)]
+mod sticky_param_tests {
+    use super::*;
+
+    #[test]
+    fn sticky_create_accepts_content_alias() {
+        let req: NoteCreateRequest = serde_json::from_value(serde_json::json!({"content": "hello"})).unwrap();
+        assert_eq!(req.text.as_deref(), Some("hello"));
+        let req: NoteCreateRequest = serde_json::from_value(serde_json::json!({"text": "hello"})).unwrap();
+        assert_eq!(req.text.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn sticky_params_reject_unknown_fields_instead_of_dropping_them() {
+        assert!(serde_json::from_value::<NoteCreateRequest>(serde_json::json!({"title": "t", "text": "hello"})).is_err());
+        assert!(serde_json::from_value::<StickyNoteUpdateRequest>(serde_json::json!({"id": "n", "txt": "hello"})).is_err());
+        let req: StickyNoteUpdateRequest = serde_json::from_value(serde_json::json!({"id": "n", "content": "hello"})).unwrap();
+        assert_eq!(req.text, "hello");
+    }
 }
