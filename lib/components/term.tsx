@@ -173,6 +173,9 @@ export default class Term extends React.PureComponent<
     navigatorLeft: number;
     navigatorWidth: number;
     navigatorTop: number;
+    // Bumped when the persisted recent-dir list is cleared, so the chip row
+    // (which reads localStorage during render) re-renders.
+    dirHistoryNonce: number;
     isGlimmerActive?: boolean;
     showCopied?: boolean;
     // Pixel offset (within term_fit) to anchor the "Copied!" toast under the
@@ -252,6 +255,7 @@ export default class Term extends React.PureComponent<
     navigatorLeft: 95,
     navigatorWidth: 280,
     navigatorTop: 38,
+    dirHistoryNonce: 0,
     isGlimmerActive: false,
     showCopied: false,
     copiedPos: undefined as {left: number; top: number} | undefined,
@@ -1955,13 +1959,24 @@ export default class Term extends React.PureComponent<
     }
   };
 
+  // Drop the whole persisted recent list (HOME is derived, so it stays).
+  clearDirHistory = (): void => {
+    try {
+      localStorage.removeItem(Term.DIR_HISTORY_KEY);
+    } catch {
+      /* ignore quota / unavailable */
+    }
+    this.setState(({dirHistoryNonce}) => ({dirHistoryNonce: dirHistoryNonce + 1}));
+  };
+
   // A single horizontal row of quick-jump buttons under the directory list:
   // HOME first (accent color), then most-recent dirs (excluding home + the
   // currently-browsed path). Clicking browses there (ctrl-enter still cds).
   renderNavigatorRecent = () => {
     const home = (process.env.USERPROFILE || process.env.HOME || '').replace(/[\\/]+$/, '');
     const current = this.normDir(this.state.navigatorCurrentPath || '');
-    const recents = this.loadDirHistory().filter(
+    const history = this.loadDirHistory();
+    const recents = history.filter(
       (p) => this.normDir(p) !== current && (!home || this.normDir(p) !== this.normDir(home))
     );
 
@@ -2051,6 +2066,31 @@ export default class Term extends React.PureComponent<
               {itemPath}
             </span>
           ))}
+          {/* Trailing "clear" — styled like the pane picker's inline badges. */}
+          {history.length > 0 && (
+            <span
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={this.clearDirHistory}
+              title="Clear recent directories"
+              style={{
+                cursor: 'pointer',
+                flexShrink: 0,
+                userSelect: 'none',
+                whiteSpace: 'nowrap',
+                lineHeight: '1.2',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '10px',
+                fontWeight: 600,
+                padding: '2px var(--space-6)',
+                borderRadius: 'var(--radius-3)',
+                border: '0.5px solid var(--border-neutral)',
+                color: 'var(--text-tertiary)',
+                background: 'var(--bg-primary)'
+              }}
+            >
+              clear
+            </span>
+          )}
         </div>
       </div>
     );
