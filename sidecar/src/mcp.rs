@@ -139,12 +139,22 @@ fn mcp_search_tools_tool() -> Tool {
 fn forwarded_auth(ctx: &RequestContext<RoleServer>) -> Option<String> {
     ctx.extensions
         .get::<axum::http::request::Parts>()
-        .and_then(|p| p.headers.get(axum::http::header::AUTHORIZATION))
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
+        .and_then(|p| {
+            p.extensions.get::<crate::mcp_sessions::ForwardAuth>()
+                .map(|auth| auth.header())
+                .or_else(|| p.headers.get(axum::http::header::AUTHORIZATION)
+                    .and_then(|v| v.to_str().ok()).map(str::to_owned))
+        })
 }
 
 // -- Tool request schemas --
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SetLabelRequest {
+    /// Unique display name for this MCP session; its mailbox identity stays unchanged.
+    pub label: String,
+}
+
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct AuditSearchRequest {
@@ -2084,6 +2094,18 @@ impl HyperiaMcp {
         let path = format!("/api/delivery/status?id={}", urlencoding::encode(&req.id));
         let resp = self.get_as(&path, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Show your authenticated identity, unique label, canonical mailbox address, parent and session ID. Bare parent labels have separate mailboxes: child sessions do not consume parent mail. No credentials are returned.")]
+    async fn whoami(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let result = self.get_as("/api/identity/whoami", forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(description = "Set a unique display label for your own MCP session. The label survives restarts; the canonical principal and existing mailbox messages do not change.")]
+    async fn set_label(&self, Parameters(req): Parameters<SetLabelRequest>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let result = self.post_json_as("/api/identity/set-label", &serde_json::json!({"label": req.label}), forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
     #[tool(description = "Get the current Hyperia version. Returns the sidecar version and the Electron app version.")]

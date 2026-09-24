@@ -72,7 +72,7 @@ pub async fn actor_from_identity(bridge: &Bridge, id: &CallerIdentity) -> Result
             let (principal, pane) = store.bindings.mailbox_identity(
                 &Principal::Agent(name.clone()), |pane| sessions.contains_key(pane),
             ).map_err(mailbox_error)?;
-            Ok(MailActor { principal, label: name.clone(), pane, requester })
+            Ok(MailActor { principal, label: id.label(), pane, requester })
         }
         CallerIdentity::Pane { pane, .. } => {
             let sessions = bridge.sessions().await;
@@ -164,15 +164,16 @@ pub async fn prepare(bridge: &Bridge, headers: &HeaderMap, req: SendRequest) -> 
     } else {
         let name = req.to_label.as_deref().map(str::trim).filter(|s| !s.is_empty())
             .ok_or_else(|| error(StatusCode::BAD_REQUEST, "An explicit recipient is required."))?;
-        if !bridge.identity().list().await.iter().any(|agent| agent.name == name) {
-            return Err(error(StatusCode::NOT_FOUND, "Unknown registered agent. Use a pane address or its registered name."));
-        }
-        let pane = store.bindings.pane_for_agent(name);
+        // Parent labels remain parent mailboxes; child aliases resolve to an
+        // immutable child principal before storage or permission checks.
+        let (name, label) = bridge.identity().mail_address(name).await
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "Unknown registered agent or MCP session address."))?;
+        let pane = store.bindings.pane_for_agent(&name);
         let pane = match pane {
             Some(pane) if bridge.sessions().await.contains_key(&pane) => Some(pane),
             _ => None,
         };
-        (Principal::Agent(name.into()), name.into(), pane)
+        (Principal::Agent(name), label, pane)
     };
     Ok(PreparedMessage {
         sender, recipient, recipient_label, target_pane,

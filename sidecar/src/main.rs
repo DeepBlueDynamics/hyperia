@@ -14,6 +14,7 @@ mod ghost;
 mod render;
 mod logs;
 mod mcp;
+mod mcp_sessions;
 /// Agent-facing prose, keyed and per-locale — see `messages/mod.rs`.
 mod messages;
 mod models;
@@ -1371,15 +1372,6 @@ async fn post_identity_agent(State(state): State<AppState>, headers: HeaderMap, 
     )
 }
 
-async fn get_identity_whoami(State(state): State<AppState>, headers: HeaderMap) -> Json<serde_json::Value> {
-    let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
-    Json(serde_json::json!({
-        "kind": id.kind(),
-        "label": id.label(),
-        "anonymous": id.is_anonymous(),
-    }))
-}
-
 /// Middleware: resolve the caller identity from the Authorization header for
 /// EVERY request (including the nested `/mcp` MCP service), stash it in request
 /// extensions for downstream handlers, and log non-anonymous calls so MCP tool
@@ -1433,9 +1425,26 @@ async fn identity_mw(
                 .to_string()
         })
         .filter(|s| !s.is_empty());
+    // Child proxy credentials are accepted only on a verified loopback socket.
+    // Missing peer metadata fails closed (including tests that omit ConnectInfo).
+    let mut child_lease = if bearer.as_deref().is_some_and(|t| t.starts_with("hyp_mcp_")) {
+        let loopback = req.extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .is_some_and(|peer| peer.0.ip().is_loopback());
+        if !loopback {
+            return axum::response::IntoResponse::into_response((StatusCode::UNAUTHORIZED, "Internal credential is loopback-only"));
+        }
+        match bridge.identity().sessions.lease_token(bearer.as_deref().unwrap()) {
+            Some(lease) => Some(lease),
+            None => return axum::response::IntoResponse::into_response((StatusCode::UNAUTHORIZED, "MCP session is revoked or expired")),
+        }
+    } else { None };
     let method = req.method().as_str().to_string();
     let path = req.uri().path().to_string();
     let id = bridge.resolve_caller(bearer.as_deref()).await;
+    if child_lease.is_some() && id.is_anonymous() {
+        return axum::response::IntoResponse::into_response((StatusCode::UNAUTHORIZED, "MCP parent identity is no longer active"));
+    }
     let (label, kind, anon) = (id.label(), id.kind(), id.is_anonymous());
     if !anon {
         tracing::info!("call from {label} ({kind}) -> {path}");
@@ -1452,7 +1461,15 @@ async fn identity_mw(
         ));
     }
     req.extensions_mut().insert(id);
-    let resp = next.run(req).await;
+    let resp = if let Some(lease) = child_lease.as_mut() {
+        tokio::select! {
+            biased;
+            _ = lease.cancelled() => axum::response::IntoResponse::into_response((StatusCode::UNAUTHORIZED, "MCP session revoked or expired during request")),
+            response = next.run(req) => response,
+        }
+    } else {
+        next.run(req).await
+    };
     // Audit: every identified call, plus every mutation attempt (non-GET) — but
     // not anonymous GET polls (renderer status/log polling), /health, or /ws.
     let auditable = (path.starts_with("/api/") || path.starts_with("/mcp"))
@@ -4469,7 +4486,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/perms/token", axum::routing::get(get_perm_token))
         .route("/api/perms/enforce", axum::routing::post(post_perm_enforce))
         .route("/api/identity/agent", axum::routing::post(post_identity_agent))
-        .route("/api/identity/whoami", axum::routing::get(get_identity_whoami))
         .route("/api/identity/agents", axum::routing::get(get_identity_agents))
         .route("/api/pane/close", axum::routing::post(post_close))
         .route("/api/pane/cd", axum::routing::post(post_cd))
@@ -4587,7 +4603,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(dash_routes)
         .merge(ghost_routes)
         .merge(settings_routes)
-        .nest_service("/mcp", mcp::streamable_http_service(args.port))
+        .merge(mcp_sessions::routes(bridge_for_mw.clone(), args.port))
         // Resolve caller identity from the Authorization header for every route
         // (incl. /mcp) — attribution now, enforcement next (#59).
         .layer(axum::middleware::from_fn_with_state(bridge_for_mw, identity_mw));
@@ -4663,7 +4679,7 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
+    let serve = axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(async move {
         let _ = tokio::signal::ctrl_c().await;
         lume_for_shutdown.persist().await;
     });

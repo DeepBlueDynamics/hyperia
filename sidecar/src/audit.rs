@@ -17,6 +17,9 @@ use tracing_appender::non_blocking::NonBlocking;
 
 static AUDIT: OnceLock<NonBlocking> = OnceLock::new();
 
+#[cfg(test)]
+pub(crate) static TEST_ENTRIES: std::sync::Mutex<Vec<serde_json::Value>> = std::sync::Mutex::new(Vec::new());
+
 /// How many daily files to keep before the oldest is pruned.
 const KEEP_DAYS: usize = 14;
 
@@ -126,6 +129,8 @@ pub fn init(log_dir: &Path) {
 
 /// Append one audit entry (a JSON object) as a line.
 pub fn record(entry: serde_json::Value) {
+    #[cfg(test)]
+    TEST_ENTRIES.lock().unwrap().push(entry.clone());
     if let Some(w) = AUDIT.get() {
         let mut w = w.clone(); // NonBlocking is cheap to clone (channel sender)
         let mut line = entry.to_string();

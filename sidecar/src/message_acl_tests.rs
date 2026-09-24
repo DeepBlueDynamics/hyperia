@@ -2,6 +2,7 @@ use super::*;
 
 fn isolated_store() -> PermStore {
     PermStore {
+        parents: std::sync::RwLock::default(),
         pending: Mutex::default(), grants: Mutex::default(), tokens: Mutex::default(),
         owners: Mutex::default(), denials: Mutex::default(), create_grants: Mutex::default(),
         cap_grants: Mutex::default(), enforce: AtomicBool::new(true),
