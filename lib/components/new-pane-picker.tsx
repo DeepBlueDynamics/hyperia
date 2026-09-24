@@ -1,6 +1,7 @@
 import React from 'react';
 
 import rpc from '../rpc';
+import {isPowerShell, pickNativeShell, profileFitsPlatform as fitsPlatform} from '../utils/native-shell';
 
 import UrlPicker from './url-picker';
 
@@ -9,19 +10,7 @@ const isWindows = ['Windows', 'Win16', 'Win32', 'WinCE'].includes(navigator.plat
 // A shell whose path is a Windows path (.exe / backslashes / "C:") only fits a
 // Windows host, and vice-versa — a config synced between machines can carry the
 // other platform's shells, which we hide here. (Mirrors the helper in term.tsx.)
-const profileFitsPlatform = (p: any): boolean => {
-  const shell = String(p?.config?.shell || '');
-  if (!shell) return true;
-  // Hide a profile ONLY when its shell path clearly belongs to the OTHER platform
-  // (e.g. a config synced from Windows onto macOS carries `C:\...\pwsh.exe`). A
-  // bare command like `ssh`, `wsl`, or `docker` — no extension, no absolute path —
-  // is valid on any platform and MUST stay visible. The old check required a
-  // Windows-looking path to show on Windows, which silently dropped every
-  // user-created `ssh` shell from the list.
-  const looksWindows = /\.exe$|\\|^[A-Za-z]:/.test(shell);
-  const looksUnix = /^\//.test(shell);
-  return isWindows ? !looksUnix : !looksWindows;
-};
+const profileFitsPlatform = (p: any): boolean => fitsPlatform(p, isWindows);
 
 // Built-in agent names that live under "New Agent", not the shell list. These
 // mirror the harness catalog in app/config/detect.ts (the agents nemesis8 knows
@@ -118,9 +107,14 @@ const writeStoredDefault = (key: string, value: string) => {
 
 // Self-update command shown in the picker footer. Like the install catalog,
 // it never auto-runs: [run] opens a shell with it typed but NOT submitted.
-const UPDATE_COMMAND = isWindows
-  ? 'powershell -c "irm https://hyperia.nuts.services/install.ps1 | iex"'
-  : 'curl -fsSL https://hyperia.nuts.services/install.sh | sh';
+// On Windows the [run] shell is the newest detected PowerShell, so the command
+// runs as-is there; only a cmd-only machine needs the powershell -c wrapper.
+const updateCommandFor = (nativeIsPowerShell: boolean): string =>
+  isWindows
+    ? nativeIsPowerShell
+      ? 'irm https://hyperia.nuts.services/install.ps1 | iex'
+      : 'powershell -c "irm https://hyperia.nuts.services/install.ps1 | iex"'
+    : 'curl -fsSL https://hyperia.nuts.services/install.sh | sh';
 
 // Version strings compare with or without a leading "v" ("0.15.11" == "v0.15.11").
 const normalizeVersion = (v?: string): string => (v || '').trim().replace(/^v/i, '');
@@ -941,16 +935,34 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
   // "Open in shell" from the install view: open the default shell in this pane
   // with the install command TYPED at the prompt but NOT submitted — the user
   // reviews it and presses Enter themselves.
+  // Always the platform's own plain shell (newest pwsh on Windows, the login
+  // shell elsewhere) picked from the detected profiles. NOT the config default:
+  // that can be a custom agent shell, which would swallow the install command.
   private openInstallShell = (command: string) => {
     const {groupUid, uid, sessionCwd, cwd} = this.props;
+    const native = this.nativeShell();
     rpc.emit('new', {
       isNewGroup: false,
       cwd: sessionCwd || cwd,
       activeUid: uid,
       groupUid,
+      ...(native ? {profile: native.name} : {}),
       prefillCommand: command
     } as any);
   };
+
+  private nativeShell = () => {
+    let loginShell = '';
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      loginShell = (require('os').userInfo().shell as string) || '';
+    } catch {
+      /* not available on Windows */
+    }
+    return pickNativeShell((this.props as any).profiles || [], isWindows, loginShell);
+  };
+
+  private updateCommand = () => updateCommandFor(isPowerShell(this.nativeShell()));
 
   private copyInstall = (command: string) => {
     try {
@@ -1264,7 +1276,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     const {currentVersion, latestVersion} = this.state;
     const upToDate =
       !!currentVersion && !!latestVersion && normalizeVersion(currentVersion) === normalizeVersion(latestVersion);
-    const updateCopied = this.state.copiedInstall === UPDATE_COMMAND;
+    const updateCopied = this.state.copiedInstall === this.updateCommand();
 
     if (this.state.view === 'install') {
       return this.renderInstallView();
@@ -1476,7 +1488,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
               ) : null}
               <span style={{flex: 1}} />
               <span
-                onClick={() => this.copyInstall(UPDATE_COMMAND)}
+                onClick={() => this.copyInstall(this.updateCommand())}
                 title="Copy the update command"
                 style={{...pickerEnterBadgeStyle, cursor: 'pointer'}}
               >
@@ -1488,7 +1500,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                 </span>
               ) : (
                 <span
-                  onClick={() => this.openInstallShell(UPDATE_COMMAND)}
+                  onClick={() => this.openInstallShell(this.updateCommand())}
                   title="Open a shell with the update command typed — press Enter yourself"
                   style={{...pickerEnterBadgeStyle, cursor: 'pointer', color: 'var(--info-text)'}}
                 >
@@ -1510,7 +1522,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                 userSelect: 'text'
               }}
             >
-              {UPDATE_COMMAND}
+              {this.updateCommand()}
             </div>
           </div>
         </div>

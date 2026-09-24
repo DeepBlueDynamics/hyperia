@@ -21,6 +21,7 @@ import type {TermProps} from '../../typings/hyper';
 import rpc from '../rpc';
 import terms from '../terms';
 import {altArrowSequence} from '../utils/alt-arrow-sequence';
+import {isPlainShell, pickNativeShell} from '../utils/native-shell';
 import {toNavigableUrl} from '../utils/navigable-url';
 import processClipboard from '../utils/paste';
 import {translatePath} from '../utils/path-translate';
@@ -2031,17 +2032,16 @@ export default class Term extends React.PureComponent<
   baseShellOptions = (): Array<{name: string; shell: string}> => {
     const seen = new Set<string>();
     return ((this.props as any).profiles || [])
-      .filter((p: any) => p?.config?.shell && !p.kind && !seen.has(p.config.shell) && seen.add(p.config.shell))
+      .filter((p: any) => isPlainShell(p, isWindows) && !seen.has(p.config.shell) && seen.add(p.config.shell))
       .map((p: any) => ({name: p.name, shell: p.config.shell as string}));
   };
 
   // Sensible default base shell for a NEW custom shell: prefer PowerShell 7
   // (pwsh), then any PowerShell, else the first detected shell.
-  defaultBaseShellPath = (): string => {
-    const opts = this.baseShellOptions();
-    const pick = opts.find((o) => /pwsh/i.test(o.shell)) || opts.find((o) => /powershell/i.test(o.shell)) || opts[0];
-    return pick?.shell || '';
-  };
+  defaultBaseShellPath = (): string =>
+    pickNativeShell((this.props as any).profiles || [], isWindows)?.config?.shell ||
+    this.baseShellOptions()[0]?.shell ||
+    '';
 
   // Save is allowed with a name + either a base shell (base-shell mode) or a
   // raw shell path (direct mode).
