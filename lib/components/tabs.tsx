@@ -6,6 +6,8 @@ import {ipcRenderer} from '../utils/ipc';
 import {decorate, getTabProps} from '../utils/plugins';
 import {dropIndexForX, reorderOffsets} from '../utils/tab-drag';
 import type {TabMetrics} from '../utils/tab-drag';
+import {nextScrollStop} from '../utils/tab-scroll';
+import type {TabSpan} from '../utils/tab-scroll';
 
 import Tab_ from './tab';
 
@@ -102,21 +104,21 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
     return () => ro.disconnect();
   }, [applyReveal, updateScrollState]);
 
-  // Whole-tab scrolling. Arrows and the wheel move exactly one tab and land the
-  // strip's left edge on a tab boundary, whatever the tabs' widths — a fixed
-  // pixel step used to stop mid-tab one click and a whole tab the next. The
-  // last stop is the scroll end, where the final tab is flush right.
+  // Whole-tab scrolling. Arrows and the wheel land the strip's left edge on a
+  // tab boundary, whatever the tabs' widths (a fixed pixel step used to stop
+  // mid-tab one click and a whole tab the next). Each step fully reveals the
+  // tab cut off at that edge, plus the one after it when more than half of the
+  // cut-off tab was already showing: see nextScrollStop.
   // `scrollTarget` is where an in-flight smooth scroll is headed, so rapid
   // clicks step from there instead of from a half-animated scrollLeft.
   const scrollTarget = useRef<number | null>(null);
   const scrollTargetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const tabStops = (el: HTMLUListElement): number[] => {
-    const max = el.scrollWidth - el.clientWidth;
+  const tabSpans = (el: HTMLUListElement): TabSpan[] => {
     const origin = el.getBoundingClientRect().left - el.scrollLeft;
-    const stops = Array.from(el.querySelectorAll<HTMLElement>('.tab_tab'))
-      .map((tab) => Math.round(tab.getBoundingClientRect().left - origin))
-      .filter((x) => x > 0 && x < max);
-    return [0, ...stops, Math.max(0, max)];
+    return Array.from(el.querySelectorAll<HTMLElement>('.tab_tab')).map((tab) => {
+      const r = tab.getBoundingClientRect();
+      return {left: Math.round(r.left - origin), right: Math.round(r.right - origin)};
+    });
   };
   const stepTabs = useCallback(
     (dir: 1 | -1) => {
@@ -124,9 +126,8 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
       if (!el) return;
       cancelReveal();
       const from = scrollTarget.current ?? el.scrollLeft;
-      const stops = tabStops(el);
-      const next = dir > 0 ? stops.find((x) => x > from + 1) : [...stops].reverse().find((x) => x < from - 1);
-      if (next === undefined) return;
+      const next = nextScrollStop(tabSpans(el), from, el.clientWidth, el.scrollWidth - el.clientWidth, dir);
+      if (next === null) return;
       scrollTarget.current = next;
       el.scrollTo({left: next, behavior: 'smooth'});
       if (scrollTargetTimer.current) clearTimeout(scrollTargetTimer.current);
