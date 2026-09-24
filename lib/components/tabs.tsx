@@ -1,4 +1,4 @@
-import React, {forwardRef, useEffect, useMemo, useRef, useCallback, useState} from 'react';
+import React, {forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useState} from 'react';
 
 import type {TabsProps} from '../../typings/hyper';
 import rpc from '../rpc';
@@ -6,6 +6,8 @@ import {ipcRenderer} from '../utils/ipc';
 import {decorate, getTabProps} from '../utils/plugins';
 import {dropIndexForX, reorderOffsets} from '../utils/tab-drag';
 import type {TabMetrics} from '../utils/tab-drag';
+import {nextScrollStop} from '../utils/tab-scroll';
+import type {TabSpan} from '../utils/tab-scroll';
 
 import Tab_ from './tab';
 
@@ -34,45 +36,163 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
     setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
   }, []);
 
-  // Scroll active tab into view
-  useEffect(() => {
-    if (listRef.current) {
-      const active = listRef.current.querySelector('.tab_active');
-      if (active) {
-        active.scrollIntoView({block: 'nearest', inline: 'nearest'});
-      }
+  // Keep the active tab fully visible. Adjusts ONLY the list's scrollLeft:
+  // scrollIntoView also scrolls every scrollable ancestor (overflow:hidden header
+  // containers included), which shifted the whole strip and left the first tab
+  // half cut off. And one pass right after render isn't enough: that same render
+  // turns the 20px scroll arrows on, which narrows and shifts the list AFTER the
+  // scroll, leaving the new tab half hidden. So the reveal stays pending briefly
+  // and is re-applied after the arrows render and on resize, until the user
+  // scrolls by hand. A tab added at the end pins the strip to the far right.
+  const pendingReveal = useRef<{mode: 'end' | 'active'; until: number} | null>(null);
+  const prevTabCount = useRef(tabs.length);
+  const applyReveal = useCallback(() => {
+    const el = listRef.current;
+    const pending = pendingReveal.current;
+    if (!el || !pending) return;
+    if (Date.now() > pending.until) {
+      pendingReveal.current = null;
+      return;
     }
-    updateScrollState();
-  }, [tabs.find((t) => t.isActive)?.uid, tabs.length, updateScrollState]);
+    if (pending.mode === 'end') {
+      el.scrollLeft = el.scrollWidth - el.clientWidth;
+      return;
+    }
+    const active = el.querySelector<HTMLElement>('.tab_active');
+    if (!active) return;
+    const listRect = el.getBoundingClientRect();
+    const tabRect = active.getBoundingClientRect();
+    if (tabRect.left < listRect.left) {
+      el.scrollLeft += tabRect.left - listRect.left;
+    } else if (tabRect.right > listRect.right) {
+      el.scrollLeft += tabRect.right - listRect.right;
+    }
+  }, []);
+  const cancelReveal = useCallback(() => {
+    pendingReveal.current = null;
+  }, []);
 
-  // Update scroll arrows on resize
+  const activeUid = tabs.find((t) => t.isActive)?.uid;
+  useLayoutEffect(() => {
+    const added = tabs.length > prevTabCount.current;
+    prevTabCount.current = tabs.length;
+    const activeIsLast = tabs.length > 0 && !!tabs[tabs.length - 1].isActive;
+    pendingReveal.current = {mode: added && activeIsLast ? 'end' : 'active', until: Date.now() + 600};
+    applyReveal();
+    updateScrollState();
+    const raf = requestAnimationFrame(() => {
+      applyReveal();
+      updateScrollState();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [activeUid, tabs.length, applyReveal, updateScrollState]);
+
+  // The scroll arrows appearing/disappearing resizes the list; re-apply after that render.
+  useLayoutEffect(() => {
+    applyReveal();
+  }, [canScrollLeft, canScrollRight, applyReveal]);
+
+  // Update scroll arrows (and any pending reveal) on resize
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(updateScrollState);
+    const ro = new ResizeObserver(() => {
+      applyReveal();
+      updateScrollState();
+    });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [updateScrollState]);
+  }, [applyReveal, updateScrollState]);
 
-  // Horizontal scroll with mouse wheel
-  const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
-      if (listRef.current) {
-        listRef.current.scrollLeft += e.deltaY;
+  // Whole-tab scrolling. Arrows and the wheel land the strip's left edge on a
+  // tab boundary, whatever the tabs' widths (a fixed pixel step used to stop
+  // mid-tab one click and a whole tab the next). Each step fully reveals the
+  // tab cut off at that edge, plus the one after it when more than half of the
+  // cut-off tab was already showing: see nextScrollStop.
+  // `scrollTarget` is where an in-flight smooth scroll is headed, so rapid
+  // clicks step from there instead of from a half-animated scrollLeft.
+  const scrollTarget = useRef<number | null>(null);
+  const scrollTargetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tabSpans = (el: HTMLUListElement): TabSpan[] => {
+    const origin = el.getBoundingClientRect().left - el.scrollLeft;
+    return Array.from(el.querySelectorAll<HTMLElement>('.tab_tab')).map((tab) => {
+      const r = tab.getBoundingClientRect();
+      return {left: Math.round(r.left - origin), right: Math.round(r.right - origin)};
+    });
+  };
+  const stepTabs = useCallback(
+    (dir: 1 | -1) => {
+      const el = listRef.current;
+      if (!el) return;
+      cancelReveal();
+      const from = scrollTarget.current ?? el.scrollLeft;
+      const next = nextScrollStop(tabSpans(el), from, el.clientWidth, el.scrollWidth - el.clientWidth, dir);
+      if (next === null) return;
+      scrollTarget.current = next;
+      el.scrollTo({left: next, behavior: 'smooth'});
+      if (scrollTargetTimer.current) clearTimeout(scrollTargetTimer.current);
+      scrollTargetTimer.current = setTimeout(() => {
+        scrollTarget.current = null;
         updateScrollState();
-      }
+      }, 350);
     },
-    [updateScrollState]
+    [cancelReveal, updateScrollState]
   );
 
-  const scrollBy = useCallback(
-    (dir: 1 | -1) => {
-      if (listRef.current) {
-        listRef.current.scrollBy({left: dir * 120, behavior: 'smooth'});
-        setTimeout(updateScrollState, 150);
-      }
+  // Mouse wheel: one tab per notch. Trackpads send many small deltas, so they
+  // accumulate until they amount to a notch before stepping.
+  const wheelAccum = useRef(0);
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      if (!delta) return;
+      if (Math.sign(delta) !== Math.sign(wheelAccum.current)) wheelAccum.current = 0;
+      wheelAccum.current += delta;
+      if (Math.abs(wheelAccum.current) < 40) return;
+      wheelAccum.current = 0;
+      stepTabs(delta > 0 ? 1 : -1);
     },
-    [updateScrollState]
+    [stepTabs]
+  );
+
+  const scrollBy = stepTabs;
+
+  // Scroll-arrow hover hints. They're DOM and drop over the pane area, where a
+  // native web pane would paint on top of them, so web panes are suppressed
+  // (frozen still) while an arrow is hovered, the same as the +/window/sticky
+  // cluster below. An arrow can unmount under the cursor (scrolled to the end),
+  // which skips mouseleave, so its disappearance also releases the suppression.
+  const hoveredArrow = useRef<'left' | 'right' | null>(null);
+  const setWebPanesSuppressed = useCallback((suppressed: boolean) => {
+    try {
+      ipcRenderer.send('web-panes:suppress', {suppressed});
+    } catch {
+      /* ipc not ready */
+    }
+  }, []);
+  const arrowHover = (dir: 'left' | 'right') => ({
+    onMouseEnter: () => {
+      hoveredArrow.current = dir;
+      setWebPanesSuppressed(true);
+    },
+    onMouseLeave: () => {
+      hoveredArrow.current = null;
+      setWebPanesSuppressed(false);
+    }
+  });
+  useEffect(() => {
+    const gone =
+      (hoveredArrow.current === 'left' && !canScrollLeft) || (hoveredArrow.current === 'right' && !canScrollRight);
+    if (gone) {
+      hoveredArrow.current = null;
+      setWebPanesSuppressed(false);
+    }
+  }, [canScrollLeft, canScrollRight, setWebPanesSuppressed]);
+  useEffect(
+    () => () => {
+      if (hoveredArrow.current) setWebPanesSuppressed(false);
+    },
+    [setWebPanesSuppressed]
   );
 
   // Tab drag-to-reorder.
@@ -218,9 +338,14 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
     <nav className="tabs_nav" ref={ref}>
       {props.customChildrenBefore}
       {canScrollLeft && (
-        <button className="tabs_scrollBtn tabs_scrollLeft" onClick={() => scrollBy(-1)} aria-label="Scroll tabs left">
-          ‹
-        </button>
+        <div className="tabs_newTab_tooltip_trigger tabs_scrollTrigger" {...arrowHover('left')}>
+          <button className="tabs_scrollBtn tabs_scrollLeft" onClick={() => scrollBy(-1)} aria-label="Scroll tabs left">
+            ‹
+          </button>
+          <div className="tabs_newTab_tooltip tabs_btnTip tabs_scrollTip tabs_scrollTipLeft">
+            Scroll tabs left, or use the scroll wheel
+          </div>
+        </div>
       )}
       <ul
         key="list"
@@ -286,9 +411,18 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         })}
       </ul>
       {canScrollRight && (
-        <button className="tabs_scrollBtn tabs_scrollRight" onClick={() => scrollBy(1)} aria-label="Scroll tabs right">
-          ›
-        </button>
+        <div className="tabs_newTab_tooltip_trigger tabs_scrollTrigger" {...arrowHover('right')}>
+          <button
+            className="tabs_scrollBtn tabs_scrollRight"
+            onClick={() => scrollBy(1)}
+            aria-label="Scroll tabs right"
+          >
+            ›
+          </button>
+          <div className="tabs_newTab_tooltip tabs_btnTip tabs_scrollTip">
+            Scroll tabs right, or use the scroll wheel
+          </div>
+        </div>
       )}
 
       {/* These tab-bar buttons' hover menus (the + layout/workspace dropdown,
@@ -936,6 +1070,24 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         .tabs_scrollRight {
           border-right: none;
           border-left: 0.5px solid var(--border-neutral);
+        }
+
+        /* Arrow + its hover hint. The wrapper takes the arrow's place as a
+           fixed-size flex item; the hint drops below the tab bar. */
+        .tabs_scrollTrigger {
+          flex: 0 0 auto;
+          -webkit-app-region: no-drag;
+        }
+        /* Compound selectors: .tabs_newTab_tooltip / .tabs_btnTip are declared
+           later in this sheet and would otherwise win at equal specificity. */
+        .tabs_newTab_tooltip.tabs_scrollTip {
+          pointer-events: none;
+          z-index: 1001;
+        }
+        /* The left arrow sits at the strip's left edge, so its hint anchors left. */
+        .tabs_btnTip.tabs_scrollTipLeft {
+          left: 0;
+          right: auto;
         }
 
         .tabs_borderShim {
