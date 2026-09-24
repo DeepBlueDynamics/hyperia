@@ -68,17 +68,23 @@ pub async fn actor_from_identity(bridge: &Bridge, id: &CallerIdentity) -> Result
         CallerIdentity::Anonymous => Err(error(StatusCode::UNAUTHORIZED, "Authentication required for messaging.")),
         CallerIdentity::System => Ok(MailActor { principal: Principal::System, label: "Hyperia".into(), pane: None, requester }),
         CallerIdentity::Agent { name, .. } => {
-            let sessions = bridge.sessions().await;
-            let (principal, pane) = store.bindings.mailbox_identity(
-                &Principal::Agent(name.clone()), |pane| sessions.contains_key(pane),
-            ).map_err(mailbox_error)?;
+            let (principal, pane) = {
+                let sessions = bridge.sessions().await;
+                store.bindings.mailbox_identity(
+                    &Principal::Agent(name.clone()), |pane| sessions.contains_key(pane),
+                ).map_err(mailbox_error)?
+            };
             Ok(MailActor { principal, label: id.label(), pane, requester })
         }
         CallerIdentity::Pane { pane, .. } => {
-            let sessions = bridge.sessions().await;
-            let (principal, _) = store.bindings.mailbox_identity(
-                &Principal::Pane(pane.clone()), |pane| sessions.contains_key(pane),
-            ).map_err(mailbox_error)?;
+            // pane_display_name also locks the session table. Drop this guard
+            // before awaiting it so pane-token mailbox calls cannot self-deadlock.
+            let (principal, _) = {
+                let sessions = bridge.sessions().await;
+                store.bindings.mailbox_identity(
+                    &Principal::Pane(pane.clone()), |pane| sessions.contains_key(pane),
+                ).map_err(mailbox_error)?
+            };
             let label = bridge.pane_display_name(pane).await.unwrap_or_else(|| pane.clone());
             Ok(MailActor { principal, label, pane: Some(pane.clone()), requester })
         }
@@ -201,10 +207,12 @@ pub async fn store_approved(bridge: &Bridge, msg: &PreparedMessage) -> Result<St
 
 pub async fn unread_for_pane(bridge: &Bridge, pane: &str) -> Result<usize, ApiError> {
     let store = context()?;
-    let sessions = bridge.sessions().await;
-    let (principal, _) = store.bindings.mailbox_identity(
-        &Principal::Pane(pane.into()), |pane| sessions.contains_key(pane),
-    ).map_err(mailbox_error)?;
+    let (principal, _) = {
+        let sessions = bridge.sessions().await;
+        store.bindings.mailbox_identity(
+            &Principal::Pane(pane.into()), |pane| sessions.contains_key(pane),
+        ).map_err(mailbox_error)?
+    };
     Ok(mailbox::inbox(&store.messages, &store.reads, &principal, Some(pane), true, 2000)
         .map_err(mailbox_error)?.len())
 }
@@ -277,7 +285,8 @@ pub async fn check(
 pub async fn approve_binding(bridge: &Bridge, req: &crate::perms::PermRequest) -> Result<(), ApiError> {
     let name = req.action.strip_prefix("bind:").ok_or_else(|| error(StatusCode::BAD_REQUEST, "Not a binding request."))?;
     let requester_key = format!("agent:{name}");
-    if req.requester != requester_key || !bridge.sessions().await.contains_key(&req.target_pane)
+    let pane_is_active = bridge.sessions().await.contains_key(&req.target_pane);
+    if req.requester != requester_key || !pane_is_active
         || !bridge.identity().list().await.iter().any(|agent| agent.name == name) {
         return Err(error(StatusCode::CONFLICT, "Binding target or requester changed; submit a new binding request."));
     }
@@ -304,7 +313,8 @@ pub async fn bind(
         CallerIdentity::Anonymous => return Err(error(StatusCode::UNAUTHORIZED, "Authentication required.")),
         _ => return Err(error(StatusCode::FORBIDDEN, "Only the agent itself or Hyperia can establish this binding.")),
     };
-    if !state.bridge.sessions().await.contains_key(&req.pane)
+    let pane_is_active = state.bridge.sessions().await.contains_key(&req.pane);
+    if !pane_is_active
         || !state.bridge.identity().list().await.iter().any(|a| a.name == name) {
         return Err(error(StatusCode::NOT_FOUND, "Active pane and registered agent are required."));
     }
@@ -344,4 +354,66 @@ pub async fn bind(
     let binding = context()?.bindings.verify_and_bind(name, &req.pane, proof, |_, _| verified).map_err(mailbox_error)?;
     state.bridge.arm_msg_notify(&req.pane).await;
     Ok(Json(serde_json::json!({"ok": true, "binding": binding})))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge::SessionInfo;
+    use crate::screen::ScreenBuffer;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn pane_token_actor_completes_without_relocking_sessions() {
+        let bridge = Bridge::new();
+        let pane = "messaging-pane-token-deadlock-regression";
+        bridge.sessions().await.insert(pane.into(), SessionInfo {
+            name: "shell".into(),
+            shell_name: "Mailbox regression".into(),
+            tab_name: "test".into(),
+            description: String::new(),
+            rows: 24,
+            cols: 80,
+            pid: 1,
+            root_tab_uid: "messaging-test-tab".into(),
+            window_id: 1,
+            split_label: "a".into(),
+            tab_order: 0,
+            tab_active: true,
+            pane_active: true,
+            screen: ScreenBuffer::new(24, 80, 1000),
+            bsp_x: 0.0,
+            bsp_y: 0.0,
+            bsp_w: 100.0,
+            bsp_h: 100.0,
+            cwd: String::new(),
+            last_user_activity: None,
+            last_output_at: None,
+            title: String::new(),
+            shell_state: "idle".into(),
+            shell_app: None,
+            shell_last_exit: None,
+            shell_has_integration: false,
+        });
+        let token = bridge.perms().token_for(pane).await;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+
+        // Exercise the real pane-token resolution used by check/inbox/send,
+        // then actor_from_identity's pane branch and its display-name lookup.
+        let who = tokio::time::timeout(Duration::from_secs(2), actor(&bridge, &headers))
+            .await.expect("pane-token mailbox actor deadlocked")
+            .expect("pane-token caller should be authorized");
+        assert_eq!(who.principal, Principal::Pane(pane.into()));
+        assert_eq!(who.pane.as_deref(), Some(pane));
+        assert_eq!(who.label, "Mailbox regression");
+        assert_eq!(who.requester, format!("pane:{pane}"));
+
+        // A successful call must also leave the shared session table usable.
+        drop(tokio::time::timeout(Duration::from_secs(2), bridge.sessions())
+            .await.expect("mailbox actor retained the session lock"));
+    }
 }

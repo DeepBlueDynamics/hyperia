@@ -24,6 +24,8 @@ const SESSION_HEADER: &str = "mcp-session-id";
 const MAX_SESSIONS: usize = 10_000;
 const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 const PANE_CLAIM_QUIET_MS: u64 = 60_000;
+/// How stale the PERSISTED last_used_ms may get before resume() rewrites the store.
+const RESUME_PERSIST_EVERY_MS: u64 = 30_000;
 const PANE_CONFLICT: &str = "Pane token is already bound to another live MCP session";
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -45,6 +47,9 @@ pub(crate) struct LogicalSession {
     // Internal proxy credential, never returned by whoami or initialize.
     #[serde(skip)]
     pub forward_token: String,
+    // When last_used_ms was last written to disk (memory-only; see resume()).
+    #[serde(skip)]
+    pub persisted_used_ms: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -227,6 +232,8 @@ impl SessionStore {
                 revoked: false,
                 expires_ms: None,
                 forward_token: format!("hyp_mcp_{}", random_hex(32)?),
+                // Written by the persist() right below.
+                persisted_used_ms: now_ms(),
             };
         };
         let mut next = records.clone();
@@ -253,9 +260,16 @@ impl SessionStore {
         let record = next.iter_mut().find(|r| r.session_id == id && r.parent == parent
             && r.parent_is_pane == parent_is_pane && r.active())
             .ok_or("Unknown, revoked, or foreign MCP session")?;
-        record.last_used_ms = now_ms();
+        // resume() runs on EVERY session request. The claim rule reads
+        // last_used_ms from memory, so only write the store (an fsync'd full
+        // rewrite, done under this lock) when the persisted value is stale.
+        // Writing per request stalled every MCP call under disk load.
+        let now = now_ms();
+        let stale = now.saturating_sub(record.persisted_used_ms) >= RESUME_PERSIST_EVERY_MS;
+        record.last_used_ms = now;
+        if stale { record.persisted_used_ms = now; }
         let result = record.clone();
-        self.persist(&next)?;
+        if stale { self.persist(&next)?; }
         *records = next;
         Ok(result)
     }

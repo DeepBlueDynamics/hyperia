@@ -170,6 +170,18 @@ fn valid_agent_name(name: &str) -> bool {
         && !name.eq_ignore_ascii_case("anonymous")
 }
 
+/// Stable machine-readable code for a register() refusal, so HTTP clients match
+/// on a code instead of prose (the prose may be reworded; codes may not).
+pub fn register_error_code(error: &str) -> &'static str {
+    match error {
+        e if e.starts_with("Identity already exists") => "identity_exists",
+        e if e.starts_with("Invalid or reserved") => "invalid_name",
+        e if e.starts_with("Identity name belongs to an MCP session") => "name_reserved_by_session",
+        e if e.contains("storage unavailable") => "storage_unavailable",
+        _ => "register_failed",
+    }
+}
+
 impl IdentityStore {
     #[cfg(test)]
     pub(crate) fn for_tests(path: PathBuf, agents: Vec<AgentRecord>) -> Self {
@@ -341,5 +353,13 @@ mod tests {
         assert!(!store.is_system("test-secret"));
         assert_eq!(store.list().await.len(), 1);
     }
+#[test]
+    fn register_refusals_have_stable_codes() {
+        assert_eq!(super::register_error_code("Identity already exists; present its credential."), "identity_exists");
+        assert_eq!(super::register_error_code("Invalid or reserved identity name."), "invalid_name");
+        assert_eq!(super::register_error_code("Identity name belongs to an MCP session."), "name_reserved_by_session");
+        assert_eq!(super::register_error_code("MCP session storage unavailable."), "storage_unavailable");
+    }
 }
+
 
