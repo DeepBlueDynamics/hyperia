@@ -36,6 +36,7 @@ import * as config from './utils/config';
 import {getBase64FileData} from './utils/file';
 import {serializeLayoutState} from './utils/layout-serialize';
 import {toNavigableUrl} from './utils/navigable-url';
+import {installLayoutScrollPin} from './utils/pin-layout-scroll';
 import * as plugins from './utils/plugins';
 import {syncWebUrls} from './utils/web-url-sync';
 
@@ -764,6 +765,7 @@ store_.subscribe(() => {
   rpc.emit('session layout sync', tabs);
 });
 
+installLayoutScrollPin();
 const root = createRoot(document.getElementById('mount')!);
 
 root.render(
