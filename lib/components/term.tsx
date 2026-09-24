@@ -2941,9 +2941,14 @@ export default class Term extends React.PureComponent<
     const hideQuickLayout = w < LADDER.quickLayout;
     const hideSplitRightLeft = w < LADDER.splitRightLeft;
     const hideSplitUpDown = w < LADDER.splitUpDown;
-    const hideNavArrows = w < LADDER.navArrows;
-    const hideClearBuffer = w < LADDER.clearBuffer;
-    const hideScreenshot = w < LADDER.screenshot;
+    // A picker pane has no terminal: nothing to navigate, clear or screenshot,
+    // and on the picker these rendered past the pane's left border. So the nav
+    // cluster (nav arrows, clear, screenshot) is hidden there; splits, quick
+    // layout and pulse stay on pickers, subject to the width ladder.
+    const onPicker = (this.props as any).sessionProfile === 'picker';
+    const hideNavArrows = onPicker || w < LADDER.navArrows;
+    const hideClearBuffer = onPicker || w < LADDER.clearBuffer;
+    const hideScreenshot = onPicker || w < LADDER.screenshot;
     const dirIconOnly = w < LADDER.dirIconOnly;
     // Find-bar match counts (xterm reports a 0-based resultIndex).
     const sr = this.state.searchResults as {resultIndex: number; resultCount: number} | undefined;
