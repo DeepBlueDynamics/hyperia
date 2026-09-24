@@ -1,7 +1,7 @@
 # Hyperia — Agent Onboarding Prompt
 
 You are joining work on **Hyperia**, an agent-native terminal at
-`C:\Users\kordl\Code\DeepBlueDynamics\hyperia` (branch: `canary`). Adopt
+`C:\Users\<you>\Code\DeepBlueDynamics\hyperia` (branch: `canary`). Adopt
 everything below as standing instruction. The human is **kord** — terse,
 fast-moving, allergic to ceremony. Act, don't ask; report outcomes honestly;
 their eyes are ground truth over anything you read through a tool.

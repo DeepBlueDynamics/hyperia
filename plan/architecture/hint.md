@@ -10,14 +10,14 @@ Add a `"ferricula"` entry alongside the existing `"hyperia"` sidecar:
 {
   "mcpServers": {
     "hyperia": {
-      "command": "C:\\Users\\kordl\\Code\\Gnosis\\hyperia\\sidecar\\target\\debug\\hyperia-sidecar.exe",
+      "command": "C:\\Users\\<you>\\Code\\Gnosis\\hyperia\\sidecar\\target\\debug\\hyperia-sidecar.exe",
       "args": ["--mcp"]
     },
     "ferricula": {
       "type": "stdio",
       "command": "python",
       "args": [
-        "C:/Users/kordl/Code/Gnosis/ferricula/tools/ferricula-mcp.py"
+        "C:/Users/<you>/Code/Gnosis/ferricula/tools/ferricula-mcp.py"
       ],
       "env": {
         "NO_COLOR": "1",
