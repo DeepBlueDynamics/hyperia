@@ -187,6 +187,19 @@ pub async fn terminal_run(HttpState(state): HttpState<AppState>, headers: Header
     submit_input(&state.bridge, &headers, req, false).await.map(response)
 }
 
+/// A trailing CR/LF on agent text is Enter, not part of the bracketed paste.
+/// Ink TUIs treat a CR inside the paste as a newline and do not submit.
+fn normalize_agent_enter(text: String, submit: bool, agent: bool) -> (String, bool) {
+    if !agent {
+        return (text, submit);
+    }
+    let body = text.trim_end_matches(['\r', '\n']);
+    if body.len() == text.len() {
+        return (text, submit);
+    }
+    (body.to_string(), true)
+}
+
 pub async fn submit_input(bridge: &Bridge, headers: &HeaderMap, req: InputRequest, agent: bool)
     -> Result<Operation, ApiError> {
     let _gate = WORKFLOW.lock().await;
@@ -194,8 +207,10 @@ pub async fn submit_input(bridge: &Bridge, headers: &HeaderMap, req: InputReques
     let kind = if agent { "pane" } else { "shell" };
     let original = value(&req)?;
     if let Some(op) = replay(&sender, req.idempotency_key.as_deref(), kind, &original).await? { return Ok(op); }
-    if req.text.trim().is_empty() || req.text.chars().count() > 16_384
-        || req.text.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
+    let (text, submit) = normalize_agent_enter(req.text.clone(), req.submit.unwrap_or(true), agent);
+    let bare_enter = agent && text.is_empty() && submit && !req.text.is_empty();
+    if !bare_enter && (text.trim().is_empty() || text.chars().count() > 16_384
+        || text.chars().any(|c| c.is_control() && c != '\n' && c != '\t')) {
         return Err(messaging::error(StatusCode::BAD_REQUEST, "Input must be plain text of 1–16384 characters, without control sequences."));
     }
     if !agent && !req.submit.unwrap_or(true) && req.text.contains('\n') {
@@ -228,11 +243,11 @@ pub async fn submit_input(bridge: &Bridge, headers: &HeaderMap, req: InputReques
             || bridge.grant_allows(&sender.requester, &pane).await;
         (allowed, "drive".to_string())
     };
-    let payload = InputPayload { sender: sender.clone(), recipient, pane: pane.clone(), pid, text: req.text, agent, raw: false, interrupt: false };
+    let payload = InputPayload { sender: sender.clone(), recipient, pane: pane.clone(), pid, text, agent, raw: false, interrupt: false };
     let mut payload = value(&payload)?;
     payload["request"] = request_metadata(original);
     retain(bridge, &sender, &pane, kind, payload,
-        req.submit.unwrap_or(true), req.idempotency_key, approved, &action,
+        submit, req.idempotency_key, approved, &action,
         if agent { "Send this retained text to the agent." } else { "Run this retained command at the shell prompt." }).await
 }
 
@@ -283,14 +298,40 @@ pub async fn consent_operations(consent_id: &str, requester: &str) -> Result<Vec
     store().await?.consent_operations(consent_id, requester).await.map_err(operation_error)
 }
 
+/// Refresh only recipient read state; receipt identities never enter the response.
+fn refresh_mail_read_status(
+    body: &mut serde_json::Value,
+    messages: &std::path::Path,
+    reads: &std::path::Path,
+) -> Result<(), crate::msgbus::mailbox::MailboxError> {
+    if body["operation"]["kind"] != "mail" {
+        return Ok(());
+    }
+    for pointer in ["/operation/outcome", "/completion_pending/outcome"] {
+        if let Some(outcome) = body.pointer_mut(pointer) {
+            if let Some(id) = outcome["message_id"].as_str() {
+                let read = crate::msgbus::mailbox::recipient_has_read(messages, reads, id)?;
+                outcome["read"] = serde_json::json!(read);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn status(HttpState(state): HttpState<AppState>, headers: HeaderMap, Query(params): Query<HashMap<String, String>>)
     -> Result<OperationResponse, ApiError> {
     let who = messaging::actor(&state.bridge, &headers).await?;
     let id = params.get("id").ok_or_else(|| messaging::error(StatusCode::BAD_REQUEST, "Operation id required."))?;
+    // Authorize the operation owner BEFORE consulting message receipts.
     let op = store().await?.get(id, &who.requester).await.map_err(operation_error)?;
     let mut body = response_body(op);
     if let Some((_, state, outcome)) = COMPLETIONS.lock().await.iter().find(|(pending, _, _)| pending == id) {
         body.0["completion_pending"] = serde_json::json!({"state": state, "outcome": outcome});
+    }
+    if body.0["operation"]["kind"] == "mail" {
+        let mail = messaging::context()?;
+        refresh_mail_read_status(&mut body.0, &mail.messages, &mail.reads)
+            .map_err(messaging::mailbox_error)?;
     }
     Ok((StatusCode::OK, body))
 }
@@ -364,9 +405,10 @@ pub async fn tick(bridge: &Bridge) {
             finish(store, &op, State::Failed, serde_json::json!({"error": "Target pane incarnation, recipient, or foreground changed."})).await;
             continue;
         }
+        let (text, submit) = normalize_agent_enter(payload.text.clone(), op.submit, payload.agent && !payload.raw);
         let result = bridge.guarded_input(&payload.pane, serde_json::json!({
             "type": "GuardedInput", "uid": payload.pane, "pid": payload.pid,
-            "text": payload.text, "submit": op.submit, "agent": payload.agent,
+            "text": text, "submit": submit, "agent": payload.agent,
             "control": payload.raw, "interrupt": payload.interrupt,
         })).await;
         let outcome = result.ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
@@ -384,6 +426,73 @@ pub async fn tick(bridge: &Bridge) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mail_status_tracks_recipient_read_and_check_without_exposing_receipts() {
+        use crate::msgbus::mailbox;
+        for use_check in [false, true] {
+            let unique = mailbox::generate_message_id(now_ms()).unwrap();
+            let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("target/test_fixtures").join(unique);
+            std::fs::create_dir_all(&dir).unwrap();
+            let messages = dir.join("messages.jsonl");
+            let reads = dir.join("reads.jsonl");
+            let sender = Principal::Agent("sender".into());
+            let recipient = Principal::Agent("recipient".into());
+            let id = mailbox::send_message(&messages, mailbox::SendParams {
+                from: &sender, to: &recipient, body: "private task", subject: "",
+                to_pane_hint: None, from_pane_hint: None, to_label: None,
+                from_label: None, idempotency_key: None,
+            }).unwrap();
+            let snapshot = serde_json::json!({
+                "message_id": id, "stored": true, "read": false
+            });
+            let op = Operation {
+                id: "op".into(), requester: sender.to_key(), target: recipient.to_key(),
+                kind: "mail".into(), payload: serde_json::json!({}), submit: false,
+                idempotency_key: None, expires_ms: 0, created_ms: 0,
+                state: State::Submitted, consent_id: None, outcome: Some(snapshot.clone()),
+            };
+            let mut before = response_body(op.clone());
+            refresh_mail_read_status(&mut before.0, &messages, &reads).unwrap();
+            assert_eq!(before.0["operation"]["outcome"], snapshot);
+            assert!(!reads.exists(), "status must not acknowledge mail");
+            assert!(mailbox::acknowledge_message(&reads, &messages, &id, &sender, None).is_err());
+            if use_check {
+                let checked = mailbox::check_inbox(&messages, &reads, &recipient, None, 10).unwrap();
+                assert_eq!(checked.len(), 1);
+                assert!(checked[0].read);
+            } else {
+                mailbox::acknowledge_message(&reads, &messages, &id, &recipient, None).unwrap();
+            }
+            // Build a fresh response from the unchanged submission snapshot.
+            let mut after = response_body(op);
+            after.0["completion_pending"] = serde_json::json!({
+                "state": "submitted", "outcome": snapshot
+            });
+            refresh_mail_read_status(&mut after.0, &messages, &reads).unwrap();
+            let expected = serde_json::json!({"message_id": id, "stored": true, "read": true});
+            assert_eq!(after.0["operation"]["outcome"], expected);
+            assert_eq!(after.0["completion_pending"]["outcome"], expected);
+            assert!(!after.0.to_string().contains("readerPrincipal"));
+            assert!(!after.0.to_string().contains("reader_label"));
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn read_status_skips_non_mail_and_unsubmitted_mail_without_file_access() {
+        let absent = std::path::Path::new("no-message-store-for-this-operation");
+        for mut body in [
+            serde_json::json!({"operation": {"kind": "pane", "outcome": {"message_id": "id"}}}),
+            serde_json::json!({"operation": {"kind": "mail", "outcome": null}}),
+            serde_json::json!({"operation": {"kind": "mail", "outcome": {"error": "denied"}}}),
+        ] {
+            let before = body.clone();
+            refresh_mail_read_status(&mut body, absent, absent).unwrap();
+            assert_eq!(body, before);
+        }
+    }
 
     #[test]
     fn replay_compares_content_target_and_submit_without_duplicating_unicode_body() {
@@ -404,4 +513,20 @@ mod tests {
         }
         assert!(!replay_matches(&op, "shell", &request));
     }
+    #[test]
+    fn agent_trailing_return_is_enter_not_paste_body() {
+        let (body, submit) = normalize_agent_enter("hello\r".into(), false, true);
+        assert_eq!(body, "hello");
+        assert!(submit);
+        let (body, submit) = normalize_agent_enter("line1\nline2\r\n".into(), false, true);
+        assert_eq!(body, "line1\nline2");
+        assert!(submit);
+        let (body, submit) = normalize_agent_enter("hello".into(), false, true);
+        assert_eq!(body, "hello");
+        assert!(!submit);
+        let (body, submit) = normalize_agent_enter("echo hi\n".into(), false, false);
+        assert_eq!(body, "echo hi\n");
+        assert!(!submit);
+    }
 }
+

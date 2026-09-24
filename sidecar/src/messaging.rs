@@ -68,19 +68,17 @@ pub async fn actor_from_identity(bridge: &Bridge, id: &CallerIdentity) -> Result
         CallerIdentity::Anonymous => Err(error(StatusCode::UNAUTHORIZED, "Authentication required for messaging.")),
         CallerIdentity::System => Ok(MailActor { principal: Principal::System, label: "Hyperia".into(), pane: None, requester }),
         CallerIdentity::Agent { name, .. } => {
-            let pane = store.bindings.pane_for_agent(name);
-            let pane = match pane {
-                Some(pane) if bridge.sessions().await.contains_key(&pane) => Some(pane),
-                _ => None,
-            };
-            Ok(MailActor { principal: Principal::Agent(name.clone()), label: name.clone(), pane, requester })
+            let sessions = bridge.sessions().await;
+            let (principal, pane) = store.bindings.mailbox_identity(
+                &Principal::Agent(name.clone()), |pane| sessions.contains_key(pane),
+            ).map_err(mailbox_error)?;
+            Ok(MailActor { principal, label: name.clone(), pane, requester })
         }
         CallerIdentity::Pane { pane, .. } => {
-            if !bridge.sessions().await.contains_key(pane) {
-                return Err(error(StatusCode::UNAUTHORIZED, "The authenticated pane is no longer active."));
-            }
-            let principal = store.bindings.agent_for_pane(pane)
-                .map(Principal::Agent).unwrap_or_else(|| Principal::Pane(pane.clone()));
+            let sessions = bridge.sessions().await;
+            let (principal, _) = store.bindings.mailbox_identity(
+                &Principal::Pane(pane.clone()), |pane| sessions.contains_key(pane),
+            ).map_err(mailbox_error)?;
             let label = bridge.pane_display_name(pane).await.unwrap_or_else(|| pane.clone());
             Ok(MailActor { principal, label, pane: Some(pane.clone()), requester })
         }
@@ -158,8 +156,9 @@ pub async fn prepare(bridge: &Bridge, headers: &HeaderMap, req: SendRequest) -> 
     let store = context()?;
     let (recipient, recipient_label, target_pane) = if has_pane {
         let pane = resolve_target(bridge, &req).await?;
-        let principal = store.bindings.agent_for_pane(&pane)
-            .map(Principal::Agent).unwrap_or_else(|| Principal::Pane(pane.clone()));
+        // Preserve the explicit address: pane mail belongs to the pane even if
+        // its agent binding changes before delivery or before the next read.
+        let principal = Principal::Pane(pane.clone());
         let label = bridge.pane_display_name(&pane).await.unwrap_or_else(|| pane.clone());
         (principal, label, Some(pane))
     } else {
@@ -201,8 +200,10 @@ pub async fn store_approved(bridge: &Bridge, msg: &PreparedMessage) -> Result<St
 
 pub async fn unread_for_pane(bridge: &Bridge, pane: &str) -> Result<usize, ApiError> {
     let store = context()?;
-    let principal = store.bindings.agent_for_pane(pane)
-        .map(Principal::Agent).unwrap_or_else(|| Principal::Pane(pane.into()));
+    let sessions = bridge.sessions().await;
+    let (principal, _) = store.bindings.mailbox_identity(
+        &Principal::Pane(pane.into()), |pane| sessions.contains_key(pane),
+    ).map_err(mailbox_error)?;
     Ok(mailbox::inbox(&store.messages, &store.reads, &principal, Some(pane), true, 2000)
         .map_err(mailbox_error)?.len())
 }
@@ -219,6 +220,9 @@ pub async fn inbox(
     let unread = params.get("unread_only").is_some_and(|s| s == "1" || s == "true");
     let results = mailbox::inbox(&store.messages, &store.reads, &who.principal, who.pane.as_deref(), unread, limit(&params))
         .map_err(mailbox_error)?;
+    if let Some(pane) = who.pane.as_deref() {
+        state.bridge.clear_msg_notify_delivered(pane).await;
+    }
     Ok(Json(serde_json::json!({"ok": true, "me": who.label, "principal": who.principal.to_key(), "pane": who.pane, "binding_required": matches!(who.principal, Principal::Agent(_)) && who.pane.is_none(), "binding_hint": if matches!(who.principal, Principal::Agent(_)) && who.pane.is_none() { Some("Call pane_bind with your current pane ID; provide its credential or approve the association. Pane-addressed mail requires this verified binding.") } else { None }, "count": results.len(), "results": results})))
 }
 
@@ -251,15 +255,21 @@ pub async fn read(
 }
 
 #[derive(Deserialize)]
-pub struct CheckRequest { pub limit: Option<usize> }
+pub struct CheckRequest {
+    pub limit: Option<usize>,
+    pub ack_ids: Option<Vec<String>>,
+}
 
 pub async fn check(
     State(state): State<AppState>, headers: HeaderMap, Json(req): Json<CheckRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let who = actor(&state.bridge, &headers).await?;
     let store = context()?;
-    let results = mailbox::check_inbox(&store.messages, &store.reads, &who.principal, who.pane.as_deref(),
-        req.limit.unwrap_or(100).clamp(1, 2000)).map_err(mailbox_error)?;
+    let results = mailbox::check_inbox_with_ack(&store.messages, &store.reads, &who.principal, who.pane.as_deref(),
+        req.limit.unwrap_or(100).clamp(1, 2000), req.ack_ids.as_deref()).map_err(mailbox_error)?;
+    if let Some(pane) = who.pane.as_deref() {
+        state.bridge.clear_msg_notify_delivered(pane).await;
+    }
     Ok(Json(serde_json::json!({"ok": true, "me": who.label, "principal": who.principal.to_key(), "pane": who.pane, "binding_required": matches!(who.principal, Principal::Agent(_)) && who.pane.is_none(), "binding_hint": if matches!(who.principal, Principal::Agent(_)) && who.pane.is_none() { Some("Call pane_bind with your current pane ID; provide its credential or approve the association. Pane-addressed mail requires this verified binding.") } else { None }, "count": results.len(), "results": results})))
 }
 

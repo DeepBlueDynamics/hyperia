@@ -27,7 +27,8 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
       _profile: string | undefined,
       url?: string,
       splitPlacement?: 'BEFORE' | 'AFTER',
-      isAgentInitiated?: boolean
+      isAgentInitiated?: boolean,
+      _cwd?: string
     ) =>
     (dispatch: HyperDispatch, getState: () => HyperState): void => {
       const {sessions, termGroups} = getState();
@@ -72,7 +73,7 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
             }
           }
           const activeSession = currentActiveUid ? currentSessions.sessions[currentActiveUid] : null;
-          const cwd = (activeSession && activeSession.cwd) || ui.cwd;
+          const cwd = _cwd || (activeSession && activeSession.cwd) || ui.cwd;
           // UI-initiated splits ALWAYS show the pane-type PICKER — you pick what
           // goes in the new pane (both directions, any source). An explicit
           // `_profile` still wins: agent terminal_split passes a real profile so
@@ -106,7 +107,8 @@ export function resizeTermGroup(uid: string, sizes: number[]): HyperActions {
 export function requestTermGroup(
   _activeUid: string | undefined,
   _profile: string | undefined,
-  isAgentInitiated?: boolean
+  isAgentInitiated?: boolean,
+  _cwd?: string
 ) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     dispatch({
@@ -115,7 +117,7 @@ export function requestTermGroup(
         const {ui, sessions} = getState();
         const activeUid = _activeUid ? _activeUid : sessions.activeUid;
         const activeSession = activeUid && sessions.sessions[activeUid] ? sessions.sessions[activeUid] : null;
-        const cwd = (activeSession && activeSession.cwd) || ui.cwd;
+        const cwd = _cwd || (activeSession && activeSession.cwd) || ui.cwd;
         // A new tab opens the CONFIGURED DEFAULT profile — NOT whatever the
         // currently-focused pane happens to be running. Inheriting the active
         // pane's profile meant that focusing a special profile (e.g. the

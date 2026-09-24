@@ -36,6 +36,7 @@ import * as config from './utils/config';
 import {getBase64FileData} from './utils/file';
 import {serializeLayoutState} from './utils/layout-serialize';
 import {toNavigableUrl} from './utils/navigable-url';
+import {installLayoutScrollPin} from './utils/pin-layout-scroll';
 import * as plugins from './utils/plugins';
 import {syncWebUrls} from './utils/web-url-sync';
 
@@ -374,8 +375,10 @@ rpc.on('session search close', () => {
   store_.dispatch(sessionActions.closeSearch());
 });
 
-rpc.on('termgroup add req', ({activeUid, profile, isAgentInitiated}) => {
-  store_.dispatch(termGroupActions.requestTermGroup(activeUid ?? undefined, profile ?? undefined, isAgentInitiated));
+rpc.on('termgroup add req', ({activeUid, profile, isAgentInitiated, cwd}) => {
+  store_.dispatch(
+    termGroupActions.requestTermGroup(activeUid ?? undefined, profile ?? undefined, isAgentInitiated, cwd)
+  );
 });
 
 // Main kept the LAST window alive after its last pane was closed (instead of
@@ -385,26 +388,28 @@ rpc.on('reset-to-picker', () => {
   store_.dispatch(termGroupActions.requestTermGroup(undefined, 'picker'));
 });
 
-rpc.on('split request horizontal', ({activeUid, profile, url, splitPlacement, isAgentInitiated}) => {
+rpc.on('split request horizontal', ({activeUid, profile, url, splitPlacement, isAgentInitiated, cwd}) => {
   store_.dispatch(
     termGroupActions.requestHorizontalSplit(
       activeUid ?? undefined,
       profile ?? undefined,
       url,
       splitPlacement,
-      isAgentInitiated
+      isAgentInitiated,
+      cwd
     )
   );
 });
 
-rpc.on('split request vertical', ({activeUid, profile, url, splitPlacement, isAgentInitiated}) => {
+rpc.on('split request vertical', ({activeUid, profile, url, splitPlacement, isAgentInitiated, cwd}) => {
   store_.dispatch(
     termGroupActions.requestVerticalSplit(
       activeUid ?? undefined,
       profile ?? undefined,
       url,
       splitPlacement,
-      isAgentInitiated
+      isAgentInitiated,
+      cwd
     )
   );
 });
@@ -760,6 +765,7 @@ store_.subscribe(() => {
   rpc.emit('session layout sync', tabs);
 });
 
+installLayoutScrollPin();
 const root = createRoot(document.getElementById('mount')!);
 
 root.render(

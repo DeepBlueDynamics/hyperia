@@ -42,6 +42,12 @@ export interface TermGroupAddWebTabAction {
   url: string;
 }
 
+export const TERM_GROUP_SET_ACTIVE = 'TERM_GROUP_SET_ACTIVE';
+export interface TermGroupSetActiveAction {
+  type: typeof TERM_GROUP_SET_ACTIVE;
+  uid: string;
+}
+
 export const TERM_GROUP_ACTIVATE_WEB_TAB = 'TERM_GROUP_ACTIVATE_WEB_TAB';
 export interface TermGroupActivateWebTabAction {
   type: typeof TERM_GROUP_ACTIVATE_WEB_TAB;
@@ -104,6 +110,7 @@ export type TermGroupActions =
   | TermGroupSetWebUrlAction
   | TermGroupAddWebTabAction
   | TermGroupActivateWebTabAction
+  | TermGroupSetActiveAction
   | TermGroupSetWebNameAction
   | TermGroupSetTabNameAction
   | TermGroupToggleTitleInheritanceAction

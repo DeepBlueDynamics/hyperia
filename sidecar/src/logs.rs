@@ -25,7 +25,12 @@ impl Write for LogBufferWriter {
                 if buffer.len() >= MAX_LINES {
                     buffer.pop_front();
                 }
-                buffer.push_back(line.to_string());
+                if line.len() > 4000 {
+                    let truncated: String = line.chars().take(4000).collect();
+                    buffer.push_back(format!("{truncated}…[truncated]"));
+                } else {
+                    buffer.push_back(line.to_string());
+                }
             }
         }
         Ok(buf.len())

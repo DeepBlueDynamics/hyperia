@@ -924,10 +924,10 @@ export function newWindow(
     // — the window keeps the proper Hyperia icon set at creation (winOpts.icon).
     window.setTitle(title ? `${title} — Hyperia` : 'Hyperia');
   });
-  rpc.on('split request vertical', (options: {activeUid?: string | null; profile?: string | null}) => {
+  rpc.on('split request vertical', (options: {activeUid?: string | null; profile?: string | null; cwd?: string}) => {
     rpc.emit('split request vertical', options);
   });
-  rpc.on('split request horizontal', (options: {activeUid?: string | null; profile?: string | null}) => {
+  rpc.on('split request horizontal', (options: {activeUid?: string | null; profile?: string | null; cwd?: string}) => {
     rpc.emit('split request horizontal', options);
   });
   rpc.on(

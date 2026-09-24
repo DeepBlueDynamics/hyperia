@@ -225,6 +225,16 @@ pub struct MsgInboxRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct MsgCheckRequest {
+    /// Max unread messages to return (default 100, maximum 2000).
+    pub limit: Option<usize>,
+    /// Optional prior message IDs to acknowledge (maximum 2000).
+    /// Present, including [], leaves the newly returned batch unread for retry.
+    /// Omitted preserves automatic acknowledgement of returned messages.
+    pub ack_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct MsgReadRequest {
     /// The message id (msg_...) to mark read.
     pub id: String,
@@ -742,8 +752,10 @@ pub struct AutoDescribeRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NoteCreateRequest {
     /// Initial text content for the note (optional)
+    #[serde(alias = "content", alias = "body")]
     pub text: Option<String>,
     /// Background color hex (e.g. "#fff9c4" for yellow). Omit to auto-assign.
     pub color: Option<String>,
@@ -786,10 +798,12 @@ pub struct StickyNoteCreateCodeRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StickyNoteUpdateRequest {
     /// Note ID from sticky_note_list output
     pub id: String,
     /// New text content for the note
+    #[serde(alias = "content", alias = "body")]
     pub text: String,
 }
 
@@ -974,10 +988,13 @@ impl HyperiaMcp {
             // pooled connections — a stale keep-alive to ourselves after a
             // network-state change produced instant "error sending request"
             // on the write path (the 0.17.42 wedge: reads fine, writes dead).
+            // Connect-level retries in post_json_as / get_as cover transient
+            // EADDRINUSE under system-wide port exhaustion.
             client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
                 .connect_timeout(std::time::Duration::from_secs(3))
                 .pool_max_idle_per_host(0)
+                .tcp_nodelay(true)
                 .build()
                 .unwrap_or_default(),
             base_url,
@@ -2052,9 +2069,12 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Fetch your unread mail and acknowledge exactly the messages returned. The response marks them read. Use msg_inbox for a read-only preview. No other caller can acknowledge your mail.")]
-    async fn msg_check(&self, Parameters(req): Parameters<MsgInboxRequest>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
-        let body = serde_json::json!({"limit": req.limit});
+    #[tool(description = "Fetch unread mail. By default, acknowledge exactly the returned messages. For at-least-once delivery, pass ack_ids with the IDs you successfully received last time (first call: []). With ack_ids present, only those IDs are acknowledged; newly returned messages remain unread. Use msg_inbox for a read-only preview or msg_read to confirm one message. No other caller can acknowledge your mail.")]
+    async fn msg_check(&self, Parameters(req): Parameters<MsgCheckRequest>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let mut body = serde_json::json!({"limit": req.limit});
+        if let Some(ids) = req.ack_ids {
+            body["ack_ids"] = serde_json::json!(ids);
+        }
         let resp = self.post_json_as("/api/msg/check", &body, forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
@@ -3595,27 +3615,47 @@ impl HyperiaMcp {
     }
 
     async fn get(&self, path: &str) -> Result<String, ErrorData> {
-        let resp = self.client
-            .get(format!("{}{}", self.base_url, path))
-            .send()
-            .await
-            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
-        resp.text().await
-            .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
+        self.get_as(path, None).await
     }
 
     /// GET that forwards a caller Authorization header so identity-gated read
     /// endpoints (enforce_identified) resolve the real caller instead of
     /// anonymous. Used by sidecar_logs / audit_search. (#96)
     async fn get_as(&self, path: &str, auth: Option<&str>) -> Result<String, ErrorData> {
-        let mut rb = self.client.get(format!("{}{}", self.base_url, path));
-        if let Some(a) = auth {
-            rb = rb.header(reqwest::header::AUTHORIZATION, a);
-        }
-        let resp = rb
-            .send()
-            .await
-            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+        let url = format!("{}{}", self.base_url, path);
+        let send_req = || {
+            let mut rb = self.client.get(&url);
+            if let Some(a) = auth {
+                rb = rb.header(reqwest::header::AUTHORIZATION, a);
+            }
+            rb
+        };
+
+        let resp = match send_req().send().await {
+            Ok(r) => r,
+            Err(e) => {
+                if e.is_timeout() {
+                    return Err(ErrorData::internal_error(
+                        "timed out waiting (possibly for consent); approve and retry",
+                        None,
+                    ));
+                }
+                // GET is idempotent: retry once on connection failure
+                if e.is_connect() {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    send_req().send().await
+                        .map_err(|retry_e| {
+                            if retry_e.is_timeout() {
+                                ErrorData::internal_error("timed out waiting (possibly for consent); approve and retry", None)
+                            } else {
+                                ErrorData::internal_error(format!("HTTP error: {retry_e} (initial connect error: {e})"), None)
+                            }
+                        })?
+                } else {
+                    return Err(ErrorData::internal_error(format!("HTTP error: {e}"), None));
+                }
+            }
+        };
         resp.text()
             .await
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
@@ -3641,7 +3681,13 @@ impl HyperiaMcp {
             req = req.timeout(t);
         }
         let resp = req.send().await
-            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    ErrorData::internal_error("timed out waiting (possibly for consent); approve and retry", None)
+                } else {
+                    ErrorData::internal_error(format!("HTTP error: {e}"), None)
+                }
+            })?;
         resp.text().await
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
     }
@@ -3675,14 +3721,40 @@ impl HyperiaMcp {
         body: &serde_json::Value,
         auth: Option<&str>,
     ) -> Result<String, ErrorData> {
-        let mut rb = self.client.post(format!("{}{}", self.base_url, path)).json(body);
-        if let Some(a) = auth {
-            rb = rb.header(reqwest::header::AUTHORIZATION, a);
-        }
-        let resp = rb
-            .send()
-            .await
-            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+        let url = format!("{}{}", self.base_url, path);
+        let send_req = || {
+            let mut rb = self.client.post(&url).json(body);
+            if let Some(a) = auth {
+                rb = rb.header(reqwest::header::AUTHORIZATION, a);
+            }
+            rb
+        };
+
+        let resp = match send_req().send().await {
+            Ok(r) => r,
+            Err(e) => {
+                if e.is_timeout() {
+                    return Err(ErrorData::internal_error(
+                        "timed out waiting (possibly for consent); approve and retry",
+                        None,
+                    ));
+                }
+                let is_keyed = body.get("idempotency_key").and_then(|v| v.as_str()).is_some();
+                if e.is_connect() || is_keyed {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    send_req().send().await
+                        .map_err(|retry_e| {
+                            if retry_e.is_timeout() {
+                                ErrorData::internal_error("timed out waiting (possibly for consent); approve and retry", None)
+                            } else {
+                                ErrorData::internal_error(format!("HTTP error: {retry_e} (initial connect error: {e})"), None)
+                            }
+                        })?
+                } else {
+                    return Err(ErrorData::internal_error(format!("HTTP error: {e}"), None));
+                }
+            }
+        };
         resp.text()
             .await
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
@@ -3707,32 +3779,24 @@ impl HyperiaMcp {
         let resp = rb
             .send()
             .await
-            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    ErrorData::internal_error("timed out waiting (possibly for consent); approve and retry", None)
+                } else {
+                    ErrorData::internal_error(format!("HTTP error: {e}"), None)
+                }
+            })?;
         resp.text()
             .await
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
     }
 
     async fn post_json(&self, path: &str, body: &serde_json::Value) -> Result<String, ErrorData> {
-        let resp = self.client
-            .post(format!("{}{}", self.base_url, path))
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
-        resp.text().await
-            .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
+        self.post_json_as(path, body, None).await
     }
 
     async fn patch_json(&self, path: &str, body: &serde_json::Value) -> Result<String, ErrorData> {
-        let resp = self.client
-            .patch(format!("{}{}", self.base_url, path))
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
-        resp.text().await
-            .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
+        self.patch_json_as(path, body, None).await
     }
 
     /// PATCH that forwards the caller's Authorization header so identity-gated
@@ -3744,14 +3808,40 @@ impl HyperiaMcp {
         body: &serde_json::Value,
         auth: Option<&str>,
     ) -> Result<String, ErrorData> {
-        let mut rb = self.client.patch(format!("{}{}", self.base_url, path)).json(body);
-        if let Some(a) = auth {
-            rb = rb.header(reqwest::header::AUTHORIZATION, a);
-        }
-        let resp = rb
-            .send()
-            .await
-            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+        let url = format!("{}{}", self.base_url, path);
+        let send_req = || {
+            let mut rb = self.client.patch(&url).json(body);
+            if let Some(a) = auth {
+                rb = rb.header(reqwest::header::AUTHORIZATION, a);
+            }
+            rb
+        };
+
+        let resp = match send_req().send().await {
+            Ok(r) => r,
+            Err(e) => {
+                if e.is_timeout() {
+                    return Err(ErrorData::internal_error(
+                        "timed out waiting (possibly for consent); approve and retry",
+                        None,
+                    ));
+                }
+                let is_keyed = body.get("idempotency_key").and_then(|v| v.as_str()).is_some();
+                if e.is_connect() || is_keyed {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    send_req().send().await
+                        .map_err(|retry_e| {
+                            if retry_e.is_timeout() {
+                                ErrorData::internal_error("timed out waiting (possibly for consent); approve and retry", None)
+                            } else {
+                                ErrorData::internal_error(format!("HTTP error: {retry_e} (initial connect error: {e})"), None)
+                            }
+                        })?
+                } else {
+                    return Err(ErrorData::internal_error(format!("HTTP error: {e}"), None));
+                }
+            }
+        };
         resp.text()
             .await
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
@@ -3762,7 +3852,13 @@ impl HyperiaMcp {
             .delete(format!("{}{}", self.base_url, path))
             .send()
             .await
-            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    ErrorData::internal_error("timed out waiting (possibly for consent); approve and retry", None)
+                } else {
+                    ErrorData::internal_error(format!("HTTP error: {e}"), None)
+                }
+            })?;
         resp.text().await
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
     }
@@ -3776,7 +3872,13 @@ impl HyperiaMcp {
         let resp = rb
             .send()
             .await
-            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    ErrorData::internal_error("timed out waiting (possibly for consent); approve and retry", None)
+                } else {
+                    ErrorData::internal_error(format!("HTTP error: {e}"), None)
+                }
+            })?;
         resp.text()
             .await
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
@@ -4148,14 +4250,12 @@ impl ServerHandler for HyperiaMcp {
                     .into(),
             ),
             capabilities: {
-                // Advertise tools/list_changed only when doors are on — that's
-                // the only mode in which the tool set mutates at runtime, so
-                // clients only need to subscribe then.
-                let mut caps = ServerCapabilities::builder().enable_tools();
-                if mcp_door_config().enabled {
-                    caps = caps.enable_tool_list_changed();
-                }
-                caps.build()
+                // Always advertise tools/list_changed so MCP clients subscribe and
+                // pick up newly registered tools across sidecar upgrades or door changes.
+                ServerCapabilities::builder()
+                    .enable_tools()
+                    .enable_tool_list_changed()
+                    .build()
             },
             ..Default::default()
         }
@@ -4198,4 +4298,25 @@ pub fn streamable_http_service(
             ..Default::default()
         },
     )
+}
+
+#[cfg(test)]
+mod sticky_param_tests {
+    use super::*;
+
+    #[test]
+    fn sticky_create_accepts_content_alias() {
+        let req: NoteCreateRequest = serde_json::from_value(serde_json::json!({"content": "hello"})).unwrap();
+        assert_eq!(req.text.as_deref(), Some("hello"));
+        let req: NoteCreateRequest = serde_json::from_value(serde_json::json!({"text": "hello"})).unwrap();
+        assert_eq!(req.text.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn sticky_params_reject_unknown_fields_instead_of_dropping_them() {
+        assert!(serde_json::from_value::<NoteCreateRequest>(serde_json::json!({"title": "t", "text": "hello"})).is_err());
+        assert!(serde_json::from_value::<StickyNoteUpdateRequest>(serde_json::json!({"id": "n", "txt": "hello"})).is_err());
+        let req: StickyNoteUpdateRequest = serde_json::from_value(serde_json::json!({"id": "n", "content": "hello"})).unwrap();
+        assert_eq!(req.text, "hello");
+    }
 }

@@ -57,7 +57,7 @@ export type uiState = Immutable<{
   _lastUpdate: number | null;
   activeUid: string | null;
   activityMarkers: Record<string, boolean>;
-  bellMarkers: Record<string, boolean>;
+  bellMarkers: Record<string, boolean | 'seen'>;
   backgroundColor: string;
   bell: 'SOUND' | false;
   bellSoundURL: string | null;

@@ -327,6 +327,35 @@ impl BindingStore {
         Ok(record)
     }
 
+    /// Resolve mailbox authority from an authenticated principal and a live,
+    /// verified binding. Never infer residency from a label or message pane hint.
+    /// Used for every mailbox read and for notification counts.
+    pub fn mailbox_identity(
+        &self,
+        caller: &Principal,
+        pane_is_active: impl Fn(&str) -> bool,
+    ) -> Result<(Principal, Option<String>), MailboxError> {
+        let records = self.records.lock().unwrap();
+        match caller {
+            Principal::Pane(pane) => {
+                if !pane_is_active(pane) {
+                    return Err(MailboxError::Unauthorized);
+                }
+                let principal = records.iter().find(|r| r.pane == *pane)
+                    .map(|r| Principal::Agent(r.agent.clone()))
+                    .unwrap_or_else(|| caller.clone());
+                Ok((principal, Some(pane.clone())))
+            }
+            Principal::Agent(agent) => {
+                let pane = records.iter().find(|r| r.agent == *agent)
+                    .filter(|r| pane_is_active(&r.pane))
+                    .map(|r| r.pane.clone());
+                Ok((caller.clone(), pane))
+            }
+            Principal::System => Ok((Principal::System, None)),
+        }
+    }
+
     pub fn pane_for_agent(&self, agent: &str) -> Option<String> {
         let recs = self.records.lock().unwrap();
         recs.iter().find(|r| r.agent == agent).map(|r| r.pane.clone())
@@ -616,6 +645,27 @@ pub fn is_message_read(reads_content: &str, msg: &serde_json::Value) -> bool {
     false
 }
 
+/// Read-only receipt lookup for an already-authorized sender status request.
+/// Exposes only whether the canonical recipient acknowledged this message.
+/// The caller must authorize access to the operation before invoking this.
+pub fn recipient_has_read(
+    messages_path: &Path,
+    reads_path: &Path,
+    msg_id: &str,
+) -> Result<bool, MailboxError> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let messages = std::fs::read_to_string(messages_path)?;
+    let message = messages.lines().filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|message| message["id"].as_str() == Some(msg_id))
+        .ok_or_else(|| MailboxError::NotFound(format!("message '{msg_id}' not found")))?;
+    let receipts = match std::fs::read_to_string(reads_path) {
+        Ok(receipts) => receipts,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error.into()),
+    };
+    Ok(is_message_read(&receipts, &message))
+}
+
 /// Pure inbox query: returns messages addressed to caller, newest-first, read-annotated.
 pub fn inbox(
     messages_path: &Path,
@@ -851,11 +901,67 @@ pub fn check_inbox(
     caller_pane: Option<&str>,
     limit: usize,
 ) -> Result<Vec<MessageEnvelope>, MailboxError> {
+    check_inbox_with_ack(messages_path, reads_path, caller, caller_pane, limit, None)
+}
+
+pub const MAX_ACK_IDS: usize = 2000;
+
+/// With ack_ids present, acknowledge only the explicitly confirmed prior batch.
+/// Newly returned messages stay unread so a lost reply can be fetched again.
+/// Omitting ack_ids retains the original fetch-and-ack behavior.
+pub fn check_inbox_with_ack(
+    messages_path: &Path,
+    reads_path: &Path,
+    caller: &Principal,
+    caller_pane: Option<&str>,
+    limit: usize,
+    ack_ids: Option<&[String]>,
+) -> Result<Vec<MessageEnvelope>, MailboxError> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(ids) = ack_ids {
+        if ids.len() > MAX_ACK_IDS {
+            return Err(MailboxError::Validation(format!("ack_ids exceeds {MAX_ACK_IDS} entries")));
+        }
+        let mut unique = HashSet::new();
+        let mut confirmed = Vec::new();
+        for id in ids {
+            let id = id.trim();
+            if id.is_empty() || id.len() > 128 {
+                return Err(MailboxError::Validation("ack_ids contains an invalid message ID".into()));
+            }
+            if unique.insert(id) {
+                confirmed.push(id);
+            }
+        }
+        if !confirmed.is_empty() {
+            let messages = if messages_path.exists() {
+                std::fs::read_to_string(messages_path)?
+            } else {
+                String::new()
+            };
+            let by_id: HashMap<String, serde_json::Value> = messages.lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .filter_map(|message| message["id"].as_str().map(str::to_owned).map(|id| (id, message)))
+                .collect();
+            // Validate the WHOLE batch before any receipt is appended.
+            // Pane hints and display labels never substitute for recipient authority.
+            for id in &confirmed {
+                let message = by_id.get(*id)
+                    .ok_or_else(|| MailboxError::NotFound(format!("message '{id}' not found")))?;
+                if !matches_recipient(message, caller, caller_pane) {
+                    return Err(MailboxError::Forbidden(format!("caller is not the recipient of message '{id}'")));
+                }
+            }
+            for id in confirmed {
+                acknowledge_message_locked(reads_path, messages_path, id, caller, caller_pane)?;
+            }
+        }
+        return inbox_locked(messages_path, reads_path, caller, caller_pane, true, limit);
+    }
     let mut unread_messages = inbox_locked(messages_path, reads_path, caller, caller_pane, true, limit)?;
     for msg in &mut unread_messages {
         let _ = acknowledge_message_locked(reads_path, messages_path, &msg.id, caller, caller_pane)?;
-        msg.read = true; // Mark read = true on the returned envelopes
+        msg.read = true;
     }
     Ok(unread_messages)
 }
@@ -872,7 +978,7 @@ mod tests {
         let _ = getrandom::getrandom(&mut random_bytes);
         let hex_rand: String = random_bytes.iter().map(|b| format!("{b:02x}")).collect();
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let root = manifest.parent().unwrap_or(&manifest);
+        let root = &manifest; // sidecar/target — never the repo-root target/ (Electron packages it)
         let dir = root
             .join("target")
             .join("test_fixtures")
@@ -1232,7 +1338,7 @@ mod tests {
     #[test]
     fn test_binding_store_staged_save_failure_leaves_memory_untouched() {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let root = manifest.parent().unwrap_or(&manifest);
+        let root = &manifest; // sidecar/target — never the repo-root target/ (Electron packages it)
         let unwritable_dir = root.join("target").join("test_fixtures").join("unwritable_binding_dir");
         let _ = std::fs::create_dir_all(&unwritable_dir);
         // Pointing file path directly to an existing directory causes writing/creating a file to fail on all OSes
@@ -1292,6 +1398,240 @@ mod tests {
         let unread = inbox(&msgs_p, &reads_p, &alice, None, true, 10).unwrap();
         assert_eq!(unread.len(), 1);
         assert_eq!(unread[0].subject, "msg 1");
+    }
+
+    #[test]
+    fn read_status_counts_only_canonical_recipient_receipts() {
+        let (messages, reads, _) = temp_test_paths("read_status_isolation");
+        let recipient = Principal::Agent("recipient".into());
+        let id = send_test_mail(&messages, &recipient, "pane-a");
+        // Display-label and unrelated-principal receipts cannot mark canonical mail read.
+        std::fs::write(&reads, format!("{}\n{}\n",
+            serde_json::json!({"msgId": id, "reader": "Shared Display Name", "ts": 1}),
+            serde_json::json!({"msgId": id, "readerPrincipal": "agent:sender", "ts": 2}),
+        )).unwrap();
+        assert!(!recipient_has_read(&messages, &reads, &id).unwrap());
+        acknowledge_message(&reads, &messages, &id, &recipient, None).unwrap();
+        assert!(recipient_has_read(&messages, &reads, &id).unwrap());
+        assert!(matches!(recipient_has_read(&messages, &reads, "missing"),
+            Err(MailboxError::NotFound(_))));
+    }
+
+    #[test]
+    fn reliable_check_replays_lost_reply_and_reack_is_idempotent() {
+        let (messages, reads, _) = temp_test_paths("reliable_replay");
+        let recipient = Principal::Agent("recipient".into());
+        let first = send_test_mail(&messages, &recipient, "pane-a");
+        let fetch = |ack: &[String]| check_inbox_with_ack(
+            &messages, &reads, &recipient, None, 10, Some(ack)).unwrap();
+        let lost = fetch(&[]);
+        assert_eq!(lost.len(), 1);
+        assert_eq!(lost[0].id, first);
+        assert!(!lost[0].read);
+        assert!(!reads.exists());
+        assert_eq!(fetch(&[]), lost, "lost response must remain available on retry");
+        assert_eq!(inbox(&messages, &reads, &recipient, None, true, 10).unwrap(), lost);
+        let second = send_test_mail(&messages, &recipient, "pane-a");
+        let confirmed = vec![first.clone(), first.clone()];
+        let next = fetch(&confirmed);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].id, second);
+        assert!(!next[0].read);
+        assert_eq!(fetch(&confirmed), next, "retrying the same checkpoint must not ack the new batch");
+        assert_eq!(std::fs::read_to_string(&reads).unwrap().lines().count(), 1);
+        assert!(recipient_has_read(&messages, &reads, &first).unwrap());
+        assert!(!recipient_has_read(&messages, &reads, &second).unwrap());
+        acknowledge_message(&reads, &messages, &second, &recipient, None).unwrap();
+        assert!(fetch(&[]).is_empty(), "msg_read also confirms reliable batches");
+    }
+
+    #[test]
+    fn reliable_check_rejects_entire_foreign_or_missing_batch_before_writing() {
+        let (messages, reads, _) = temp_test_paths("reliable_atomic_auth");
+        let recipient = Principal::Agent("recipient".into());
+        let own = send_test_mail(&messages, &recipient, "pane-a");
+        let foreign = send_test_mail(&messages, &Principal::Agent("foreign".into()), "pane-a");
+        let result = check_inbox_with_ack(&messages, &reads, &recipient, None, 10,
+            Some(&[own.clone(), foreign]));
+        assert!(matches!(result, Err(MailboxError::Forbidden(_))));
+        assert!(!reads.exists(), "foreign ID must not partially acknowledge the valid ID");
+        let missing = check_inbox_with_ack(&messages, &reads, &recipient, None, 10,
+            Some(&[own.clone(), "missing".into()]));
+        assert!(matches!(missing, Err(MailboxError::NotFound(_))));
+        assert!(!reads.exists());
+        assert_eq!(inbox(&messages, &reads, &recipient, None, true, 10).unwrap()[0].id, own);
+    }
+
+    #[test]
+    fn reliable_check_bounds_and_validates_ids_before_writing() {
+        let (messages, reads, _) = temp_test_paths("reliable_bounds");
+        let recipient = Principal::Agent("recipient".into());
+        let own = send_test_mail(&messages, &recipient, "pane-a");
+        for batch in [vec![own.clone(); MAX_ACK_IDS + 1],
+            vec![own.clone(), String::new()], vec![own.clone(), "x".repeat(129)]] {
+            assert!(matches!(check_inbox_with_ack(&messages, &reads, &recipient, None, 10,
+                Some(&batch)), Err(MailboxError::Validation(_))));
+            assert!(!reads.exists());
+        }
+    }
+
+    #[test]
+    fn omitted_ack_ids_preserves_automatic_acknowledgement() {
+        let (messages, reads, _) = temp_test_paths("reliable_compat");
+        let recipient = Principal::Agent("recipient".into());
+        send_test_mail(&messages, &recipient, "pane-a");
+        let checked = check_inbox_with_ack(&messages, &reads, &recipient, None, 10, None).unwrap();
+        assert_eq!(checked.len(), 1);
+        assert!(checked[0].read);
+        assert!(check_inbox(&messages, &reads, &recipient, None, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn reliable_ack_does_not_retain_pane_authority_after_rebind() {
+        let (messages, reads, bindings) = temp_test_paths("reliable_rebind");
+        let store = BindingStore::new(bindings).unwrap();
+        store.verify_and_bind("worker", "pane-a", ProofOfResidency::System, |_, _| false).unwrap();
+        let worker = Principal::Agent("worker".into());
+        let pane_a = Principal::Pane("pane-a".into());
+        let id = send_test_mail(&messages, &pane_a, "pane-a");
+        let (principal, residency) = store.mailbox_identity(&worker, |_| true).unwrap();
+        let batch = check_inbox_with_ack(&messages, &reads, &principal, residency.as_deref(), 10,
+            Some(&[])).unwrap();
+        assert_eq!(batch[0].id, id);
+        store.verify_and_bind("worker", "pane-b", ProofOfResidency::System, |_, _| false).unwrap();
+        let (principal, residency) = store.mailbox_identity(&worker, |_| true).unwrap();
+        assert!(matches!(check_inbox_with_ack(&messages, &reads, &principal, residency.as_deref(), 10,
+            Some(&[id.clone()])), Err(MailboxError::Forbidden(_))));
+        assert!(!reads.exists());
+        let (principal, residency) = store.mailbox_identity(&pane_a, |_| true).unwrap();
+        assert!(check_inbox_with_ack(&messages, &reads, &principal, residency.as_deref(), 10,
+            Some(&[id])).unwrap().is_empty());
+    }
+
+    fn send_test_mail(path: &Path, recipient: &Principal, pane: &str) -> String {
+        send_message(path, SendParams {
+            from: &Principal::Agent("sender".into()),
+            to: recipient,
+            subject: "assignment",
+            body: "private task",
+            to_pane_hint: Some(pane),
+            from_pane_hint: None,
+            to_label: Some("Shared Display Name"),
+            from_label: None,
+            idempotency_key: None,
+        }).unwrap()
+    }
+
+    #[test]
+    fn pane_address_is_readable_with_either_verified_credential() {
+        let (msgs, reads, bindings) = temp_test_paths("pane_credentials");
+        let store = BindingStore::new(bindings).unwrap();
+        store.verify_and_bind("worker", "pane-a", ProofOfResidency::PaneToken("credential"),
+            |pane, token| pane == "pane-a" && token == "credential").unwrap();
+        let agent = Principal::Agent("worker".into());
+        let pane = Principal::Pane("pane-a".into());
+        let id = send_test_mail(&msgs, &pane, "pane-a");
+
+        for credential in [&agent, &pane] {
+            let (principal, residency) = store.mailbox_identity(credential, |_| true).unwrap();
+            let preview = inbox(&msgs, &reads, &principal, residency.as_deref(), true, 10).unwrap();
+            assert_eq!(preview.len(), 1);
+            assert_eq!(preview[0].id, id);
+            assert!(!preview[0].read, "inbox must not acknowledge");
+        }
+        let (principal, residency) = store.mailbox_identity(&agent, |_| true).unwrap();
+        let checked = check_inbox(&msgs, &reads, &principal, residency.as_deref(), 10).unwrap();
+        assert_eq!(checked.len(), 1);
+        assert!(checked[0].read);
+        let (principal, residency) = store.mailbox_identity(&pane, |_| true).unwrap();
+        assert!(inbox(&msgs, &reads, &principal, residency.as_deref(), true, 10).unwrap().is_empty());
+        let receipt = acknowledge_message(&reads, &msgs, &id, &principal, residency.as_deref()).unwrap();
+        assert_eq!(receipt.reader_principal, "pane:pane-a");
+        assert_eq!(std::fs::read_to_string(reads).unwrap().lines().count(), 1);
+    }
+
+    #[test]
+    fn old_agent_addressed_pane_mail_is_visible_to_verified_pane_token() {
+        let (msgs, reads, bindings) = temp_test_paths("old_agent_address");
+        let store = BindingStore::new(bindings).unwrap();
+        store.verify_and_bind("worker", "pane-a", ProofOfResidency::System, |_, _| false).unwrap();
+        let agent = Principal::Agent("worker".into());
+        let pane = Principal::Pane("pane-a".into());
+        // The old send path stored this canonical agent key with a pane hint.
+        let id = send_test_mail(&msgs, &agent, "pane-a");
+        let (principal, residency) = store.mailbox_identity(&pane, |_| true).unwrap();
+        assert_eq!(principal, agent);
+        let preview = inbox(&msgs, &reads, &principal, residency.as_deref(), true, 10).unwrap();
+        assert_eq!(preview.len(), 1);
+        assert!(!preview[0].read);
+        let found = search(&msgs, &reads, &principal, residency.as_deref(),
+            SearchScope::Received, None, 10).unwrap();
+        assert_eq!(found[0].id, id);
+        let checked = check_inbox(&msgs, &reads, &principal, residency.as_deref(), 10).unwrap();
+        assert_eq!(checked.len(), 1);
+        assert!(checked[0].read);
+        let receipt = acknowledge_message(&reads, &msgs, &id, &principal, residency.as_deref()).unwrap();
+        assert_eq!(receipt.reader_principal, agent.to_key());
+        assert!(inbox(&msgs, &reads, &agent, None, true, 10).unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(reads).unwrap().lines().count(), 1);
+    }
+
+    #[test]
+    fn pane_mail_stays_at_its_address_when_agent_moves() {
+        let (msgs, reads, bindings) = temp_test_paths("pane_rebind");
+        let store = BindingStore::new(bindings).unwrap();
+        store.verify_and_bind("worker", "pane-a", ProofOfResidency::System, |_, _| false).unwrap();
+        let pane = Principal::Pane("pane-a".into());
+        let id = send_test_mail(&msgs, &pane, "pane-a");
+        store.verify_and_bind("worker", "pane-b", ProofOfResidency::System, |_, _| false).unwrap();
+
+        for credential in [Principal::Agent("worker".into()), Principal::Pane("pane-b".into())] {
+            let (principal, residency) = store.mailbox_identity(&credential, |_| true).unwrap();
+            assert!(inbox(&msgs, &reads, &principal, residency.as_deref(), false, 10).unwrap().is_empty());
+            assert!(check_inbox(&msgs, &reads, &principal, residency.as_deref(), 10).unwrap().is_empty());
+            assert!(matches!(acknowledge_message(&reads, &msgs, &id, &principal, residency.as_deref()),
+                Err(MailboxError::Forbidden(_))));
+        }
+        let (principal, residency) = store.mailbox_identity(&pane, |_| true).unwrap();
+        assert_eq!(principal, pane);
+        let receipt = acknowledge_message(&reads, &msgs, &id, &principal, residency.as_deref()).unwrap();
+        assert_eq!(receipt.reader_principal, pane.to_key());
+    }
+
+    #[test]
+    fn pane_hint_or_replacement_binding_cannot_grant_old_agents_mail() {
+        let (msgs, reads, bindings) = temp_test_paths("binding_isolation");
+        let store = BindingStore::new(bindings).unwrap();
+        let old = Principal::Agent("old-worker".into());
+        let pane = Principal::Pane("pane-a".into());
+        let id = send_test_mail(&msgs, &old, "pane-a");
+        // Same pane hint, but no verified binding: no authority.
+        let (principal, residency) = store.mailbox_identity(&pane, |_| true).unwrap();
+        assert!(inbox(&msgs, &reads, &principal, residency.as_deref(), false, 10).unwrap().is_empty());
+        store.verify_and_bind("new-worker", "pane-a", ProofOfResidency::System, |_, _| false).unwrap();
+        for credential in [pane, Principal::Agent("new-worker".into()),
+            Principal::Agent("Shared Display Name".into()), Principal::Agent("sender".into())] {
+            let (principal, residency) = store.mailbox_identity(&credential, |_| true).unwrap();
+            assert!(inbox(&msgs, &reads, &principal, residency.as_deref(), false, 10).unwrap().is_empty());
+            assert!(check_inbox(&msgs, &reads, &principal, residency.as_deref(), 10).unwrap().is_empty());
+            assert!(matches!(acknowledge_message(&reads, &msgs, &id, &principal, residency.as_deref()),
+                Err(MailboxError::Forbidden(_))));
+        }
+        assert!(!reads.exists(), "unauthorized checks must not create receipts");
+    }
+
+    #[test]
+    fn inactive_pane_and_invalid_residency_proof_grant_no_delegation() {
+        let (_, _, bindings) = temp_test_paths("inactive_binding");
+        let store = BindingStore::new(bindings).unwrap();
+        assert!(matches!(store.verify_and_bind("worker", "pane-a",
+            ProofOfResidency::PaneToken("wrong"), |_, _| false), Err(MailboxError::Forbidden(_))));
+        let agent = Principal::Agent("worker".into());
+        assert_eq!(store.mailbox_identity(&agent, |_| true).unwrap(), (agent.clone(), None));
+        store.verify_and_bind("worker", "pane-a", ProofOfResidency::System, |_, _| false).unwrap();
+        assert_eq!(store.mailbox_identity(&agent, |_| false).unwrap(), (agent, None));
+        assert!(matches!(store.mailbox_identity(&Principal::Pane("pane-a".into()), |_| false),
+            Err(MailboxError::Unauthorized)));
     }
 
     #[test]
