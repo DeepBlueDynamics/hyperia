@@ -169,14 +169,14 @@ async fn pane_conflict_is_audited_and_quiet_takeover_fails_old_session_closed() 
     assert_eq!(conflict.status(), StatusCode::CONFLICT);
     let notice: Value = serde_json::from_str(&notices.recv().await.unwrap()).unwrap();
     assert_eq!(notice["type"], "AgentNotice");
-    assert_eq!(notice["text"], format!("pane token for {pane} used by two live sessions — possible token crossing"));
+    assert_eq!(notice["text"], pane_notice_text(&pane, true, "fixture", Some("fixture")));
     assert!(crate::audit::TEST_ENTRIES.lock().unwrap().iter().any(|v|
         v["identity"] == format!("pane:{pane}") && v["event"] == "pane_token_conflict" && v["status"] == 409));
     quiet(&bridge, &sid);
     let successor = init(&srv, "hyp_test_pane").await;
     assert_ne!(sid, successor);
     let notice: Value = serde_json::from_str(&notices.recv().await.unwrap()).unwrap();
-    assert_eq!(notice["text"], format!("pane {pane} re-bound to a new session"));
+    assert_eq!(notice["text"], pane_notice_text(&pane, false, "fixture", None));
     assert!(crate::audit::TEST_ENTRIES.lock().unwrap().iter().any(|v|
         v["identity"] == format!("pane:{pane}") && v["event"] == "pane_session_takeover"));
     assert_eq!(post(&srv, "hyp_test_pane", Some(&sid), initialize()).await.status(), StatusCode::UNAUTHORIZED);
@@ -378,4 +378,14 @@ fn corrupt_store_fails_closed_instead_of_recreating_sessions() {
     let store = SessionStore::open(path.clone());
     assert!(store.create("parent", json!({}), &[]).is_err());
     assert_eq!(std::fs::read(path).unwrap(), b"{broken");
+}
+
+#[test]
+fn pane_conflict_notice_names_both_clients_and_the_usual_cause() {
+    let text = pane_notice_text("11e87950-9f57-4e6b-86ff-46a5ac40be22", true, "mcp", Some("codex-mcp-client"));
+    assert!(text.starts_with("Pane 11e87950:"));
+    assert!(text.contains("codex-mcp-client holds the session; mcp was refused"));
+    assert!(text.contains("two Hyperia MCP servers"));
+    assert!(!text.contains("token crossing"));
+    assert_eq!(client_name(&json!({"clientInfo": {"name": ""}})), "an unnamed client");
 }
