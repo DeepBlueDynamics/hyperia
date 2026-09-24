@@ -26,17 +26,9 @@ $ErrorActionPreference = 'Stop'
 
 function Invoke-Checked {
     param([string]$Program, [string[]]$Arguments)
-    $stderrFile = [IO.Path]::GetTempFileName()
-    try {
-        & $Program @Arguments 2>&1>$stderrFile
-        if ($LASTEXITCODE -ne 0) {
-            $stderr = [IO.File]::ReadAllText($stderrFile).Trim()
-            $detail = if ($stderr) { "`nstderr: $stderr" } else { '' }
-            throw "$Program failed (exit $LASTEXITCODE).$detail Build stopped."
-        }
-    } finally {
-        Remove-Item -LiteralPath $stderrFile -ErrorAction SilentlyContinue
-    }
+    # stdout must stay on the pipeline: Get-GitText and callers read it.
+    & $Program @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "$Program failed (exit $LASTEXITCODE). Build stopped." }
 }
 
 function Get-GitText {
