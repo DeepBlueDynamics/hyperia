@@ -21,7 +21,7 @@ opt-level = "z"
 # Voice (Kokoro TTS). Default ON everywhere except x86_64-apple-darwin, where
 # ort has no prebuilt ONNX Runtime — Intel-mac CI builds --no-default-features.
 default = ["tts"]
-tts = ["dep:kokoro-tts", "dep:rodio"]
+tts = ["dep:kokoro-tts", "dep:rodio", "dep:misaki-rs", "dep:ort", "dep:ndarray", "dep:bincode", "dep:regex", "dep:num2words", "dep:sha2"]
 
 [dependencies]
 # HTTP server + WebSocket bridge
@@ -44,7 +44,15 @@ grub-md = { path = "crates/grub-md" }
 # gated behind the default-on `tts` feature because ort ships no prebuilt ONNX
 # Runtime for x86_64-apple-darwin — Intel-mac builds pass --no-default-features
 # and get a sidecar without voice (the /api/tts route reports unavailable).
+# Retained for its v1.0 token vocabulary; synthesis bypasses its G2P.
 kokoro-tts = { version = "0.3", features = ["use-cmudict"], optional = true }
+misaki-rs = { version = "=0.6.0", default-features = false, optional = true }
+ort = { version = "=2.0.0-rc.12", optional = true }
+ndarray = { version = "0.17.2", optional = true }
+bincode = { version = "2.0", optional = true }
+regex = { version = "1", optional = true }
+num2words = { version = "0.4", optional = true }
+sha2 = { version = "0.10", optional = true }
 # Play the synthesized WAV on the machine (WASAPI/CoreAudio/ALSA via cpal).
 rodio = { version = "0.22", optional = true }
 
