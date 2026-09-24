@@ -2941,11 +2941,12 @@ export default class Term extends React.PureComponent<
     const hideQuickLayout = w < LADDER.quickLayout;
     const hideSplitRightLeft = w < LADDER.splitRightLeft;
     const hideSplitUpDown = w < LADDER.splitUpDown;
-    const hideNavArrows = w < LADDER.navArrows;
-    // A picker pane has no terminal buffer to clear or screenshot, and on the
-    // picker these two rendered past the pane's left border. Hide just them;
-    // every other control stays on pickers, subject to the width ladder.
+    // A picker pane has no terminal: nothing to navigate, clear or screenshot,
+    // and on the picker these rendered past the pane's left border. So the nav
+    // cluster (nav arrows, clear, screenshot) is hidden there; splits, quick
+    // layout and pulse stay on pickers, subject to the width ladder.
     const onPicker = (this.props as any).sessionProfile === 'picker';
+    const hideNavArrows = onPicker || w < LADDER.navArrows;
     const hideClearBuffer = onPicker || w < LADDER.clearBuffer;
     const hideScreenshot = onPicker || w < LADDER.screenshot;
     const dirIconOnly = w < LADDER.dirIconOnly;
