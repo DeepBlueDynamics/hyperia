@@ -636,7 +636,7 @@ export function newWindow(
 
     // remove the rows and cols, the wrong value of them will break layout when init create
     // Validate the cwd before it reaches node-pty. An agent running in a
-    // container/another machine can pass a path like /workspace/kordl that does
+    // container/another machine can pass a path like /workspace/alice that does
     // not exist on this host; node-pty's WindowsPtyAgent then throws "File not
     // found" as an UNCAUGHT exception and crashes the whole main process. Fall
     // back to a known-good directory instead.

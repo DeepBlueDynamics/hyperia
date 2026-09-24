@@ -7,7 +7,7 @@ description = "Aegis-Edit: line-oriented piece-table (LOPT) text buffer with gra
 [dependencies]
 unicode-segmentation = "1.11"
 
-# Vendored into Hyperia from C:\Users\kordl\Code\research\aegis-edit (built by a
+# Vendored into Hyperia from C:\Users\alice\Code\research\aegis-edit (built by a
 # Gemini/nemesis8 agent). Verified locally: 7/7 of the original suite pass, now
 # living as #[cfg(test)] unit tests below. ONE change from the source: the
 # original buffer is an `Arc<String>` (was `Rc`) so `Document` is Send + Sync —

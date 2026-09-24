@@ -171,7 +171,7 @@ gcloud builds submit --tag gcr.io/gnosis-459403/hyperia-site --project gnosis-45
 gcloud run deploy hyperia-site --image gcr.io/gnosis-459403/hyperia-site --platform managed --region us-central1 --project gnosis-459403 --quiet
 ```
 
-**hyperia-web is cloned at** `C:/Users/kordl/Code/DeepBlueDynamics/hyperia-web`.
+**hyperia-web is cloned at** `C:/Users/<you>/Code/DeepBlueDynamics/hyperia-web`.
 
 ### install.ps1 known pitfalls
 
