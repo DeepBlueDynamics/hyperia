@@ -2942,8 +2942,12 @@ export default class Term extends React.PureComponent<
     const hideSplitRightLeft = w < LADDER.splitRightLeft;
     const hideSplitUpDown = w < LADDER.splitUpDown;
     const hideNavArrows = w < LADDER.navArrows;
-    const hideClearBuffer = w < LADDER.clearBuffer;
-    const hideScreenshot = w < LADDER.screenshot;
+    // A picker pane has no terminal buffer to clear or screenshot, and on the
+    // picker these two rendered past the pane's left border. Hide just them;
+    // every other control stays on pickers, subject to the width ladder.
+    const onPicker = (this.props as any).sessionProfile === 'picker';
+    const hideClearBuffer = onPicker || w < LADDER.clearBuffer;
+    const hideScreenshot = onPicker || w < LADDER.screenshot;
     const dirIconOnly = w < LADDER.dirIconOnly;
     // Find-bar match counts (xterm reports a 0-based resultIndex).
     const sr = this.state.searchResults as {resultIndex: number; resultCount: number} | undefined;
