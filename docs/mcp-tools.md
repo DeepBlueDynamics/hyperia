@@ -18,10 +18,14 @@ Sessions are organized as **windows > tabs > panes**. Most tools accept optional
 
 ## Identity & consent
 
+Initialized HTTP clients get durable logical session identities. See [MCP session identity](mcp-session-identity.md) for restart/resume, parent mailboxes, inherited grants, and the pane-token conflict guard.
+
 Reads work anonymously; state-changing tools need an identity (`Authorization: Bearer` — a pane's `HYPERIA_AGENT_TOKEN` or a persistent agent token). Acting on a pane you don't own asks the human first.
 
 | Tool | Description |
 |------|-------------|
+| `whoami` | Show your principal, mailbox, label, parent/session, pane association, and whether the credential is a pane token or agent token. |
+| `set_label` | Choose a unique persistent label for your own child session without changing its principal or mailbox. |
 | `request_token` | Mint (or re-fetch) a persistent `hyp_agent_…` identity token — call when a write returns "No identity". The reply explains immediate use (direct HTTP works without restart) and permanent config. |
 | `request_access` | Ask the human to grant you access to a pane/tab (type, run commands, …) with a stated `purpose`. Raises the consent prompt. |
 | `audit_search` | Search the audit log — who did what, when, and the decision (identity/path/status filters). |
