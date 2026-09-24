@@ -13,6 +13,7 @@ import {
   SESSION_SET_ACTIVE,
   SESSION_SET_CWD
 } from '../../typings/constants/sessions';
+import {TERM_GROUP_SET_ACTIVE} from '../../typings/constants/term-groups';
 import {
   UI_FONT_SIZE_SET,
   UI_FONT_SIZE_RESET,
@@ -27,7 +28,7 @@ import {
   UI_TAB_BELL_CLEAR
 } from '../../typings/constants/ui';
 import {UPDATE_AVAILABLE} from '../../typings/constants/updater';
-import type {uiState, Mutable, IUiReducer} from '../../typings/hyper';
+import type {uiState, Mutable, IUiReducer, ITermState} from '../../typings/hyper';
 import {decorateUIReducer} from '../utils/plugins';
 
 const isWindows = ['Windows', 'Win16', 'Win32', 'WinCE'].includes(navigator.platform) || process.platform === 'win32';
@@ -127,6 +128,41 @@ const initial: uiState = Immutable<Mutable<uiState>>({
   agentStatuses: {},
   env: {}
 });
+
+function clearPaneBell(state: uiState, uid: string): uiState {
+  if (!(uid in state.bellMarkers)) return state;
+  const markers = state.bellMarkers.asMutable();
+  delete markers[uid];
+  return state.set('bellMarkers', markers);
+}
+
+// Selecting a tab acknowledges its alerts while preserving unfocused pane bells.
+// Return the original UI object unless a marker actually changes.
+export function seeActiveTabBells(state: uiState, groups: ITermState): uiState {
+  const rootUid = groups.activeRootGroup;
+  if (!rootUid) return state;
+  let markers: Record<string, boolean | 'seen'> | undefined;
+  const visit = (uid: string) => {
+    const group = groups.termGroups[uid];
+    if (!group) return;
+    const focused =
+      groups.activeTermGroup === uid ||
+      (!groups.activeTermGroup && !!group.sessionUid && groups.activeSessions[rootUid] === group.sessionUid);
+    for (const key of [group.uid, group.sessionUid]) {
+      if (!key || !state.bellMarkers[key]) continue;
+      if (focused) {
+        markers ??= state.bellMarkers.asMutable();
+        delete markers[key];
+      } else if (state.bellMarkers[key] === true) {
+        markers ??= state.bellMarkers.asMutable();
+        markers[key] = 'seen';
+      }
+    }
+    group.children.forEach(visit);
+  };
+  visit(rootUid);
+  return markers ? state.set('bellMarkers', markers) : state;
+}
 
 const reducer: IUiReducer = (state = initial, action) => {
   let state_ = state;
@@ -364,7 +400,7 @@ const reducer: IUiReducer = (state = initial, action) => {
           delete markers_[action.uid];
           return markers_;
         })
-        .updateIn(['bellMarkers'], (markers: ImmutableType<Record<string, boolean>>) => {
+        .updateIn(['bellMarkers'], (markers: ImmutableType<Record<string, boolean | 'seen'>>) => {
           const markers_ = markers.asMutable();
           delete markers_[action.uid];
           return markers_;
@@ -393,12 +429,9 @@ const reducer: IUiReducer = (state = initial, action) => {
       break;
 
     case SESSION_SET_ACTIVE:
-      state_ = state.merge(
+      state_ = clearPaneBell(state, action.uid).merge(
         {
           activeUid: action.uid,
-          bellMarkers: {
-            [action.uid]: false
-          },
           activityMarkers: {
             [action.uid]: false
           }
@@ -445,15 +478,9 @@ const reducer: IUiReducer = (state = initial, action) => {
       );
       break;
 
+    case TERM_GROUP_SET_ACTIVE:
     case UI_TAB_BELL_CLEAR:
-      state_ = state.merge(
-        {
-          bellMarkers: {
-            [action.uid]: false
-          }
-        },
-        {deep: true}
-      );
+      state_ = clearPaneBell(state, action.uid);
       break;
 
     case SESSION_SET_CWD:

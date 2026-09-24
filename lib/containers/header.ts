@@ -126,7 +126,7 @@ const getTabs = createSelector(
       // uid instead — count both so either rings the tab.
       const hasActivity = leaves.some((leaf) => leaf.sessionUid && activityMarkers[leaf.sessionUid]);
       const hasBell = leaves.some(
-        (leaf) => (leaf.sessionUid && bellMarkers[leaf.sessionUid]) || bellMarkers[leaf.uid as string]
+        (leaf) => (leaf.sessionUid && bellMarkers[leaf.sessionUid] === true) || bellMarkers[leaf.uid as string] === true
       );
 
       // Agent status from active session or first session

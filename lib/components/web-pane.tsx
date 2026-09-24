@@ -38,6 +38,8 @@ interface WebPaneProps {
   onSplitWebPane?: (url: string, direction: 'HORIZONTAL' | 'VERTICAL') => void;
   // True when this pane's ROOT term group is the active tab (mapped from redux).
   isTabActive?: boolean;
+  // Only the pane that receives focus clears its persistent pane-band bell.
+  isPaneActive?: boolean;
   // Standard tab-bell plumbing (ui.bellMarkers — the same store terminal BELs use).
   onTabBell?: (uid: string) => void;
   onTabBellClear?: (uid: string) => void;
@@ -1113,10 +1115,11 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       this.reportBounds();
     }
 
-    // The human switched TO this pane's tab → the shell-update bell has served
-    // its purpose (mirror of SESSION_SET_ACTIVE clearing terminal bells).
-    if (!prevProps.isTabActive && this.props.isTabActive) {
+    if (!prevProps.isPaneActive && this.props.isPaneActive) {
       this.clearPendingBell();
+    }
+    // Selecting a tab acknowledges its tab bell; sibling pane bells remain.
+    if (!prevProps.isTabActive && this.props.isTabActive) {
       // Self-heal: re-assert the native view on activation. If it's alive,
       // createPane is a no-op (cancels any pending teardown); if it was
       // reaped (window close, delayed-destroy, crash-restore, or dedupe
@@ -3480,7 +3483,8 @@ const mapStateToProps = (state: any, ownProps: WebPaneProps) => {
         : state.ui.profiles
       : [],
     webName: termGroup ? termGroup.webName : undefined,
-    isTabActive: rootUid === state.termGroups.activeRootGroup
+    isTabActive: rootUid === state.termGroups.activeRootGroup,
+    isPaneActive: rootUid === state.termGroups.activeRootGroup && ownProps.groupUid === state.termGroups.activeTermGroup
   };
 };
 

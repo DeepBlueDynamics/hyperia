@@ -1,6 +1,9 @@
 import {ipcRenderer} from 'electron';
 import React from 'react';
 
+import {useSelector} from 'react-redux';
+
+import type {HyperState} from '../../typings/hyper';
 import {subscribePulseStatus, refreshPulseStatus} from '../pulse-status-bus';
 import {openLayout} from '../utils/layouts';
 
@@ -119,6 +122,15 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
     },
     ref
   ) => {
+    const hasBell = useSelector((state: HyperState) => {
+      const marker = paneId ? state.ui.bellMarkers[paneId] : undefined;
+      return marker === true || marker === 'seen';
+    });
+    const bellIndicator = hasBell ? (
+      <span role="img" aria-label="Pane needs attention" title="Pane needs attention" style={{flexShrink: 0}}>
+        🔔
+      </span>
+    ) : null;
     const resolvedTint = isPlaceholder ? 'neutral' : tint;
     // Interpolate a px value along the squeeze ramp (0 roomy → 1 tight).
     const sq = (roomy: number, tight: number) => `${Math.round(roomy + (tight - roomy) * squeeze)}px`;
@@ -444,6 +456,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               >
                 {copied ? 'Copied ✓' : label}
               </span>
+              {bellIndicator}
             </>
           ) : (
             <>
@@ -509,6 +522,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 )}
               </div>
 
+              {bellIndicator}
               {/* Nav Cluster */}
               {navCluster}
             </>
