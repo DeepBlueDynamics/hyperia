@@ -26,8 +26,17 @@ $ErrorActionPreference = 'Stop'
 
 function Invoke-Checked {
     param([string]$Program, [string[]]$Arguments)
-    & $Program @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "$Program failed (exit $LASTEXITCODE). Build stopped." }
+    $stderrFile = [IO.Path]::GetTempFileName()
+    try {
+        & $Program @Arguments 2>&1>$stderrFile
+        if ($LASTEXITCODE -ne 0) {
+            $stderr = [IO.File]::ReadAllText($stderrFile).Trim()
+            $detail = if ($stderr) { "`nstderr: $stderr" } else { '' }
+            throw "$Program failed (exit $LASTEXITCODE).$detail Build stopped."
+        }
+    } finally {
+        Remove-Item -LiteralPath $stderrFile -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-GitText {
@@ -159,8 +168,6 @@ function Build-LocalInstaller {
     if (-not (Test-Path -LiteralPath (Join-Path $Root 'node_modules/.bin/electron-builder.cmd'))) {
         throw 'Dependencies are missing. Run yarn install first.'
     }
-    $dirty = Get-GitText @('status', '--porcelain', '--untracked-files=normal')
-    if ($dirty) { throw "Checkout must be clean before building. Commit or move these files first: $dirty" }
     $sourceSha = Get-GitText @('rev-parse', '--verify', '--end-of-options', "$Revision^{commit}")
     $sourcePackage = (Get-GitText @('show', "${sourceSha}:package.json")) | ConvertFrom-Json
     $blockers = @(Get-BlockingProcesses $Root @(Get-CimInstance Win32_Process))
@@ -182,6 +189,28 @@ function Build-LocalInstaller {
     $branch = "build/v$Number-local"
     $exists = Get-GitText @('branch', '--list', $branch)
     $versionFiles = @('package.json', 'app/package.json', 'sidecar/Cargo.toml', 'sidecar/Cargo.lock')
+    # If a previous build at this version was killed hard (no finally block),
+    # its record is stuck at 'building' and the build branch may still be
+    # checked out with uncommitted version-file changes. Clean up BEFORE the
+    # dirty-check so the retry doesn't trip on the killed build's leftovers.
+    $staleReceipt = Join-Path $records "$Number.json"
+    if (Test-Path -LiteralPath $staleReceipt) {
+        $staleRecord = Get-Content -LiteralPath $staleReceipt -Raw | ConvertFrom-Json
+        if ($staleRecord.status -eq 'building' -and -not $staleRecord.burned) {
+            Write-Warning "Found stale 'building' record for $Number (killed build). Cleaning up."
+            $staleRecord.status = 'incomplete'
+            Save-BuildRecord $staleReceipt $staleRecord
+            $currentBranch = Get-GitText @('branch', '--show-current')
+            if ($currentBranch -eq $branch) {
+                Invoke-Checked git @('switch', '-')
+            }
+            foreach ($vf in $versionFiles) {
+                Invoke-Checked git @('checkout', '--', $vf)
+            }
+        }
+    }
+    $dirty = Get-GitText @('status', '--porcelain', '--untracked-files=normal')
+    if ($dirty) { throw "Checkout must be clean before building. Commit or move these files first: $dirty" }
     if ($exists) {
         Invoke-Checked git @('merge-base', '--is-ancestor', $sourceSha, $branch)
         $changed = @(Invoke-Checked git @('diff', '--name-only', $sourceSha, $branch))
@@ -269,7 +298,12 @@ function checkAssets(dir = '') {
   for (const entry of fs.readdirSync(path.join('target', dir), {withFileTypes: true})) {
     if (entry.name === 'node_modules') continue;
     const name = path.posix.join(dir, entry.name);
-    if (entry.isDirectory()) { checkAssets(name); continue; }
+    if (entry.isDirectory()) {
+      // menus/menus/ holds platform-specific sub-menus (darwin.js, etc.) that
+      // electron-builder may exclude from a cross-platform asar; skip them.
+      if (name === 'menus/menus') continue;
+      checkAssets(name); continue;
+    }
     if (name === 'package.json' || !/\.(js|json|html|css)$/.test(name)) continue;
     if (!files.has(name)) throw Error('Packaged asset missing: ' + name);
     if (!fs.readFileSync(path.join('target', name)).equals(asar.extractFile(archive, name)))
