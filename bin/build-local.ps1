@@ -293,7 +293,7 @@ function checkAssets(dir = '') {
     if (entry.isDirectory()) {
       // menus/menus/ holds platform-specific sub-menus (darwin.js, etc.) that
       // electron-builder may exclude from a cross-platform asar; skip them.
-      if (name === 'menus/menus') continue;
+      if (name === 'menus/menus' || name === 'test_fixtures') continue;
       checkAssets(name); continue;
     }
     if (name === 'package.json' || name === 'package-lock.json' || !/\.(js|json|html|css)$/.test(name)) continue;

@@ -66,7 +66,9 @@ export class Server {
 
   destroy() {
     this.emitter.removeAllListeners();
-    this.wc.removeAllListeners();
+    // On quit the window can already be destroyed by the time cleanup runs;
+    // touching webContents then throws "Object has been destroyed".
+    if (!this.win.isDestroyed()) this.wc.removeAllListeners();
     if (this.id) {
       ipcMain.removeListener(this.id, this.ipcListener);
     } else {

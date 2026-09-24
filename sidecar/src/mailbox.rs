@@ -978,7 +978,7 @@ mod tests {
         let _ = getrandom::getrandom(&mut random_bytes);
         let hex_rand: String = random_bytes.iter().map(|b| format!("{b:02x}")).collect();
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let root = manifest.parent().unwrap_or(&manifest);
+        let root = &manifest; // sidecar/target — never the repo-root target/ (Electron packages it)
         let dir = root
             .join("target")
             .join("test_fixtures")
@@ -1338,7 +1338,7 @@ mod tests {
     #[test]
     fn test_binding_store_staged_save_failure_leaves_memory_untouched() {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let root = manifest.parent().unwrap_or(&manifest);
+        let root = &manifest; // sidecar/target — never the repo-root target/ (Electron packages it)
         let unwritable_dir = root.join("target").join("test_fixtures").join("unwritable_binding_dir");
         let _ = std::fs::create_dir_all(&unwritable_dir);
         // Pointing file path directly to an existing directory causes writing/creating a file to fail on all OSes

@@ -652,7 +652,7 @@ mod tests {
 
     fn test_dir(name: &str) -> PathBuf {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let root = manifest_dir.parent().unwrap_or(&manifest_dir);
+        let root = &manifest_dir; // sidecar/target — never the repo-root target/ (Electron packages it)
         let dir = root.join("target").join("test_fixtures").join("delivery").join(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
