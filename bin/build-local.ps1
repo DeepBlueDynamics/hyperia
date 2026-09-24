@@ -296,7 +296,7 @@ function checkAssets(dir = '') {
       if (name === 'menus/menus') continue;
       checkAssets(name); continue;
     }
-    if (name === 'package.json' || !/\.(js|json|html|css)$/.test(name)) continue;
+    if (name === 'package.json' || name === 'package-lock.json' || !/\.(js|json|html|css)$/.test(name)) continue;
     if (!files.has(name)) throw Error('Packaged asset missing: ' + name);
     if (!fs.readFileSync(path.join('target', name)).equals(asar.extractFile(archive, name)))
       throw Error('Packaged asset differs: ' + name);
