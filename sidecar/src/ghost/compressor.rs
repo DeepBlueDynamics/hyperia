@@ -903,8 +903,7 @@ mod tests {
 
     #[test]
     fn from_env_defaults() {
-        std::env::remove_var("OLLAMA_HOST");
-        std::env::remove_var("MAXIMUS_MODEL");
+        if !crate::util::isolated_test("ghost::compressor::tests::from_env_defaults") { return; }
         let c = ContextCompressor::from_env();
         assert_eq!(c.ollama_url, "http://localhost:11434");
         assert_eq!(c.model, "gemma2:2b");
@@ -912,6 +911,7 @@ mod tests {
 
     #[test]
     fn from_env_reads_vars() {
+        if !crate::util::isolated_test("ghost::compressor::tests::from_env_reads_vars") { return; }
         std::env::set_var("OLLAMA_HOST", "http://custom:9999");
         std::env::set_var("MAXIMUS_MODEL", "mistral");
         let c = ContextCompressor::from_env();
@@ -923,10 +923,9 @@ mod tests {
 
     #[test]
     fn getters_prefer_config_then_env_then_fields() {
-        let temp_dir = std::env::temp_dir().join(format!("hyperia_test_{}", std::process::id()));
-        let config_dir = temp_dir.join(".hyperia");
-        std::fs::create_dir_all(&config_dir).unwrap();
-        let config_file = config_dir.join("hyperia.json");
+        if !crate::util::isolated_test("ghost::compressor::tests::getters_prefer_config_then_env_then_fields") { return; }
+        let config_file = crate::util::shared_config_path().unwrap();
+        std::fs::create_dir_all(config_file.parent().unwrap()).unwrap();
 
         let config_json = serde_json::json!({
             "config": {
@@ -939,7 +938,6 @@ mod tests {
         });
         std::fs::write(&config_file, serde_json::to_string(&config_json).unwrap()).unwrap();
 
-        std::env::set_var("HYPERIA_MOCK_HOME", temp_dir.to_str().unwrap());
         std::env::set_var("OLLAMA_HOST", "http://env-ollama:11434");
         std::env::set_var("MAXIMUS_MODEL", "gemma2:env-model");
         std::env::set_var("MAXIMUS_DISABLED", "false");
@@ -966,8 +964,24 @@ mod tests {
         assert_eq!(c.get_model(), "gemma2:default-model");
         assert!(!c.is_disabled());
 
-        std::env::remove_var("HYPERIA_MOCK_HOME");
-        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn fallback_provider_preserves_maximus_settings() {
+        if !crate::util::isolated_test("ghost::compressor::tests::fallback_provider_preserves_maximus_settings") { return; }
+        // Both missing provider and a cloud provider without credentials take
+        // the local fallback while keeping independent Maximus preferences.
+        for agent in [serde_json::json!({}), serde_json::json!({"provider": "anthropic"})] {
+            crate::util::write_shared_config_atomic(&serde_json::json!({"config": {
+                "agent": agent,
+                "maximus": {"model": "compressor-test", "url": "http://maximus.invalid", "disabled": true}
+            }})).unwrap();
+            let cfg = super::super::load_config().unwrap();
+            assert_eq!(cfg.provider, "ollama");
+            assert_eq!(cfg.maximus_model.as_deref(), Some("compressor-test"));
+            assert_eq!(cfg.maximus_url.as_deref(), Some("http://maximus.invalid"));
+            assert!(cfg.maximus_disabled);
+        }
     }
 
     // --- compress_messages: passthrough when under threshold ---

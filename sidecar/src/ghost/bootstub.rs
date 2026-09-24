@@ -584,16 +584,16 @@ fn http_post_json(path: &str, body: &serde_json::Value) -> Result<String, String
 
 fn reply_list_models() -> BootReply {
     BootReply {
-        text: "Recommended Local & Cloud Models for Hyperia:\n\n\
+        text: format!("Recommended Local & Cloud Models for Hyperia:\n\n\
             * Local (Ollama):\n  \
               - `gemma2:2b` (Recommended - ~1.6GB, extremely fast, excellent structured JSON & tool dispatch)\n  \
               - `qwen2.5-coder:7b` (Strong alternative - 4.7GB, robust code generation)\n  \
               - `deepseek-coder:6.7b` (Coding specialist)\n\n\
             * Cloud (Frontier):\n  \
-              - `claude-sonnet-4-6` (Default - Gold standard for agent tasks)\n  \
+              - `{}` (Default Anthropic model)\n  \
               - `gpt-4o` (Excellent overall tool performance)\n  \
               - `gemini-2.0-flash` (Extremely fast, massive context window)\n\n\
-            To configure a provider, paste its API key (e.g. `sk-ant-...` or `AIza...`), or install/run Ollama locally.".into(),
+            To configure a provider, paste its API key (e.g. `sk-ant-...` or `AIza...`), or install/run Ollama locally.", crate::models::default_model("anthropic")),
         system: vec![],
         config_changed: false,
     }
@@ -1194,8 +1194,8 @@ mod tests {
     #[test]
     fn test_list_models() {
         let r = handle("list models");
+        assert!(r.text.contains(crate::models::default_model("anthropic")));
         assert!(r.text.contains("gemma2:2b"));
-        assert!(r.text.contains("claude-sonnet-4-6"));
         assert!(!r.config_changed);
     }
 
@@ -1208,9 +1208,37 @@ mod tests {
 
     #[test]
     fn test_show_logs() {
+        if !crate::util::isolated_test("ghost::bootstub::tests::test_show_logs") { return; }
+        // A controlled HTTP peer keeps this test independent of the running
+        // developer sidecar, its authentication, and its current log contents.
+        let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+        std::env::set_var("HYPERIA_PORT", listener.local_addr().unwrap().port().to_string());
+        let peer = std::thread::spawn(move || {
+            let lines: Vec<_> = (0..35).map(|n| format!("fixture-line-{n:02}")).collect();
+            for body in [serde_json::to_string(&lines).unwrap(), "[]".into(), "invalid-json".into()] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0u8; 1];
+                while !request.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                assert!(request.starts_with(b"GET /api/logs HTTP/1.0"));
+                write!(stream, "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        });
         let r = handle("show logs");
-        assert!(r.text.contains("Recent sidecar logs") || r.text.contains("connect") || r.text.contains("empty"));
+        assert!(r.text.contains("showing last 30/35 lines"), "{}", r.text);
+        assert!(r.text.contains("fixture-line-05"));
+        assert!(r.text.contains("fixture-line-34"));
+        assert!(!r.text.contains("fixture-line-04"));
         assert!(!r.config_changed);
+        assert!(handle("show logs").text.contains("currently empty"));
+        assert!(handle("show logs").text.contains("failed to parse /api/logs JSON"));
+        peer.join().unwrap();
+        std::env::set_var("HYPERIA_PORT", "0");
+        assert!(handle("show logs").text.contains("failed to connect"));
     }
 
     #[test]
@@ -1247,15 +1275,9 @@ mod tests {
 
     #[test]
     fn test_config_operations_integration() {
-        // Setup a unique temp directory for config
-        let temp_dir = std::env::temp_dir().join(format!("hyperia_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-        let _ = std::fs::create_dir_all(&temp_dir);
-
-        let orig_home = std::env::var("HOME").ok();
-        let orig_userprofile = std::env::var("USERPROFILE").ok();
-
-        std::env::set_var("HOME", &temp_dir);
-        std::env::set_var("USERPROFILE", &temp_dir);
+        if !crate::util::isolated_test("ghost::bootstub::tests::test_config_operations_integration") {
+            return;
+        }
 
         // 1. set token
         let r_set = handle("set anthropic token sk-ant-api03-abcdef123456");
@@ -1264,7 +1286,7 @@ mod tests {
 
         // 2. get config path
         let r_get_model = handle("get agent.model");
-        assert_eq!(r_get_model.text, "agent.model = claude-sonnet-4-6");
+        assert_eq!(r_get_model.text, format!("agent.model = {}", crate::models::default_model("anthropic")));
 
         let r_get_provider = handle("get agent.provider");
         assert_eq!(r_get_provider.text, "agent.provider = anthropic");
@@ -1281,17 +1303,12 @@ mod tests {
         assert!(r_show.text.contains("sk-ant"));
         assert!(!r_show.text.contains("abcdef"));
 
-        // Clean up
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        if let Some(h) = orig_home {
-            std::env::set_var("HOME", h);
-        } else {
-            std::env::remove_var("HOME");
-        }
-        if let Some(up) = orig_userprofile {
-            std::env::set_var("USERPROFILE", up);
-        } else {
-            std::env::remove_var("USERPROFILE");
-        }
+        // Refreshing credentials must preserve an explicit model selection.
+        let mut config = crate::util::read_shared_config().unwrap();
+        config["config"]["agent"]["model"] = serde_json::json!("chosen-model");
+        crate::util::write_shared_config_atomic(&config).unwrap();
+        assert!(handle("set anthropic token sk-ant-api03-refreshed654321").config_changed);
+        assert_eq!(handle("get agent.model").text, "agent.model = chosen-model");
+
     }
 }
