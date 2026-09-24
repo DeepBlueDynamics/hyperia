@@ -11,6 +11,7 @@ import {
   reviveRequest,
   type PermRequest
 } from '../permissions-bus';
+import {consentSubject, consentTargetName, consentVariant} from '../utils/consent-variant';
 
 // Segmented-control pill (scope + duration rows). Mirrors the old per-pane card.
 const segStyle = (active: boolean): React.CSSProperties => ({
@@ -25,6 +26,31 @@ const segStyle = (active: boolean): React.CSSProperties => ({
   cursor: 'pointer',
   whiteSpace: 'nowrap'
 });
+
+// The same pill, frozen: messaging/binding have exactly one possible scope, so
+// it's shown as a fixed chip — not a button, no hover, no pointer.
+const fixedChipStyle: React.CSSProperties = {
+  ...segStyle(true),
+  display: 'inline-block',
+  lineHeight: 'normal',
+  cursor: 'default',
+  userSelect: 'none'
+};
+
+// Row: muted 54px label column + controls. Shared by Access and For so every
+// variant lines up the same way.
+const rowStyle = (last: boolean): React.CSSProperties => ({
+  display: 'flex',
+  alignItems: 'center',
+  gap: '10px',
+  marginBottom: last ? '18px' : '10px'
+});
+const rowLabelStyle: React.CSSProperties = {
+  fontSize: '11px',
+  color: 'var(--text-secondary, #9a9aa2)',
+  width: '54px',
+  flexShrink: 0
+};
 
 const actionStyle = (primary: boolean, busy: boolean): React.CSSProperties => ({
   padding: '7px 20px',
@@ -88,12 +114,12 @@ export default function ConsentModal(): React.ReactElement | null {
     return () => ipcRenderer.send('web-panes:suppress', {suppressed: false});
   }, [hasPrompt]);
 
-  // Resolve the target pane's friendly name (the "where") from the store.
+  // Resolve the friendly "where": the recipient agent for messaging, else the
+  // target pane's name from the store (see consentTargetName).
   const paneName = useSelector((s: any) => {
-    // Sentinel targets aren't panes: __audio__ gates host audio (epic #162).
-    if (req?.targetPane === '__audio__') return '🔊 audio on this machine';
-    const sess = req ? s?.sessions?.sessions?.[req.targetPane] : null;
-    return (sess && (sess.shellName || sess.title)) || (req ? `pane ${req.targetPane.slice(0, 8)}` : '');
+    if (!req) return '';
+    const sess = s?.sessions?.sessions?.[req.targetPane];
+    return consentTargetName(req, (sess && (sess.shellName || sess.title)) || undefined);
   });
 
   // No ACTIVE prompt — but pending (expired/snoozed) requests collapse into a
@@ -143,6 +169,10 @@ export default function ConsentModal(): React.ReactElement | null {
       </div>
     );
   }
+
+  // Wording + which rows apply (pane access / messaging / mailbox binding).
+  const variant = consentVariant(req.action);
+  const subject = consentSubject(req);
 
   const act = (decision: 'allow' | 'deny') => {
     setBusy(true);
@@ -196,19 +226,10 @@ export default function ConsentModal(): React.ReactElement | null {
           <span style={{fontSize: '20px', lineHeight: 1}}>🛂</span>
           <div style={{fontSize: '13.5px', lineHeight: 1.4}}>
             <b>{req.requesterName || req.requester}</b>
-            <span style={{color: 'var(--text-secondary, #9a9aa2)'}}>
-              {req.action?.startsWith('message:')
-                ? ' wants to send a message to '
-                : req.action?.startsWith('bind:')
-                  ? ' wants to associate its mailbox with '
-                  : ' wants to control '}
-            </span>
+            <span style={{color: 'var(--text-secondary, #9a9aa2)'}}>{variant.verb}</span>
             <b>{paneName}</b>
-            <span style={{color: 'var(--text-secondary, #9a9aa2)'}}>
-              {' '}
-              — its tab is flashing 🔔. Approving releases the waiting operation.
-            </span>
-            {req.purpose ? (
+            <span style={{color: 'var(--text-secondary, #9a9aa2)'}}> {variant.tail}</span>
+            {subject || req.purpose ? (
               <div
                 style={{
                   marginTop: '8px',
@@ -220,59 +241,80 @@ export default function ConsentModal(): React.ReactElement | null {
                   color: 'var(--text-secondary, #9a9aa2)'
                 }}
               >
-                <span style={{color: 'var(--text-primary, #e8e8ea)'}}>Why:</span> {req.purpose}
+                {/* Messaging shows the mail's subject (never its body) in place of Why. */}
+                {subject ? (
+                  <span title={subject.full} style={{overflowWrap: 'anywhere'}}>
+                    <span style={{color: 'var(--text-primary, #e8e8ea)'}}>Subject:</span> {subject.text}
+                  </span>
+                ) : (
+                  <>
+                    <span style={{color: 'var(--text-primary, #e8e8ea)'}}>Why:</span> {req.purpose}
+                  </>
+                )}
               </div>
             ) : null}
           </div>
         </div>
 
-        {req.action?.startsWith('message:') || req.action?.startsWith('bind:') ? (
-          <p style={{fontSize: '12px'}}>Access applies only to this recipient.</p>
-        ) : (
-          <>
-            <div style={{display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px'}}>
-              <span style={{fontSize: '11px', color: 'var(--text-secondary, #9a9aa2)', width: '54px', flexShrink: 0}}>
-                Access
+        {/* Access — every variant uses the same label-column row. Messaging and
+            binding have one possible scope, shown as a fixed chip. */}
+        <div role="group" aria-label="Access" style={rowStyle(!variant.showDuration)}>
+          <span style={rowLabelStyle} aria-hidden="true">
+            Access
+          </span>
+          <div style={{display: 'flex', gap: '5px'}}>
+            {variant.accessChip ? (
+              <span style={fixedChipStyle} title="The only scope this request can have">
+                {variant.accessChip}
               </span>
-              <div style={{display: 'flex', gap: '5px'}}>
-                {(
-                  [
-                    ['pane', 'This pane'],
-                    ['tab', 'This tab'],
-                    ['any', 'Any pane']
-                  ] as const
-                ).map(([val, lbl]) => (
-                  <button key={val} type="button" onClick={() => setScope(val)} style={segStyle(scope === val)}>
-                    {lbl}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
+            ) : (
+              (
+                [
+                  ['pane', 'This pane'],
+                  ['tab', 'This tab'],
+                  ['any', 'Any pane']
+                ] as const
+              ).map(([val, lbl]) => (
+                <button
+                  key={val}
+                  type="button"
+                  aria-pressed={scope === val}
+                  onClick={() => setScope(val)}
+                  style={segStyle(scope === val)}
+                >
+                  {lbl}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
 
-        {req.action?.startsWith('bind:') ? null : (
-          <>
-            <div style={{display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '18px'}}>
-              <span style={{fontSize: '11px', color: 'var(--text-secondary, #9a9aa2)', width: '54px', flexShrink: 0}}>
-                For
-              </span>
-              <div style={{display: 'flex', gap: '5px'}}>
-                {(
-                  [
-                    ['15 min', 900],
-                    ['1 hour', 3600],
-                    ['Always', null]
-                  ] as const
-                ).map(([lbl, secs]) => (
-                  <button key={lbl} type="button" onClick={() => setDuration(secs)} style={segStyle(duration === secs)}>
-                    {lbl}
-                  </button>
-                ))}
-              </div>
+        {variant.showDuration ? (
+          <div role="group" aria-label="For" style={rowStyle(true)}>
+            <span style={rowLabelStyle} aria-hidden="true">
+              For
+            </span>
+            <div style={{display: 'flex', gap: '5px'}}>
+              {(
+                [
+                  ['15 min', 900],
+                  ['1 hour', 3600],
+                  ['Always', null]
+                ] as const
+              ).map(([lbl, secs]) => (
+                <button
+                  key={lbl}
+                  type="button"
+                  aria-pressed={duration === secs}
+                  onClick={() => setDuration(secs)}
+                  style={segStyle(duration === secs)}
+                >
+                  {lbl}
+                </button>
+              ))}
             </div>
-          </>
-        )}
+          </div>
+        ) : null}
 
         {error ? (
           <div role="alert" style={{color: 'var(--accent-danger, #f85149)', marginBottom: 12}}>

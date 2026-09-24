@@ -110,11 +110,40 @@ async fn message_allowed(bridge: &Bridge, sender: &MailActor, recipient: &Princi
         || bridge.perms().has_message_grant(&sender.requester, &recipient.to_key()).await
 }
 
+/// Display-only extras for a messaging consent prompt, so the human sees WHO
+/// the mail is for and its subject. Never carries the message body.
+#[derive(Default)]
+struct PromptDetails {
+    /// Friendly recipient (agent label or pane name); omitted when only a raw id is known.
+    recipient_label: Option<String>,
+    /// Mail subject line, if the sender gave one.
+    subject: Option<String>,
+}
+
+/// The `PermissionRequest` notification for a retained operation. The detail
+/// fields are additive and optional: older renderers ignore them.
+fn prompt_json(req: &crate::perms::PermRequest, requester_name: &str, details: &PromptDetails) -> serde_json::Value {
+    let mut prompt = serde_json::json!({
+        "type": "PermissionRequest", "id": req.id, "requester": req.requester,
+        "requesterName": requester_name, "requesterPane": req.requester_pane,
+        "targetPane": req.target_pane, "action": req.action, "purpose": req.purpose,
+    });
+    let present = |s: &Option<String>| s.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    if let Some(label) = present(&details.recipient_label) {
+        prompt["recipientLabel"] = serde_json::json!(label);
+    }
+    if let Some(subject) = present(&details.subject) {
+        prompt["subject"] = serde_json::json!(subject);
+    }
+    prompt
+}
+
 /// Called under WORKFLOW. Persist the payload and consent association before displaying a prompt.
+#[allow(clippy::too_many_arguments)]
 async fn retain(
     bridge: &Bridge, sender: &MailActor, target: &str, kind: &str,
     payload: serde_json::Value, submit: bool, key: Option<String>,
-    approved: bool, action: &str, purpose: &str,
+    approved: bool, action: &str, purpose: &str, details: PromptDetails,
 ) -> Result<Operation, ApiError> {
     let denial_key = if action == "drive" { target } else { action };
     if !approved && bridge.perms().recently_denied(&sender.requester, denial_key).await {
@@ -143,11 +172,7 @@ async fn retain(
         }
         crate::consent_log::record_request(&req.id, &req.requester, &sender.label, sender.principal.kind_str(),
             &req.action, &req.target_pane, &req.purpose);
-        let prompt = serde_json::json!({
-            "type": "PermissionRequest", "id": req.id, "requester": req.requester,
-            "requesterName": sender.label, "requesterPane": req.requester_pane,
-            "targetPane": req.target_pane, "action": req.action, "purpose": req.purpose,
-        });
+        let prompt = prompt_json(&req, &sender.label, &details);
         if let Err(error) = bridge.notify(prompt.clone()).await {
             let mut pending = PROMPTS.lock().await;
             if !pending.iter().any(|(id, _)| id == &req.id) {
@@ -172,8 +197,15 @@ pub async fn send_mail(HttpState(state): HttpState<AppState>, headers: HeaderMap
     let approved = message_allowed(&state.bridge, &msg.sender, &msg.recipient).await;
     let target = msg.target_pane.clone().unwrap_or_else(|| msg.recipient.to_key());
     let action = format!("message:{}", msg.recipient.to_key());
+    // A pane recipient with no shell name falls back to its raw uid as the
+    // label; leave that out so the renderer can use the pane's own name.
+    let details = PromptDetails {
+        recipient_label: Some(msg.recipient_label.clone()).filter(|l| msg.target_pane.as_deref() != Some(l.as_str())),
+        subject: Some(msg.subject.clone()),
+    };
     let op = retain(&state.bridge, &msg.sender, &target, "mail", payload, false,
-        msg.idempotency_key.clone(), approved, &action, &format!("Deliver stored mail to {}.", msg.recipient_label)).await?;
+        msg.idempotency_key.clone(), approved, &action, &format!("Deliver stored mail to {}.", msg.recipient_label),
+        details).await?;
     Ok(response(op))
 }
 
@@ -243,12 +275,18 @@ pub async fn submit_input(bridge: &Bridge, headers: &HeaderMap, req: InputReques
             || bridge.grant_allows(&sender.requester, &pane).await;
         (allowed, "drive".to_string())
     };
+    // Agent input names its bound agent on the prompt; the text itself never does.
+    let details = PromptDetails {
+        recipient_label: match &recipient { Principal::Agent(name) if agent => Some(name.clone()), _ => None },
+        subject: None,
+    };
     let payload = InputPayload { sender: sender.clone(), recipient, pane: pane.clone(), pid, text, agent, raw: false, interrupt: false };
     let mut payload = value(&payload)?;
     payload["request"] = request_metadata(original);
     retain(bridge, &sender, &pane, kind, payload,
         submit, req.idempotency_key, approved, &action,
-        if agent { "Send this retained text to the agent." } else { "Run this retained command at the shell prompt." }).await
+        if agent { "Send this retained text to the agent." } else { "Run this retained command at the shell prompt." },
+        details).await
 }
 
 /// Retain explicitly requested raw control keys under terminal-control permission.
@@ -284,7 +322,8 @@ pub async fn raw_keys(bridge: &Bridge, headers: &HeaderMap, req: InputRequest, i
     let mut payload = value(&payload)?;
     payload["request"] = request_metadata(original);
     retain(bridge, &sender, &pane, "keys", payload, false, req.idempotency_key,
-        approved, "drive", "Send these exact retained terminal-control keys without adding Enter.").await
+        approved, "drive", "Send these exact retained terminal-control keys without adding Enter.",
+        PromptDetails::default()).await
 }
 
 /// Main's approval handler holds WORKFLOW while applying this decision and the grant.
@@ -520,6 +559,31 @@ mod tests {
         }
         assert!(!replay_matches(&op, "shell", &request));
     }
+    #[test]
+    fn prompt_json_adds_recipient_and_subject_only_when_present() {
+        let req = crate::perms::PermRequest {
+            id: "perm-1".into(), requester: "agent:alice".into(), requester_pane: "pA".into(),
+            target_pane: "agent:bob".into(), action: "message:agent:bob".into(),
+            purpose: "Deliver stored mail to bob.".into(),
+        };
+        let bare = prompt_json(&req, "Alice", &PromptDetails::default());
+        assert_eq!(bare["type"], "PermissionRequest");
+        assert_eq!(bare["requesterName"], "Alice");
+        assert_eq!(bare["action"], "message:agent:bob");
+        assert!(bare.get("recipientLabel").is_none());
+        assert!(bare.get("subject").is_none());
+        let blank = prompt_json(&req, "Alice", &PromptDetails {
+            recipient_label: Some("  ".into()), subject: Some(String::new()),
+        });
+        assert!(blank.get("recipientLabel").is_none());
+        assert!(blank.get("subject").is_none());
+        let full = prompt_json(&req, "Alice", &PromptDetails {
+            recipient_label: Some("team/bob".into()), subject: Some(" Status report ".into()),
+        });
+        assert_eq!(full["recipientLabel"], "team/bob");
+        assert_eq!(full["subject"], "Status report");
+    }
+
     #[test]
     fn agent_trailing_return_is_enter_not_paste_body() {
         let (body, submit) = normalize_agent_enter("hello\r".into(), false, true);

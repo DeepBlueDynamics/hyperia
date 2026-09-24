@@ -106,7 +106,17 @@ export type MainEvents = {
   'close-confirm-ack': {id: number};
   /** Renderer's answer to the in-app close modal (#148). */
   'close-confirm-reply': {id: number; ok: boolean};
-  'permission request': {id: string; requester: string; requesterPane: string; targetPane: string; purpose?: string};
+  'permission request': {
+    id: string;
+    requester: string;
+    requesterName?: string;
+    requesterPane: string;
+    targetPane: string;
+    purpose?: string;
+    action?: string;
+    recipientLabel?: string;
+    subject?: string;
+  };
   'permission resolved': {targetPane: string; decision: string; id?: string};
   'agent toast': {id: string; requester: string; action: string};
   'audio notice': {id: string; name: string; active: boolean};
@@ -247,7 +257,17 @@ export type RendererEvents = {
       app?: {name: string; path: string; cmdline: string; pid: number};
     };
   };
-  'permission request': {id: string; requester: string; requesterPane: string; targetPane: string; purpose?: string};
+  'permission request': {
+    id: string;
+    requester: string;
+    requesterName?: string;
+    requesterPane: string;
+    targetPane: string;
+    purpose?: string;
+    action?: string;
+    recipientLabel?: string;
+    subject?: string;
+  };
   'permission resolved': {targetPane: string; decision: string; id?: string};
   'agent toast': {id: string; requester: string; action: string};
   'audio notice': {id: string; name: string; active: boolean};

@@ -17,6 +17,10 @@ export type PermRequest = {
   purpose?: string;
   /** Capability being approved; messaging must not imply terminal control. */
   action?: string;
+  /** Messaging only: friendly recipient (agent label or pane name) — shown instead of the pane. */
+  recipientLabel?: string;
+  /** Messaging only: the mail's subject line (never the body). */
+  subject?: string;
 };
 
 type Listener = (req: PermRequest | null) => void;
