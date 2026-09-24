@@ -9,11 +9,12 @@
 //! is built lazily and reused across every call via a [`tokio::sync::OnceCell`].
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use kokoro_tts::{KokoroTts, Voice};
-use tokio::sync::OnceCell;
+use tokio::sync::{Mutex, OnceCell};
 
 /// Kokoro V1.0 model assets. CPU inference only; ~120 MB total across the two
 /// files. Each is fetched from OUR CDN first (hyperia.nuts.services, served off
@@ -38,6 +39,33 @@ const SAMPLE_RATE: u32 = 24_000;
 /// the ONNX session, which is the expensive part. A failed init leaves the cell
 /// empty so the next call retries (a transient download/load error is not fatal).
 static ENGINE: OnceCell<Arc<KokoroTts>> = OnceCell::const_new();
+
+/// Process-wide serialization lock for audio playback. Spoken summaries
+/// synthesize in parallel, but playback is serialized process-wide so concurrent
+/// summaries never overlap or cut each other off (epic #162 bug M).
+static PLAYBACK_MUTEX: Mutex<()> = Mutex::const_new(());
+
+/// Number of spoken summaries currently in flight (synthesizing or waiting to play).
+static PLAYBACK_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+/// Sane bounds on the playback queue: max concurrent summaries in flight and max wait.
+pub const DEFAULT_MAX_PLAYBACK_QUEUE: usize = 8;
+pub const DEFAULT_PLAYBACK_TIMEOUT_SECS: u64 = 120;
+
+fn max_playback_queue() -> usize {
+    crate::ghost::api::read_shared_config()["config"]["tts"]["maxQueue"]
+        .as_u64()
+        .map(|n| n.clamp(1, 32) as usize)
+        .unwrap_or(DEFAULT_MAX_PLAYBACK_QUEUE)
+}
+
+fn playback_timeout() -> std::time::Duration {
+    let secs = crate::ghost::api::read_shared_config()["config"]["tts"]["timeoutSecs"]
+        .as_u64()
+        .map(|n| n.clamp(5, 600))
+        .unwrap_or(DEFAULT_PLAYBACK_TIMEOUT_SECS);
+    std::time::Duration::from_secs(secs)
+}
 
 /// Kokoro's v10 synth path indexes the voice style-pack by phoneme count
 /// (`pack[phonemes.len() - 1]`) and PANICS out-of-bounds once a single synth
@@ -111,21 +139,55 @@ pub async fn speak(text: &str, voice: Option<&str>, speed: Option<f32>) -> Resul
     }
     let speed = speed.unwrap_or(1.0).clamp(0.5, 2.0);
 
+    // Queue depth bounding (epic #162 bug M): reject immediately if too many
+    // spoken summaries are in flight (synthesizing or waiting to play) so a
+    // flood of calls cannot queue forever or consume unbounded resources.
+    let max_q = max_playback_queue();
+    let in_flight = PLAYBACK_IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+    if in_flight >= max_q {
+        PLAYBACK_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        return Err(anyhow!(
+            "spoken summary playback queue is full ({max_q} summaries in flight) — try again when playback finishes"
+        ));
+    }
+    struct InFlightGuard;
+    impl Drop for InFlightGuard {
+        fn drop(&mut self) {
+            PLAYBACK_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    let _in_flight = InFlightGuard;
+
     // Second engine: ElevenLabs, when a token is around (config.tts.elevenlabs
     // .token or ELEVENLABS_API_KEY). Synthesizes in the cloud, plays through
     // the SAME host playback path (pcm_24000 matches our SAMPLE_RATE exactly).
     // Kokoro stays the offline default and the fallback when the cloud call
     // fails — spoken summaries must never go silent over a network blip.
     // config.tts.engine forces it: "kokoro" | "elevenlabs" | "auto" (default).
-    if let Some(cfg) = eleven_cfg() {
-        match speak_eleven(&cfg, text, speed).await {
-            Ok(secs) => return Ok(secs),
+    let audio = if let Some(cfg) = eleven_cfg() {
+        match synth_eleven(&cfg, text, speed).await {
+            Ok(a) => a,
             Err(e) => {
-                tracing::warn!(target: "tts", "ElevenLabs failed ({e}) — falling back to Kokoro")
+                tracing::warn!(target: "tts", "ElevenLabs failed ({e}) — falling back to Kokoro");
+                synth_kokoro(text, voice, speed).await?
             }
         }
-    }
+    } else {
+        synth_kokoro(text, voice, speed).await?
+    };
 
+    let secs = audio.len() as f64 / SAMPLE_RATE as f64;
+
+    // Playback is serialized process-wide: rodio drives a cpal stream on its own
+    // thread and we sleep until the buffer drains. Summaries synthesize in
+    // parallel, but play sequentially to completion in arrival order.
+    play_samples_serialized(audio).await?;
+
+    Ok(secs)
+}
+
+/// Synthesize audio via Kokoro ONNX model.
+async fn synth_kokoro(text: &str, voice: Option<&str>, speed: f32) -> Result<Vec<f32>> {
     let voice = resolve_voice(voice, speed);
 
     // Lowercase for synthesis: kokoro-tts's cmudict lookup is case-sensitive
@@ -171,13 +233,7 @@ pub async fn speak(text: &str, voice: Option<&str>, speed: Option<f32>) -> Resul
         Err(e) => tracing::warn!(target: "tts", "wav dump failed: {e}"),
     }
 
-    // Playback is blocking: rodio drives a cpal stream on its own thread and we
-    // sleep until the buffer drains. Keep it off the async runtime's workers.
-    tokio::task::spawn_blocking(move || play_samples(audio))
-        .await
-        .context("playback task join failed")??;
-
-    Ok(secs)
+    Ok(audio)
 }
 
 /// ElevenLabs settings, resolved per call (config hot-reloads). Token from
@@ -222,11 +278,10 @@ fn eleven_cfg() -> Option<ElevenCfg> {
     })
 }
 
-/// Synthesize via ElevenLabs and play on the host. Requests `pcm_24000` —
-/// raw s16le mono at exactly our SAMPLE_RATE, so the bytes go straight into
-/// the same `play_samples` path Kokoro (and agent audio) uses. Errors bubble
-/// so the caller can fall back to Kokoro.
-async fn speak_eleven(cfg: &ElevenCfg, text: &str, speed: f32) -> Result<f64> {
+/// Synthesize via ElevenLabs. Requests `pcm_24000` — raw s16le mono at exactly
+/// our SAMPLE_RATE, so the bytes go straight into the same `play_samples` path
+/// Kokoro (and agent audio) uses. Errors bubble so the caller can fall back to Kokoro.
+async fn synth_eleven(cfg: &ElevenCfg, text: &str, speed: f32) -> Result<Vec<f32>> {
     let url = format!(
         "https://api.elevenlabs.io/v1/text-to-speech/{}?output_format=pcm_24000",
         cfg.voice_id
@@ -262,10 +317,7 @@ async fn speak_eleven(cfg: &ElevenCfg, text: &str, speed: f32) -> Result<f64> {
     }
     let secs = audio.len() as f64 / SAMPLE_RATE as f64;
     tracing::info!(target: "tts", "elevenlabs synth {} chars -> {:.1}s audio", text.len(), secs);
-    tokio::task::spawn_blocking(move || play_samples(audio))
-        .await
-        .context("playback task join failed")??;
-    Ok(secs)
+    Ok(audio)
 }
 
 /// Get (or lazily build) the shared engine.
@@ -481,5 +533,27 @@ fn play_samples(audio: Vec<f32>) -> Result<()> {
     player.append(buffer);
     player.sleep_until_end(); // blocks until the buffer has fully played
     drop(handle);
+    Ok(())
+}
+
+/// Play audio samples through rodio on the host machine, serialized process-wide.
+///
+/// Ensures only one spoken summary plays at a time so concurrent calls never
+/// overlap or cut each other off (epic #162 bug M). Calls line up in FIFO order
+/// and wait up to `playback_timeout()` to acquire the playback mutex.
+async fn play_samples_serialized(audio: Vec<f32>) -> Result<()> {
+    let timeout = playback_timeout();
+    let lock_res = tokio::time::timeout(timeout, PLAYBACK_MUTEX.lock()).await;
+    let _guard = lock_res.map_err(|_| {
+        anyhow!(
+            "timed out waiting for previous spoken summary playback after {}s",
+            timeout.as_secs()
+        )
+    })?;
+
+    tokio::task::spawn_blocking(move || play_samples(audio))
+        .await
+        .context("playback task join failed")??;
+
     Ok(())
 }

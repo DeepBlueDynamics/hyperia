@@ -4330,7 +4330,9 @@ async fn main() -> anyhow::Result<()> {
     if args.mcp {
         tracing_subscriber::fmt()
             .with_env_filter(
-                EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()),
+                EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into())
+                .add_directive("rmcp=warn".parse().unwrap()),
             )
             .with_writer(std::io::stderr)
             .with_ansi(false)
@@ -4371,7 +4373,9 @@ async fn main() -> anyhow::Result<()> {
     let writer = logs::LogBufferMakeWriter::new(log_buffer.clone()).and(file_writer);
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()),
+            EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into())
+                .add_directive("rmcp=warn".parse().unwrap()),
         )
         .with_writer(writer)
         .with_ansi(false)

@@ -120,15 +120,69 @@ struct IdleCallback {
 /// clobbers the pane's own pane_on_idle callback or trips the poke rate-limiter,
 /// and many messages collapse into ONE notice (the count is recomputed at fire
 /// time from the bus, so it self-heals if the recipient already read them).
-struct MsgNotify {
-    pending: bool,
-    armed_at: std::time::Instant,
-    last_fire: Option<std::time::Instant>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MsgNotify {
+    /// Notice is armed and waiting to be delivered next time the pane is idle.
+    pub pending: bool,
+    /// A notice has been delivered to this pane, and the agent has NOT run
+    /// msg_check or msg_inbox since. While true, no further notices are sent (epic #162 bug R).
+    pub delivered: bool,
+    pub armed_at: std::time::Instant,
+    pub last_fire: Option<std::time::Instant>,
 }
 
-/// Min seconds between two message-notice fires for a pane — coalesces a burst of
-/// arriving mail into one short notice.
-const MSG_NOTIFY_COOLDOWN_SECS: u64 = 45;
+impl MsgNotify {
+    pub fn new(now: std::time::Instant) -> Self {
+        Self {
+            pending: true,
+            delivered: false,
+            armed_at: now,
+            last_fire: None,
+        }
+    }
+
+    /// Arm this entry on arrival of a new message.
+    ///
+    /// If a notice has already been delivered to the pane and the agent hasn't
+    /// run msg_check/msg_inbox since, this is a NO-OP (at most ONE outstanding notice).
+    /// Returns true if armed, false if ignored due to outstanding delivered notice.
+    pub fn arm(&mut self, now: std::time::Instant) -> bool {
+        if self.delivered {
+            return false;
+        }
+        self.pending = true;
+        self.armed_at = now;
+        true
+    }
+
+    /// Mark that the agent has interacted with its mailbox (msg_check / msg_inbox).
+    /// Clears the delivered flag so future mail can arm a new notice.
+    pub fn on_mailbox_checked(&mut self) {
+        self.delivered = false;
+    }
+
+    /// Check if a notice is currently eligible to fire.
+    pub fn can_fire(&self, now: std::time::Instant, cooldown_secs: u64) -> bool {
+        if !self.pending || self.delivered {
+            return false;
+        }
+        match self.last_fire {
+            Some(last) => now.saturating_duration_since(last).as_secs() >= cooldown_secs,
+            None => true,
+        }
+    }
+
+    /// Record that a notice was delivered to the pane.
+    pub fn record_fire(&mut self, now: std::time::Instant) {
+        self.pending = false;
+        self.delivered = true;
+        self.last_fire = Some(now);
+    }
+}
+
+/// Min seconds between two message-notice fires for a pane — rate-limits automated
+/// notices to at most one per ~60s even across checks (epic #162 bug R).
+const MSG_NOTIFY_COOLDOWN_SECS: u64 = 60;
 /// Retire completed notice bookkeeping after this interval. Pending notices survive
 /// focus delays; closing the pane removes its entry.
 const MSG_NOTIFY_TTL_SECS: u64 = 3600;
@@ -651,23 +705,38 @@ impl Bridge {
     }
 
     /// Arm a coalesced, idle-gated "you've got mail" notice for a pane (called
-    /// when a bus message is addressed to it). The idle monitor delivers ONE line
-    /// the next time the pane is idle — never mid-turn, never clobbering the
-    /// pane's own idle callback, never counted against the poke rate-limiter.
-    /// Repeated arms before it fires collapse into a single notice.
+    /// when a bus message is addressed to it).
+    ///
+    /// Coalescing policy (epic #162 bug R):
+    /// At most ONE outstanding notice per pane. If a notice has already been
+    /// delivered and the agent hasn't run msg_check/msg_inbox since, do NOT
+    /// re-arm or send another notice. A later notice happens only after the agent
+    /// has checked and new mail arrives.
     pub async fn arm_msg_notify(&self, pane: &str) {
         if pane.is_empty() {
             return;
         }
         let now = std::time::Instant::now();
         let mut m = self.inner.msg_notify.lock().await;
-        let e = m.entry(pane.to_string()).or_insert(MsgNotify {
+        let e = m.entry(pane.to_string()).or_insert_with(|| MsgNotify {
             pending: false,
+            delivered: false,
             armed_at: now,
             last_fire: None,
         });
-        e.pending = true;
-        e.armed_at = now;
+        e.arm(now);
+    }
+
+    /// Clear the delivered flag when an agent runs msg_check or msg_inbox.
+    /// Allows a subsequent notice to be armed when NEW mail arrives (epic #162 bug R).
+    pub async fn clear_msg_notify_delivered(&self, pane: &str) {
+        if pane.is_empty() {
+            return;
+        }
+        let mut m = self.inner.msg_notify.lock().await;
+        if let Some(e) = m.get_mut(pane) {
+            e.on_mailbox_checked();
+        }
     }
 
     /// Record a self-reported liveness pulse. busy=true marks the pane busy until
@@ -988,7 +1057,7 @@ impl Bridge {
             let notif = self.inner.msg_notify.lock().await;
             let mut v: Vec<String> = cbs.iter().map(|c| c.pane.clone()).collect();
             v.extend(pulses.iter().filter(|p| !p.paused).map(|p| p.pane.clone()));
-            v.extend(notif.iter().filter(|(_, n)| n.pending).map(|(p, _)| p.clone()));
+            v.extend(notif.iter().filter(|(_, n)| n.pending && !n.delivered).map(|(p, _)| p.clone()));
             v.sort();
             v.dedup();
             v
@@ -1138,12 +1207,12 @@ impl Bridge {
         }
 
         // Mail notices protect human focus but do not wait for agent output silence.
-        // Keep a batch armed until accepted; a concurrent new message arms a new batch.
+        // Mail notices protect human focus but do not wait for agent output silence.
+        // Keep at most ONE outstanding notice per pane; rate-limit to ~60s (epic #162 bug R).
         let notify_candidates: Vec<(String, std::time::Instant)> = {
             let already: HashSet<String> = to_fire.iter().map(|(p, _, _, _)| p.clone()).collect();
             let notif = self.inner.msg_notify.lock().await;
-            notif.iter().filter(|(pane, st)| st.pending && !already.contains(*pane)
-                && st.last_fire.map(|t| t.elapsed().as_secs() >= MSG_NOTIFY_COOLDOWN_SECS).unwrap_or(true))
+            notif.iter().filter(|(pane, st)| !already.contains(*pane) && st.can_fire(now, MSG_NOTIFY_COOLDOWN_SECS))
                 .map(|(pane, st)| (pane.clone(), st.armed_at)).collect()
         };
         for (pane, armed_at) in notify_candidates {
@@ -1156,7 +1225,8 @@ impl Bridge {
             let mut consumed = unread == 0;
             if unread > 0 {
                 let pid = self.inner.sessions.lock().await.get(&pane).map(|s| s.pid).unwrap_or(0);
-                let notice = format!("[Hyperia] You have {unread} unread messages. Use msg_check to fetch and acknowledge, or msg_inbox to preview. Automated mailbox notice.");
+                // Keep notice text count-free so it stays accurate once typed into the prompt queue (epic #162 bug R).
+                let notice = "[Hyperia] You have unread messages. Use msg_check to fetch and acknowledge, or msg_inbox to preview. Automated mailbox notice.";
                 let response = self.guarded_input(&pane, serde_json::json!({
                     "type": "GuardedInput", "uid": pane, "pid": pid,
                     "text": notice, "submit": true, "agent": true,
@@ -1177,14 +1247,19 @@ impl Bridge {
             if consumed {
                 let mut notif = self.inner.msg_notify.lock().await;
                 if let Some(st) = notif.get_mut(&pane) {
-                    if st.armed_at == armed_at { st.pending = false; }
-                    if unread > 0 { st.last_fire = Some(now); }
+                    if st.armed_at == armed_at {
+                        if unread > 0 {
+                            st.record_fire(now);
+                        } else {
+                            st.pending = false;
+                        }
+                    }
                 }
             }
         }
         {
             let mut notif = self.inner.msg_notify.lock().await;
-            notif.retain(|_, st| st.pending || st.armed_at.elapsed().as_secs() < MSG_NOTIFY_TTL_SECS);
+            notif.retain(|_, st| st.pending || st.delivered || st.armed_at.elapsed().as_secs() < MSG_NOTIFY_TTL_SECS);
         }
 
         // Retire orphaned lock entries only when no transaction or waiter owns the Arc.
@@ -2392,4 +2467,56 @@ mod tests {
         });
     }
 
+    #[test]
+    fn test_msg_notify_coalescing_and_rate_limit() {
+        let start = std::time::Instant::now();
+        let mut n = MsgNotify::new(start);
+
+        // Initially armed and pending, not yet delivered.
+        assert!(n.pending);
+        assert!(!n.delivered);
+        assert!(n.can_fire(start, 60));
+
+        // Fire the notice: marks delivered, clears pending, sets last_fire.
+        n.record_fire(start);
+        assert!(!n.pending);
+        assert!(n.delivered);
+        assert_eq!(n.last_fire, Some(start));
+
+        // While delivered and unacknowledged, further arms are no-ops (coalescing).
+        let t1 = start + std::time::Duration::from_secs(10);
+        assert!(!n.arm(t1));
+        assert!(!n.can_fire(t1, 60));
+
+        let t2 = start + std::time::Duration::from_secs(30);
+        assert!(!n.arm(t2));
+        assert!(!n.can_fire(t2, 60));
+
+        // Even after 60s cooldown has elapsed, if still unacknowledged, no fire.
+        let t3 = start + std::time::Duration::from_secs(70);
+        assert!(!n.arm(t3));
+        assert!(!n.can_fire(t3, 60));
+
+        // Agent runs msg_check / msg_inbox -> mailbox checked!
+        n.on_mailbox_checked();
+        assert!(!n.delivered);
+        // Not pending because no new mail arrived yet.
+        assert!(!n.pending);
+        assert!(!n.can_fire(t3, 60));
+
+        // Rate-limit across checks: new mail arrives within 60s of previous fire.
+        let mut n2 = MsgNotify::new(start);
+        n2.record_fire(start);
+        let _t_check = start + std::time::Duration::from_secs(20);
+        n2.on_mailbox_checked();
+        let t_new_mail = start + std::time::Duration::from_secs(25);
+        assert!(n2.arm(t_new_mail)); // arms successfully
+        assert!(n2.pending);
+        // But rate-limited: 25s < 60s since last_fire.
+        assert!(!n2.can_fire(t_new_mail, 60));
+
+        // Once 60s cooldown elapses:
+        let t_ready = start + std::time::Duration::from_secs(61);
+        assert!(n2.can_fire(t_ready, 60));
+    }
 }

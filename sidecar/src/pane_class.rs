@@ -291,7 +291,7 @@ fn basename_token(raw: &str) -> String {
     }
     let base = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
     let lower = base.to_lowercase();
-    lower.strip_suffix(".exe").unwrap_or(&lower).to_string()
+    lower.strip_suffix(".exe").or_else(|| lower.strip_suffix(".cmd")).or_else(|| lower.strip_suffix(".ps1")).or_else(|| lower.strip_suffix(".bat")).unwrap_or(&lower).to_string()
 }
 
 fn agent_token(token: &str) -> Option<&'static str> {
@@ -314,23 +314,33 @@ fn launcher_executable(name: &str, cmdline: &str) -> String {
 
 const CONTAINER_RUNTIMES: &[&str] = &["docker", "podman", "containerd"];
 
-/// Live launcher first. A shell-integration app recorded while the shell is
-/// idle is a finished command and is ignored. Integration still identifies a
-/// running n8 whose visible child is a container runtime.
+/// Live launcher first. An idle integration record with no child is a
+/// finished command. A container runtime that is still the foreground is
+/// not: the walk only keeps the deepest process, so pwsh -> n8 -> docker
+/// is reported as docker, and a prompt redraw marks the shell idle while
+/// that child is alive.
 fn find_agent(evidence: &ClassEvidence) -> Option<&'static str> {
     let live = launcher_executable(&evidence.foreground_name, &evidence.foreground_cmdline);
     if let Some(token) = agent_token(&live) {
         return Some(token);
     }
+    let recorded = launcher_executable(&evidence.shell_app_name, &evidence.shell_app_cmdline);
+    let recorded_token = agent_token(&recorded);
+    if CONTAINER_RUNTIMES.iter().any(|runtime| *runtime == live)
+        && matches!(recorded_token, Some("n8" | "nemesis8"))
+    {
+        return recorded_token;
+    }
     if !evidence.shell_has_integration || integration_idle(evidence) {
         return None;
     }
-    let recorded = launcher_executable(&evidence.shell_app_name, &evidence.shell_app_cmdline);
-    let Some(token) = agent_token(&recorded) else {
+    let Some(token) = recorded_token else {
         return None;
     };
-    if token == "n8" && (live.is_empty() || CONTAINER_RUNTIMES.iter().any(|runtime| *runtime == live)) {
-        return Some("n8");
+    if matches!(token, "n8" | "nemesis8")
+        && (live.is_empty() || CONTAINER_RUNTIMES.iter().any(|runtime| *runtime == live))
+    {
+        return Some(token);
     }
     // No child visible yet: the running integration record is the launcher.
     // A different live executable (`echo codex`, `vim`) is not that agent.
@@ -780,12 +790,24 @@ mod tests {
         assert!(class.agent_token().is_none());
         assert!(class.terminal_run_allowed(), "idle shell with a leftover app record is a prompt: {class:?}");
 
-        let mut stale_n8 = idle_shell("bash");
-        stale_n8.shell_state = "idle".into();
-        stale_n8.shell_app_name = "n8".into();
-        stale_n8.foreground_name = "docker".into();
-        stale_n8.foreground_cmdline = "docker run --rm hyperia-n8".into();
-        assert!(classify(&stale_n8).agent_token().is_none());
+        let mut finished_n8 = idle_shell("bash");
+        finished_n8.shell_app_name = "n8".into();
+        finished_n8.shell_app_cmdline = "n8".into();
+        assert!(classify(&finished_n8).agent_token().is_none());
+        assert!(classify(&finished_n8).terminal_run_allowed());
+
+        let mut live_docker = idle_shell("bash");
+        live_docker.shell_state = "idle".into();
+        live_docker.shell_app_name = "n8".into();
+        live_docker.foreground_name = "docker".into();
+        live_docker.foreground_cmdline = "docker run --rm hyperia-n8".into();
+        assert_eq!(classify(&live_docker).agent_token(), Some("n8"));
+
+        let mut n8_cmd = idle_shell("pwsh");
+        n8_cmd.shell_app_name = "n8.cmd".into();
+        n8_cmd.foreground_name = "docker.exe".into();
+        n8_cmd.foreground_cmdline = "docker.exe run --rm hyperia-n8".into();
+        assert_eq!(classify(&n8_cmd).agent_token(), Some("n8"));
 
         let mut live_child = idle_shell("zsh");
         live_child.shell_state = "idle".into();
