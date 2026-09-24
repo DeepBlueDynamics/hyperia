@@ -289,6 +289,8 @@ export default class Term extends React.PureComponent<
   labelRef = React.createRef<HTMLDivElement>();
   inputRef = React.createRef<HTMLInputElement>();
   dirNavigatorRef = React.createRef<HTMLDivElement>();
+  // The picker's single scroll area (directory list + recent chips).
+  navigatorBodyRef = React.createRef<HTMLDivElement>();
   pathBarRef = React.createRef<HTMLDivElement>();
   navigatorSearchInputRef = React.createRef<HTMLInputElement>();
   findInputRef = React.createRef<HTMLInputElement>();
@@ -2029,13 +2031,7 @@ export default class Term extends React.PureComponent<
       <div
         style={{
           borderTop: '0.5px solid var(--border-neutral)',
-          padding: 'var(--space-6) var(--space-8)',
-          // Shrinks (with the dir list) when the popup is height-capped, so the
-          // chip row below scrolls instead of being clipped by the pane edge.
-          display: 'flex',
-          flexDirection: 'column',
-          minHeight: 0,
-          flex: '0 1 auto'
+          padding: 'var(--space-6) var(--space-8)'
         }}
       >
         <div
@@ -2057,13 +2053,7 @@ export default class Term extends React.PureComponent<
             display: 'flex',
             flexWrap: 'wrap',
             gap: 'var(--space-6)',
-            paddingBottom: '2px',
-            // A narrow pane still wraps even the short list into a column; cap at
-            // ~4 rows and scroll the rest.
-            maxHeight: '96px',
-            overflowY: 'auto',
-            minHeight: 0,
-            flex: '0 1 auto'
+            paddingBottom: '2px'
           }}
         >
           {items.map(({path: itemPath, accent}) => (
@@ -2414,10 +2404,7 @@ export default class Term extends React.PureComponent<
     }
 
     return (
-      <div
-        style={{maxHeight: '220px', overflowY: 'auto', minHeight: 0, flex: '0 1 auto'}}
-        className="term_navigatorDirList"
-      >
+      <div className="term_navigatorDirList">
         {filteredDirs.map((dir, index) => {
           const isMatched = index === focusedIndex;
           const showFocus = isMatched;
@@ -2762,6 +2749,20 @@ export default class Term extends React.PureComponent<
       // Sync shell CWD changes to directory picker if open and not manually navigated away
       if (this.state.isDirNavigatorOpen && this.state.navigatorCurrentPath === prevSessionCwd) {
         this.loadNavigatorDirs(sessionCwd);
+      }
+    }
+
+    // Keep the arrow-key selection visible inside the picker's scroll area.
+    // Adjusts only that area's scrollTop: scrollIntoView would also scroll the
+    // pane's ancestors.
+    if (this.state.isDirNavigatorOpen && this.state.focusedIndex !== prevState.focusedIndex) {
+      const body = this.navigatorBodyRef.current;
+      const row = body?.querySelector<HTMLElement>('.term_navigatorDirRow_focused');
+      if (body && row) {
+        const b = body.getBoundingClientRect();
+        const r = row.getBoundingClientRect();
+        if (r.top < b.top) body.scrollTop -= b.top - r.top;
+        else if (r.bottom > b.bottom) body.scrollTop += r.bottom - b.bottom;
       }
     }
 
@@ -3608,7 +3609,9 @@ export default class Term extends React.PureComponent<
               top: `${this.state.navigatorTop}px`,
               left: `${this.state.navigatorLeft}px`,
               width: `${this.state.navigatorWidth}px`,
-              maxHeight: this.state.navigatorMaxHeight ? `${this.state.navigatorMaxHeight}px` : undefined,
+              // Never past the pane's remaining height, and never more than 480px
+              // in a tall pane (the list scrolls instead of covering the pane).
+              maxHeight: `${Math.min(this.state.navigatorMaxHeight || 480, 480)}px`,
               background: 'var(--bg-secondary)',
               border: '0.5px solid var(--border-neutral)',
               borderRadius: '4px',
@@ -3623,11 +3626,21 @@ export default class Term extends React.PureComponent<
             {/* Breadcrumbs Header */}
             {this.renderNavigatorBreadcrumbs()}
 
-            {/* Directory list */}
-            {this.renderNavigatorDirectoryList()}
+            {/* One scroll area for the directory list and the recent chips, so
+                they scroll together. Breadcrumbs above and the status/search
+                footer below stay pinned. (Two separately shrinking areas left a
+                short pane with only the "RECENT" label.) */}
+            <div
+              ref={this.navigatorBodyRef}
+              className="term_navigatorBody"
+              style={{flex: '1 1 auto', minHeight: 0, overflowY: 'auto'}}
+            >
+              {/* Directory list */}
+              {this.renderNavigatorDirectoryList()}
 
-            {/* Recent dirs — quick-jump button row */}
-            {this.renderNavigatorRecent()}
+              {/* Recent dirs — quick-jump button row */}
+              {this.renderNavigatorRecent()}
+            </div>
 
             {/* Status bar */}
             {this.state.navigatorStatus && (
