@@ -3666,6 +3666,11 @@ export default class Term extends React.PureComponent<
           <div
             ref={this.onTermWrapperRef}
             className={'term_fit term_wrapper ' + (this.state.isDirNavigatorOpen ? 'term_dimmed' : '')}
+            // xterm fits whole rows only, so up to one row's height stays
+            // uncovered at the bottom. Paint that leftover the terminal's own
+            // background (not .term_fit's panel gray), or it shows as a strip
+            // that changes height as the pane resizes.
+            style={{background: (this.props as any).backgroundColor}}
           />
         )}
 
