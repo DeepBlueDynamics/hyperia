@@ -1997,14 +1997,19 @@ export default class Term extends React.PureComponent<
       return full.includes(query) || base.includes(query);
     };
 
+    // Keep the idle list short (a long history wrapped into a tall column and
+    // pushed the picker's header off-screen); typing searches the full history.
+    const RECENT_IDLE = 5;
+    const RECENT_SEARCH = 12;
     const items: {path: string; accent: boolean}[] = [];
+    let hiddenCount = 0;
     if (query.length > 0) {
       if (home && matchesQuery(home)) {
         items.push({path: home, accent: true});
       }
       recents
         .filter(matchesQuery)
-        .slice(0, 12)
+        .slice(0, RECENT_SEARCH)
         .forEach((p) => {
           items.push({path: p, accent: false});
         });
@@ -2012,9 +2017,10 @@ export default class Term extends React.PureComponent<
       if (home) {
         items.push({path: home, accent: true});
       }
-      recents.slice(0, 12).forEach((p) => {
+      recents.slice(0, RECENT_IDLE).forEach((p) => {
         items.push({path: p, accent: false});
       });
+      hiddenCount = Math.max(0, recents.length - RECENT_IDLE);
     }
 
     if (items.length === 0) return null;
@@ -2052,7 +2058,7 @@ export default class Term extends React.PureComponent<
             flexWrap: 'wrap',
             gap: 'var(--space-6)',
             paddingBottom: '2px',
-            // Up to 13 chips wrap into a tall column in a narrow pane; cap at
+            // A narrow pane still wraps even the short list into a column; cap at
             // ~4 rows and scroll the rest.
             maxHeight: '96px',
             overflowY: 'auto',
@@ -2088,6 +2094,20 @@ export default class Term extends React.PureComponent<
               {itemPath}
             </span>
           ))}
+          {hiddenCount > 0 && (
+            <span
+              style={{
+                alignSelf: 'center',
+                fontFamily: 'var(--font-sans)',
+                fontSize: '10px',
+                color: 'var(--text-tertiary)',
+                padding: '2px var(--space-4)',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              +{hiddenCount} more · type to search
+            </span>
+          )}
         </div>
       </div>
     );
