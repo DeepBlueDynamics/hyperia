@@ -77,6 +77,8 @@ pub enum AuthDecision {
 }
 
 pub struct PermStore {
+    // None is a revoked session; links are registered only from the durable identity store.
+    parents: std::sync::RwLock<HashMap<String, Option<(String, Option<u64>)>>>,
     pending: Mutex<HashMap<String, PermRequest>>,
     grants: Mutex<Vec<Grant>>,
     /// pane uid → access token. Minted lazily on first request, stable for the
@@ -302,6 +304,7 @@ impl Default for PermStore {
     fn default() -> Self {
         let (tokens, owners, grants, create_grants, cap_grants) = load_persisted();
         Self {
+            parents: std::sync::RwLock::default(),
             pending: Mutex::default(),
             grants: Mutex::new(grants),
             tokens: Mutex::new(tokens),
@@ -317,6 +320,42 @@ impl Default for PermStore {
 }
 
 impl PermStore {
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        Self {
+            parents: std::sync::RwLock::default(),
+            pending: Mutex::default(), grants: Mutex::default(), tokens: Mutex::default(),
+            owners: Mutex::default(), denials: Mutex::default(), create_grants: Mutex::default(),
+            cap_grants: Mutex::default(), enforce: AtomicBool::new(true),
+            next_id: AtomicU64::default(), persist_path: None,
+        }
+    }
+    pub fn set_parent(&self, child: &str, parent: &str) {
+        self.set_parent_until(child, parent, None);
+    }
+
+    pub fn set_parent_until(&self, child: &str, parent: &str, expires_ms: Option<u64>) {
+        self.parents.write().unwrap().insert(child.into(), Some((parent.into(), expires_ms)));
+    }
+
+    pub fn remove_parent(&self, child: &str) {
+        self.parents.write().unwrap().insert(child.into(), None);
+    }
+
+    fn grant_keys(&self, requester: &str) -> Vec<String> {
+        match self.parents.read().unwrap().get(requester) {
+            Some(Some((parent, deadline))) => {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default().as_millis() as u64;
+                if deadline.is_some_and(|deadline| now >= deadline) { Vec::new() }
+                else { vec![requester.into(), parent.clone()] }
+            },
+            Some(None) => Vec::new(),
+            None if requester.starts_with("agent:mcp-session/") => Vec::new(),
+            None => vec![requester.into()],
+        }
+    }
+
     /// Write-through persistence: durable state only (tokens, owners,
     /// non-expiring grants). Best-effort — a failed write never breaks the
     /// in-memory truth.
@@ -506,11 +545,9 @@ impl PermStore {
 
     /// Does `agent` hold capability `cap`?
     pub async fn has_cap(&self, agent: &str, cap: &str) -> bool {
-        self.cap_grants
-            .lock()
-            .await
-            .get(agent)
-            .map_or(false, |s| s.contains(cap))
+        let keys = self.grant_keys(agent);
+        let grants = self.cap_grants.lock().await;
+        keys.iter().any(|key| grants.get(key).is_some_and(|set| set.contains(cap)))
     }
 
     /// Is there already a pending capability prompt for this (requester, cap)?
@@ -526,10 +563,11 @@ impl PermStore {
     /// Does `agent` currently hold a create grant? Prunes expired grants and
     /// consumes a one-shot ("Just once") as a side effect.
     pub async fn has_create(&self, agent: &str) -> bool {
+        let keys = self.grant_keys(agent);
         let now = Instant::now();
         let mut grants = self.create_grants.lock().await;
         grants.retain(|g| g.expires_at.map_or(true, |t| t > now));
-        if let Some(pos) = grants.iter().position(|g| g.agent == agent) {
+        if let Some(pos) = keys.iter().find_map(|key| grants.iter().position(|g| &g.agent == key)) {
             let consumed_once = grants[pos].once;
             if consumed_once {
                 grants.remove(pos);
@@ -545,22 +583,24 @@ impl PermStore {
     /// Live (scope, pane) grant pairs for `requester`. Lets the bridge resolve
     /// tab-scoped grants (it can map a pane → tab; the store can't).
     pub async fn grants_for(&self, requester: &str) -> Vec<(String, String)> {
+        let keys = self.grant_keys(requester);
         let now = Instant::now();
         let mut grants = self.grants.lock().await;
         grants.retain(|g| g.live(now));
         grants
             .iter()
-            .filter(|g| g.requester == requester && g.scope != "message")
+            .filter(|g| keys.contains(&g.requester) && g.scope != "message")
             .map(|g| (g.scope.clone(), g.pane.clone()))
             .collect()
     }
 
     /// Message grants are recipient-scoped and cannot authorize terminal writes.
     pub async fn has_message_grant(&self, requester: &str, recipient: &str) -> bool {
+        let keys = self.grant_keys(requester);
         let now = Instant::now();
         let mut grants = self.grants.lock().await;
         grants.retain(|g| g.live(now));
-        grants.iter().any(|g| g.requester == requester && g.scope == "message" && g.pane == recipient)
+        grants.iter().any(|g| keys.contains(&g.requester) && g.scope == "message" && g.pane == recipient)
     }
 
     /// Find one exact pending capability without conflating it with drive access.
@@ -661,6 +701,10 @@ impl PermStore {
         }
         self.tokens.lock().await.insert(pane.to_string(), token.to_string());
         self.save().await;
+    }
+
+    pub async fn has_pane_token(&self, pane: &str) -> bool {
+        self.tokens.lock().await.contains_key(pane)
     }
 
     /// Reverse lookup: which pane does this token identify? (For #58's header

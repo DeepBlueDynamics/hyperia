@@ -75,7 +75,7 @@ pub const GHOST_CORE: &[&str] = &[
     "close_tools",
 ];
 
-/// External MCP core — 12 defs (plan §3.2). `open_tools`/`close_tools`/
+/// External MCP core — 14 defs (plan §3.2). `open_tools`/`close_tools`/
 /// `search_tools` are new meta-tools (added in Phase 4).
 pub const MCP_CORE: &[&str] = &[
     "terminal_status",
@@ -87,6 +87,8 @@ pub const MCP_CORE: &[&str] = &[
     "request_access",
     "request_token",
     "hyperia_version",
+    "whoami",
+    "set_label",
     // meta:
     "open_tools",
     "close_tools",
@@ -730,7 +732,7 @@ mod tests {
         assert_eq!(doors_for(Surface::Ghost).count(), 9, "ghost door count");
         assert_eq!(doors_for(Surface::Mcp).count(), 12, "mcp door count");
         assert_eq!(GHOST_CORE.len(), 11, "ghost core count");
-        assert_eq!(MCP_CORE.len(), 12, "mcp core count");
+        assert_eq!(MCP_CORE.len(), 14, "mcp core count");
     }
 
     /// Every ghost catalog tool (registry `tool_defs`) belongs to exactly one

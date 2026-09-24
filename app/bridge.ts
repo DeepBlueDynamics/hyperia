@@ -775,6 +775,13 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'AgentNotice': {
+      for (const w of (app as any).getWindows?.() || []) {
+        if (w?.rpc) w.rpc.emit('add notification', {text: String(msg.text), url: '', dismissable: true});
+      }
+      break;
+    }
+
     case 'AgentToast': {
       // Create-consent prompt — a window-level toast (no target pane).
       const payload = {

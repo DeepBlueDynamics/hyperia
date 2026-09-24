@@ -359,6 +359,13 @@ pub async fn tick(bridge: &Bridge) {
     }
     let queue = match store.queued().await { Ok(queue) => queue, Err(error) => { tracing::error!("Delivery queue read failed: {error}"); return; } };
     for queued in queue {
+        let _session_gate = WORKFLOW.lock().await;
+        if !bridge.identity().sessions.principal_active(&queued.requester) {
+            if let Ok(Some(op)) = store.claim(&queued.id).await {
+                finish(store, &op, State::Failed, serde_json::json!({"error": "MCP session was revoked or expired before delivery."})).await;
+            }
+            continue;
+        }
         if !matches!(queued.kind.as_str(), "mail" | "pane" | "shell" | "keys") {
             if let Ok(Some(op)) = store.claim(&queued.id).await {
                 finish(store, &op, State::Failed, serde_json::json!({"error":"Unknown operation kind."})).await;

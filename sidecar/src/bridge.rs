@@ -345,6 +345,16 @@ struct BridgeInner {
 
 impl Bridge {
     pub fn new() -> Self {
+        Self::with_stores(crate::identity::IdentityStore::new(), crate::perms::PermStore::default())
+    }
+
+    pub(crate) fn with_stores(identity: crate::identity::IdentityStore, perms: crate::perms::PermStore) -> Self {
+        for (child, parent, expires_ms) in identity.sessions.parent_pairs() {
+            match parent {
+                Some(parent) => perms.set_parent_until(&child, &parent, expires_ms),
+                None => perms.remove_parent(&child),
+            }
+        }
         Self {
             inner: Arc::new(BridgeInner {
                 cmd_tx: Mutex::new(None),
@@ -364,8 +374,8 @@ impl Bridge {
                 msg_notify: Mutex::new(HashMap::new()),
                 output_subs: Mutex::new(HashMap::new()),
                 lume: crate::lume_store::LumeStore::new(),
-                perms: crate::perms::PermStore::default(),
-                identity: crate::identity::IdentityStore::new(),
+                perms,
+                identity,
                 window_bounds: Mutex::new(HashMap::new()),
                 trusted_agent_tokens: std::sync::Mutex::new(std::collections::HashSet::new()),
             }),
@@ -421,8 +431,18 @@ impl Bridge {
         if self.inner.identity.is_system(token) {
             return CallerIdentity::System;
         }
+        if let Some(session) = self.inner.identity.sessions.by_token(token) {
+            if session.parent_is_pane {
+                return if self.inner.perms.has_pane_token(&session.parent).await {
+                    CallerIdentity::Pane { pane: session.parent, token: token.into() }
+                } else { CallerIdentity::Anonymous };
+            }
+        }
+        if let Some(child) = self.inner.identity.resolve_child(token).await {
+            return child;
+        }
         if let Some(rec) = self.inner.identity.resolve(token).await {
-            return CallerIdentity::Agent { name: rec.name, token: rec.token };
+            return CallerIdentity::Agent { name: rec.name, token: rec.token, label: None };
         }
         if let Some(pane) = self.inner.perms.pane_for_token(token).await {
             return CallerIdentity::Pane { pane, token: token.to_string() };
@@ -1292,6 +1312,13 @@ impl Bridge {
                 .map_err(|_| "Electron disconnected".to_string()),
             None => Err("No Electron client connected".into()),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn test_notifications(&self) -> mpsc::UnboundedReceiver<String> {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        *self.inner.cmd_tx.lock().await = Some(sender);
+        receiver
     }
 
     /// Whether an Electron client is connected.

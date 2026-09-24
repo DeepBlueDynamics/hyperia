@@ -17,15 +17,23 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 /// Who is making a request, once the Authorization header is resolved.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum CallerIdentity {
     Anonymous,
     /// Hyperia's own internal calls (system token) — always trusted.
     System,
     /// A persistent external agent (survives restarts).
-    Agent { name: String, token: String },
+    Agent { name: String, token: String, label: Option<String> },
     /// Acting as a specific pane (ephemeral pane token).
     Pane { pane: String, token: String },
+}
+
+impl std::fmt::Debug for CallerIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallerIdentity")
+            .field("kind", &self.kind()).field("principal", &self.principal_key())
+            .field("label", &self.label()).finish()
+    }
 }
 
 impl CallerIdentity {
@@ -34,7 +42,7 @@ impl CallerIdentity {
         match self {
             CallerIdentity::Anonymous => "anonymous".into(),
             CallerIdentity::System => "Hyperia".into(),
-            CallerIdentity::Agent { name, .. } => name.clone(),
+            CallerIdentity::Agent { name, label, .. } => label.clone().unwrap_or_else(|| name.clone()),
             CallerIdentity::Pane { pane, .. } => format!("pane {pane}"),
         }
     }
@@ -74,6 +82,7 @@ pub struct AgentRecord {
 
 /// File-backed set of persistent agent identities.
 pub struct IdentityStore {
+    pub(crate) sessions: crate::mcp_sessions::SessionStore,
     agents: Mutex<Vec<AgentRecord>>,
     /// Internal-trust token for Hyperia's own HTTP calls (sticky runner, etc.).
     /// Set by the Electron main process via the HYPERIA_SYSTEM_TOKEN env var at
@@ -154,6 +163,7 @@ pub fn cutover_requester(stored: &str, registered_names: &[String]) -> Requester
 fn valid_agent_name(name: &str) -> bool {
     let name = name.trim();
     !name.is_empty() && name.len() <= 256
+        && !name.starts_with("mcp-session/")
         && !name.chars().any(char::is_control)
         && !name.to_ascii_lowercase().starts_with("pane ")
         && !name.eq_ignore_ascii_case("hyperia")
@@ -161,9 +171,15 @@ fn valid_agent_name(name: &str) -> bool {
 }
 
 impl IdentityStore {
+    #[cfg(test)]
+    pub(crate) fn for_tests(path: PathBuf, agents: Vec<AgentRecord>) -> Self {
+        Self { agents: Mutex::new(agents), system_token: None,
+            sessions: crate::mcp_sessions::SessionStore::open(path) }
+    }
     pub fn new() -> Self {
         Self {
             agents: Mutex::new(Self::load()),
+            sessions: crate::mcp_sessions::SessionStore::open(Self::path().with_file_name("mcp-sessions.json")),
             system_token: std::env::var("HYPERIA_SYSTEM_TOKEN").ok().filter(|s| !s.is_empty()),
         }
     }
@@ -202,30 +218,7 @@ impl IdentityStore {
     /// unique: minting an existing name returns its current token so the same
     /// agent keeps a stable identity across calls and restarts.
     pub async fn mint(&self, name: &str) -> AgentRecord {
-        // Fast path: name already has an identity.
-        if let Some(rec) = self.agents.lock().await.iter().find(|a| a.name == name).cloned() {
-            return rec;
-        }
-        // Generate WITHOUT holding the lock — random_token may do network I/O
-        // (CSPRNG base + best-effort sdrrand mix). 16 bytes = 128-bit token.
-        let token = format!("hyp_agent_{}", crate::util::random_token(16).await);
-        let created_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let mut agents = self.agents.lock().await;
-        // Re-check: a concurrent mint may have created it while we generated.
-        if let Some(rec) = agents.iter().find(|a| a.name == name).cloned() {
-            return rec;
-        }
-        let rec = AgentRecord {
-            token,
-            name: name.to_string(),
-            created_ms,
-        };
-        agents.push(rec.clone());
-        Self::persist(&agents);
-        rec
+        self.register(name, true).await.expect("Built-in identity name is reserved")
     }
 
     /// Registration may create a new identity, but only that identity or System
@@ -241,10 +234,45 @@ impl IdentityStore {
         if let Some(rec) = agents.iter().find(|a| a.name == name).cloned() {
             return if may_retrieve { Ok(rec) } else { Err("Identity already exists; present its credential.") };
         }
+        if self.sessions.reserved(name).map_err(|_| "MCP session storage unavailable.")? {
+            return Err("Identity name belongs to an MCP session.");
+        }
         let rec = AgentRecord { token, name: name.to_string(), created_ms };
         agents.push(rec.clone());
         Self::persist(&agents);
         Ok(rec)
+    }
+
+    pub async fn create_session(&self, parent: &str, client: serde_json::Value) -> Result<crate::mcp_sessions::LogicalSession, String> {
+        let agents = self.agents.lock().await;
+        if !agents.iter().any(|a| a.name == parent) { return Err("Unknown parent identity".into()); }
+        self.sessions.create(parent, client, &agents.iter().map(|a| a.name.clone()).collect::<Vec<_>>())
+    }
+
+    pub async fn create_pane_session(&self, pane: &str, client: serde_json::Value) -> Result<(crate::mcp_sessions::LogicalSession, bool), String> {
+        let agents = self.agents.lock().await;
+        self.sessions.create_pane(pane, client, &agents.iter().map(|a| a.name.clone()).collect::<Vec<_>>())
+    }
+
+    pub async fn set_session_label(&self, name: &str, label: &str) -> Result<crate::mcp_sessions::LogicalSession, String> {
+        let agents = self.agents.lock().await;
+        self.sessions.set_label(name, label, &agents.iter().map(|a| a.name.clone()).collect::<Vec<_>>())
+    }
+
+    pub async fn mail_address(&self, address: &str) -> Option<(String, String)> {
+        let agents = self.agents.lock().await;
+        if let Some(parent) = agents.iter().find(|a| a.name == address) {
+            return Some((parent.name.clone(), parent.name.clone()));
+        }
+        let child = self.sessions.by_address(address)?;
+        agents.iter().any(|a| a.name == child.parent).then_some((child.name, child.label))
+    }
+
+    pub async fn resolve_child(&self, token: &str) -> Option<CallerIdentity> {
+        let agents = self.agents.lock().await;
+        let child = self.sessions.by_token(token)?;
+        if child.parent_is_pane || !agents.iter().any(|a| a.name == child.parent) { return None; }
+        Some(CallerIdentity::Agent { name: child.name, token: child.forward_token, label: Some(child.label) })
     }
 
     pub async fn resolve(&self, token: &str) -> Option<AgentRecord> {
@@ -278,7 +306,7 @@ mod tests {
         let pane = CallerIdentity::Pane { pane: "abcdefgh-1".into(), token: String::new() };
         assert_eq!(pane.principal_key(), "pane:abcdefgh-1");
         assert_ne!(pane.principal_key(), pane.label());
-        assert_eq!(CallerIdentity::Agent { name: "codex".into(), token: String::new() }.principal_key(), "agent:codex");
+        assert_eq!(CallerIdentity::Agent { name: "codex".into(), token: String::new(), label: None }.principal_key(), "agent:codex");
         assert_eq!(CallerIdentity::System.principal_key(), "system");
         let only_codex = vec!["codex".into()];
         assert_eq!(cutover_requester("codex", &only_codex), RequesterCutover::Key("agent:codex".into()));
@@ -303,6 +331,7 @@ mod tests {
         let store = IdentityStore {
             agents: Mutex::new(vec![AgentRecord { token: "test-secret".into(), name: "owner".into(), created_ms: 1 }]),
             system_token: Some("test-system".into()),
+            sessions: crate::mcp_sessions::SessionStore::open(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-fixtures/identity-unused.json")),
         };
         assert!(store.register("owner", false).await.is_err());
         assert_eq!(store.register("owner", true).await.unwrap().token, "test-secret");
