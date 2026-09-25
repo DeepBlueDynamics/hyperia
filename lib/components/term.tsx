@@ -21,6 +21,7 @@ import type {TermProps} from '../../typings/hyper';
 import rpc from '../rpc';
 import terms from '../terms';
 import {altArrowSequence} from '../utils/alt-arrow-sequence';
+import {ctrlCaretSequence} from '../utils/ctrl-caret';
 import {isPlainShell, pickNativeShell} from '../utils/native-shell';
 import {toNavigableUrl} from '../utils/navigable-url';
 import processClipboard from '../utils/paste';
@@ -1571,6 +1572,15 @@ export default class Term extends React.PureComponent<
       e.preventDefault();
       if (this.props.onData) {
         this.props.onData(altArrow);
+      }
+      return false;
+    }
+    // Ctrl+^ (Ctrl+Shift+6): xterm sends nothing for it; nemesis8 detaches on it.
+    const caret = ctrlCaretSequence(e);
+    if (caret) {
+      e.preventDefault();
+      if (this.props.onData) {
+        this.props.onData(caret);
       }
       return false;
     }
