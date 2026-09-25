@@ -977,11 +977,26 @@ fn check_inject_cap(addr: &PaneAddress, keys: &str) -> Result<(), (StatusCode, S
     Ok(())
 }
 
+/// What an operation's state actually means for the caller. The old fixed text
+/// ("Approval releases it automatically") was returned for every state, so
+/// agents reported plain queued deliveries as "waiting for the human's approval".
+fn delivery_message(state: delivery::State) -> &'static str {
+    use delivery::DeliveryState::*;
+    match state {
+        AwaitingApproval => "Waiting for the human to approve this in Hyperia; approval sends it automatically. Inspect delivery_status for the outcome.",
+        Queued | Submitting => "Queued for delivery; no approval needed. Hyperia sends it shortly (held only while a human is typing in that pane). Inspect delivery_status to confirm.",
+        Submitted => "Delivered.",
+        Denied => "Not delivered: the human denied it.",
+        Expired => "Not delivered: it expired before it could be sent.",
+        Cancelled => "Not delivered: cancelled.",
+        Failed | Indeterminate => "Delivery did not complete; inspect delivery_status for details.",
+    }
+}
+
 fn delivery_http(result: Result<delivery::Operation, messaging::ApiError>) -> (StatusCode, String) {
     match result {
         Ok(operation) => (if operation.state.is_active() { StatusCode::ACCEPTED } else { StatusCode::OK }, serde_json::json!({
-            "ok": true, "operation": operation,
-            "message": "Operation retained. Approval releases it automatically; inspect delivery_status for the outcome."
+            "ok": true, "message": delivery_message(operation.state), "operation": operation,
         }).to_string()),
         Err((status, Json(body))) => (status, body.to_string()),
     }
@@ -4707,4 +4722,23 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod delivery_message_tests {
+    use super::*;
+
+    #[test]
+    fn only_awaiting_approval_mentions_approval() {
+        use delivery::DeliveryState::*;
+        assert!(delivery_message(AwaitingApproval).contains("approve"));
+        for state in [Queued, Submitting] {
+            let text = delivery_message(state);
+            assert!(text.contains("no approval needed"), "{state:?}: {text}");
+        }
+        assert_eq!(delivery_message(Submitted), "Delivered.");
+        for state in [Queued, Submitting, Submitted, Failed, Denied, Expired, Cancelled, Indeterminate] {
+            assert!(!delivery_message(state).contains("approval sends"), "{state:?}");
+        }
+    }
 }
