@@ -21,14 +21,16 @@ import type {TermProps} from '../../typings/hyper';
 import rpc from '../rpc';
 import terms from '../terms';
 import {altArrowSequence} from '../utils/alt-arrow-sequence';
+import {ctrlCaretSequence} from '../utils/ctrl-caret';
 import {isPlainShell, pickNativeShell} from '../utils/native-shell';
 import {toNavigableUrl} from '../utils/navigable-url';
 import processClipboard from '../utils/paste';
 import {translatePath} from '../utils/path-translate';
+import {readLastUsedShell, resolvePickerShell} from '../utils/picker-shell';
 import {countPathHorizontalStacks} from '../utils/term-groups';
 
 import FindBar from './find-bar';
-import {NewPanePicker} from './new-pane-picker';
+import {NewPanePicker, pickerShellProfiles} from './new-pane-picker';
 import {PaneBand} from './pane-band';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -175,6 +177,9 @@ export default class Term extends React.PureComponent<
     navigatorLeft: number;
     navigatorWidth: number;
     navigatorTop: number;
+    // Bumped when the persisted recent-dir list is cleared, so the chip row
+    // (which reads localStorage during render) re-renders.
+    dirHistoryNonce: number;
     // Measured room from navigatorTop to the bottom of the pane (see
     // measureNavigatorGeometry). The popup never extends past it.
     navigatorMaxHeight: number;
@@ -263,6 +268,7 @@ export default class Term extends React.PureComponent<
     navigatorLeft: 95,
     navigatorWidth: 280,
     navigatorTop: 38,
+    dirHistoryNonce: 0,
     navigatorMaxHeight: 400,
     navigatorRowMin: 27,
     navigatorRecentMin: 48,
@@ -1569,6 +1575,15 @@ export default class Term extends React.PureComponent<
       }
       return false;
     }
+    // Ctrl+^ (Ctrl+Shift+6): xterm sends nothing for it; nemesis8 detaches on it.
+    const caret = ctrlCaretSequence(e);
+    if (caret) {
+      e.preventDefault();
+      if (this.props.onData) {
+        this.props.onData(caret);
+      }
+      return false;
+    }
     // Intercept Ctrl+Shift+O to toggle the directory navigator. Bare Ctrl+O is
     // deliberately left alone — it collides with Claude Code (and nano, bash
     // operate-and-get-next, etc.) which bind it, and our screen-scrape program
@@ -1983,8 +1998,13 @@ export default class Term extends React.PureComponent<
     if (!commandLine) return;
 
     const profiles = (this.props as any).profiles || [];
-    const defaultProfileName = (this.props as any).defaultProfile;
-    const defaultProfile = profiles.find((p: any) => p.name === defaultProfileName) || profiles[0];
+    // Same shell the picker shows (last-used → configured default → first).
+    const shownShell = resolvePickerShell(
+      pickerShellProfiles(profiles).map((p: any) => p.name as string),
+      readLastUsedShell(),
+      (this.props as any).defaultProfile || undefined
+    );
+    const defaultProfile = profiles.find((p: any) => p.name === shownShell) || profiles[0];
 
     const shellBin = defaultProfile?.config?.shell || (process.platform === 'win32' ? 'cmd.exe' : '/bin/bash');
     const shellLower = shellBin.toLowerCase();
@@ -2214,6 +2234,18 @@ export default class Term extends React.PureComponent<
     }
   };
 
+  // Drop the whole persisted recent list (HOME is derived, so it stays).
+  clearDirHistory = (): void => {
+    try {
+      localStorage.removeItem(Term.DIR_HISTORY_KEY);
+    } catch {
+      /* ignore quota / unavailable */
+    }
+    this.setState(({dirHistoryNonce}) => ({dirHistoryNonce: dirHistoryNonce + 1}));
+    // RECENT just shrank: re-fit so the dir list takes the freed height.
+    this.scheduleNavigatorFit();
+  };
+
   // A single horizontal row of quick-jump buttons under the directory list:
   // HOME first (accent color), then most-recent dirs (excluding home + the
   // currently-browsed path). Clicking browses there (ctrl-enter still cds).
@@ -2224,7 +2256,8 @@ export default class Term extends React.PureComponent<
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const home = (require('os').homedir() as string).replace(/[\\/]+$/, '');
     const current = this.normDir(this.state.navigatorCurrentPath || '');
-    const recents = this.loadDirHistory().filter(
+    const history = this.loadDirHistory();
+    const recents = history.filter(
       (p) => this.normDir(p) !== current && (!home || this.normDir(p) !== this.normDir(home))
     );
 
@@ -2341,6 +2374,31 @@ export default class Term extends React.PureComponent<
               {itemPath}
             </span>
           ))}
+          {/* Trailing "clear" — styled like the pane picker's inline badges. */}
+          {history.length > 0 && (
+            <span
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={this.clearDirHistory}
+              title="Clear recent directories"
+              style={{
+                cursor: 'pointer',
+                flexShrink: 0,
+                userSelect: 'none',
+                whiteSpace: 'nowrap',
+                lineHeight: '1.2',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '10px',
+                fontWeight: 600,
+                padding: '2px var(--space-6)',
+                borderRadius: 'var(--radius-3)',
+                border: '0.5px solid var(--border-neutral)',
+                color: 'var(--text-tertiary)',
+                background: 'var(--bg-primary)'
+              }}
+            >
+              clear
+            </span>
+          )}
         </div>
       </div>
     );
@@ -2429,17 +2487,18 @@ export default class Term extends React.PureComponent<
     // in the default profile when none is given), replacing the picker in place.
     if ((this.props as any).sessionProfile === 'picker') {
       this.setState({isDirNavigatorOpen: false, navigatorStatus: null});
-      // Launch the configured DEFAULT profile (config.defaultProfile) in the
-      // chosen dir — NOT the last-used picker shell. Using a shell once doesn't
-      // make it the default. Passing it explicitly pins "Go" to the same default
-      // the config declares (rather than main's getDefaultProfile fallback).
-      const defaultProfile = (this.props as any).defaultProfile || undefined;
+      // Launch exactly the shell this picker's New Shell pulldown shows
+      // (last-used → configured default → first), so Go never starts something
+      // the human can't see selected (it used to launch config.defaultProfile,
+      // e.g. a custom "Claude" shell, while the pulldown showed PowerShell 7).
+      const shells = pickerShellProfiles((this.props as any).profiles || []).map((p: any) => p.name as string);
+      const profile = resolvePickerShell(shells, readLastUsedShell(), (this.props as any).defaultProfile || undefined);
       rpc.emit('new', {
         isNewGroup: false,
         cwd: target,
         activeUid: this.props.uid,
         groupUid: (this.props as any).groupUid,
-        ...(defaultProfile ? {profile: defaultProfile} : {})
+        ...(profile ? {profile} : {})
       } as any);
       return;
     }

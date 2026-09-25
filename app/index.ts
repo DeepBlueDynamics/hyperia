@@ -110,6 +110,7 @@ import parseUrl from 'parse-url';
 
 import {startBridge, stopBridge, sendAppFocus} from './bridge';
 import {initHyperia} from './ghost';
+import {setLastUsedShell} from './last-shell';
 import * as AppMenu from './menus/menu';
 import {initTray, destroyTray} from './notify';
 import * as plugins from './plugins';
@@ -213,10 +214,22 @@ async function consentFetch(event: Electron.IpcMainInvokeEvent, apiPath: string,
     headers: {'Content-Type': 'application/json', Authorization: `Bearer ${SYSTEM_TOKEN}`},
     body: body === undefined ? undefined : JSON.stringify(body)
   });
+  // 404 = the sidecar no longer holds this request (expired, consumed, or lost
+  // with a restart). Report it as gone so the prompt closes; throwing left the
+  // toast on screen with every button failing forever.
+  if (response.status === 404) return {ok: false, gone: true, error: 'This request is no longer pending.'};
   if (!response.ok) throw new Error(`Consent request failed (${response.status}).`);
   return response.json();
 }
 ipcMain.handle('consent:respond', (event, body) => consentFetch(event, '/api/perms/respond', body));
+// The renderer reports the shell the human last launched from a picker (and once
+// at startup), so main-side fallbacks (getDefaultProfile) launch the same shell.
+ipcMain.on('last-used-shell', (_event, name: unknown) => setLastUsedShell(name));
+// Live pending-request ids, so the window can drop prompts the sidecar no longer holds.
+ipcMain.handle('consent:pending', async (event) => {
+  const state = (await consentFetch(event, '/api/perms/state')) as {pending?: {id?: string}[]};
+  return (state?.pending || []).map((p) => p.id).filter((id): id is string => typeof id === 'string');
+});
 ipcMain.handle('consent:pane-token', (event, pane: string) => {
   if (typeof pane !== 'string' || !pane) throw new Error('Pane is required.');
   return consentFetch(event, `/api/perms/token?pane=${encodeURIComponent(pane)}`);

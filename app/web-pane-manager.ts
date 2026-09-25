@@ -20,6 +20,8 @@ import {BrowserWindow, WebContentsView, ipcMain, session, shell, Menu, clipboard
 import type {Session, WebContents} from 'electron';
 
 import {getConfig} from './config';
+import {ERR_ABORTED, initialLoadState, nextLoadState} from './utils/web-pane-loading';
+import type {WebPaneLoadEvent, WebPaneLoadState} from './utils/web-pane-loading';
 
 const PARTITION = 'persist:hyperia-web';
 // DevTools docks into the bottom of the pane, taking this fraction of its height.
@@ -185,6 +187,61 @@ export async function capturePaneJpeg(uid: string, w: number, h: number, quality
   }
 }
 
+// Spinner state tracks the main frame only, so never-settling iframes can't pin it on.
+const loadStates = new WeakMap<WebContents, WebPaneLoadState>();
+
+// Returns true when `loading` changed (and was pushed).
+function applyLoadEvent(uid: string, wc: WebContents, ev: WebPaneLoadEvent): boolean {
+  const prev = loadStates.get(wc) ?? initialLoadState;
+  const next = nextLoadState(prev, ev);
+  loadStates.set(wc, next);
+  if (next.loading === prev.loading) return false;
+  pushState(uid, next.loading ? {loading: true, error: null} : {loading: false, ...navState(wc)});
+  return true;
+}
+
+// Single path for did-fail-load / did-fail-provisional-load.
+function handleLoadFailure(
+  uid: string,
+  wc: WebContents,
+  f: {errorCode: number; description: string; url: string; isMainFrame: boolean; provisional: boolean}
+) {
+  if (!f.isMainFrame) return;
+  const ev: WebPaneLoadEvent = {
+    type: 'fail-load',
+    isMainFrame: true,
+    errorCode: f.errorCode,
+    provisional: f.provisional,
+    url: f.url
+  };
+  if (f.errorCode === ERR_ABORTED) {
+    applyLoadEvent(uid, wc, ev);
+    // An abort with no replacement navigation (download, OAuth bail) must still clear the spinner.
+    const navSeq = (loadStates.get(wc) ?? initialLoadState).navSeq;
+    setImmediate(() => {
+      if (!wc.isDestroyed()) applyLoadEvent(liveUidOf(wc, uid), wc, {type: 'abort-settle', navSeq});
+    });
+    return;
+  }
+  loadStates.set(wc, nextLoadState(loadStates.get(wc) ?? initialLoadState, ev));
+  pushState(uid, {loading: false, error: {code: f.errorCode, description: f.description, url: f.url}});
+}
+
+function stopPane(uid: string, wc: WebContents) {
+  wc.stop();
+  // Clear the spinner now, not when every frame stops.
+  if (!applyLoadEvent(uid, wc, {type: 'stop'})) pushState(uid, {loading: false, ...navState(wc)});
+}
+
+// Stop an in-flight load first, or back/forward is slow on busy pages.
+function goHistory(wc: WebContents, dir: 'back' | 'forward') {
+  const h = wc.navigationHistory;
+  if (dir === 'back' ? !h.canGoBack() : !h.canGoForward()) return;
+  if (wc.isLoading()) wc.stop();
+  if (dir === 'back') h.goBack();
+  else h.goForward();
+}
+
 function navState(wc: WebContents) {
   return {
     url: wc.getURL(),
@@ -223,21 +280,44 @@ function wireWebContents(initialUid: string, wc: WebContents) {
       entrySend(uid, 'web-pane:focus', {uid, activate: true});
     }
   });
-  wc.on('did-start-loading', () => {
-    pushState(u(), {loading: true, error: null});
+  // Not did-start-loading: it fires for subframes too.
+  wc.on('did-start-navigation', (details) => {
+    applyLoadEvent(u(), wc, {
+      type: 'start-navigation',
+      isMainFrame: !!details.isMainFrame,
+      isSameDocument: !!details.isSameDocument,
+      url: details.url
+    });
   });
-  wc.on('did-stop-loading', () => pushState(u(), {loading: false, ...navState(wc)}));
-  wc.on('did-navigate', () => pushState(u(), {...navState(wc)}));
-  wc.on('did-navigate-in-page', (_e, _url, isMainFrame) => {
-    if (isMainFrame) pushState(u(), {...navState(wc)});
+  wc.on('did-finish-load', () => {
+    applyLoadEvent(u(), wc, {type: 'finish-load'});
   });
-  wc.on('page-title-updated', (_e, title) => pushState(u(), {title}));
-  wc.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
-    // -3 = ERR_ABORTED (user/redirect navigation), not a real failure.
-    if (isMainFrame && errorCode !== -3) {
-      pushState(u(), {loading: false, error: {code: errorCode, description: errorDescription, url: validatedURL}});
+  // Electron also emits did-fail-load for every non-aborted provisional failure; take only aborts here.
+  wc.on('did-fail-provisional-load', (_e, errorCode, description, url, isMainFrame) => {
+    if (errorCode === ERR_ABORTED) {
+      handleLoadFailure(u(), wc, {errorCode, description, url, isMainFrame, provisional: true});
     }
   });
+  wc.on('did-fail-load', (_e, errorCode, description, url, isMainFrame) => {
+    handleLoadFailure(u(), wc, {errorCode, description, url, isMainFrame, provisional: false});
+  });
+  // Waits for every frame; respects a pending main-frame navigation.
+  wc.on('did-stop-loading', () => {
+    const uid = u();
+    if (!applyLoadEvent(uid, wc, {type: 'stop-loading'})) pushState(uid, {...navState(wc)});
+  });
+  wc.on('did-navigate', () => {
+    const uid = u();
+    applyLoadEvent(uid, wc, {type: 'commit'});
+    pushState(uid, {...navState(wc)});
+  });
+  wc.on('did-navigate-in-page', (_e, _url, isMainFrame) => {
+    if (!isMainFrame) return;
+    const uid = u();
+    applyLoadEvent(uid, wc, {type: 'commit'});
+    pushState(uid, {...navState(wc)});
+  });
+  wc.on('page-title-updated', (_e, title) => pushState(u(), {title}));
   wc.on('found-in-page', (_e, result) => {
     const uid = u();
     entrySend(uid, 'web-pane:found-in-page', {
@@ -271,6 +351,11 @@ function wireWebContents(initialUid: string, wc: WebContents) {
   // route to the renderer's zoom handlers (which own the zoom-factor state).
   wc.on('before-input-event', (event: Electron.Event, input: Electron.Input) => {
     if (input.type !== 'keyDown') return;
+    // Esc stops a load like a browser tab; no preventDefault so the page still gets Esc.
+    if (input.key === 'Escape' && wc.isLoading()) {
+      stopPane(u(), wc);
+      return;
+    }
     // Browser-standard reload keys act on the PAGE, like a browser tab:
     // Ctrl/Cmd+R and F5 reload; +Shift bypasses the HTTP cache. preventDefault
     // also keeps the app accelerator (Ctrl+Shift+R = renderer reload) from
@@ -324,8 +409,8 @@ function wireWebContents(initialUid: string, wc: WebContents) {
       );
     }
     items.push(
-      {label: 'Back', enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack()},
-      {label: 'Forward', enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward()},
+      {label: 'Back', enabled: wc.navigationHistory.canGoBack(), click: () => goHistory(wc, 'back')},
+      {label: 'Forward', enabled: wc.navigationHistory.canGoForward(), click: () => goHistory(wc, 'forward')},
       {label: 'Reload', click: () => wc.reload()},
       {type: 'separator'}
     );
@@ -452,6 +537,18 @@ function roundRect(b: {x: number; y: number; width: number; height: number}) {
   };
 }
 
+// The toolbar starts with loading:true; send the view's real state.
+// No url: echoing it could clobber redux.
+function syncAdoptedState(uid: string, entry: WebPaneEntry) {
+  const wc = entry.view.webContents;
+  if (wc.isDestroyed()) return;
+  pushState(uid, {
+    loading: (loadStates.get(wc) ?? initialLoadState).loading,
+    canGoBack: wc.navigationHistory.canGoBack(),
+    canGoForward: wc.navigationHistory.canGoForward()
+  });
+}
+
 function createPane(win: BrowserWindow, uid: string, url: string) {
   if (panes.has(uid)) {
     const entry = panes.get(uid)!;
@@ -467,6 +564,8 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
     if (url && url !== entry.url && url !== current) {
       entry.url = url;
       void entry.view.webContents.loadURL(url).catch(() => {});
+    } else {
+      syncAdoptedState(uid, entry);
     }
     entry.view.setVisible(nativeVisible(entry));
     return;
@@ -480,6 +579,7 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
       entry.destroyTimer = undefined;
       panes.delete(oldUid);
       panes.set(uid, entry);
+      syncAdoptedState(uid, entry);
       entry.view.setVisible(nativeVisible(entry));
       return;
     }
@@ -517,6 +617,8 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
   wireWebContents(uid, view.webContents);
   applyPaneZoom(entry);
   if (url) void view.webContents.loadURL(url).catch(() => {});
+  // Nothing loads, so no event would clear the renderer's initial loading:true.
+  else syncAdoptedState(uid, entry);
   console.log(
     `[wp] createPane BUILT fresh uid=${uid.slice(0, 8)} win=${win.id} childViews=${win.contentView.children.length}`
   );
@@ -774,10 +876,8 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
         if (url && wc.getURL() !== url) void wc.loadURL(url).catch(() => {});
         break;
       case 'back':
-        if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
-        break;
       case 'forward':
-        if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
+        goHistory(wc, action === 'back' ? 'back' : 'forward');
         break;
       case 'reload':
         wc.reload();
@@ -786,7 +886,7 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
         wc.reloadIgnoringCache();
         break;
       case 'stop':
-        wc.stop();
+        stopPane(uid, wc);
         break;
     }
   });

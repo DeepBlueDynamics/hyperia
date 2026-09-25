@@ -1211,7 +1211,9 @@ mod tests {
         if !crate::util::isolated_test("ghost::bootstub::tests::test_show_logs") { return; }
         // A controlled HTTP peer keeps this test independent of the running
         // developer sidecar, its authentication, and its current log contents.
-        let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+        // Loopback only: an all-interfaces bind in a test pops a Windows Firewall
+        // prompt for every new test binary path.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         std::env::set_var("HYPERIA_PORT", listener.local_addr().unwrap().port().to_string());
         let peer = std::thread::spawn(move || {
             let lines: Vec<_> = (0..35).map(|n| format!("fixture-line-{n:02}")).collect();

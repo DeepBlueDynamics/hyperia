@@ -984,7 +984,7 @@ pub struct WorkspaceRenameRequest {
 pub struct SpokenSummaryRequest {
     /// The text to speak aloud (required). Keep it short — a sentence or two.
     pub text: String,
-    /// Voice name: af_heart (default), am_michael, am_puck, bf_emma, bm_george, af_bella, af_nicole. Unknown names fall back to af_heart.
+    /// English pack voice or blend (af_heart:0.6,am_adam:0.4). Omit for a stable blend from your authenticated pane name or agent label. Unknown names return the valid names.
     pub voice: Option<String>,
     /// Speaking speed, 0.5–2.0 (default 1.0). Values outside the range are clamped.
     pub speed: Option<f32>,
@@ -2146,7 +2146,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(info)]))
     }
 
-    #[tool(description = "Speak a short text summary ALOUD on the host machine. Engine: ElevenLabs when a token is configured (config.tts.elevenlabs.token or ELEVENLABS_API_KEY; config.tts.engine forces kokoro/elevenlabs), otherwise the fully-local offline Kokoro model — and Kokoro is always the fallback if the cloud call fails. Your text is framed as a radio transmission from YOU (your pane/agent callsign) to the configured recipient (config.tts.recipient, default 'base'): \"<recipient>, <recipient>, this is <you> transmitting. <text>. This is <you>. Over and out.\" The frame ALREADY says who you are and signs off — do NOT include callsigns, 'over', or 'over and out' in your text (the result echoes the exact spoken transcript so you can see what was said). Pass frame=false to speak the raw text with no wrapper. The first call downloads a ~90MB model to ~/.hyperia/kokoro. Args: text (required); voice (optional: af_heart[default], am_michael, am_puck, bf_emma, bm_george, af_bella, af_nicole); speed (optional 0.5-2.0, default 1.0); frame (optional bool, default true).")]
+    #[tool(description = "Speak a short text summary ALOUD on the host machine. Engine: ElevenLabs when a token is configured (config.tts.elevenlabs.token or ELEVENLABS_API_KEY; config.tts.engine forces kokoro/elevenlabs), otherwise the fully-local offline Kokoro model — and Kokoro is always the fallback if the cloud call fails. Your text is framed as a radio transmission from YOU (your pane/agent callsign) to the configured recipient (config.tts.recipient, default 'base'): \"<recipient>, <recipient>, this is <you> transmitting. <text>. This is <you>. Over and out.\" The frame ALREADY says who you are and signs off — do NOT include callsigns, 'over', or 'over and out' in your text (the result echoes the exact spoken transcript so you can see what was said). Pass frame=false to speak the raw text with no wrapper. The first call downloads a ~90MB model to ~/.hyperia/kokoro. Args: text (required); voice (optional: any English voice in the pack, or a blend such as af_heart:0.6,am_adam:0.4; omitted selects a stable blend from your authenticated pane name or agent label; anonymous uses af_heart; unknown names error; response includes the resolved Kokoro voice and actual engine); speed (optional 0.5-2.0, default 1.0); frame (optional bool, default true).")]
     async fn hyperia_spoken_summary(
         &self,
         Parameters(req): Parameters<SpokenSummaryRequest>,
@@ -2182,10 +2182,12 @@ impl HyperiaMcp {
             let caller = v["caller"].as_str().unwrap_or("station");
             let recipient = v["recipient"].as_str().unwrap_or("base");
             let spoken = v["spoken"].as_str().unwrap_or("");
+            let voice = v["voice"].as_str().unwrap_or("");
+            let engine = v["engine"].as_str().unwrap_or("kokoro");
             // Echo the exact transcript so the caller sees the frame already
             // carries the callsigns + sign-off — no redundant "over"s.
             Ok(CallToolResult::success(vec![Content::text(format!(
-                "Transmitted to {recipient} as {caller} — {secs:.1}s on air.\n\
+                "Transmitted to {recipient} as {caller} — {secs:.1}s on air. Engine: {engine}. Resolved Kokoro voice: {voice}.\n\
                  Spoken verbatim (the frame already includes callsigns and the \"Over and out\" sign-off — never append your own radio phrases):\n\
                  {spoken}"
             ))]))

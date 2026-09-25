@@ -36,6 +36,7 @@ import * as config from './utils/config';
 import {getBase64FileData} from './utils/file';
 import {serializeLayoutState} from './utils/layout-serialize';
 import {toNavigableUrl} from './utils/navigable-url';
+import {readLastUsedShell, reportLastUsedShell} from './utils/picker-shell';
 import {installLayoutScrollPin} from './utils/pin-layout-scroll';
 import * as plugins from './utils/plugins';
 import {syncWebUrls} from './utils/web-url-sync';
@@ -285,6 +286,34 @@ rpc.on('permission request', (req) => {
   // human's view is theirs and only human input changes it.
   if (req?.targetPane) store_.dispatch(uiActions.markTabBell(req.targetPane));
 });
+
+// Tell main which shell the human last launched, so its own fallbacks agree from
+// the first launch after startup (it's also reported on every picker launch).
+reportLastUsedShell(readLastUsedShell());
+
+// No consent prompt may outlive its request. The sidecar notifies on answers,
+// but a request can also vanish silently (expired, requester's pane closed,
+// sidecar restarted). Every few seconds, while any prompt is up, compare with the
+// sidecar's live pending set and drop the rest. A failed fetch clears nothing.
+let reconcilingPrompts = false;
+setInterval(() => {
+  if (reconcilingPrompts || !permissionsBus.hasAnyPrompts()) return;
+  reconcilingPrompts = true;
+  const snapshotAt = Date.now();
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  (require('electron').ipcRenderer.invoke('consent:pending') as Promise<string[]>)
+    .then((ids) => {
+      for (const pane of permissionsBus.reconcilePending(new Set(ids), snapshotAt)) {
+        if (!permissionsBus.hasRequests(pane)) store_.dispatch(uiActions.clearTabBell(pane));
+      }
+    })
+    .catch(() => {
+      /* sidecar unreachable: keep prompts; can't prove they're stale */
+    })
+    .finally(() => {
+      reconcilingPrompts = false;
+    });
+}, 3000);
 
 rpc.on('permission resolved', ({targetPane, id}: {targetPane: string; decision: string; id?: string}) => {
   permissionsBus.clearRequest(targetPane, id);

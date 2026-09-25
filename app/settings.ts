@@ -239,10 +239,10 @@ export function initSettings() {
           }
         });
 
-        // Saving a custom SHELL makes it the default so the S quick-key launches
-        // it. (Agents keep their own last-used; a non-shell default would break
-        // shell resolution in getDefaultProfile.)
-        if (!isAgent) cfg.config.defaultProfile = profile.name;
+        // Saving a profile never changes config.defaultProfile. It used to make
+        // every saved custom shell the default, silently: a "Claude" shell (or
+        // an ssh one) became what new tabs, splits and the picker's Go launched.
+        // The picker's S key and pulldown use the last-used shell anyway.
 
         writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
         event.sender.send('add-profile-done', {ok: true});

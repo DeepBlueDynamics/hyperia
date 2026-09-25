@@ -17,11 +17,18 @@ export type PermRequest = {
   purpose?: string;
   /** Capability being approved; messaging must not imply terminal control. */
   action?: string;
+  /** Messaging only: friendly recipient (agent label or pane name) — shown instead of the pane. */
+  recipientLabel?: string;
+  /** Messaging only: the mail's subject line (never the body). */
+  subject?: string;
 };
 
 type Listener = (req: PermRequest | null) => void;
 
 const current = new Map<string, PermRequest>();
+// When each prompt id (request or toast) was first shown, so reconciliation never
+// clears a prompt that arrived after the sidecar snapshot was taken.
+const seenAt = new Map<string, number>();
 const listeners = new Map<string, Set<Listener>>();
 
 // Requests whose PROMPT timed out (or was snoozed by a backdrop click) but are
@@ -87,6 +94,7 @@ const reqTimers = new Map<string, ReturnType<typeof setTimeout>>();
 /** A request arrived for a pane — show its prompt. */
 export function setRequest(req: PermRequest): void {
   if (!req.targetPane || !req.id) return;
+  if (!seenAt.has(req.id)) seenAt.set(req.id, Date.now());
   if (expired.delete(req.id)) emitExpired();
   current.set(req.id, req);
   const prev = reqTimers.get(req.id);
@@ -229,6 +237,7 @@ function emitToasts(): void {
 const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
 export function setToast(req: ToastRequest): void {
   if (!req.id) return;
+  if (!seenAt.has(req.id)) seenAt.set(req.id, Date.now());
   if (expiredToasts.delete(req.id)) emitExpiredToasts();
   toasts.set(req.id, req);
   const prev = toastTimers.get(req.id);
@@ -287,4 +296,33 @@ export function subscribeExpiredToasts(cb: (reqs: ToastRequest[]) => void): () =
   return () => {
     expiredToastListeners.delete(cb);
   };
+}
+
+/** True when any consent prompt, toast, or collapsed pill is on screen. */
+export function hasAnyPrompts(): boolean {
+  return current.size + expired.size + toasts.size + expiredToasts.size > 0;
+}
+
+/**
+ * Drop every prompt whose request the sidecar no longer holds (expired, answered
+ * elsewhere, requester's pane closed, or lost with a sidecar restart). `live` is
+ * the sidecar's pending-request id set, snapshotted at `snapshotAt`; prompts
+ * first seen after that moment are left alone. Returns the panes whose requests were
+ * cleared, so callers can clear their tab bells.
+ */
+export function reconcilePending(live: Set<string>, snapshotAt: number): string[] {
+  const stale = (id: string) => !live.has(id) && (seenAt.get(id) ?? 0) < snapshotAt;
+  const panes = new Set<string>();
+  for (const req of [...current.values(), ...expired.values()]) {
+    if (!stale(req.id)) continue;
+    clearRequest(req.targetPane, req.id);
+    seenAt.delete(req.id);
+    panes.add(req.targetPane);
+  }
+  for (const req of [...toasts.values(), ...expiredToasts.values()]) {
+    if (!stale(req.id)) continue;
+    clearToast(req.id);
+    seenAt.delete(req.id);
+  }
+  return [...panes];
 }

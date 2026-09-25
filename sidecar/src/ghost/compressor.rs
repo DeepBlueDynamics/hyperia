@@ -1414,7 +1414,7 @@ test ghost::compressor::tests::live_compress_messages ... ok
 test ghost::compressor::tests::live_extract_focused ... ok
 test ghost::compressor::tests::live_extract_focused_absent_focus ... ok
 test result: ok. 4 passed; 0 failed; finished in 5.75s
-PS C:\Users\kordl\Code\DeepBlueDynamics\hyperia\sidecar>"#;
+PS C:\Users\alice\Code\DeepBlueDynamics\hyperia\sidecar>"#;
         let out = c.extract_focused(screen, "database connection error").await;
         println!("output ({} chars): {out}", out.len());
         assert!(!out.is_empty());

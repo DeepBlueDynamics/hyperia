@@ -1,0 +1,92 @@
+[
+  {
+    "id": "numbers_01",
+    "category": "numbers",
+    "text": "There are 42 items in PR 219 and 1000 lines of code.",
+    "target": "Cardinal numbers, ordinal numbers, mixed digit-letter tokens"
+  },
+  {
+    "id": "numbers_02",
+    "category": "numbers",
+    "text": "The temperature dropped to -5 degrees at 3:45 PM on July 24th, 2026.",
+    "target": "Negative numbers, time formatting, calendar dates, ordinals"
+  },
+  {
+    "id": "acronyms_01",
+    "category": "acronyms",
+    "text": "The MCP server returned HTTP 404 for the URL.",
+    "target": "Technical acronyms (MCP, HTTP, URL) and status code"
+  },
+  {
+    "id": "acronyms_02",
+    "category": "acronyms",
+    "text": "Configure the CLI using JSON and YAML in the IDE via API.",
+    "target": "Acronyms pronounced letter-by-letter (CLI, IDE, API) vs word (JSON, YAML)"
+  },
+  {
+    "id": "paths_01",
+    "category": "paths",
+    "text": "Check the file at /workspace/hyperia/sidecar/src/tts.rs for errors.",
+    "target": "Unix filesystem paths, slashes, file extensions (.rs)"
+  },
+  {
+    "id": "paths_02",
+    "category": "paths",
+    "text": "Navigate to C:\\Users\\alice\\.hyperia\\kokoro\\last.wav to inspect the audio dump.",
+    "target": "Windows path backslashes, leading dot directory (.hyperia), extension (.wav)"
+  },
+  {
+    "id": "questions_01",
+    "category": "questions",
+    "text": "Did the sidecar crash, or is it still responding to ping requests?",
+    "target": "Rising-falling terminal question intonation and pitch contour"
+  },
+  {
+    "id": "questions_02",
+    "category": "questions",
+    "text": "Why does the synthesized voice sound muffled and distorted?",
+    "target": "Wh-question intonation and vocal fry / distortion at ends"
+  },
+  {
+    "id": "plosives_01",
+    "category": "plosives",
+    "text": "Please stop the clock, cut the rope, and grab the big red bag.",
+    "target": "Plosive consonant codas (/p/, /k/, /t/, /b/, /d/, /g/) testing clipping/truncation"
+  },
+  {
+    "id": "plosives_02",
+    "category": "plosives",
+    "text": "That quick dark cat sat on top of the black desk.",
+    "target": "Clustered voiceless stops and final plosive bursts"
+  },
+  {
+    "id": "plosives_03_over",
+    "category": "plosives",
+    "text": "The project is over and done, with clear crisp sound at the end.",
+    "target": "Specifically tests word-final plosives and the known 'over' -> 'ove' truncation quirk"
+  },
+  {
+    "id": "long_01",
+    "category": "long_sentences",
+    "text": "Hyperia's spoken summary feature enables autonomous agents to communicate critical state changes, status updates, and operation milestones directly to the operator using a compact neural text-to-speech engine embedded in the local sidecar runtime without external network dependencies.",
+    "target": "274-char long sentence crossing 250-char chunk boundary, testing chunk concatenation"
+  },
+  {
+    "id": "long_02",
+    "category": "long_sentences",
+    "text": "When processing a complex sequence of technical instructions, the speech synthesizer must maintain consistent prosody, natural pauses at punctuation boundaries, and smooth transitions between concatenated audio buffers across all active worker threads.",
+    "target": "258-char long sentence testing phoneme ceiling margin, clause prosody, and chunk stitching"
+  },
+  {
+    "id": "baseline_01",
+    "category": "baseline",
+    "text": "Station to base, transmission confirmed. All systems operational.",
+    "target": "Radio framing baseline with short crisp phrases"
+  },
+  {
+    "id": "heteronym_01",
+    "category": "prosody",
+    "text": "Record the record, then present the present to the subject.",
+    "target": "Noun/verb stress shift across heteronyms and phonetic prosody"
+  }
+]

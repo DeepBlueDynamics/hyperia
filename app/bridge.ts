@@ -677,7 +677,11 @@ function handleCommand(msg: Record<string, unknown>) {
         requesterPane: (msg.requesterPane as string) || '',
         targetPane: msg.targetPane as string,
         action: (msg.action as string) || 'drive',
-        purpose: (msg.purpose as string) || ''
+        purpose: (msg.purpose as string) || '',
+        // Messaging extras (optional; older sidecars omit them): who the mail
+        // is for, and its subject. The body is never sent to the prompt.
+        recipientLabel: (msg.recipientLabel as string) || undefined,
+        subject: (msg.subject as string) || undefined
       };
       for (const w of (app as any).getWindows?.() || []) {
         if (w?.rpc) w.rpc.emit('permission request', payload);

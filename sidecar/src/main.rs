@@ -367,11 +367,7 @@ async fn post_tts(
     headers: HeaderMap,
     Json(req): Json<TtsRequest>,
 ) -> Json<serde_json::Value> {
-    let voice = req
-        .voice
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty());
+    let voice = req.voice.as_deref();
 
     // Caller's spokenable callsign — resolved from the request identity (mirrors
     // maybe_attribute): a pane's friendly codename, or an external agent's name.
@@ -380,7 +376,26 @@ async fn post_tts(
         identity::CallerIdentity::Pane { pane, .. } => {
             state.bridge.pane_display_name(pane).await.unwrap_or_default()
         }
-        identity::CallerIdentity::Agent { name, .. } => name.clone(),
+        identity::CallerIdentity::Agent { name, .. } => {
+            // Binding comes from authenticated residency, never request JSON.
+            // Do not hold a session-table guard across pane_display_name.
+            let store = match messaging::context() {
+                Ok(store) => store,
+                Err((_, error)) => return error,
+            };
+            // A per-session child (`mcp-session/<id>`) speaks as its PARENT
+            // agent's pane: the binding lives on the parent, and hashing the
+            // pane name (not the per-session label) keeps one voice per pane.
+            let parent = state.bridge.identity().sessions.by_name(name)
+                .filter(|s| !s.parent_is_pane).map(|s| s.parent);
+            let agent = parent.as_deref().unwrap_or(name);
+            let pane = store.bindings.pane_for_agent(agent).or_else(|| store.bindings.pane_for_agent(name));
+            let fallback = || tts::agent_callsign(&id.label());
+            match pane {
+                Some(pane) => state.bridge.pane_display_name(&pane).await.unwrap_or_else(fallback),
+                None => fallback(),
+            }
+        },
         _ => String::new(),
     };
     let caller = match tts::spokenable_name(&caller_raw) {
@@ -403,15 +418,16 @@ async fn post_tts(
     } else {
         tts::radio_wrap(&recipient, &caller, &req.text)
     };
-    match tts::speak(&spoken, voice, req.speed).await {
+    let requester = (!caller_raw.is_empty()).then_some(caller_raw.as_str());
+    match tts::speak(&spoken, voice, req.speed, requester).await {
         // `spoken` echoes the EXACT transcript delivered to the user (frame
         // included) so callers can see the wrapper already carries the
         // callsigns + "Over and out" and don't add their own radio phrases.
-        Ok(secs) => {
+        Ok(result) => {
             dashboard::mark_tts_spoke();
             Json(serde_json::json!({
-                "ok": true, "duration_secs": secs, "caller": caller, "recipient": recipient,
-                "spoken": spoken
+                "ok": true, "duration_secs": result.duration_secs, "caller": caller, "recipient": recipient,
+                "spoken": spoken, "voice": result.voice, "engine": result.engine
             }))
         }
         Err(e) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
@@ -961,11 +977,26 @@ fn check_inject_cap(addr: &PaneAddress, keys: &str) -> Result<(), (StatusCode, S
     Ok(())
 }
 
+/// What an operation's state actually means for the caller. The old fixed text
+/// ("Approval releases it automatically") was returned for every state, so
+/// agents reported plain queued deliveries as "waiting for the human's approval".
+fn delivery_message(state: delivery::State) -> &'static str {
+    use delivery::DeliveryState::*;
+    match state {
+        AwaitingApproval => "Waiting for the human to approve this in Hyperia; approval sends it automatically. Inspect delivery_status for the outcome.",
+        Queued | Submitting => "Queued for delivery; no approval needed. Hyperia sends it shortly (held only while a human is typing in that pane). Inspect delivery_status to confirm.",
+        Submitted => "Delivered.",
+        Denied => "Not delivered: the human denied it.",
+        Expired => "Not delivered: it expired before it could be sent.",
+        Cancelled => "Not delivered: cancelled.",
+        Failed | Indeterminate => "Delivery did not complete; inspect delivery_status for details.",
+    }
+}
+
 fn delivery_http(result: Result<delivery::Operation, messaging::ApiError>) -> (StatusCode, String) {
     match result {
         Ok(operation) => (if operation.state.is_active() { StatusCode::ACCEPTED } else { StatusCode::OK }, serde_json::json!({
-            "ok": true, "operation": operation,
-            "message": "Operation retained. Approval releases it automatically; inspect delivery_status for the outcome."
+            "ok": true, "message": delivery_message(operation.state), "operation": operation,
         }).to_string()),
         Err((status, Json(body))) => (status, body.to_string()),
     }
@@ -4747,5 +4778,24 @@ mod identity_agent_tests {
             r#"{"name":"owner","single_session":false}"#.into()).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod delivery_message_tests {
+    use super::*;
+
+    #[test]
+    fn only_awaiting_approval_mentions_approval() {
+        use delivery::DeliveryState::*;
+        assert!(delivery_message(AwaitingApproval).contains("approve"));
+        for state in [Queued, Submitting] {
+            let text = delivery_message(state);
+            assert!(text.contains("no approval needed"), "{state:?}: {text}");
+        }
+        assert_eq!(delivery_message(Submitted), "Delivered.");
+        for state in [Queued, Submitting, Submitted, Failed, Denied, Expired, Cancelled, Indeterminate] {
+            assert!(!delivery_message(state).contains("approval sends"), "{state:?}");
+        }
     }
 }

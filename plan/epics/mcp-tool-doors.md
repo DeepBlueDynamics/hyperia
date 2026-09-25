@@ -4,13 +4,13 @@
 
 **Mission:** Refactor both of Hyperia's tool surfaces — the built-in ghost agent loop and the external MCP server — to a "doors" progressive-disclosure model so that a 4B local model (Sailfish `gemma4-e4b`, 8k context) and token-billed cloud models never see 100+ tool schemas at once. Live tool set stays ≤ ~20 per turn.
 
-Spec source: `C:\Users\kordl\Code\DeepBlueDynamics\nuts.services\sailfish\HYPERIA_TOOLCALL_GUIDE.md` ("Recommended: gate tools behind doors"), `HYPERIA_INTEGRATION.md` (endpoints/ladder/auth), `harness\PROFILE_RESULTS.md` (6/6 tool selection on a tight menu, 5–12x decode speedup on agentic output).
+Spec source: `C:\Users\<you>\Code\DeepBlueDynamics\nuts.services\sailfish\HYPERIA_TOOLCALL_GUIDE.md` ("Recommended: gate tools behind doors"), `HYPERIA_INTEGRATION.md` (endpoints/ladder/auth), `harness\PROFILE_RESULTS.md` (6/6 tool selection on a tight menu, 5–12x decode speedup on agentic output).
 
 ---
 
 ## 1. Code map (what exists today, with evidence)
 
-All paths relative to `C:\Users\kordl\Code\DeepBlueDynamics\hyperia\`.
+All paths relative to `C:\Users\<you>\Code\DeepBlueDynamics\hyperia\`.
 
 ### 1.1 Ghost agent tool surface — `sidecar/src/ghost/registry.rs` (2747 lines)
 
