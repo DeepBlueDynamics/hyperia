@@ -72,6 +72,11 @@ async function respond(
   durationSecs: number | null
 ): Promise<void> {
   const result = await ipcRenderer.invoke('consent:respond', {id: req.id, decision, scope, durationSecs});
+  // Gone sidecar-side (expired or already answered): close, don't show a retry error.
+  if (result?.gone) {
+    clearRequest(req.targetPane, req.id);
+    return;
+  }
   if (!result?.ok) throw new Error(result?.error || 'Approval was not recorded. Please retry.');
   clearRequest(req.targetPane, req.id);
 }

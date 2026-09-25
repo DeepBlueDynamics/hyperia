@@ -2177,8 +2177,18 @@ impl Bridge {
                 let uid = msg["uid"].as_str().unwrap_or("");
                 tracing::info!("Session exited: {uid}");
                 self.inner.sessions.lock().await.remove(uid);
-                // Revoke any cross-pane grants/prompts tied to the closed pane.
-                self.inner.perms.cleanup_pane(uid).await;
+                // Revoke any cross-pane grants/prompts tied to the closed pane,
+                // and close their prompts in the UI right away. The source OR
+                // destination pane is gone, so there is nothing left to decide.
+                for req in self.inner.perms.cleanup_pane(uid).await {
+                    let bridge = self.clone();
+                    tokio::spawn(async move {
+                        let _ = bridge.notify(serde_json::json!({
+                            "type": "PermissionResolved", "id": req.id,
+                            "targetPane": req.target_pane, "decision": "cancelled",
+                        })).await;
+                    });
+                }
                 // Drop a pending "you've got mail" notice for the closed pane
                 // (it will never go idle again). The mail itself stays on the bus.
                 self.inner.msg_notify.lock().await.remove(uid);

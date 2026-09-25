@@ -720,11 +720,16 @@ impl PermStore {
 
     /// Drop everything tied to a pane that just closed: pending prompts aimed
     /// at it (or originating from it), pane-scoped grants for it, and its token.
-    pub async fn cleanup_pane(&self, uid: &str) {
-        self.pending
-            .lock()
-            .await
-            .retain(|_, r| r.target_pane != uid && r.requester_pane != uid);
+    /// Returns the dropped prompts so the caller can tell the UI to close them
+    /// (a silently dropped prompt left its toast on screen, unanswerable).
+    pub async fn cleanup_pane(&self, uid: &str) -> Vec<PermRequest> {
+        let dropped: Vec<PermRequest> = {
+            let mut pending = self.pending.lock().await;
+            let ids: Vec<String> = pending.iter()
+                .filter(|(_, r)| r.target_pane == uid || r.requester_pane == uid)
+                .map(|(id, _)| id.clone()).collect();
+            ids.iter().filter_map(|id| pending.remove(id)).collect()
+        };
         self.grants
             .lock()
             .await
@@ -734,6 +739,7 @@ impl PermStore {
         self.owners.lock().await.remove(uid);
         self.denials.lock().await.retain(|(_, p), _| p != uid);
         self.save().await;
+        dropped
     }
 
     /// JSON snapshot for debugging / the test surface.
@@ -798,5 +804,26 @@ impl PermStore {
             "owners": owners,
             "createGrants": create_grants,
         })
+    }
+}
+
+#[cfg(test)]
+mod pane_close_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn closing_a_pane_returns_and_removes_prompts_aimed_at_or_from_it() {
+        let perms = PermStore::for_tests();
+        let to_pane = perms.create_request("agent:a", "", "pane-closed", "drive", "").await;
+        let from_pane = perms.create_request("pane:pane-closed", "pane-closed", "pane-other", "drive", "").await;
+        let unrelated = perms.create_request("agent:b", "", "pane-other", "cap:manage", "").await;
+        let mut dropped: Vec<String> = perms.cleanup_pane("pane-closed").await.into_iter().map(|r| r.id).collect();
+        dropped.sort();
+        let mut expected = vec![to_pane.id.clone(), from_pane.id.clone()];
+        expected.sort();
+        assert_eq!(dropped, expected);
+        assert!(perms.pending_request(&to_pane.id).await.is_none());
+        assert!(perms.pending_request(&from_pane.id).await.is_none());
+        assert!(perms.pending_request(&unrelated.id).await.is_some());
     }
 }
