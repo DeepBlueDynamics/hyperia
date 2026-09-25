@@ -213,6 +213,10 @@ async function consentFetch(event: Electron.IpcMainInvokeEvent, apiPath: string,
     headers: {'Content-Type': 'application/json', Authorization: `Bearer ${SYSTEM_TOKEN}`},
     body: body === undefined ? undefined : JSON.stringify(body)
   });
+  // 404 = the sidecar no longer holds this request (expired, consumed, or lost
+  // with a restart). Report it as gone so the prompt closes; throwing left the
+  // toast on screen with every button failing forever.
+  if (response.status === 404) return {ok: false, gone: true, error: 'This request is no longer pending.'};
   if (!response.ok) throw new Error(`Consent request failed (${response.status}).`);
   return response.json();
 }
