@@ -2,6 +2,7 @@ import React from 'react';
 
 import rpc from '../rpc';
 import {isPowerShell, pickNativeShell, profileFitsPlatform as fitsPlatform} from '../utils/native-shell';
+import {LS_LAST_SHELL, resolvePickerShell} from '../utils/picker-shell';
 
 import UrlPicker from './url-picker';
 
@@ -85,7 +86,7 @@ const INSTALL_CATALOG: InstallEntry[] = [
 // Persisted picker defaults — what the S / A hotkeys launch. Written on every
 // explicit shell/agent selection, read once when the picker mounts, so the
 // quick keys keep working across sessions.
-const LS_DEFAULT_SHELL = 'hyperia.picker.defaultShell';
+const LS_DEFAULT_SHELL = LS_LAST_SHELL;
 const LS_DEFAULT_AGENT = 'hyperia.picker.defaultAgent';
 // The saved tab the R hotkey / Saved Tabs box defaults to = the last
 // one restored from the picker.
@@ -692,6 +693,20 @@ interface NewPanePickerState {
 // The "New Webpane" chooser shown when a pane has the synthetic `picker`
 // profile. Top→bottom: title, URL entry, a New Shell combobox, a New Agent
 // combobox. No dividers between sections.
+/** The shells a picker offers (non-agent, platform-fit; stock before custom). */
+export function pickerShellProfiles(profiles: any[]): any[] {
+  return (
+    profiles
+      .filter((p: any) => {
+        const n = String(p?.name || '').toLowerCase();
+        if (!n || AGENT_NAMES.has(n) || p.kind === 'agent') return false;
+        return profileFitsPlatform(p);
+      })
+      // Stock (system-detected) shells first, user-added custom shells after.
+      .sort((a: any, b: any) => (a.kind ? 1 : 0) - (b.kind ? 1 : 0))
+  );
+}
+
 export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePickerState> {
   state: NewPanePickerState = {
     lastUsedShell: readStoredDefault(LS_DEFAULT_SHELL),
@@ -1128,17 +1143,10 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
   }
 
   // --- Shell items (everything that isn't an agent, platform-filtered) ---
+  // (list comes from pickerShellProfiles, shared with the navigator's Go)
   // Shared by render() and the S hotkey.
   private buildShellItems(): ComboItem[] {
-    const profileList: any[] = this.props.profiles || [];
-    const shellProfiles = profileList
-      .filter((p: any) => {
-        const n = p.name.toLowerCase();
-        if (AGENT_NAMES.has(n) || p.kind === 'agent') return false;
-        return profileFitsPlatform(p);
-      })
-      // Stock (system-detected) shells first, user-added custom shells after.
-      .sort((a: any, b: any) => (a.kind ? 1 : 0) - (b.kind ? 1 : 0));
+    const shellProfiles = pickerShellProfiles(this.props.profiles || []);
 
     return shellProfiles.map((p: any) => {
       const displayName = capitalize(p.name);
@@ -1161,12 +1169,12 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
   // SSH-into-a-box profile as the configured default, every picker kept
   // preselecting the server no matter what you'd just chosen.)
   private resolveDefaultShell(shellItems: ComboItem[]): ComboItem | undefined {
-    const {defaultProfile} = this.props;
-    return (
-      (this.state.lastUsedShell && shellItems.find((i) => i.key === this.state.lastUsedShell)) ||
-      (defaultProfile && shellItems.find((i) => i.key === defaultProfile)) ||
-      shellItems[0]
+    const name = resolvePickerShell(
+      shellItems.map((i) => i.key),
+      this.state.lastUsedShell,
+      this.props.defaultProfile
     );
+    return shellItems.find((i) => i.key === name);
   }
 
   // --- Saved session items (#183) — the tab-workspace library as combo rows.
