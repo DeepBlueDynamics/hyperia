@@ -20,6 +20,8 @@ import {BrowserWindow, WebContentsView, ipcMain, session, shell, Menu, clipboard
 import type {Session, WebContents} from 'electron';
 
 import {getConfig} from './config';
+import {nextMainFrameLoading} from './utils/web-pane-loading';
+import type {WebPaneLoadEvent} from './utils/web-pane-loading';
 
 const PARTITION = 'persist:hyperia-web';
 // DevTools docks into the bottom of the pane, taking this fraction of its height.
@@ -185,6 +187,18 @@ export async function capturePaneJpeg(uid: string, w: number, h: number, quality
   }
 }
 
+// Spinner state tracks the main frame only, so never-settling iframes can't pin it on.
+const mainFrameLoading = new WeakMap<WebContents, boolean>();
+
+// Returns true when the loading state changed (and was pushed).
+function applyLoadEvent(uid: string, wc: WebContents, ev: WebPaneLoadEvent): boolean {
+  const next = nextMainFrameLoading(mainFrameLoading.get(wc) ?? false, ev);
+  if (next === null) return false;
+  mainFrameLoading.set(wc, next);
+  pushState(uid, next ? {loading: true, error: null} : {loading: false, ...navState(wc)});
+  return true;
+}
+
 function navState(wc: WebContents) {
   return {
     url: wc.getURL(),
@@ -223,10 +237,25 @@ function wireWebContents(initialUid: string, wc: WebContents) {
       entrySend(uid, 'web-pane:focus', {uid, activate: true});
     }
   });
-  wc.on('did-start-loading', () => {
-    pushState(u(), {loading: true, error: null});
+  // Not did-start-loading: it fires for subframes too.
+  wc.on('did-start-navigation', (details) => {
+    applyLoadEvent(u(), wc, {
+      type: 'start-navigation',
+      isMainFrame: !!details.isMainFrame,
+      isSameDocument: !!details.isSameDocument
+    });
   });
-  wc.on('did-stop-loading', () => pushState(u(), {loading: false, ...navState(wc)}));
+  wc.on('did-finish-load', () => {
+    applyLoadEvent(u(), wc, {type: 'finish-load'});
+  });
+  wc.on('did-fail-provisional-load', (_e, errorCode, _desc, _url, isMainFrame) => {
+    applyLoadEvent(u(), wc, {type: 'fail-load', isMainFrame, errorCode});
+  });
+  // Waits for every frame; a backstop for aborted navigations (downloads).
+  wc.on('did-stop-loading', () => {
+    const uid = u();
+    if (!applyLoadEvent(uid, wc, {type: 'stop-loading'})) pushState(uid, {...navState(wc)});
+  });
   wc.on('did-navigate', () => pushState(u(), {...navState(wc)}));
   wc.on('did-navigate-in-page', (_e, _url, isMainFrame) => {
     if (isMainFrame) pushState(u(), {...navState(wc)});
@@ -235,6 +264,7 @@ function wireWebContents(initialUid: string, wc: WebContents) {
   wc.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
     // -3 = ERR_ABORTED (user/redirect navigation), not a real failure.
     if (isMainFrame && errorCode !== -3) {
+      mainFrameLoading.set(wc, false);
       pushState(u(), {loading: false, error: {code: errorCode, description: errorDescription, url: validatedURL}});
     }
   });
@@ -452,6 +482,18 @@ function roundRect(b: {x: number; y: number; width: number; height: number}) {
   };
 }
 
+// A remounted toolbar starts with loading:true; send the adopted view's real state.
+// No url: echoing it could clobber redux.
+function syncAdoptedState(uid: string, entry: WebPaneEntry) {
+  const wc = entry.view.webContents;
+  if (wc.isDestroyed()) return;
+  pushState(uid, {
+    loading: mainFrameLoading.get(wc) ?? false,
+    canGoBack: wc.navigationHistory.canGoBack(),
+    canGoForward: wc.navigationHistory.canGoForward()
+  });
+}
+
 function createPane(win: BrowserWindow, uid: string, url: string) {
   if (panes.has(uid)) {
     const entry = panes.get(uid)!;
@@ -467,6 +509,8 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
     if (url && url !== entry.url && url !== current) {
       entry.url = url;
       void entry.view.webContents.loadURL(url).catch(() => {});
+    } else {
+      syncAdoptedState(uid, entry);
     }
     entry.view.setVisible(nativeVisible(entry));
     return;
@@ -480,6 +524,7 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
       entry.destroyTimer = undefined;
       panes.delete(oldUid);
       panes.set(uid, entry);
+      syncAdoptedState(uid, entry);
       entry.view.setVisible(nativeVisible(entry));
       return;
     }
@@ -773,11 +818,18 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
         // the page. Explicit reloads use the 'reload' action instead.
         if (url && wc.getURL() !== url) void wc.loadURL(url).catch(() => {});
         break;
+      // Stop an in-flight load first, or back/forward is slow on busy pages.
       case 'back':
-        if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
+        if (wc.navigationHistory.canGoBack()) {
+          if (wc.isLoading()) wc.stop();
+          wc.navigationHistory.goBack();
+        }
         break;
       case 'forward':
-        if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
+        if (wc.navigationHistory.canGoForward()) {
+          if (wc.isLoading()) wc.stop();
+          wc.navigationHistory.goForward();
+        }
         break;
       case 'reload':
         wc.reload();
@@ -787,6 +839,8 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
         break;
       case 'stop':
         wc.stop();
+        // Clear the spinner now, not when every frame stops.
+        if (!applyLoadEvent(uid, wc, {type: 'stop'})) pushState(uid, {loading: false, ...navState(wc)});
         break;
     }
   });

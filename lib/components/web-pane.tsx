@@ -386,6 +386,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     });
   };
 
+  stopWebview = () => {
+    ipcRenderer.send('web-pane:nav', {uid: this.props.groupUid, action: 'stop'});
+  };
+
   // Open the current page in the system browser (Chrome). The reliable bail-out
   // when an embedded view can't clear a bot wall (Cloudflare et al.).
   openInExternal = () => {
@@ -497,6 +501,16 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
       e.preventDefault();
       e.stopPropagation();
       this.reloadWebview(e.shiftKey);
+    }
+    // Esc in the pane chrome stops loading; the page (native view) keeps its own Esc.
+    if (
+      e.key === 'Escape' &&
+      this.state.loading &&
+      !this.state.isUrlNavigatorOpen &&
+      !this.state.authRequest &&
+      !(this.props.url || '').startsWith('ai://')
+    ) {
+      this.stopWebview();
     }
   };
 
@@ -2403,7 +2417,38 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                       </div>
                     </div>
                   </span>
-                  {showReload && (
+                  {showReload && loading && (
+                    <span
+                      className="term_controlIcon term_tooltipTrigger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        this.stopWebview();
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <i className="ti ti-x" style={{fontSize: '14px'}} aria-hidden="true" />
+                      <div className="term_tooltip" style={{minWidth: '160px'}}>
+                        <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
+                          Stop loading
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            fontFamily: 'var(--font-mono)',
+                            color: 'var(--text-secondary)',
+                            marginTop: 'var(--space-2)'
+                          }}
+                        >
+                          Esc
+                        </div>
+                      </div>
+                    </span>
+                  )}
+                  {showReload && !loading && (
                     <span
                       className="term_controlIcon term_tooltipTrigger"
                       onClick={(e) => {
