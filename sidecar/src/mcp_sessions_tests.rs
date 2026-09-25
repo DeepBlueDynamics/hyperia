@@ -15,10 +15,43 @@ impl Fixture {
     fn bridge(&self) -> Bridge {
         Bridge::with_stores(IdentityStore::for_tests(self.dir.join("sessions.json"),
             vec![
-                AgentRecord { name: "parent".into(), token: "hyp_agent_test_parent".into(), created_ms: 1 },
-                AgentRecord { name: "other".into(), token: "hyp_agent_test_other".into(), created_ms: 1 },
+                AgentRecord { name: "parent".into(), token: "hyp_agent_test_parent".into(), created_ms: 1, single_session: false },
+                AgentRecord { name: "other".into(), token: "hyp_agent_test_other".into(), created_ms: 1, single_session: false },
+                AgentRecord { name: "solo".into(), token: "hyp_agent_test_solo".into(), created_ms: 1, single_session: true },
+                // Single-session by the interim nemesis8/ name rule, flag unset.
+                AgentRecord { name: "nemesis8/n8-test-urchin".into(), token: "hyp_agent_test_n8".into(), created_ms: 1, single_session: false },
             ]), PermStore::for_tests())
     }
+    fn mail(&self) -> crate::messaging::MailContext {
+        crate::messaging::MailContext {
+            bindings: mailbox::BindingStore::new(self.dir.join("bindings.json")).unwrap(),
+            messages: self.dir.join("messages.jsonl"),
+            reads: self.dir.join("reads.jsonl"),
+        }
+    }
+}
+
+async fn add_pane(bridge: &Bridge, pane: &str) {
+    bridge.sessions().await.insert(pane.into(), crate::bridge::SessionInfo {
+        name: "shell".into(), shell_name: "Fixture pane".into(), tab_name: "test".into(),
+        description: String::new(), rows: 24, cols: 80, pid: 1, root_tab_uid: "fixture-tab".into(),
+        window_id: 1, split_label: "a".into(), tab_order: 0, tab_active: true, pane_active: true,
+        screen: crate::screen::ScreenBuffer::new(24, 80, 1000),
+        bsp_x: 0.0, bsp_y: 0.0, bsp_w: 100.0, bsp_h: 100.0, cwd: String::new(),
+        last_user_activity: None, last_output_at: None, title: String::new(), shell_state: "idle".into(),
+        shell_app: None, shell_last_exit: None, shell_has_integration: false,
+    });
+}
+
+fn agent(name: &str) -> CallerIdentity {
+    CallerIdentity::Agent { name: name.into(), token: String::new(), label: None }
+}
+
+fn send(mail: &crate::messaging::MailContext, from: &Principal, to: &Principal, body: &str) -> String {
+    mailbox::send_message(&mail.messages, mailbox::SendParams {
+        from, to, body, subject: "", from_pane_hint: None, to_pane_hint: None,
+        from_label: None, to_label: None, idempotency_key: None,
+    }).unwrap()
 }
 impl Drop for Fixture {
     fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.dir); }
@@ -388,4 +421,135 @@ fn pane_conflict_notice_names_both_clients_and_the_usual_cause() {
     assert!(text.contains("two Hyperia MCP servers"));
     assert!(!text.contains("token crossing"));
     assert_eq!(client_name(&json!({"clientInfo": {"name": ""}})), "an unnamed client");
+}
+
+#[tokio::test]
+async fn single_session_agents_initialize_as_themselves_without_a_child() {
+    let fixture = Fixture::new();
+    let bridge = fixture.bridge();
+    // A pre-existing child of an agent that later opted in keeps resuming.
+    let old_child = bridge.identity().create_session("solo", json!({})).await.unwrap();
+    let srv = server(bridge.clone(), true).await;
+    for (token, name) in [("hyp_agent_test_solo", "solo"), ("hyp_agent_test_n8", "nemesis8/n8-test-urchin")] {
+        for _reconnect in 0..2 {
+            let response = post(&srv, token, None, initialize()).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(response.headers().get(SESSION_HEADER).is_none(), "{name} was given a child session");
+            let me = tool(&srv, token, None, "whoami", json!({})).await;
+            assert_eq!(me["principal"], format!("agent:{name}"));
+            assert_eq!(me["canonical_address"], name);
+            assert_eq!(me["legacy"], true);
+            assert!(me["session_id"].is_null());
+        }
+    }
+    let records = bridge.identity().sessions.records().unwrap().clone();
+    assert!(!records.iter().any(|r| r.parent == "nemesis8/n8-test-urchin"));
+    assert_eq!(records.iter().filter(|r| r.parent == "solo").count(), 1);
+    let resumed = tool(&srv, "hyp_agent_test_solo", Some(&old_child.session_id), "whoami", json!({})).await;
+    assert_eq!(resumed["principal"], format!("agent:{}", old_child.name));
+    // A plain multi-session agent still gets a child per initialize.
+    init(&srv, "hyp_agent_test_parent").await;
+}
+
+#[tokio::test]
+async fn child_reads_parent_mail_but_not_sibling_mail_and_sends_as_itself() {
+    let fixture = Fixture::new();
+    let bridge = fixture.bridge();
+    let mail = fixture.mail();
+    let a = bridge.identity().create_session("parent", json!({})).await.unwrap();
+    let b = bridge.identity().create_session("parent", json!({})).await.unwrap();
+    let parent = Principal::Agent("parent".into());
+    let (a_key, b_key) = (Principal::Agent(a.name.clone()), Principal::Agent(b.name.clone()));
+    let to_parent = send(&mail, &Principal::System, &parent, "for the agent");
+    let to_a = send(&mail, &Principal::System, &a_key, "for session a only");
+
+    let who_a = crate::messaging::actor_in(&bridge, &mail, &agent(&a.name)).await.unwrap();
+    let who_b = crate::messaging::actor_in(&bridge, &mail, &agent(&b.name)).await.unwrap();
+    assert_eq!(who_a.principal, a_key);
+    assert_eq!(who_b.principal, b_key);
+    assert_eq!(who_a.parent, Some(parent.clone()));
+    assert_eq!(who_a.requester, format!("agent:{}", a.name));
+
+    let a_mail = mailbox::check_inbox_as(&mail.messages, &mail.reads, &who_a.reader(), 100, None).unwrap();
+    let ids: Vec<_> = a_mail.iter().map(|m| m.id.as_str()).collect();
+    assert!(ids.contains(&to_parent.as_str()) && ids.contains(&to_a.as_str()));
+    // Receipts are per child: b still sees the parent mail, and never the mail sent to a.
+    let b_mail = mailbox::inbox_as(&mail.messages, &mail.reads, &who_b.reader(), true, 100).unwrap();
+    assert_eq!(b_mail.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec![to_parent.as_str()]);
+    assert!(mailbox::acknowledge_as(&mail.reads, &mail.messages, &to_a, &who_b.reader()).is_err());
+    assert!(mailbox::inbox_as(&mail.messages, &mail.reads, &who_a.reader(), true, 100).unwrap().is_empty());
+    // A child read counts for the parent recipient (sender status, pane badge).
+    assert!(mailbox::recipient_has_read(&mail.messages, &mail.reads, &to_parent).unwrap());
+    assert!(mailbox::inbox(&mail.messages, &mail.reads, &parent, None, true, 100).unwrap().is_empty());
+    // A registered agent has no parent view.
+    let who_parent = crate::messaging::actor_in(&bridge, &mail, &agent("parent")).await.unwrap();
+    assert!(who_parent.parent.is_none());
+
+    // Sends go out as the child, so replies route back to that session.
+    let sent = send(&mail, &who_a.principal, &Principal::Agent("other".into()), "reply");
+    let found = mailbox::search_as(&mail.messages, &mail.reads, &who_a.reader(), mailbox::SearchScope::Sent, None, 10).unwrap();
+    assert_eq!(found[0].id, sent);
+    assert_eq!(found[0].from_principal, a_key.to_key());
+    assert!(mailbox::search(&mail.messages, &mail.reads, &parent, None, mailbox::SearchScope::Sent, None, 10).unwrap().is_empty());
+
+    // A child inherits its parent's live pane binding for pane mail.
+    let pane = format!("pane-{}", random_hex(8).unwrap());
+    add_pane(&bridge, &pane).await;
+    mail.bindings.verify_and_bind("parent", &pane, mailbox::ProofOfResidency::System, |_, _| false).unwrap();
+    let who_a = crate::messaging::actor_in(&bridge, &mail, &agent(&a.name)).await.unwrap();
+    assert_eq!(who_a.pane.as_deref(), Some(pane.as_str()));
+    let pane_mail = send(&mail, &Principal::System, &Principal::Pane(pane.clone()), "for the pane");
+    let unread = mailbox::inbox_as(&mail.messages, &mail.reads, &who_a.reader(), true, 100).unwrap();
+    assert!(unread.iter().any(|m| m.id == pane_mail));
+}
+
+#[tokio::test]
+async fn pane_bind_from_a_child_binds_its_registered_parent() {
+    let fixture = Fixture::new();
+    let bridge = fixture.bridge();
+    let mail = fixture.mail();
+    let child = bridge.identity().create_session("parent", json!({})).await.unwrap();
+    let pane = format!("pane-{}", random_hex(8).unwrap());
+    add_pane(&bridge, &pane).await;
+    let token = bridge.perms().token_for(&pane).await;
+    let request = |agent: Option<&str>| crate::messaging::BindRequest {
+        pane: pane.clone(), agent: agent.map(String::from), pane_token: Some(token.clone()),
+    };
+
+    let bound = crate::messaging::bind_in(&bridge, &mail, &agent(&child.name), request(None)).await.unwrap().0;
+    assert_eq!(bound["agent"], "parent");
+    assert_eq!(bound["session"], child.name);
+    assert_eq!(bound["binding"]["agent"], "parent");
+    assert_eq!(mail.bindings.pane_for_agent("parent").as_deref(), Some(pane.as_str()));
+    assert!(mail.bindings.pane_for_agent(&child.name).is_none());
+    // Naming the parent explicitly works; naming some other agent does not.
+    assert!(crate::messaging::bind_in(&bridge, &mail, &agent(&child.name), request(Some("parent"))).await.is_ok());
+    let err = crate::messaging::bind_in(&bridge, &mail, &agent(&child.name), request(Some("other"))).await.unwrap_err();
+    assert_eq!(err.0, StatusCode::FORBIDDEN);
+
+    // A child whose parent is not a registered agent is still refused.
+    let orphan = bridge.identity().sessions.create("unregistered-parent", json!({}), &[]).unwrap();
+    let err = crate::messaging::bind_in(&bridge, &mail, &agent(&orphan.name), request(None)).await.unwrap_err();
+    assert_eq!(err.0, StatusCode::NOT_FOUND);
+    // So is an inactive pane, same as for the parent itself.
+    let mut gone = request(None);
+    gone.pane = "pane-not-open".into();
+    let err = crate::messaging::bind_in(&bridge, &mail, &agent(&child.name), gone).await.unwrap_err();
+    assert_eq!(err.0, StatusCode::NOT_FOUND);
+
+    // The approval flow accepts a request raised by the child for its parent,
+    let second = format!("pane-{}", random_hex(8).unwrap());
+    add_pane(&bridge, &second).await;
+    let approval = |requester: String| crate::perms::PermRequest {
+        id: "req-1".into(), requester, requester_pane: String::new(),
+        target_pane: second.clone(), action: "bind:parent".into(), purpose: String::new(),
+    };
+    crate::messaging::approve_binding_in(&bridge, &mail, &approval(format!("agent:{}", child.name))).await.unwrap();
+    assert_eq!(mail.bindings.pane_for_agent("parent").as_deref(), Some(second.as_str()));
+    // but not one raised by another agent's child, or by an orphan.
+    let foreign = bridge.identity().create_session("other", json!({})).await.unwrap();
+    for requester in [format!("agent:{}", foreign.name), format!("agent:{}", orphan.name)] {
+        let err = crate::messaging::approve_binding_in(&bridge, &mail, &approval(requester)).await.unwrap_err();
+        assert_eq!(err.0, StatusCode::CONFLICT);
+    }
 }

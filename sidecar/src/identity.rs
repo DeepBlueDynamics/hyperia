@@ -78,6 +78,25 @@ pub struct AgentRecord {
     pub token: String,
     pub name: String,
     pub created_ms: u64,
+    /// One agent, one MCP client (e.g. an n8 container). A single-session
+    /// agent's `initialize` never mints a per-session child: every connection
+    /// runs as the agent itself, so its mailbox and pane binding stay whole.
+    /// Absent in older `agents.json` files, where it defaults to false.
+    #[serde(default)]
+    pub single_session: bool,
+}
+
+/// INTERIM (remove once every nemesis8 build sends `single_session`):
+/// container agents are named `nemesis8/<container>` and each runs exactly one
+/// Hyperia MCP client, so treat them as single-session even without the flag.
+const INTERIM_SINGLE_SESSION_PREFIX: &str = "nemesis8/";
+
+impl AgentRecord {
+    /// Whether `initialize` should skip per-session child identities for this
+    /// agent. The one place that decides it; see INTERIM_SINGLE_SESSION_PREFIX.
+    pub fn is_single_session(&self) -> bool {
+        self.single_session || self.name.starts_with(INTERIM_SINGLE_SESSION_PREFIX)
+    }
 }
 
 /// File-backed set of persistent agent identities.
@@ -88,6 +107,8 @@ pub struct IdentityStore {
     /// Set by the Electron main process via the HYPERIA_SYSTEM_TOKEN env var at
     /// spawn; None if absent (then nothing resolves to System).
     system_token: Option<String>,
+    /// Never write `agents.json` (test fixtures).
+    memory_only: bool,
 }
 
 impl Default for IdentityStore {
@@ -185,7 +206,7 @@ pub fn register_error_code(error: &str) -> &'static str {
 impl IdentityStore {
     #[cfg(test)]
     pub(crate) fn for_tests(path: PathBuf, agents: Vec<AgentRecord>) -> Self {
-        Self { agents: Mutex::new(agents), system_token: None,
+        Self { agents: Mutex::new(agents), system_token: None, memory_only: true,
             sessions: crate::mcp_sessions::SessionStore::open(path) }
     }
     pub fn new() -> Self {
@@ -193,6 +214,7 @@ impl IdentityStore {
             agents: Mutex::new(Self::load()),
             sessions: crate::mcp_sessions::SessionStore::open(Self::path().with_file_name("mcp-sessions.json")),
             system_token: std::env::var("HYPERIA_SYSTEM_TOKEN").ok().filter(|s| !s.is_empty()),
+            memory_only: false,
         }
     }
 
@@ -236,23 +258,52 @@ impl IdentityStore {
     /// Registration may create a new identity, but only that identity or System
     /// may retrieve its existing credential. Recheck under the insertion lock.
     pub async fn register(&self, name: &str, may_retrieve: bool) -> Result<AgentRecord, &'static str> {
+        self.register_with(name, may_retrieve, None).await
+    }
+
+    /// `register` plus the optional single-session opt-in. A new identity
+    /// stores the flag. An authorized re-registration may turn it ON (records
+    /// minted before the flag existed) but never silently turns it off:
+    /// dropping it would split a container agent's mailbox across children.
+    pub async fn register_with(&self, name: &str, may_retrieve: bool, single_session: Option<bool>) -> Result<AgentRecord, &'static str> {
         if !valid_agent_name(name) { return Err("Invalid or reserved identity name."); }
-        if let Some(rec) = self.agents.lock().await.iter().find(|a| a.name == name).cloned() {
-            return if may_retrieve { Ok(rec) } else { Err("Identity already exists; present its credential.") };
+        {
+            let mut agents = self.agents.lock().await;
+            if agents.iter().any(|a| a.name == name) {
+                return self.retrieve_existing(&mut agents, name, may_retrieve, single_session);
+            }
         }
         let token = format!("hyp_agent_{}", crate::util::random_token(16).await);
         let created_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
         let mut agents = self.agents.lock().await;
-        if let Some(rec) = agents.iter().find(|a| a.name == name).cloned() {
-            return if may_retrieve { Ok(rec) } else { Err("Identity already exists; present its credential.") };
+        if agents.iter().any(|a| a.name == name) {
+            return self.retrieve_existing(&mut agents, name, may_retrieve, single_session);
         }
         if self.sessions.reserved(name).map_err(|_| "MCP session storage unavailable.")? {
             return Err("Identity name belongs to an MCP session.");
         }
-        let rec = AgentRecord { token, name: name.to_string(), created_ms };
+        let rec = AgentRecord { token, name: name.to_string(), created_ms, single_session: single_session.unwrap_or(false) };
         agents.push(rec.clone());
-        Self::persist(&agents);
+        self.persist_agents(&agents);
         Ok(rec)
+    }
+
+    fn retrieve_existing(&self, agents: &mut [AgentRecord], name: &str, may_retrieve: bool, single_session: Option<bool>) -> Result<AgentRecord, &'static str> {
+        const EXISTS: &str = "Identity already exists; present its credential.";
+        if !may_retrieve { return Err(EXISTS); }
+        let rec = agents.iter_mut().find(|a| a.name == name).ok_or(EXISTS)?;
+        if single_session == Some(true) && !rec.single_session {
+            rec.single_session = true;
+            let rec = rec.clone();
+            self.persist_agents(agents);
+            return Ok(rec);
+        }
+        Ok(rec.clone())
+    }
+
+    /// Test fixtures stay in memory; production writes `agents.json`.
+    fn persist_agents(&self, agents: &[AgentRecord]) {
+        if !self.memory_only { Self::persist(agents); }
     }
 
     pub async fn create_session(&self, parent: &str, client: serde_json::Value) -> Result<crate::mcp_sessions::LogicalSession, String> {
@@ -285,6 +336,13 @@ impl IdentityStore {
         let child = self.sessions.by_token(token)?;
         if child.parent_is_pane || !agents.iter().any(|a| a.name == child.parent) { return None; }
         Some(CallerIdentity::Agent { name: child.name, token: child.forward_token, label: Some(child.label) })
+    }
+
+    /// The registered agent a per-session child (`mcp-session/…`) belongs to.
+    /// None for registered agents, pane-owned sessions, and orphaned children.
+    pub async fn session_parent(&self, name: &str) -> Option<String> {
+        let child = self.sessions.by_name(name).filter(|s| !s.parent_is_pane)?;
+        self.agents.lock().await.iter().any(|a| a.name == child.parent).then_some(child.parent)
     }
 
     pub async fn resolve(&self, token: &str) -> Option<AgentRecord> {
@@ -341,8 +399,9 @@ mod tests {
     #[tokio::test]
     async fn existing_identity_requires_its_credential() {
         let store = IdentityStore {
-            agents: Mutex::new(vec![AgentRecord { token: "test-secret".into(), name: "owner".into(), created_ms: 1 }]),
+            agents: Mutex::new(vec![AgentRecord { token: "test-secret".into(), name: "owner".into(), created_ms: 1, single_session: false }]),
             system_token: Some("test-system".into()),
+            memory_only: true,
             sessions: crate::mcp_sessions::SessionStore::open(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-fixtures/identity-unused.json")),
         };
         assert!(store.register("owner", false).await.is_err());
@@ -359,6 +418,41 @@ mod tests {
         assert_eq!(super::register_error_code("Invalid or reserved identity name."), "invalid_name");
         assert_eq!(super::register_error_code("Identity name belongs to an MCP session."), "name_reserved_by_session");
         assert_eq!(super::register_error_code("MCP session storage unavailable."), "storage_unavailable");
+    }
+
+    fn record(name: &str, single_session: bool) -> AgentRecord {
+        AgentRecord { token: format!("t-{name}"), name: name.into(), created_ms: 1, single_session }
+    }
+
+    #[test]
+    fn interim_rule_treats_nemesis8_names_as_single_session() {
+        assert!(record("nemesis8/n8-test-urchin", false).is_single_session());
+        assert!(!record("parent", false).is_single_session());
+        assert!(!record("nemesis8", false).is_single_session());
+        assert!(record("parent", true).is_single_session());
+        // Records written before the flag existed still load, as multi-session.
+        let old: AgentRecord = serde_json::from_str(r#"{"token":"t","name":"parent","created_ms":1}"#).unwrap();
+        assert!(!old.single_session);
+    }
+
+    #[tokio::test]
+    async fn single_session_flag_is_stored_upgraded_and_never_silently_dropped() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-fixtures")
+            .join(format!("identity-single-{}", crate::util::random_token(6).await));
+        let store = IdentityStore::for_tests(dir.join("sessions.json"), vec![record("legacy", false)]);
+        let minted = store.register_with("solo", false, Some(true)).await.unwrap();
+        assert!(minted.single_session);
+        assert!(store.list().await.iter().any(|a| a.name == "solo" && a.single_session));
+        assert!(!store.register_with("multi", false, None).await.unwrap().single_session);
+        // Only an authorized re-registration may change the record.
+        assert!(store.register_with("legacy", false, Some(true)).await.is_err());
+        assert!(!store.list().await.iter().any(|a| a.name == "legacy" && a.single_session));
+        assert!(store.register_with("legacy", true, Some(true)).await.unwrap().single_session);
+        assert!(store.list().await.iter().any(|a| a.name == "legacy" && a.single_session));
+        // Omitting the flag, or sending false, keeps it on.
+        assert!(store.register_with("solo", true, None).await.unwrap().single_session);
+        assert!(store.register_with("solo", true, Some(false)).await.unwrap().single_session);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
 
