@@ -888,23 +888,30 @@ pub fn spokenable_name(raw: &str) -> String {
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// An agent identity label as a callsign, when the agent has no pane to speak
+/// as: drop the namespace (`nemesis8/`), a per-session suffix (`·cdf123`) and
+/// the `n8-` container prefix. `"nemesis8/n8-quiet-wren·cdf123"` → `"quiet wren"`.
+pub fn agent_callsign(label: &str) -> String {
+    let base = label.split('·').next().unwrap_or(label);
+    let base = base.rsplit('/').next().unwrap_or(base);
+    let base = base.strip_prefix("n8-").unwrap_or(base);
+    spokenable_name(base)
+}
+
 /// Wrap `text` in a radio-transmission frame addressed from `caller` to
 /// `recipient`:
 /// `"{recipient}, {recipient}, this is {caller} transmitting. {text}. This is
-/// {caller}. Oh ver and out."`
+/// {caller}. Over and out."`
 ///
-/// The sign-off is deliberately spelled "oh ver": the int8 af_heart voice clips
-/// "over"'s UNSTRESSED final syllable (OW1 V ER0 → "ove"). "oh" (OW1) and
-/// "ver" (V ER1) are both real cmudict entries, and ver's STRESSED ER1 forces
-/// the full syllable — so it sounds like "over" instead of "ove". Don't
-/// respell it as one made-up word (e.g. "ovear"): a dictionary miss falls back
-/// to letter-spelling ("O-V-E-A-R").
+/// (It used to say "Oh ver" to dodge the old CMUdict G2P dropping over's ER
+/// vowel; the misaki G2P pronounces "over" correctly, and the respelling was
+/// heard literally.)
 pub fn radio_wrap(recipient: &str, caller: &str, text: &str) -> String {
     // Strip trailing sentence punctuation from the body so the frame reads
     // cleanly ("… transmitting. <text>. This is …").
     let body = text.trim().trim_end_matches(['.', ',', '!', '?', ';', ':', ' ']);
     format!(
-        "{recipient}, {recipient}, this is {caller} transmitting. {body}. This is {caller}. Oh ver and out."
+        "{recipient}, {recipient}, this is {caller} transmitting. {body}. This is {caller}. Over and out."
     )
 }
 
@@ -988,6 +995,21 @@ async fn play_samples_serialized(audio: Vec<f32>) -> Result<()> {
 mod tests {
     use super::*;
     use super::kokoro::*;
+
+    #[test]
+    fn agent_callsign_drops_namespace_session_suffix_and_n8_prefix() {
+        assert_eq!(agent_callsign("nemesis8/n8-quiet-wren·cdf123"), "quiet wren");
+        assert_eq!(agent_callsign("nemesis8/n8-jade-lemur"), "jade lemur");
+        assert_eq!(agent_callsign("host-claude"), "host claude");
+        assert_eq!(agent_callsign("host-claude·a1b2c3"), "host claude");
+    }
+
+    #[test]
+    fn radio_frame_signs_off_with_plain_over() {
+        let spoken = radio_wrap("base", "Continued Alpaca", "Antigravity online.");
+        assert!(spoken.ends_with("This is Continued Alpaca. Over and out."), "{spoken}");
+        assert!(!spoken.to_lowercase().contains("oh ver"));
+    }
 
     fn test_voice_names() -> Vec<String> {
         ["af_bella", "af_heart", "am_adam", "bf_emma", "bm_george", "bm_lewis"]

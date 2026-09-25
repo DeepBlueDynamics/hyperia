@@ -383,10 +383,17 @@ async fn post_tts(
                 Ok(store) => store,
                 Err((_, error)) => return error,
             };
-            let pane = store.bindings.pane_for_agent(name);
+            // A per-session child (`mcp-session/<id>`) speaks as its PARENT
+            // agent's pane: the binding lives on the parent, and hashing the
+            // pane name (not the per-session label) keeps one voice per pane.
+            let parent = state.bridge.identity().sessions.by_name(name)
+                .filter(|s| !s.parent_is_pane).map(|s| s.parent);
+            let agent = parent.as_deref().unwrap_or(name);
+            let pane = store.bindings.pane_for_agent(agent).or_else(|| store.bindings.pane_for_agent(name));
+            let fallback = || tts::agent_callsign(&id.label());
             match pane {
-                Some(pane) => state.bridge.pane_display_name(&pane).await.unwrap_or_else(|| id.label()),
-                None => id.label(),
+                Some(pane) => state.bridge.pane_display_name(&pane).await.unwrap_or_else(fallback),
+                None => fallback(),
             }
         },
         _ => String::new(),
