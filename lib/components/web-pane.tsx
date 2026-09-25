@@ -505,10 +505,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     // Esc in the pane chrome stops loading; the page (native view) keeps its own Esc.
     if (
       e.key === 'Escape' &&
+      !e.defaultPrevented &&
+      !this.state.findOpen &&
       this.state.loading &&
       !this.state.isUrlNavigatorOpen &&
       !this.state.authRequest &&
-      !(this.props.url || '').startsWith('ai://')
+      this.isNativeWeb()
     ) {
       this.stopWebview();
     }
@@ -1295,7 +1297,8 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         }
       }
 
-      const loadFinished = 'loading' in payload && payload.loading === false && !payload.error;
+      // Only a real loading→done transition; adopted-state pushes on tab switch would re-probe.
+      const loadFinished = payload.loading === false && this.state.loading && !payload.error;
 
       this.setState(patch as any, () => {
         // Record history for a genuinely new main-frame URL (matches the old
@@ -2280,7 +2283,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     const w = this.state.paneWidth;
     const showBack = true;
     const showForward = true;
-    const showReload = !isAi;
+    const showReload = this.isNativeWeb();
     const showExternal = !isAi;
     // splits (~60px) crowd the url floor below ~400; url floor (110) itself
     // stops fitting below ~320 → drop the bar.
@@ -2417,12 +2420,13 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                       </div>
                     </div>
                   </span>
-                  {showReload && loading && (
+                  {showReload && (
                     <span
                       className="term_controlIcon term_tooltipTrigger"
                       onClick={(e) => {
                         e.stopPropagation();
-                        this.stopWebview();
+                        if (loading) this.stopWebview();
+                        else this.reloadWebview(e.shiftKey);
                       }}
                       style={{
                         display: 'flex',
@@ -2430,10 +2434,14 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                         cursor: 'pointer'
                       }}
                     >
-                      <i className="ti ti-x" style={{fontSize: '14px'}} aria-hidden="true" />
+                      <i
+                        className={loading ? 'ti ti-x' : 'ti ti-refresh'}
+                        style={{fontSize: '14px'}}
+                        aria-hidden="true"
+                      />
                       <div className="term_tooltip" style={{minWidth: '160px'}}>
                         <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
-                          Stop loading
+                          {loading ? 'Stop loading' : 'Reload'}
                         </div>
                         <div
                           style={{
@@ -2443,36 +2451,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                             marginTop: 'var(--space-2)'
                           }}
                         >
-                          Esc
-                        </div>
-                      </div>
-                    </span>
-                  )}
-                  {showReload && !loading && (
-                    <span
-                      className="term_controlIcon term_tooltipTrigger"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        this.reloadWebview(e.shiftKey);
-                      }}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      <i className="ti ti-refresh" style={{fontSize: '14px'}} aria-hidden="true" />
-                      <div className="term_tooltip" style={{minWidth: '160px'}}>
-                        <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Reload</div>
-                        <div
-                          style={{
-                            fontSize: '11px',
-                            fontFamily: 'var(--font-mono)',
-                            color: 'var(--text-secondary)',
-                            marginTop: 'var(--space-2)'
-                          }}
-                        >
-                          Reload · F5
+                          {loading ? 'Esc' : 'Reload · F5'}
                         </div>
                       </div>
                     </span>

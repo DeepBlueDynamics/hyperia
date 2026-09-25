@@ -3,32 +3,48 @@
 
 export type WebPaneLoadEvent =
   | {type: 'start-navigation'; isMainFrame: boolean; isSameDocument: boolean}
+  | {type: 'commit'}
   | {type: 'finish-load'}
-  | {type: 'fail-load'; isMainFrame: boolean; errorCode: number}
+  | {type: 'fail-load'; isMainFrame: boolean; errorCode: number; provisional: boolean}
+  | {type: 'abort-settle'; navSeq: number}
   | {type: 'stop-loading'}
   | {type: 'stop'};
 
-// ERR_ABORTED usually means a newer navigation replaced this one; keep its spinner.
-const ERR_ABORTED = -3;
+export type WebPaneLoadState = {
+  loading: boolean;
+  // A main-frame navigation has started but not yet committed or failed.
+  pending: boolean;
+  // Bumped per main-frame navigation start, so an abort can tell if one replaced it.
+  navSeq: number;
+};
 
-/**
- * The main-frame loading state after `ev`, given the current state `loading`.
- * Returns `null` when the event does not change the state (nothing to push).
- */
-export function nextMainFrameLoading(loading: boolean, ev: WebPaneLoadEvent): boolean | null {
-  let next: boolean = loading;
+export const ERR_ABORTED = -3;
+
+export const initialLoadState: WebPaneLoadState = {loading: false, pending: false, navSeq: 0};
+
+/** The loading state after `ev`. Returns `s` itself when nothing changed. */
+export function nextLoadState(s: WebPaneLoadState, ev: WebPaneLoadEvent): WebPaneLoadState {
   switch (ev.type) {
     case 'start-navigation':
-      if (ev.isMainFrame && !ev.isSameDocument) next = true;
-      break;
+      if (!ev.isMainFrame || ev.isSameDocument) return s;
+      return {loading: true, pending: true, navSeq: s.navSeq + 1};
+    case 'commit':
+      return s.pending ? {...s, pending: false} : s;
     case 'finish-load':
     case 'stop-loading':
-    case 'stop':
-      next = false;
-      break;
+      // The old page's finish can land after the next navigation has started.
+      if (s.pending || !s.loading) return s;
+      return {...s, loading: false};
     case 'fail-load':
-      if (ev.isMainFrame && ev.errorCode !== ERR_ABORTED) next = false;
-      break;
+      if (!ev.isMainFrame) return s;
+      // An abort is settled on the next tick (abort-settle): a replacement may be starting.
+      if (ev.errorCode === ERR_ABORTED) return ev.provisional && s.pending ? {...s, pending: false} : s;
+      return s.loading || s.pending ? {...s, loading: false, pending: false} : s;
+    case 'abort-settle':
+      if (s.navSeq !== ev.navSeq || s.pending || !s.loading) return s;
+      return {...s, loading: false};
+    case 'stop':
+      return s.loading || s.pending ? {...s, loading: false, pending: false} : s;
   }
-  return next === loading ? null : next;
+  return s;
 }
