@@ -53,6 +53,17 @@ pub struct MailActor {
     pub pane: Option<String>,
     /// Authentication label used by the consent ledger, never a user-supplied name.
     pub requester: String,
+    /// For a per-session MCP child: its registered parent agent, whose mailbox
+    /// (and pane binding) the child also reads. Sends still go out as the child.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<Principal>,
+}
+
+impl MailActor {
+    /// Mailbox view: own mail, delegated pane mail, and the parent agent's mail.
+    pub fn reader(&self) -> mailbox::Reader<'_> {
+        mailbox::Reader::new(&self.principal, self.pane.as_deref()).with_parent(self.parent.as_ref())
+    }
 }
 
 pub async fn actor(bridge: &Bridge, headers: &HeaderMap) -> Result<MailActor, ApiError> {
@@ -62,19 +73,33 @@ pub async fn actor(bridge: &Bridge, headers: &HeaderMap) -> Result<MailActor, Ap
 
 pub async fn actor_from_identity(bridge: &Bridge, id: &CallerIdentity) -> Result<MailActor, ApiError> {
     if id.is_anonymous() { return Err(error(StatusCode::UNAUTHORIZED, "Authentication required for messaging.")); }
-    let store = context()?;
+    actor_in(bridge, context()?, id).await
+}
+
+/// `actor_from_identity` against an explicit mail store (tests use fixtures).
+pub(crate) async fn actor_in(bridge: &Bridge, store: &MailContext, id: &CallerIdentity) -> Result<MailActor, ApiError> {
     let requester = id.principal_key();
     match id {
         CallerIdentity::Anonymous => Err(error(StatusCode::UNAUTHORIZED, "Authentication required for messaging.")),
-        CallerIdentity::System => Ok(MailActor { principal: Principal::System, label: "Hyperia".into(), pane: None, requester }),
+        CallerIdentity::System => Ok(MailActor { principal: Principal::System, label: "Hyperia".into(), pane: None, requester, parent: None }),
         CallerIdentity::Agent { name, .. } => {
+            // Resolve before taking the session lock (it locks the agent list).
+            let parent = bridge.identity().session_parent(name).await.map(Principal::Agent);
             let (principal, pane) = {
                 let sessions = bridge.sessions().await;
-                store.bindings.mailbox_identity(
-                    &Principal::Agent(name.clone()), |pane| sessions.contains_key(pane),
-                ).map_err(mailbox_error)?
+                let active = |pane: &str| sessions.contains_key(pane);
+                let (principal, own_pane) = store.bindings
+                    .mailbox_identity(&Principal::Agent(name.clone()), active).map_err(mailbox_error)?;
+                // A child has no binding of its own; it inherits its parent's
+                // pane for pane-mailbox delegation while that pane is live.
+                let pane = match (own_pane, &parent) {
+                    (Some(pane), _) => Some(pane),
+                    (None, Some(parent)) => store.bindings.mailbox_identity(parent, active).map_err(mailbox_error)?.1,
+                    (None, None) => None,
+                };
+                (principal, pane)
             };
-            Ok(MailActor { principal, label: id.label(), pane, requester })
+            Ok(MailActor { principal, label: id.label(), pane, requester, parent })
         }
         CallerIdentity::Pane { pane, .. } => {
             // pane_display_name also locks the session table. Drop this guard
@@ -86,7 +111,7 @@ pub async fn actor_from_identity(bridge: &Bridge, id: &CallerIdentity) -> Result
                 ).map_err(mailbox_error)?
             };
             let label = bridge.pane_display_name(pane).await.unwrap_or_else(|| pane.clone());
-            Ok(MailActor { principal, label, pane: Some(pane.clone()), requester })
+            Ok(MailActor { principal, label, pane: Some(pane.clone()), requester, parent: None })
         }
     }
 }
@@ -205,6 +230,10 @@ pub async fn store_approved(bridge: &Bridge, msg: &PreparedMessage) -> Result<St
     Ok(id)
 }
 
+/// Unread count for a pane's badge. Only registered agents are ever bound
+/// (a child's pane_bind binds its parent), so the principal here is never a
+/// child and needs no parent view; a child reading its parent's mail writes an
+/// `onBehalfOf` receipt, which clears the parent's count too.
 pub async fn unread_for_pane(bridge: &Bridge, pane: &str) -> Result<usize, ApiError> {
     let store = context()?;
     let (principal, _) = {
@@ -227,12 +256,12 @@ pub async fn inbox(
     let who = actor(&state.bridge, &headers).await?;
     let store = context()?;
     let unread = params.get("unread_only").is_some_and(|s| s == "1" || s == "true");
-    let results = mailbox::inbox(&store.messages, &store.reads, &who.principal, who.pane.as_deref(), unread, limit(&params))
+    let results = mailbox::inbox_as(&store.messages, &store.reads, &who.reader(), unread, limit(&params))
         .map_err(mailbox_error)?;
     if let Some(pane) = who.pane.as_deref() {
         state.bridge.clear_msg_notify_delivered(pane).await;
     }
-    Ok(Json(serde_json::json!({"ok": true, "me": who.label, "principal": who.principal.to_key(), "pane": who.pane, "binding_required": matches!(who.principal, Principal::Agent(_)) && who.pane.is_none(), "binding_hint": if matches!(who.principal, Principal::Agent(_)) && who.pane.is_none() { Some("Call pane_bind with your current pane ID; provide its credential or approve the association. Pane-addressed mail requires this verified binding.") } else { None }, "count": results.len(), "results": results})))
+    Ok(Json(serde_json::json!({"ok": true, "me": who.label, "principal": who.principal.to_key(), "pane": who.pane, "parent_mailbox": who.parent.as_ref().map(Principal::to_key), "binding_required": matches!(who.principal, Principal::Agent(_)) && who.pane.is_none(), "binding_hint": if matches!(who.principal, Principal::Agent(_)) && who.pane.is_none() { Some("Call pane_bind with your current pane ID; provide its credential or approve the association. Pane-addressed mail requires this verified binding.") } else { None }, "count": results.len(), "results": results})))
 }
 
 pub async fn search(
@@ -245,7 +274,7 @@ pub async fn search(
         Some("received") => mailbox::SearchScope::Received,
         _ => mailbox::SearchScope::All,
     };
-    let results = mailbox::search(&store.messages, &store.reads, &who.principal, who.pane.as_deref(),
+    let results = mailbox::search_as(&store.messages, &store.reads, &who.reader(),
         scope, params.get("q").map(String::as_str), limit(&params)).map_err(mailbox_error)?;
     Ok(Json(serde_json::json!({"ok": true, "me": who.label, "count": results.len(), "results": results})))
 }
@@ -258,7 +287,7 @@ pub async fn read(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let who = actor(&state.bridge, &headers).await?;
     let store = context()?;
-    let receipt = mailbox::acknowledge_message(&store.reads, &store.messages, &req.id, &who.principal, who.pane.as_deref())
+    let receipt = mailbox::acknowledge_as(&store.reads, &store.messages, &req.id, &who.reader())
         .map_err(mailbox_error)?;
     Ok(Json(serde_json::json!({"ok": true, "receipt": receipt})))
 }
@@ -274,23 +303,33 @@ pub async fn check(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let who = actor(&state.bridge, &headers).await?;
     let store = context()?;
-    let results = mailbox::check_inbox_with_ack(&store.messages, &store.reads, &who.principal, who.pane.as_deref(),
+    let results = mailbox::check_inbox_as(&store.messages, &store.reads, &who.reader(),
         req.limit.unwrap_or(100).clamp(1, 2000), req.ack_ids.as_deref()).map_err(mailbox_error)?;
     if let Some(pane) = who.pane.as_deref() {
         state.bridge.clear_msg_notify_delivered(pane).await;
     }
-    Ok(Json(serde_json::json!({"ok": true, "me": who.label, "principal": who.principal.to_key(), "pane": who.pane, "binding_required": matches!(who.principal, Principal::Agent(_)) && who.pane.is_none(), "binding_hint": if matches!(who.principal, Principal::Agent(_)) && who.pane.is_none() { Some("Call pane_bind with your current pane ID; provide its credential or approve the association. Pane-addressed mail requires this verified binding.") } else { None }, "count": results.len(), "results": results})))
+    Ok(Json(serde_json::json!({"ok": true, "me": who.label, "principal": who.principal.to_key(), "pane": who.pane, "parent_mailbox": who.parent.as_ref().map(Principal::to_key), "binding_required": matches!(who.principal, Principal::Agent(_)) && who.pane.is_none(), "binding_hint": if matches!(who.principal, Principal::Agent(_)) && who.pane.is_none() { Some("Call pane_bind with your current pane ID; provide its credential or approve the association. Pane-addressed mail requires this verified binding.") } else { None }, "count": results.len(), "results": results})))
 }
 
 pub async fn approve_binding(bridge: &Bridge, req: &crate::perms::PermRequest) -> Result<(), ApiError> {
+    approve_binding_in(bridge, context()?, req).await
+}
+
+/// `approve_binding` against an explicit mail store (tests use fixtures).
+pub(crate) async fn approve_binding_in(bridge: &Bridge, store: &MailContext, req: &crate::perms::PermRequest) -> Result<(), ApiError> {
     let name = req.action.strip_prefix("bind:").ok_or_else(|| error(StatusCode::BAD_REQUEST, "Not a binding request."))?;
-    let requester_key = format!("agent:{name}");
+    // The requester is the agent itself or, for pane_bind from a per-session
+    // MCP child, one of that agent's live children.
+    let requester_ok = req.requester == format!("agent:{name}") || match req.requester.strip_prefix("agent:") {
+        Some(child) => bridge.identity().session_parent(child).await.as_deref() == Some(name),
+        None => false,
+    };
     let pane_is_active = bridge.sessions().await.contains_key(&req.target_pane);
-    if req.requester != requester_key || !pane_is_active
+    if !requester_ok || !pane_is_active
         || !bridge.identity().list().await.iter().any(|agent| agent.name == name) {
         return Err(error(StatusCode::CONFLICT, "Binding target or requester changed; submit a new binding request."));
     }
-    context()?.bindings.verify_and_bind(name, &req.target_pane, ProofOfResidency::System, |_, _| false)
+    store.bindings.verify_and_bind(name, &req.target_pane, ProofOfResidency::System, |_, _| false)
         .map_err(mailbox_error)?;
     bridge.arm_msg_notify(&req.target_pane).await;
     Ok(())
@@ -307,39 +346,60 @@ pub async fn bind(
     State(state): State<AppState>, headers: HeaderMap, Json(req): Json<BindRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let caller = state.bridge.resolve_caller(crate::bearer_token(&headers).as_deref()).await;
-    let name = match &caller {
-        CallerIdentity::System => req.agent.as_deref().ok_or_else(|| error(StatusCode::BAD_REQUEST, "Agent is required."))?,
-        CallerIdentity::Agent { name, .. } if req.agent.as_deref().is_none_or(|s| s == name) => name,
-        CallerIdentity::Anonymous => return Err(error(StatusCode::UNAUTHORIZED, "Authentication required.")),
-        _ => return Err(error(StatusCode::FORBIDDEN, "Only the agent itself or Hyperia can establish this binding.")),
-    };
-    let pane_is_active = state.bridge.sessions().await.contains_key(&req.pane);
+    if caller.is_anonymous() { return Err(error(StatusCode::UNAUTHORIZED, "Authentication required.")); }
+    bind_in(&state.bridge, context()?, &caller, req).await
+}
+
+/// Which registered agent a bind from `caller` targets, and the child session
+/// it came from. A per-session MCP child (`mcp-session/…`) is not a registered
+/// agent and has no binding of its own: pane_bind from it binds its PARENT,
+/// under the same residency and active-pane checks.
+async fn bind_target(bridge: &Bridge, caller: &CallerIdentity, requested: Option<&str>) -> Result<(String, Option<String>), ApiError> {
+    let forbidden = || error(StatusCode::FORBIDDEN, "Only the agent itself or Hyperia can establish this binding.");
+    match caller {
+        CallerIdentity::System => Ok((requested.ok_or_else(|| error(StatusCode::BAD_REQUEST, "Agent is required."))?.to_owned(), None)),
+        CallerIdentity::Agent { name, .. } => match bridge.identity().session_parent(name).await {
+            Some(parent) if requested.is_none_or(|s| s == name || s == parent) => Ok((parent, Some(name.clone()))),
+            None if requested.is_none_or(|s| s == name) => Ok((name.clone(), None)),
+            _ => Err(forbidden()),
+        },
+        CallerIdentity::Anonymous => Err(error(StatusCode::UNAUTHORIZED, "Authentication required.")),
+        CallerIdentity::Pane { .. } => Err(forbidden()),
+    }
+}
+
+/// `bind` against an explicit mail store (tests use fixtures).
+pub(crate) async fn bind_in(
+    bridge: &Bridge, store: &MailContext, caller: &CallerIdentity, req: BindRequest,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (agent, session) = bind_target(bridge, caller, req.agent.as_deref()).await?;
+    let name = agent.as_str();
+    let pane_is_active = bridge.sessions().await.contains_key(&req.pane);
     if !pane_is_active
-        || !state.bridge.identity().list().await.iter().any(|a| a.name == name) {
+        || !bridge.identity().list().await.iter().any(|a| a.name == name) {
         return Err(error(StatusCode::NOT_FOUND, "Active pane and registered agent are required."));
     }
     let token = req.pane_token.as_deref().unwrap_or("");
-    let verified = !token.is_empty() && state.bridge.perms().pane_for_token(token).await.as_deref() == Some(&req.pane);
+    let verified = !token.is_empty() && bridge.perms().pane_for_token(token).await.as_deref() == Some(&req.pane);
     if !caller.is_system() && !verified {
         if req.pane_token.is_some() {
             return Err(error(StatusCode::FORBIDDEN, "The pane credential is invalid."));
         }
-        let store = context()?;
         if store.bindings.pane_for_agent(name).as_deref() == Some(&req.pane) {
-            return Ok(Json(serde_json::json!({"ok": true, "agent": name, "pane": req.pane, "state": "bound"})));
+            return Ok(Json(serde_json::json!({"ok": true, "agent": name, "session": session, "pane": req.pane, "state": "bound"})));
         }
         let action = format!("bind:{name}");
         let requester_key = caller.principal_key();
-        if state.bridge.perms().recently_denied(&requester_key, &action).await {
+        if bridge.perms().recently_denied(&requester_key, &action).await {
             return Err(error(StatusCode::FORBIDDEN, "Mailbox binding was denied."));
         }
-        let pending = match state.bridge.perms().pending_action_for(&requester_key, &action).await {
+        let pending = match bridge.perms().pending_action_for(&requester_key, &action).await {
             Some(pending) if pending.target_pane == req.pane => pending,
             Some(_) => return Err(error(StatusCode::CONFLICT, "Another binding request is pending for this identity.")),
             None => {
-                let pending = state.bridge.perms().create_request(&requester_key, "", &req.pane, &action,
+                let pending = bridge.perms().create_request(&requester_key, "", &req.pane, &action,
                     "Associate this authenticated agent's inbox with the addressed pane.").await;
-                state.bridge.notify(serde_json::json!({
+                bridge.notify(serde_json::json!({
                     "type": "PermissionRequest", "id": pending.id, "requester": pending.requester,
                     "requesterName": name, "requesterPane": "", "targetPane": req.pane,
                     "action": action, "purpose": pending.purpose,
@@ -347,13 +407,13 @@ pub async fn bind(
                 pending
             }
         };
-        return Ok(Json(serde_json::json!({"ok": true, "state": "awaiting_approval", "request_id": pending.id,
+        return Ok(Json(serde_json::json!({"ok": true, "agent": name, "session": session, "state": "awaiting_approval", "request_id": pending.id,
             "message": "Mailbox binding is awaiting approval. Approval applies the stored binding request automatically."})));
     }
     let proof = if caller.is_system() { ProofOfResidency::System } else { ProofOfResidency::PaneToken(token) };
-    let binding = context()?.bindings.verify_and_bind(name, &req.pane, proof, |_, _| verified).map_err(mailbox_error)?;
-    state.bridge.arm_msg_notify(&req.pane).await;
-    Ok(Json(serde_json::json!({"ok": true, "binding": binding})))
+    let binding = store.bindings.verify_and_bind(name, &req.pane, proof, |_, _| verified).map_err(mailbox_error)?;
+    bridge.arm_msg_notify(&req.pane).await;
+    Ok(Json(serde_json::json!({"ok": true, "agent": name, "session": session, "binding": binding})))
 }
 
 #[cfg(test)]

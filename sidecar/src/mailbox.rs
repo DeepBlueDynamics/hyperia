@@ -203,6 +203,66 @@ pub struct ReadReceipt {
     #[serde(default, rename = "reader")]
     pub reader_label: String,
     pub ts: u64,
+    /// Set when a per-session child read mail addressed to its parent agent:
+    /// the receipt stays keyed to the child (`readerPrincipal`) so each sibling
+    /// session sees that mail once, and this names the parent it was read for.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "onBehalfOf")]
+    pub on_behalf_of: Option<String>,
+}
+
+/// Who is reading a mailbox.
+///
+/// `parent` is set for a per-session MCP child (`agent:mcp-session/…`): the
+/// child sees its own mail plus mail addressed to its parent agent. Mail
+/// addressed directly to a child stays private to that child. Parent mail is
+/// read-tracked per child, so every sibling session sees it once.
+#[derive(Clone, Copy, Debug)]
+pub struct Reader<'a> {
+    pub principal: &'a Principal,
+    pub pane: Option<&'a str>,
+    pub parent: Option<&'a Principal>,
+}
+
+impl<'a> Reader<'a> {
+    pub fn new(principal: &'a Principal, pane: Option<&'a str>) -> Self {
+        Self { principal, pane, parent: None }
+    }
+    pub fn with_parent(mut self, parent: Option<&'a Principal>) -> Self {
+        self.parent = parent;
+        self
+    }
+}
+
+/// How a message reached a reader.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Via {
+    /// Addressed to the reader, its delegated pane, or a legacy label.
+    Own,
+    /// Addressed to the reader's parent agent.
+    Parent,
+}
+
+fn recipient_via(msg: &serde_json::Value, reader: &Reader) -> Option<Via> {
+    if matches_recipient(msg, reader.principal, reader.pane) {
+        return Some(Via::Own);
+    }
+    let parent = reader.parent?;
+    let to = msg["toPrincipal"].as_str().filter(|s| !s.is_empty())?;
+    (to == parent.to_key()).then_some(Via::Parent)
+}
+
+/// Read state as this reader sees it: own mail uses the canonical recipient's
+/// receipt; parent mail uses the reader's own receipt.
+fn is_read_by(reads_content: &str, msg: &serde_json::Value, via: Via, reader: &Reader) -> bool {
+    match via {
+        Via::Own => is_message_read(reads_content, msg),
+        Via::Parent => {
+            let (Some(id), key) = (msg["id"].as_str(), reader.principal.to_key()) else { return false };
+            reads_content.lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .any(|v| v["msgId"].as_str() == Some(id) && v["readerPrincipal"].as_str() == Some(&key))
+        }
+    }
 }
 
 /// Proof of residency presented to bind an agent to a pane.
@@ -624,6 +684,10 @@ pub fn is_message_read(reads_content: &str, msg: &serde_json::Value) -> bool {
                     if v["readerPrincipal"].as_str() == Some(target_p) {
                         return true;
                     }
+                    // A child session read it for this (parent) recipient.
+                    if v["onBehalfOf"].as_str() == Some(target_p) {
+                        return true;
+                    }
                     // NEVER fall through to legacy reader label for canonical messages!
                 } else {
                     // Legacy message (no toPrincipal):
@@ -675,15 +739,25 @@ pub fn inbox(
     unread_only: bool,
     limit: usize,
 ) -> Result<Vec<MessageEnvelope>, MailboxError> {
+    inbox_as(messages_path, reads_path, &Reader::new(caller, caller_pane), unread_only, limit)
+}
+
+/// `inbox` for a reader that may also inherit its parent agent's mailbox.
+pub fn inbox_as(
+    messages_path: &Path,
+    reads_path: &Path,
+    reader: &Reader,
+    unread_only: bool,
+    limit: usize,
+) -> Result<Vec<MessageEnvelope>, MailboxError> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    inbox_locked(messages_path, reads_path, caller, caller_pane, unread_only, limit)
+    inbox_locked(messages_path, reads_path, reader, unread_only, limit)
 }
 
 fn inbox_locked(
     messages_path: &Path,
     reads_path: &Path,
-    caller: &Principal,
-    caller_pane: Option<&str>,
+    reader: &Reader,
     unread_only: bool,
     limit: usize,
 ) -> Result<Vec<MessageEnvelope>, MailboxError> {
@@ -708,10 +782,10 @@ fn inbox_locked(
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if !matches_recipient(&v, caller, caller_pane) {
+        let Some(via) = recipient_via(&v, reader) else {
             continue;
-        }
-        let read = is_message_read(&reads_content, &v);
+        };
+        let read = is_read_by(&reads_content, &v, via, reader);
         if unread_only && read {
             continue;
         }
@@ -741,15 +815,27 @@ pub fn search(
     q: Option<&str>,
     limit: usize,
 ) -> Result<Vec<MessageEnvelope>, MailboxError> {
+    search_as(messages_path, reads_path, &Reader::new(caller, caller_pane), scope, q, limit)
+}
+
+/// `search` for a reader that may also inherit its parent agent's mailbox.
+/// "Sent" stays the reader's own: a child never searches its parent's outbox.
+pub fn search_as(
+    messages_path: &Path,
+    reads_path: &Path,
+    reader: &Reader,
+    scope: SearchScope,
+    q: Option<&str>,
+    limit: usize,
+) -> Result<Vec<MessageEnvelope>, MailboxError> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    search_locked(messages_path, reads_path, caller, caller_pane, scope, q, limit)
+    search_locked(messages_path, reads_path, reader, scope, q, limit)
 }
 
 fn search_locked(
     messages_path: &Path,
     reads_path: &Path,
-    caller: &Principal,
-    caller_pane: Option<&str>,
+    reader: &Reader,
     scope: SearchScope,
     q: Option<&str>,
     limit: usize,
@@ -781,8 +867,9 @@ fn search_locked(
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        let is_recv = matches_recipient(&v, caller, caller_pane);
-        let is_sent = matches_sender(&v, caller, caller_pane);
+        let via = recipient_via(&v, reader);
+        let is_recv = via.is_some();
+        let is_sent = matches_sender(&v, reader.principal, reader.pane);
         let matched = match scope {
             SearchScope::Received => is_recv,
             SearchScope::Sent => is_sent,
@@ -791,7 +878,10 @@ fn search_locked(
         if !matched {
             continue;
         }
-        let read = is_message_read(&reads_content, &v);
+        let read = match via {
+            Some(via) => is_read_by(&reads_content, &v, via, reader),
+            None => is_message_read(&reads_content, &v),
+        };
         let mut envelope: MessageEnvelope = serde_json::from_value(v)?;
         envelope = normalize_envelope(envelope);
         envelope.read = read;
@@ -813,16 +903,26 @@ pub fn acknowledge_message(
     caller: &Principal,
     caller_pane: Option<&str>,
 ) -> Result<ReadReceipt, MailboxError> {
+    acknowledge_as(reads_path, messages_path, msg_id, &Reader::new(caller, caller_pane))
+}
+
+/// `acknowledge_message` for a reader that may also inherit its parent's mail.
+/// Parent mail is receipted under the reader (with `onBehalfOf` = the parent).
+pub fn acknowledge_as(
+    reads_path: &Path,
+    messages_path: &Path,
+    msg_id: &str,
+    reader: &Reader,
+) -> Result<ReadReceipt, MailboxError> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    acknowledge_message_locked(reads_path, messages_path, msg_id, caller, caller_pane)
+    acknowledge_message_locked(reads_path, messages_path, msg_id, reader)
 }
 
 fn acknowledge_message_locked(
     reads_path: &Path,
     messages_path: &Path,
     msg_id: &str,
-    caller: &Principal,
-    caller_pane: Option<&str>,
+    reader: &Reader,
 ) -> Result<ReadReceipt, MailboxError> {
     let msg_id = msg_id.trim();
     if msg_id.is_empty() {
@@ -845,36 +945,36 @@ fn acknowledge_message_locked(
 
     let msg = target_msg.ok_or_else(|| MailboxError::NotFound(format!("message '{msg_id}' not found")))?;
 
-    if !matches_recipient(&msg, caller, caller_pane) {
+    let caller_key = reader.principal.to_key();
+    let Some(via) = recipient_via(&msg, reader) else {
         return Err(MailboxError::Forbidden(format!(
-            "caller '{}' is not the recipient of message '{msg_id}'",
-            caller.to_key()
+            "caller '{caller_key}' is not the recipient of message '{msg_id}'"
         )));
-    }
+    };
 
-    // Determine canonical recipient key for this message
-    let caller_key = caller.to_key();
-    let canonical_to = msg
-        .get("toPrincipal")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&caller_key);
+    // Own mail is receipted under its canonical recipient. Parent mail is
+    // receipted under the reading child so each sibling session sees it once.
+    let to_principal = msg.get("toPrincipal").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+    let (reader_key, on_behalf_of) = match via {
+        Via::Own => (to_principal.unwrap_or(&caller_key).to_string(), None),
+        Via::Parent => (caller_key.clone(), to_principal.map(str::to_string)),
+    };
 
     if reads_path.exists() {
         let reads_content = std::fs::read_to_string(reads_path)?;
         for line in reads_content.lines() {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                if v["msgId"].as_str() == Some(msg_id) {
-                    if v["readerPrincipal"].as_str() == Some(canonical_to)
-                        || v["readerPrincipal"].as_str() == Some(&caller_key)
-                    {
-                        return Ok(ReadReceipt {
-                            msg_id: msg_id.to_string(),
-                            reader_principal: canonical_to.to_string(),
-                            reader_label: v["reader"].as_str().unwrap_or("").to_string(),
-                            ts: v["ts"].as_u64().unwrap_or(0),
-                        });
-                    }
+                if v["msgId"].as_str() == Some(msg_id)
+                    && (v["readerPrincipal"].as_str() == Some(&reader_key)
+                        || (via == Via::Own && v["readerPrincipal"].as_str() == Some(&caller_key)))
+                {
+                    return Ok(ReadReceipt {
+                        msg_id: msg_id.to_string(),
+                        reader_principal: reader_key,
+                        reader_label: v["reader"].as_str().unwrap_or("").to_string(),
+                        ts: v["ts"].as_u64().unwrap_or(0),
+                        on_behalf_of,
+                    });
                 }
             }
         }
@@ -883,9 +983,10 @@ fn acknowledge_message_locked(
     let ts = now_ms();
     let receipt = ReadReceipt {
         msg_id: msg_id.to_string(),
-        reader_principal: canonical_to.to_string(),
-        reader_label: caller_key.clone(),
+        reader_principal: reader_key,
+        reader_label: caller_key,
         ts,
+        on_behalf_of,
     };
     let serialized = serde_json::to_string(&receipt)?;
     append_line(reads_path, &serialized)?;
@@ -914,6 +1015,17 @@ pub fn check_inbox_with_ack(
     reads_path: &Path,
     caller: &Principal,
     caller_pane: Option<&str>,
+    limit: usize,
+    ack_ids: Option<&[String]>,
+) -> Result<Vec<MessageEnvelope>, MailboxError> {
+    check_inbox_as(messages_path, reads_path, &Reader::new(caller, caller_pane), limit, ack_ids)
+}
+
+/// `check_inbox_with_ack` for a reader that may also inherit its parent's mail.
+pub fn check_inbox_as(
+    messages_path: &Path,
+    reads_path: &Path,
+    reader: &Reader,
     limit: usize,
     ack_ids: Option<&[String]>,
 ) -> Result<Vec<MessageEnvelope>, MailboxError> {
@@ -948,19 +1060,19 @@ pub fn check_inbox_with_ack(
             for id in &confirmed {
                 let message = by_id.get(*id)
                     .ok_or_else(|| MailboxError::NotFound(format!("message '{id}' not found")))?;
-                if !matches_recipient(message, caller, caller_pane) {
+                if recipient_via(message, reader).is_none() {
                     return Err(MailboxError::Forbidden(format!("caller is not the recipient of message '{id}'")));
                 }
             }
             for id in confirmed {
-                acknowledge_message_locked(reads_path, messages_path, id, caller, caller_pane)?;
+                acknowledge_message_locked(reads_path, messages_path, id, reader)?;
             }
         }
-        return inbox_locked(messages_path, reads_path, caller, caller_pane, true, limit);
+        return inbox_locked(messages_path, reads_path, reader, true, limit);
     }
-    let mut unread_messages = inbox_locked(messages_path, reads_path, caller, caller_pane, true, limit)?;
+    let mut unread_messages = inbox_locked(messages_path, reads_path, reader, true, limit)?;
     for msg in &mut unread_messages {
-        let _ = acknowledge_message_locked(reads_path, messages_path, &msg.id, caller, caller_pane)?;
+        let _ = acknowledge_message_locked(reads_path, messages_path, &msg.id, reader)?;
         msg.read = true;
     }
     Ok(unread_messages)

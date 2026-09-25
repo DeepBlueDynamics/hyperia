@@ -428,9 +428,13 @@ async fn handle(State(state): State<HttpState>, mut request: Request<Body>) -> R
     let token = crate::bearer_token(request.headers());
     // Only original credentials can initialize or resume; internal child
     // credentials cannot mint descendants or impersonate their parent.
+    let mut single_session = false;
     let owner = match token.as_deref() {
         Some(token) => match state.bridge.identity().resolve(token).await {
-            Some(parent) => Some((parent.name, false)),
+            Some(parent) => {
+                single_session = parent.is_single_session();
+                Some((parent.name, false))
+            }
             None => state.bridge.perms().pane_for_token(token).await.map(|pane| (pane, true)),
         },
         None => None,
@@ -468,7 +472,11 @@ async fn handle(State(state): State<HttpState>, mut request: Request<Body>) -> R
         lease = state.bridge.identity().sessions.lease_token(&record.forward_token);
         if lease.is_none() { return failure(StatusCode::UNAUTHORIZED, "MCP session revoked or expired"); }
         request.extensions_mut().insert(ForwardAuth(record.forward_token));
-    } else if request.method() == Method::POST && owner.is_some() {
+    } else if request.method() == Method::POST && owner.is_some() && !single_session {
+        // A single-session agent (one agent, one client) skips this branch:
+        // its initialize mints no child and returns no session header, so
+        // every connection, including a reconnect, runs as the agent itself.
+        // Children it minted before opting in still resume above.
         let (parts, body) = request.into_parts();
         let bytes = match to_bytes(body, MAX_REQUEST_BYTES).await {
             Ok(bytes) => bytes,
@@ -545,7 +553,8 @@ async fn whoami(State(state): State<HttpState>, headers: HeaderMap) -> Response 
         "parent": session.as_ref().map(|s| format!("{}:{}", if s.parent_is_pane { "pane" } else { "agent" }, s.parent)),
         "session_id": session.as_ref().map(|s| &s.session_id),
         "legacy": session.is_none(), "pane": pane,
-        "parent_mailbox_rule": "Bare parent labels address a separate parent mailbox; children do not consume it."
+        "parent_mailbox": actor.as_ref().and_then(|a| a.parent.as_ref()).map(|p| p.to_key()),
+        "parent_mailbox_rule": "A child session also reads mail addressed to its parent agent (read-tracked per session, so each sibling sees it once); mail addressed to a child stays private to it. Sends go out as the child."
     })).into_response()
 }
 
