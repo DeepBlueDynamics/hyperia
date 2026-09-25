@@ -221,6 +221,11 @@ async function consentFetch(event: Electron.IpcMainInvokeEvent, apiPath: string,
   return response.json();
 }
 ipcMain.handle('consent:respond', (event, body) => consentFetch(event, '/api/perms/respond', body));
+// Live pending-request ids, so the window can drop prompts the sidecar no longer holds.
+ipcMain.handle('consent:pending', async (event) => {
+  const state = (await consentFetch(event, '/api/perms/state')) as {pending?: {id?: string}[]};
+  return (state?.pending || []).map((p) => p.id).filter((id): id is string => typeof id === 'string');
+});
 ipcMain.handle('consent:pane-token', (event, pane: string) => {
   if (typeof pane !== 'string' || !pane) throw new Error('Pane is required.');
   return consentFetch(event, `/api/perms/token?pane=${encodeURIComponent(pane)}`);
