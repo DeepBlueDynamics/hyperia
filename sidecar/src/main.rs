@@ -367,11 +367,7 @@ async fn post_tts(
     headers: HeaderMap,
     Json(req): Json<TtsRequest>,
 ) -> Json<serde_json::Value> {
-    let voice = req
-        .voice
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty());
+    let voice = req.voice.as_deref();
 
     // Caller's spokenable callsign — resolved from the request identity (mirrors
     // maybe_attribute): a pane's friendly codename, or an external agent's name.
@@ -380,7 +376,26 @@ async fn post_tts(
         identity::CallerIdentity::Pane { pane, .. } => {
             state.bridge.pane_display_name(pane).await.unwrap_or_default()
         }
-        identity::CallerIdentity::Agent { name, .. } => name.clone(),
+        identity::CallerIdentity::Agent { name, .. } => {
+            // Binding comes from authenticated residency, never request JSON.
+            // Do not hold a session-table guard across pane_display_name.
+            let store = match messaging::context() {
+                Ok(store) => store,
+                Err((_, error)) => return error,
+            };
+            // A per-session child (`mcp-session/<id>`) speaks as its PARENT
+            // agent's pane: the binding lives on the parent, and hashing the
+            // pane name (not the per-session label) keeps one voice per pane.
+            let parent = state.bridge.identity().sessions.by_name(name)
+                .filter(|s| !s.parent_is_pane).map(|s| s.parent);
+            let agent = parent.as_deref().unwrap_or(name);
+            let pane = store.bindings.pane_for_agent(agent).or_else(|| store.bindings.pane_for_agent(name));
+            let fallback = || tts::agent_callsign(&id.label());
+            match pane {
+                Some(pane) => state.bridge.pane_display_name(&pane).await.unwrap_or_else(fallback),
+                None => fallback(),
+            }
+        },
         _ => String::new(),
     };
     let caller = match tts::spokenable_name(&caller_raw) {
@@ -403,15 +418,16 @@ async fn post_tts(
     } else {
         tts::radio_wrap(&recipient, &caller, &req.text)
     };
-    match tts::speak(&spoken, voice, req.speed).await {
+    let requester = (!caller_raw.is_empty()).then_some(caller_raw.as_str());
+    match tts::speak(&spoken, voice, req.speed, requester).await {
         // `spoken` echoes the EXACT transcript delivered to the user (frame
         // included) so callers can see the wrapper already carries the
         // callsigns + "Over and out" and don't add their own radio phrases.
-        Ok(secs) => {
+        Ok(result) => {
             dashboard::mark_tts_spoke();
             Json(serde_json::json!({
-                "ok": true, "duration_secs": secs, "caller": caller, "recipient": recipient,
-                "spoken": spoken
+                "ok": true, "duration_secs": result.duration_secs, "caller": caller, "recipient": recipient,
+                "spoken": spoken, "voice": result.voice, "engine": result.engine
             }))
         }
         Err(e) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
