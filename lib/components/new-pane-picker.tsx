@@ -2,7 +2,7 @@ import React from 'react';
 
 import rpc from '../rpc';
 import {isPowerShell, pickNativeShell, profileFitsPlatform as fitsPlatform} from '../utils/native-shell';
-import {LS_LAST_SHELL, resolvePickerShell} from '../utils/picker-shell';
+import {LS_LAST_SHELL, reportLastUsedShell, resolvePickerShell} from '../utils/picker-shell';
 
 import UrlPicker from './url-picker';
 
@@ -888,6 +888,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
   private launchShell = (name: string) => {
     this.setState({lastUsedShell: name});
     writeStoredDefault(LS_DEFAULT_SHELL, name);
+    reportLastUsedShell(name);
     this.newWithProfile(name);
   };
 

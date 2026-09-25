@@ -14,6 +14,17 @@ export function readLastUsedShell(): string | undefined {
   }
 }
 
+/** Tell the main process, so its own fallbacks (getDefaultProfile) agree. */
+export function reportLastUsedShell(name: string | undefined): void {
+  if (!name) return;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('electron').ipcRenderer.send('last-used-shell', name);
+  } catch {
+    /* not in Electron (tests) */
+  }
+}
+
 /** Pick from `shells` (profile names, in display order): last-used → default → first. */
 export function resolvePickerShell(
   shells: string[],

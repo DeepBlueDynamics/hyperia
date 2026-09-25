@@ -1984,8 +1984,13 @@ export default class Term extends React.PureComponent<
     if (!commandLine) return;
 
     const profiles = (this.props as any).profiles || [];
-    const defaultProfileName = (this.props as any).defaultProfile;
-    const defaultProfile = profiles.find((p: any) => p.name === defaultProfileName) || profiles[0];
+    // Same shell the picker shows (last-used → configured default → first).
+    const shownShell = resolvePickerShell(
+      pickerShellProfiles(profiles).map((p: any) => p.name as string),
+      readLastUsedShell(),
+      (this.props as any).defaultProfile || undefined
+    );
+    const defaultProfile = profiles.find((p: any) => p.name === shownShell) || profiles[0];
 
     const shellBin = defaultProfile?.config?.shell || (process.platform === 'win32' ? 'cmd.exe' : '/bin/bash');
     const shellLower = shellBin.toLowerCase();
