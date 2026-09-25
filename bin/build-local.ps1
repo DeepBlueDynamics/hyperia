@@ -305,10 +305,17 @@ function checkAssets(dir = '') {
 }
 checkAssets();
 if (!files.has('index.js')) throw Error('Packaged main entry missing');
+// Every runtime dependency must be inside the package. A build whose
+// app/node_modules is a junction/symlink (e.g. run from a git worktree) packs
+// ZERO modules, and the app dies at launch ("Cannot find module
+// 'electron-is-dev'") while the asset check above still passes.
+const deps = Object.keys(packaged.dependencies || {});
+const missingDeps = deps.filter(d => !files.has('node_modules/' + d + '/package.json'));
+if (missingDeps.length) throw Error('Packaged dependencies missing (' + missingDeps.length + '/' + deps.length + '): ' + missingDeps.slice(0, 10).join(', '));
 const hash = p => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 if (hash('sidecar/target/release/hyperia-sidecar.exe') !==
     hash('dist/win-unpacked/resources/sidecar/hyperia-sidecar.exe')) throw Error('Packaged sidecar mismatch');
-console.log('PACKAGE VERIFIED: v' + expected + ', ' + count + ' app assets, matching sidecar.');
+console.log('PACKAGE VERIFIED: v' + expected + ', ' + count + ' app assets, ' + deps.length + ' runtime deps, matching sidecar.');
 '@
         Invoke-Checked node @('-e', $verifyPackage, $Number)
         Assert-BuildSource $buildSha
