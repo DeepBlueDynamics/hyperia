@@ -1,20 +1,40 @@
-# Hyperia v0.20.12 — install runs in a real shell 🐚
+# Hyperia v0.20.20 — every agent gets its own voice 🐙
 
-A small follow-up to v0.20.11: the install and update **run** buttons in the new-pane picker now open a plain shell instead of whatever your default profile happens to be.
+Spoken summaries got a rebuild, web panes got a Stop button, and a batch of agent-plumbing fixes make the swarm quieter and more reliable.
 
-## Install and update open the right shell
+## A voice for every pane
 
-The picker's **run** button (for the Hyperia update line and the agent installers) opens a new pane with the command typed in, waiting for you to press Enter. It used to open your *default* profile. If that was a custom shell, say one that launches Claude, the install command went into Claude instead of a shell.
+Text-to-speech is rewritten in Rust on top of the Kokoro model: no Python, no espeak. Pronunciation comes from the misaki 0.9.4 dictionaries, downloaded once on first use. Every English voice is available.
 
-Now **run** always opens your system's own shell, picked from the shells Hyperia already detected. Nothing is hardcoded:
+Each agent now speaks in its own voice. The pane's name is hashed into a blend of voices, so two agents never sound alike, and the same pane always sounds the same. An agent signs off with its pane name as its callsign and ends with "Over and out." Agents running several sessions speak as the pane they live in.
 
-- **Windows:** the newest PowerShell 7 (`pwsh`) Hyperia finds, whether it's installed under Program Files, as a 32-bit install, or from the Store or winget. Without one it falls back to Windows PowerShell, then cmd.
-- **macOS / Linux:** your login shell, then zsh, then bash.
+## Web panes: Stop, and a Back that works
 
-Custom shells and agents are never picked. In PowerShell, the update command is now plain `irm https://hyperia.nuts.services/install.ps1 | iex` rather than the `powershell -c "…"` wrapper, which forced Windows PowerShell 5.1.
+- A **Stop** button (and **Esc**) halts a page that's stuck loading. It turns back into Reload when the page is done.
+- **Back** and **Forward** stop the current load first, so going back from a slow page is instant.
+- The spinner follows the page itself, not ads and embedded frames that never finish, and no longer clears early while the next page is still starting.
+- Switching tabs no longer re-checks the page or flashes white.
 
-## No Windows shells on a Mac
+## Picker opens the shell it shows
 
-A config synced from a Windows machine can carry Windows-only shells such as `C:\…\pwsh.exe`. The custom-shell setup used to list them as base shells on macOS and Linux, and could even pick one as the default. It now offers only plain shells that exist on the current platform.
+The directory picker's **Go** button and new panes now launch the shell the pulldown shows: your last-used shell. Launching a shell no longer quietly changes your default profile.
 
-Coming from further back? [v0.20.11](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.20.11) is the big one: a directory picker that fits any pane, correctly sized terminals, two-level bells, and a separate identity for every agent session. [v0.20.2](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.20.2) gave agents a mailbox and made "Allow" actually run the approved action.
+The recent-directory chips have a **clear** button.
+
+## Consent prompts that clean up after themselves
+
+A permission prompt disappears as soon as its request is gone: answered elsewhere, expired, or its pane closed. Clicking a stale prompt no longer does nothing. Access, messaging and pane-binding prompts share one layout.
+
+## Agent messaging and identity
+
+- Agents using a pane token can check their mail again (a deadlock is fixed).
+- Delivery responses say what actually happened. Queued messages no longer claim to be "waiting for approval".
+- Container agents can register as a single session, and child sessions read their parent's mail.
+- Clearer notices when two agents claim the same pane, plus stable identity error codes.
+
+## Small fixes
+
+- **Ctrl+^** reaches the terminal, so nemesis8's detach key works.
+- Tests only listen on 127.0.0.1, which ends the Windows Firewall prompts during development.
+
+Coming from further back? [v0.20.12](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.20.12) made the picker's install buttons open a real shell, and [v0.20.11](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.20.11) brought the directory picker, correctly sized terminals and per-session agent identity.
