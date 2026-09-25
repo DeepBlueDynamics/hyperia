@@ -331,6 +331,25 @@ pub struct RequestTokenRequest {
     /// A unique registered identity name. Retrieving an existing identity requires its credential.
     /// Defaults to "external-agent".
     pub name: Option<String>,
+    /// Set true when this identity is used by exactly one MCP client (e.g. one
+    /// container = one agent). Connections then run as the identity itself
+    /// instead of minting a per-session child, keeping one mailbox and pane binding.
+    /// Once on, re-registering never turns it off.
+    pub single_session: Option<bool>,
+}
+
+impl RequestTokenRequest {
+    /// Body for POST /api/identity/agent. `single_session` is forwarded only
+    /// when the caller set it.
+    fn mint_body(&self) -> serde_json::Value {
+        let raw = self.name.as_deref().unwrap_or_default().trim();
+        let name = if raw.is_empty() { "external-agent" } else { raw };
+        let mut body = serde_json::json!({"name": name});
+        if let Some(single) = self.single_session {
+            body["single_session"] = serde_json::Value::Bool(single);
+        }
+        body
+    }
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -2096,7 +2115,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Show your authenticated identity, unique label, canonical mailbox address, parent and session ID. Bare parent labels have separate mailboxes: child sessions do not consume parent mail. No credentials are returned.")]
+    #[tool(description = "Show your authenticated identity, unique label, canonical mailbox address, parent and session ID. A child session also reads mail addressed to its parent agent (each session sees it once); mail addressed to a child stays private to it. Single-session agents run as themselves with no session ID. No credentials are returned.")]
     async fn whoami(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
         let result = self.get_as("/api/identity/whoami", forwarded_auth(&ctx).as_deref()).await?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
@@ -2265,9 +2284,8 @@ impl HyperiaMcp {
         Parameters(req): Parameters<RequestTokenRequest>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let raw = req.name.unwrap_or_default();
-        let name = if raw.trim().is_empty() { "external-agent".to_string() } else { raw.trim().to_string() };
-        let body = serde_json::json!({"name": name});
+        let body = req.mint_body();
+        let name = body["name"].as_str().unwrap_or_default().to_string();
         let resp = self.post_json_as("/api/identity/agent", &body, forwarded_auth(&ctx).as_deref()).await?;
         let token = serde_json::from_str::<serde_json::Value>(&resp)
             .ok()
@@ -4327,6 +4345,17 @@ pub fn streamable_http_service(
 #[cfg(test)]
 mod sticky_param_tests {
     use super::*;
+
+    #[test]
+    fn request_token_forwards_single_session_and_ignores_unknown_fields() {
+        let req: RequestTokenRequest = serde_json::from_value(serde_json::json!(
+            {"name": " nemesis8/n8-test-urchin ", "single_session": true, "field_from_the_future": 1})).unwrap();
+        assert_eq!(req.mint_body(), serde_json::json!({"name": "nemesis8/n8-test-urchin", "single_session": true}));
+        let req: RequestTokenRequest = serde_json::from_value(serde_json::json!({"single_session": false})).unwrap();
+        assert_eq!(req.mint_body(), serde_json::json!({"name": "external-agent", "single_session": false}));
+        let req: RequestTokenRequest = serde_json::from_value(serde_json::json!({"name": "older-client"})).unwrap();
+        assert_eq!(req.mint_body(), serde_json::json!({"name": "older-client"}));
+    }
 
     #[test]
     fn sticky_create_accepts_content_alias() {

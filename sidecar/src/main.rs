@@ -1384,7 +1384,10 @@ async fn post_identity_agent(State(state): State<AppState>, headers: HeaderMap, 
     let caller = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
     let may_retrieve = caller.is_system()
         || matches!(&caller, identity::CallerIdentity::Agent { name: own, .. } if own == &name);
-    let rec = match state.bridge.identity().register(&name, may_retrieve).await {
+    // Optional and unvalidated beyond its type: older clients omit it, and
+    // unknown fields are ignored so every n8 build can mint against any sidecar.
+    let single_session = p["single_session"].as_bool();
+    let rec = match state.bridge.identity().register_with(&name, may_retrieve, single_session).await {
         Ok(rec) => rec,
         // `code` is the stable, machine-readable reason (clients such as
         // nemesis8 retry with a new name on "identity_exists"); `error` stays prose.
@@ -1401,7 +1404,8 @@ async fn post_identity_agent(State(state): State<AppState>, headers: HeaderMap, 
     } else { None };
     (
         StatusCode::OK,
-        serde_json::json!({"name": rec.name, "token": rec.token, "createdMs": rec.created_ms, "binding": binding}).to_string(),
+        serde_json::json!({"name": rec.name, "token": rec.token, "createdMs": rec.created_ms,
+            "singleSession": rec.is_single_session(), "binding": binding}).to_string(),
     )
 }
 
@@ -2217,7 +2221,7 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
                 if let Ok(recipient) = msgbus::mailbox::Principal::parse(&operation.requester) {
                     let notice = messaging::PreparedMessage {
                         sender: messaging::MailActor { principal: msgbus::mailbox::Principal::System,
-                            label: "Hyperia".into(), pane: None, requester: "system".into() },
+                            label: "Hyperia".into(), pane: None, requester: "system".into(), parent: None },
                         recipient, recipient_label: req.requester.clone(),
                         target_pane: if req.requester_pane.is_empty() { None } else { Some(req.requester_pane.clone()) },
                         subject: "Delivery approval outcome".into(),
@@ -4722,6 +4726,59 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod identity_agent_tests {
+    use super::*;
+
+    fn state(agents: Vec<identity::AgentRecord>) -> (AppState, std::path::PathBuf) {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-fixtures")
+            .join(format!("identity-agent-{}-{}", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let bridge = Bridge::with_stores(identity::IdentityStore::for_tests(dir.join("sessions.json"), agents),
+            perms::PermStore::for_tests());
+        (AppState { bridge, log_buffer: logs::new_log_buffer(), telemetry: telemetry::TelemetryStore::new(),
+            render: render::RenderStore::new() }, dir)
+    }
+
+    #[tokio::test]
+    async fn mint_with_single_session_stores_the_flag_and_tolerates_unknown_fields() {
+        let (state, dir) = state(Vec::new());
+        let body = r#"{"name":"nemesis8/n8-test-urchin","single_session":true,"field_from_the_future":1}"#;
+        let (status, resp) = post_identity_agent(State(state.clone()), HeaderMap::new(), body.into()).await;
+        assert_eq!(status, StatusCode::OK, "{resp}");
+        let resp: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(resp["singleSession"], true);
+        let agents = state.bridge.identity().list().await;
+        assert!(agents.iter().any(|a| a.name == "nemesis8/n8-test-urchin" && a.single_session));
+
+        // An older client sends only the name: still mints, flag stays off.
+        let (status, resp) = post_identity_agent(State(state.clone()), HeaderMap::new(), r#"{"name":"plain"}"#.into()).await;
+        assert_eq!(status, StatusCode::OK, "{resp}");
+        let resp: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(resp["singleSession"], false);
+        assert!(state.bridge.identity().list().await.iter().any(|a| a.name == "plain" && !a.single_session));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn owner_reregistration_upgrades_to_single_session() {
+        let (state, dir) = state(vec![identity::AgentRecord {
+            token: "hyp_agent_test_owner".into(), name: "owner".into(), created_ms: 1, single_session: false,
+        }]);
+        let mut headers = HeaderMap::new();
+        headers.insert(axum::http::header::AUTHORIZATION, "Bearer hyp_agent_test_owner".parse().unwrap());
+        let (status, resp) = post_identity_agent(State(state.clone()), headers,
+            r#"{"name":"owner","single_session":true}"#.into()).await;
+        assert_eq!(status, StatusCode::OK, "{resp}");
+        assert!(state.bridge.identity().list().await.iter().any(|a| a.name == "owner" && a.single_session));
+        // A stranger presenting no credential cannot touch the record.
+        let (status, _) = post_identity_agent(State(state.clone()), HeaderMap::new(),
+            r#"{"name":"owner","single_session":false}"#.into()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 #[cfg(test)]
