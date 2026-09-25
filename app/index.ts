@@ -110,6 +110,7 @@ import parseUrl from 'parse-url';
 
 import {startBridge, stopBridge, sendAppFocus} from './bridge';
 import {initHyperia} from './ghost';
+import {setLastUsedShell} from './last-shell';
 import * as AppMenu from './menus/menu';
 import {initTray, destroyTray} from './notify';
 import * as plugins from './plugins';
@@ -221,6 +222,9 @@ async function consentFetch(event: Electron.IpcMainInvokeEvent, apiPath: string,
   return response.json();
 }
 ipcMain.handle('consent:respond', (event, body) => consentFetch(event, '/api/perms/respond', body));
+// The renderer reports the shell the human last launched from a picker (and once
+// at startup), so main-side fallbacks (getDefaultProfile) launch the same shell.
+ipcMain.on('last-used-shell', (_event, name: unknown) => setLastUsedShell(name));
 // Live pending-request ids, so the window can drop prompts the sidecar no longer holds.
 ipcMain.handle('consent:pending', async (event) => {
   const state = (await consentFetch(event, '/api/perms/state')) as {pending?: {id?: string}[]};

@@ -25,10 +25,11 @@ import {isPlainShell, pickNativeShell} from '../utils/native-shell';
 import {toNavigableUrl} from '../utils/navigable-url';
 import processClipboard from '../utils/paste';
 import {translatePath} from '../utils/path-translate';
+import {readLastUsedShell, resolvePickerShell} from '../utils/picker-shell';
 import {countPathHorizontalStacks} from '../utils/term-groups';
 
 import FindBar from './find-bar';
-import {NewPanePicker} from './new-pane-picker';
+import {NewPanePicker, pickerShellProfiles} from './new-pane-picker';
 import {PaneBand} from './pane-band';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -1987,8 +1988,13 @@ export default class Term extends React.PureComponent<
     if (!commandLine) return;
 
     const profiles = (this.props as any).profiles || [];
-    const defaultProfileName = (this.props as any).defaultProfile;
-    const defaultProfile = profiles.find((p: any) => p.name === defaultProfileName) || profiles[0];
+    // Same shell the picker shows (last-used → configured default → first).
+    const shownShell = resolvePickerShell(
+      pickerShellProfiles(profiles).map((p: any) => p.name as string),
+      readLastUsedShell(),
+      (this.props as any).defaultProfile || undefined
+    );
+    const defaultProfile = profiles.find((p: any) => p.name === shownShell) || profiles[0];
 
     const shellBin = defaultProfile?.config?.shell || (process.platform === 'win32' ? 'cmd.exe' : '/bin/bash');
     const shellLower = shellBin.toLowerCase();
@@ -2471,17 +2477,18 @@ export default class Term extends React.PureComponent<
     // in the default profile when none is given), replacing the picker in place.
     if ((this.props as any).sessionProfile === 'picker') {
       this.setState({isDirNavigatorOpen: false, navigatorStatus: null});
-      // Launch the configured DEFAULT profile (config.defaultProfile) in the
-      // chosen dir — NOT the last-used picker shell. Using a shell once doesn't
-      // make it the default. Passing it explicitly pins "Go" to the same default
-      // the config declares (rather than main's getDefaultProfile fallback).
-      const defaultProfile = (this.props as any).defaultProfile || undefined;
+      // Launch exactly the shell this picker's New Shell pulldown shows
+      // (last-used → configured default → first), so Go never starts something
+      // the human can't see selected (it used to launch config.defaultProfile,
+      // e.g. a custom "Claude" shell, while the pulldown showed PowerShell 7).
+      const shells = pickerShellProfiles((this.props as any).profiles || []).map((p: any) => p.name as string);
+      const profile = resolvePickerShell(shells, readLastUsedShell(), (this.props as any).defaultProfile || undefined);
       rpc.emit('new', {
         isNewGroup: false,
         cwd: target,
         activeUid: this.props.uid,
         groupUid: (this.props as any).groupUid,
-        ...(defaultProfile ? {profile: defaultProfile} : {})
+        ...(profile ? {profile} : {})
       } as any);
       return;
     }

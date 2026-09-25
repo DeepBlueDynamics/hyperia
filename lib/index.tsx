@@ -36,6 +36,7 @@ import * as config from './utils/config';
 import {getBase64FileData} from './utils/file';
 import {serializeLayoutState} from './utils/layout-serialize';
 import {toNavigableUrl} from './utils/navigable-url';
+import {readLastUsedShell, reportLastUsedShell} from './utils/picker-shell';
 import {installLayoutScrollPin} from './utils/pin-layout-scroll';
 import * as plugins from './utils/plugins';
 import {syncWebUrls} from './utils/web-url-sync';
@@ -285,6 +286,10 @@ rpc.on('permission request', (req) => {
   // human's view is theirs and only human input changes it.
   if (req?.targetPane) store_.dispatch(uiActions.markTabBell(req.targetPane));
 });
+
+// Tell main which shell the human last launched, so its own fallbacks agree from
+// the first launch after startup (it's also reported on every picker launch).
+reportLastUsedShell(readLastUsedShell());
 
 // No consent prompt may outlive its request. The sidecar notifies on answers,
 // but a request can also vanish silently (expired, requester's pane closed,

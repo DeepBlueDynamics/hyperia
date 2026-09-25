@@ -15,6 +15,7 @@ import {
 import type {ITermState, ITermGroup, HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
 import {getRootGroups} from '../selectors';
+import {readLastUsedShell} from '../utils/picker-shell';
 import {restoredTabName} from '../utils/restored-tab-name';
 import {openTabDisplayNames} from '../utils/tab-display-name';
 import findBySession, {countPathHorizontalStacks} from '../utils/term-groups';
@@ -126,7 +127,14 @@ export function requestTermGroup(
         // (Windows Terminal, iTerm) open the default profile on a new tab; this
         // matches that. Splits/clones still pass their source profile via
         // _profile when they explicitly want to match the source pane.
-        const profile = _profile ? _profile : ui.defaultProfile || window.profileName || 'default';
+        // No explicit profile: the shell the human last launched, then the
+        // configured default (only a seed), then the window's.
+        const lastUsed = readLastUsedShell();
+        const lastValid =
+          lastUsed && ((ui as any).profiles || []).some((p: any) => p.name === lastUsed && p.kind !== 'agent');
+        const profile = _profile
+          ? _profile
+          : (lastValid && lastUsed) || ui.defaultProfile || window.profileName || 'default';
         rpc.emit('new', {
           isNewGroup: true,
           cwd,

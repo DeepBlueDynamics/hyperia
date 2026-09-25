@@ -11,6 +11,7 @@ import {detectProfiles, pickDefaultProfile} from './config/detect';
 import {_import, getDefaultConfig} from './config/import';
 import _openConfig from './config/open';
 import {cfgPath, cfgDir} from './config/paths';
+import {getLastUsedShell} from './last-shell';
 import notify from './notify';
 import {getColorMap} from './utils/colors';
 
@@ -114,6 +115,21 @@ export const getDefaultProfile = () => {
     }
     return 'default';
   };
+
+  // The shell the human last launched wins over the configured default (the
+  // 2026-08-24 rule): the config value is only the seed before any shell was
+  // ever picked. Agents never qualify; a stale or missing shell falls through.
+  const lastUsed = getLastUsedShell();
+  if (lastUsed) {
+    const profile = cfg.config.profiles?.find((p) => p.name === lastUsed) as any;
+    if (profile?.config?.shell && profile.kind !== 'agent') {
+      try {
+        if (existsSync(profile.config.shell)) return lastUsed;
+      } catch {
+        // fall through
+      }
+    }
+  }
 
   // If defaultProfile is specified and valid, use it
   if (cfg.config.defaultProfile) {
