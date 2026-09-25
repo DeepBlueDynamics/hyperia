@@ -211,7 +211,8 @@ function handleLoadFailure(
     type: 'fail-load',
     isMainFrame: true,
     errorCode: f.errorCode,
-    provisional: f.provisional
+    provisional: f.provisional,
+    url: f.url
   };
   if (f.errorCode === ERR_ABORTED) {
     applyLoadEvent(uid, wc, ev);
@@ -284,7 +285,8 @@ function wireWebContents(initialUid: string, wc: WebContents) {
     applyLoadEvent(u(), wc, {
       type: 'start-navigation',
       isMainFrame: !!details.isMainFrame,
-      isSameDocument: !!details.isSameDocument
+      isSameDocument: !!details.isSameDocument,
+      url: details.url
     });
   });
   wc.on('did-finish-load', () => {

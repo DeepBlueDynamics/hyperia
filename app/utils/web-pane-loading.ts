@@ -2,10 +2,10 @@
 // Only a main-frame, cross-document navigation turns it on.
 
 export type WebPaneLoadEvent =
-  | {type: 'start-navigation'; isMainFrame: boolean; isSameDocument: boolean}
+  | {type: 'start-navigation'; isMainFrame: boolean; isSameDocument: boolean; url?: string}
   | {type: 'commit'}
   | {type: 'finish-load'}
-  | {type: 'fail-load'; isMainFrame: boolean; errorCode: number; provisional: boolean}
+  | {type: 'fail-load'; isMainFrame: boolean; errorCode: number; provisional: boolean; url?: string}
   | {type: 'abort-settle'; navSeq: number}
   | {type: 'stop-loading'}
   | {type: 'stop'};
@@ -16,6 +16,8 @@ export type WebPaneLoadState = {
   pending: boolean;
   // Bumped per main-frame navigation start, so an abort can tell if one replaced it.
   navSeq: number;
+  // URL of the pending navigation, so a late abort of an older one can't clear it.
+  pendingUrl?: string;
 };
 
 export const ERR_ABORTED = -3;
@@ -27,7 +29,7 @@ export function nextLoadState(s: WebPaneLoadState, ev: WebPaneLoadEvent): WebPan
   switch (ev.type) {
     case 'start-navigation':
       if (!ev.isMainFrame || ev.isSameDocument) return s;
-      return {loading: true, pending: true, navSeq: s.navSeq + 1};
+      return {loading: true, pending: true, navSeq: s.navSeq + 1, ...(ev.url ? {pendingUrl: ev.url} : {})};
     case 'commit':
       return s.pending ? {...s, pending: false} : s;
     case 'finish-load':
@@ -38,7 +40,11 @@ export function nextLoadState(s: WebPaneLoadState, ev: WebPaneLoadEvent): WebPan
     case 'fail-load':
       if (!ev.isMainFrame) return s;
       // An abort is settled on the next tick (abort-settle): a replacement may be starting.
-      if (ev.errorCode === ERR_ABORTED) return ev.provisional && s.pending ? {...s, pending: false} : s;
+      if (ev.errorCode === ERR_ABORTED) {
+        // The old navigation's abort can arrive after its replacement started.
+        const stale = ev.url && s.pendingUrl && ev.url !== s.pendingUrl;
+        return ev.provisional && s.pending && !stale ? {...s, pending: false} : s;
+      }
       return s.loading || s.pending ? {...s, loading: false, pending: false} : s;
     case 'abort-settle':
       if (s.navSeq !== ev.navSeq || s.pending || !s.loading) return s;

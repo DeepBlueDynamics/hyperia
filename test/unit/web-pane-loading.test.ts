@@ -99,3 +99,12 @@ test('no change returns the same state', (t) => {
   t.is(nextLoadState(initialLoadState, {type: 'stop'}), initialLoadState);
   t.is(nextLoadState(initialLoadState, {type: 'finish-load'}), initialLoadState);
 });
+
+test('a late abort of the old navigation does not clear the new pending one', (t) => {
+  const oldNav: WebPaneLoadEvent = {...mainNav, url: 'https://a.test/'};
+  const newNav: WebPaneLoadEvent = {...mainNav, url: 'https://b.test/'};
+  let {s} = run([oldNav, newNav, {...abort, url: 'https://a.test/'}]);
+  t.true(s.pending);
+  s = nextLoadState(s, settleNow(s));
+  t.true(s.loading);
+});
