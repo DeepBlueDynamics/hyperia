@@ -32,6 +32,12 @@ function respond(id: string, body: Record<string, unknown>): void {
   void ipcRenderer
     .invoke('consent:respond', {id, action: 'create', ...body})
     .then((result) => {
+      // The request is gone sidecar-side (expired or already answered): nothing
+      // left to decide, so close the toast instead of leaving it stuck.
+      if (result?.gone) {
+        clearToast(id);
+        return;
+      }
       if (!result?.ok) throw new Error(result?.error || 'Approval was not recorded.');
       clearToast(id);
     })
