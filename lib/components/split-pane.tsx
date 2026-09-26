@@ -3,6 +3,7 @@ import React, {useState, useEffect, useRef, forwardRef} from 'react';
 import sum from 'lodash/sum';
 
 import type {SplitPaneProps} from '../../typings/hyper';
+import {splitPaneSize} from '../utils/split-sizes';
 
 const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
   const dragPanePosition = useRef<number>(0);
@@ -95,10 +96,11 @@ const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
   return (
     <div className={`splitpane_panes splitpane_panes_${direction}`} ref={ref}>
       {children.map((child, i) => {
+        const size = splitPaneSize(sizes, i);
         const style = {
           // flexBasis doesn't work for the first horizontal pane, height need to be specified
-          [sizeProperty]: `${sizes[i] * 100}%`,
-          flexBasis: `${sizes[i] * 100}%`,
+          [sizeProperty]: size,
+          flexBasis: size,
           flexGrow: 0
         };
 
@@ -155,6 +157,9 @@ const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
           border-radius: 4px;
           overflow: hidden;
           box-sizing: border-box;
+          /* nested (overflow:visible) panes otherwise won't shrink below xterm's fixed-px canvas */
+          min-width: 0;
+          min-height: 0;
         }
 
         .splitpane_pane_shell {
