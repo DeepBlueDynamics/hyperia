@@ -537,21 +537,21 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
 
       state = state.setIn(['termGroups', uid, 'parentUid'], null);
 
-      let sessionUid = group.sessionUid;
-      if (!sessionUid) {
-        const getFirstLeafSession = (gUid: string): string | null => {
-          const g = state.termGroups[gUid];
-          if (!g) return null;
-          if (g.sessionUid) return g.sessionUid;
-          if (g.children && g.children.length > 0) {
-            for (const childUid of g.children) {
-              const res = getFirstLeafSession(childUid);
-              if (res) return res;
-            }
-          }
-          return null;
-        };
-        sessionUid = getFirstLeafSession(uid);
+      const leafSessions = (gUid: string): string[] => {
+        const g = state.termGroups[gUid];
+        if (!g) return [];
+        if (g.sessionUid) return [g.sessionUid];
+        return (g.children || []).flatMap((childUid) => leafSessions(childUid));
+      };
+      const movedSessions = leafSessions(uid);
+      const sessionUid = movedSessions[0] || null;
+
+      // The old tab still remembers the moved pane as its active session; a click on it
+      // would resolve through that session to the NEW tab. Repoint it at one of its own panes.
+      for (const rootUid of Object.keys(state.activeSessions)) {
+        if (rootUid !== uid && movedSessions.includes(state.activeSessions[rootUid])) {
+          state = state.setIn(['activeSessions', rootUid], leafSessions(rootUid)[0] || (null as any));
+        }
       }
 
       state = state.setIn(['activeSessions', uid], sessionUid || (null as any));
