@@ -1,6 +1,6 @@
 import test from 'ava';
 
-import {isPlainShell, pickNativeShell, profileFitsPlatform} from '../../lib/utils/native-shell';
+import {isPlainShell, pickNativeShell, profileFitsPlatform, shellRunnableHere} from '../../lib/utils/native-shell';
 
 const win = [
   {
@@ -56,4 +56,24 @@ test('mac: login shell first, never a synced Windows PowerShell entry', (t) => {
   t.false(isPlainShell(mac[0], false));
   t.false(profileFitsPlatform(mac[0], false));
   t.false(isPlainShell(mac[3], false));
+});
+
+test('linux: shells whose absolute path is missing are hidden (stale /bin/zsh profiles)', (t) => {
+  const onUbuntu = (path: string) => path === '/bin/bash';
+  const zsh = {name: 'zsh', config: {shell: '/bin/zsh', shellArgs: ['--login']}};
+  const claudeMac = {name: 'Claude Code (macOS)', config: {shell: '/bin/zsh', shellArgs: ['-l', '-c', 'claude']}};
+  const bash = {name: 'bash', config: {shell: '/bin/bash', shellArgs: ['--login']}};
+  const cmd = {name: 'CMD', config: {shell: String.raw`C:\Windows\System32\cmd.exe`, shellArgs: []}};
+  t.false(shellRunnableHere(zsh, false, onUbuntu));
+  t.false(shellRunnableHere(claudeMac, false, onUbuntu));
+  t.false(shellRunnableHere(cmd, false, onUbuntu));
+  t.true(shellRunnableHere(bash, false, onUbuntu));
+  // Bare commands resolve via PATH; never hidden.
+  t.true(shellRunnableHere({name: 'ssh', config: {shell: 'ssh'}}, false, () => false));
+});
+
+test('windows: a stale absolute pwsh path is hidden', (t) => {
+  const pwsh = {name: 'PowerShell 7', config: {shell: String.raw`C:\Program Files\PowerShell\7\pwsh.exe`}};
+  t.false(shellRunnableHere(pwsh, true, () => false));
+  t.true(shellRunnableHere(pwsh, true, () => true));
 });

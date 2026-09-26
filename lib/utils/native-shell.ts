@@ -18,6 +18,24 @@ export function profileFitsPlatform(p: ShellProfile, windows: boolean): boolean 
   return windows ? !looksUnix : !looksWindows;
 }
 
+const existsOnDisk = (path: string): boolean => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return (require('fs') as typeof import('fs')).existsSync(path);
+  } catch {
+    return true;
+  }
+};
+
+// Fits this platform AND, for an absolute shell path, is actually installed.
+// Old configs carry shells this machine never had (e.g. /bin/zsh on Ubuntu).
+export function shellRunnableHere(p: ShellProfile, windows: boolean, exists = existsOnDisk): boolean {
+  if (!profileFitsPlatform(p, windows)) return false;
+  const shell = String(p?.config?.shell || '');
+  const absolute = windows ? /^[A-Za-z]:[\\/]/.test(shell) : shell.startsWith('/');
+  return !absolute || exists(shell);
+}
+
 // Flags that still mean "just the interactive shell". Anything else (e.g. a
 // custom shell wrapping `-Command claude`) is a launcher, not a plain shell.
 const INTERACTIVE_FLAGS = new Set(['--login', '-l', '-i', '--interactive', '-nologo', '-login']);
