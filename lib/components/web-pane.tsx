@@ -1968,8 +1968,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     // Grab the icon BEFORE the await — React pools synthetic events, so
     // e.currentTarget is null by the time the capture resolves.
     const iconEl = (e.currentTarget as HTMLElement).querySelector('i');
+    const fullPage = e.shiftKey;
     try {
-      const dataURL: string | null = await ipcRenderer.invoke('web-pane:capture', {uid: this.props.groupUid});
+      const dataURL: string | null = await ipcRenderer.invoke('web-pane:capture', {
+        uid: this.props.groupUid,
+        fullPage
+      });
       if (!dataURL) return;
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const {clipboard, nativeImage} = require('electron');
@@ -1991,7 +1995,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
         } catch {
           /* keep 'page' */
         }
-        fs.writeFileSync(path.join(dir, `webshot-${host}-${Date.now()}.png`), img.toPNG());
+        fs.writeFileSync(path.join(dir, `webshot-${host}${fullPage ? '-full' : ''}-${Date.now()}.png`), img.toPNG());
       } catch (saveErr) {
         // clipboard copy already succeeded; disk save is best-effort
         console.error('[web-pane] screenshot save failed:', saveErr);
@@ -2492,7 +2496,9 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                   >
                     <i className="ti ti-camera" style={{fontSize: '14px'}} aria-hidden="true" />
                     <div className="term_tooltip" style={{minWidth: '200px'}}>
-                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Screenshot</div>
+                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
+                        Click: screenshot · Shift+click: whole page
+                      </div>
                       <div
                         style={{
                           fontSize: '11px',

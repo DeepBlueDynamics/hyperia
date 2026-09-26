@@ -29,6 +29,7 @@ import {toNavigableUrl} from '../utils/navigable-url';
 import processClipboard from '../utils/paste';
 import {translatePath} from '../utils/path-translate';
 import {readLastUsedShell, resolvePickerShell} from '../utils/picker-shell';
+import {renderScrollbackPng} from '../utils/scrollback-shot';
 import {countPathHorizontalStacks} from '../utils/term-groups';
 
 import FindBar from './find-bar';
@@ -446,15 +447,26 @@ export default class Term extends React.PureComponent<
     const iconEl = (e.currentTarget as HTMLElement).querySelector('i');
     const el = this.termWrapperRef;
     if (!el) return;
+    const fullBuffer = e.shiftKey && !!this.term;
     try {
-      const r = el.getBoundingClientRect();
-      // getBoundingClientRect is CSS px; capturePage wants window DIPs. They
-      // differ by the page zoom (Linux boots at 1.2), same as the web-pane
-      // bounds fix — scale so the captured rect lines up with the pane.
-      const zoom = webFrame.getZoomFactor() || 1;
-      const dataURL: string | null = await ipcRenderer.invoke('term:capture', {
-        rect: {x: r.left * zoom, y: r.top * zoom, width: r.width * zoom, height: r.height * zoom}
-      });
+      let dataURL: string | null = null;
+      if (fullBuffer) {
+        try {
+          dataURL = renderScrollbackPng(this.term);
+        } catch (renderErr) {
+          console.error('[term] scrollback render failed, using visible capture:', renderErr);
+        }
+      }
+      if (!dataURL) {
+        const r = el.getBoundingClientRect();
+        // getBoundingClientRect is CSS px; capturePage wants window DIPs. They
+        // differ by the page zoom (Linux boots at 1.2), same as the web-pane
+        // bounds fix — scale so the captured rect lines up with the pane.
+        const zoom = webFrame.getZoomFactor() || 1;
+        dataURL = await ipcRenderer.invoke('term:capture', {
+          rect: {x: r.left * zoom, y: r.top * zoom, width: r.width * zoom, height: r.height * zoom}
+        });
+      }
       if (!dataURL) return;
       const img = nativeImage.createFromDataURL(dataURL);
       if (!img || img.isEmpty()) return;
@@ -470,7 +482,7 @@ export default class Term extends React.PureComponent<
         const name = String(rawName)
           .replace(/[^\w.-]+/g, '_')
           .slice(0, 40);
-        fs.writeFileSync(path.join(dir, `termshot-${name}-${Date.now()}.png`), img.toPNG());
+        fs.writeFileSync(path.join(dir, `termshot-${name}${fullBuffer ? '-full' : ''}-${Date.now()}.png`), img.toPNG());
       } catch (saveErr) {
         // clipboard copy already succeeded; disk save is best-effort
         console.error('[term] screenshot save failed:', saveErr);
@@ -3837,7 +3849,7 @@ export default class Term extends React.PureComponent<
                             fontWeight: 500
                           }}
                         >
-                          Screenshot
+                          Click: screenshot · Shift+click: whole scrollback
                         </div>
                         <div
                           style={{
