@@ -383,3 +383,17 @@ test.serial('history: trimmed per note to history.limit, results snapshotted whe
   t.is(viaIpc.length, 2);
   t.true(viaIpc[0].finished >= viaIpc[1].finished);
 });
+
+test.serial('bridge-style pause: re-sending the stored run with paused flips only the pause', (t) => {
+  const f = createStickyFixture(t, {autoInit: false});
+  const past = new Date(Date.now() - 5 * MIN).toISOString();
+  const run = {when: 'at', at: past, target: 'notify', created_by: 'human', approved: {at: 1}};
+  seed(f, [{id: 'n1', text: 'x', run, run_state: {next_run: Date.parse(past)}}]);
+  f.sticky.initSticky();
+  const paused = f.sticky.setRun('n1', {...run, paused: true} as any);
+  t.deepEqual(paused, {ok: true, next_run: undefined, status: 'paused'});
+  t.true(readNotes(f)[0].run.paused);
+  const resumed = f.sticky.setRun('n1', {...run, paused: false} as any);
+  t.true(resumed.ok, 'a past At resumes without failing validation');
+  t.is((resumed as any).status, 'scheduled');
+});

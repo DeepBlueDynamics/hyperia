@@ -52,6 +52,10 @@ function normalize(run: StickyRun, human: boolean, now: number): StickyRun {
 export function setRun(id: string, run: StickyRun, opts: {human?: boolean} = {}): SetRunResult {
   const note = getNote(id);
   if (!note) return {ok: false, error: 'Note not found'};
+  // The sidecar pauses by re-sending the stored run with only `paused` flipped; skip re-validation (a past At stays valid).
+  if (!opts.human && run && note.run && sameRun(note.run, run) && !!note.run.paused !== !!run.paused) {
+    return pauseRun(note.id, !!run.paused);
+  }
   const now = Date.now();
   const error = validateRun(run, now);
   if (error) return {ok: false, error};
@@ -83,7 +87,7 @@ export function clearRun(id: string): {ok: boolean; error?: string} {
   return saved ? {ok: true} : {ok: false, error: 'notes.json is unreadable'};
 }
 
-export function pauseRun(id: string, paused: boolean): {ok: boolean; next_run?: number; error?: string} {
+export function pauseRun(id: string, paused: boolean): SetRunResult {
   const note = getNote(id);
   if (!note?.run) return {ok: false, error: note ? 'This sticky has no run' : 'Note not found'};
   const run: StickyRun = {...note.run, paused};
@@ -92,7 +96,9 @@ export function pauseRun(id: string, paused: boolean): {ok: boolean; next_run?: 
   // Resuming re-arms a pane schedule that paused itself; it clears the old halt reason.
   if (!paused && note.run_state?.last_status === 'halted') patch.last_error = undefined;
   const saved = writeRun(note.id, run, patch);
-  return saved ? {ok: true, next_run: next} : {ok: false, error: 'notes.json is unreadable'};
+  if (!saved) return {ok: false, error: 'notes.json is unreadable'};
+  const status = paused ? 'paused' : needsApproval(run) ? 'awaiting_approval' : 'scheduled';
+  return {ok: true, next_run: next, status};
 }
 
 /** Fire once now; the schedule (and next_run) are kept. */

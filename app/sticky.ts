@@ -4,7 +4,7 @@
 export {initSticky} from './sticky/ipc';
 export {readStickyHidden} from './sticky/preferences';
 export {clearRun, pauseRun, runNow, setRun} from './sticky/scheduler';
-export {readAllNotes, setResult, setRunState} from './sticky/store';
+export {getNote, readAllNotes, setResult, setRunState} from './sticky/store';
 export type {
   NoteData,
   RunEvery,

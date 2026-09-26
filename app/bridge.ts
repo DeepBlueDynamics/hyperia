@@ -23,7 +23,8 @@ import {
   clearRun,
   pauseRun,
   runNow,
-  setResult
+  setResult,
+  getNote
 } from './sticky';
 import {SYSTEM_TOKEN} from './system-token';
 import {capturePaneJpeg} from './web-pane-manager';
@@ -1259,10 +1260,15 @@ function handleCommand(msg: Record<string, unknown>) {
     }
 
     case 'NoteUpdate': {
+      // Main is the only notes.json writer; the sidecar sends text and/or result here.
       const noteId = msg.id as string;
-      const text = msg.text as string;
-      const updated = updateStickyNote(noteId, text);
-      sendResult(seq, updated ? 'ok' : 'Note not found');
+      let ok = true;
+      if (typeof msg.result === 'string') ok = setResult(noteId, msg.result);
+      const note = getNote(noteId);
+      if (ok && typeof msg.text === 'string' && (!note || note.text !== msg.text)) {
+        ok = updateStickyNote(noteId, msg.text);
+      }
+      sendResult(seq, ok ? 'ok' : 'Note not found');
       break;
     }
 
