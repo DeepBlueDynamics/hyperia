@@ -14,6 +14,7 @@ import {cfgPath, cfgDir} from './config/paths';
 import {getLastUsedShell} from './last-shell';
 import notify from './notify';
 import {getColorMap} from './utils/colors';
+import {dropForeignShells} from './utils/foreign-shells';
 
 const watchers: Function[] = [];
 let cfg: parsedConfig = {} as any;
@@ -188,6 +189,7 @@ export const getKeymaps = () => {
 
 const applyDetectedProfiles = (configObj: parsedConfig) => {
   if (!configObj.config) return;
+  configObj.config.profiles = dropForeignShells(configObj.config.profiles || []);
   const detected = detectProfiles();
   if (detected.length > 0) {
     configObj.config.profiles = configObj.config.profiles || [];

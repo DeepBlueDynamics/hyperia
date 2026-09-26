@@ -1,6 +1,4 @@
 // Packages
-import {existsSync} from 'fs';
-
 import {app, dialog, Menu} from 'electron';
 import type {BrowserWindow} from 'electron';
 
@@ -68,14 +66,7 @@ export const createMenu = (
     shellMenu(
       commandKeys,
       execCommand,
-      // Hide profiles whose shell isn't installed here (stale synced/old-default entries).
-      getConfig()
-        .profiles.filter((p) => {
-          const shell = p.config?.shell || '';
-          // Bare commands resolve via PATH; anything path-like must exist here.
-          return !/[\\/]|^[A-Za-z]:/.test(shell) || existsSync(shell);
-        })
-        .map((p) => p.name)
+      getConfig().profiles.map((p) => p.name)
     ),
     editMenu(commandKeys, execCommand),
     viewMenu(commandKeys, execCommand),

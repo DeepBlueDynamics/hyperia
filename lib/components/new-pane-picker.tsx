@@ -1,7 +1,7 @@
 import React from 'react';
 
 import rpc from '../rpc';
-import {isPowerShell, pickNativeShell, shellRunnableHere} from '../utils/native-shell';
+import {isPowerShell, pickNativeShell, profileFitsPlatform as fitsPlatform} from '../utils/native-shell';
 import {LS_LAST_SHELL, reportLastUsedShell, resolvePickerShell} from '../utils/picker-shell';
 
 import UrlPicker from './url-picker';
@@ -11,7 +11,7 @@ const isWindows = ['Windows', 'Win16', 'Win32', 'WinCE'].includes(navigator.plat
 // A shell whose path is a Windows path (.exe / backslashes / "C:") only fits a
 // Windows host, and vice-versa — a config synced between machines can carry the
 // other platform's shells, which we hide here. (Mirrors the helper in term.tsx.)
-const profileFitsPlatform = (p: any): boolean => shellRunnableHere(p, isWindows);
+const profileFitsPlatform = (p: any): boolean => fitsPlatform(p, isWindows);
 
 // Built-in agent names that live under "New Agent", not the shell list. These
 // mirror the harness catalog in app/config/detect.ts (the agents nemesis8 knows
@@ -975,7 +975,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     } catch {
       /* not available on Windows */
     }
-    return pickNativeShell(((this.props as any).profiles || []).filter(profileFitsPlatform), isWindows, loginShell);
+    return pickNativeShell((this.props as any).profiles || [], isWindows, loginShell);
   };
 
   private updateCommand = () => updateCommandFor(isPowerShell(this.nativeShell()));
