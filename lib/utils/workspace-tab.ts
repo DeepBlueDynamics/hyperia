@@ -87,13 +87,13 @@ export type ResumeCandidate = {
  * cwd, which restore recreates first. Main mirrors it as shellState.command
  * (and shellState.app.cmdline); both are read so an older main still works.
  */
-const reportedCommand = (live: any): string | undefined => {
+export const reportedCommand = (live: any): string | undefined => {
   const st = live?.shellState;
   const cmd = st?.command || st?.app?.cmdline;
   return typeof cmd === 'string' && cmd.trim() ? cmd.trim() : undefined;
 };
 
-const wasRunning = (live: any): boolean => {
+export const wasRunning = (live: any): boolean => {
   const st = live?.shellState?.state;
   // Main reports 'running'; the renderer's older typings said 'busy'; Term's
   // published busy flag folds in alt-screen detection. Any of them counts.

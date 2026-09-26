@@ -15,6 +15,7 @@ import {
 import type {ITermState, ITermGroup, HyperState, HyperDispatch, HyperActions} from '../../typings/hyper';
 import rpc from '../rpc';
 import {getRootGroups} from '../selectors';
+import type {CloneLaunch} from '../utils/clone-launch';
 import {readLastUsedShell} from '../utils/picker-shell';
 import {restoredTabName} from '../utils/restored-tab-name';
 import {openTabDisplayNames} from '../utils/tab-display-name';
@@ -29,7 +30,8 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
       url?: string,
       splitPlacement?: 'BEFORE' | 'AFTER',
       isAgentInitiated?: boolean,
-      _cwd?: string
+      _cwd?: string,
+      clone?: CloneLaunch
     ) =>
     (dispatch: HyperDispatch, getState: () => HyperState): void => {
       const {sessions, termGroups} = getState();
@@ -87,7 +89,8 @@ function requestSplit(direction: 'VERTICAL' | 'HORIZONTAL') {
             profile,
             url,
             splitPlacement,
-            isAgentInitiated
+            isAgentInitiated,
+            clone
           });
         }
       });

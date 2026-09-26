@@ -23,6 +23,7 @@ import terms from '../terms';
 import {altArrowSequence} from '../utils/alt-arrow-sequence';
 import {ctrlCaretSequence} from '../utils/ctrl-caret';
 import {fileBrowserLabel, isLocalDir} from '../utils/file-browser';
+import {acceleratorFor} from '../utils/keymaps';
 import {isPlainShell, pickNativeShell} from '../utils/native-shell';
 import {toNavigableUrl} from '../utils/navigable-url';
 import processClipboard from '../utils/paste';
@@ -542,59 +543,41 @@ export default class Term extends React.PureComponent<
     const {Menu, MenuItem} = remote;
     const menu = new Menu();
 
-    menu.append(
-      new MenuItem({
-        label: 'Split Right',
-        accelerator: 'Ctrl+Shift+|',
-        registerAccelerator: false,
-        enabled: !this.state.isNarrow,
-        click: () => {
-          rpc.emit('split request vertical', {activeUid: this.props.uid});
-        }
-      })
-    );
-
-    menu.append(
-      new MenuItem({
-        label: 'Split Down',
-        accelerator: 'Ctrl+Shift+_',
-        registerAccelerator: false,
-        enabled: !isSplitDownDisabled,
-        click: () => {
-          rpc.emit('split request horizontal', {activeUid: this.props.uid});
-        }
-      })
-    );
-
-    menu.append(
-      new MenuItem({
-        label: 'Clone Right',
-        accelerator: 'Ctrl+Alt+Shift+|',
-        registerAccelerator: false,
-        enabled: !this.state.isNarrow,
-        click: () => {
-          rpc.emit('split request vertical', {
-            activeUid: this.props.uid,
-            profile: (this.props as any).sessionProfile
-          });
-        }
-      })
-    );
-
-    menu.append(
-      new MenuItem({
-        label: 'Clone Down',
-        accelerator: 'Ctrl+Alt+Shift+_',
-        registerAccelerator: false,
-        enabled: !isSplitDownDisabled,
-        click: () => {
-          rpc.emit('split request horizontal', {
-            activeUid: this.props.uid,
-            profile: (this.props as any).sessionProfile
-          });
-        }
-      })
-    );
+    // Every direction × {split, clone}; accelerators come from the keymap, clones via the shared handler.
+    const splitItems: Array<{label: string; command: string; vertical: boolean; before: boolean; clone: boolean}> = [
+      {label: 'Split Right', command: 'pane:splitRight', vertical: true, before: false, clone: false},
+      {label: 'Split Down', command: 'pane:splitDown', vertical: false, before: false, clone: false},
+      {label: 'Split Left', command: 'pane:splitLeft', vertical: true, before: true, clone: false},
+      {label: 'Split Up', command: 'pane:splitUp', vertical: false, before: true, clone: false},
+      {label: 'Clone Right', command: 'pane:cloneRight', vertical: true, before: false, clone: true},
+      {label: 'Clone Down', command: 'pane:cloneDown', vertical: false, before: false, clone: true},
+      {label: 'Clone Left', command: 'pane:cloneLeft', vertical: true, before: true, clone: true},
+      {label: 'Clone Up', command: 'pane:cloneUp', vertical: false, before: true, clone: true}
+    ];
+    splitItems.forEach((item) => {
+      const splitPlacement = item.before ? ('BEFORE' as const) : undefined;
+      menu.append(
+        new MenuItem({
+          label: item.label,
+          accelerator: acceleratorFor(item.command),
+          registerAccelerator: false,
+          enabled: item.vertical ? !this.state.isNarrow : !isSplitDownDisabled,
+          click: () => {
+            if (item.clone) {
+              rpc.emitter.emit(item.vertical ? 'clone request vertical' : 'clone request horizontal', {
+                activeUid: this.props.uid,
+                splitPlacement
+              });
+            } else {
+              rpc.emit(item.vertical ? 'split request vertical' : 'split request horizontal', {
+                activeUid: this.props.uid,
+                splitPlacement
+              });
+            }
+          }
+        })
+      );
+    });
 
     menu.append(new MenuItem({type: 'separator'}));
 
@@ -1637,27 +1620,36 @@ export default class Term extends React.PureComponent<
       }
     }
 
-    // If pane is squished/narrow, disable split right and clone right keystrokes completely
-    if (this.state.isNarrow && (e.ctrlKey || e.metaKey) && e.key === '|') {
+    // If pane is squished/narrow, disable split/clone right + left keystrokes completely
+    if (this.state.isNarrow && (e.ctrlKey || e.metaKey) && (e.key === '|' || (e.shiftKey && e.key === '<'))) {
       e.preventDefault();
       e.stopPropagation();
       return false;
     }
 
-    // If split down limit is reached (11 stacks), disable split down and clone down keystrokes completely
-    if (isSplitDownDisabled && (e.ctrlKey || e.metaKey) && (e.key === '_' || e.key === '-')) {
+    // If split down limit is reached (11 stacks), disable split/clone down + up keystrokes completely
+    const isVerticalStackKey = e.key === '_' || e.key === '-' || (e.shiftKey && e.key === '"');
+    if (isSplitDownDisabled && (e.ctrlKey || e.metaKey) && isVerticalStackKey) {
       e.preventDefault();
       e.stopPropagation();
       return false;
     }
 
-    // Intercept Ctrl+Shift+D, Ctrl+Alt+Shift+D, Ctrl+Shift+|, Ctrl+Alt+Shift+|, Ctrl+Shift+_, Ctrl+Alt+Shift+_ (and Cmd equivalents on macOS) to prevent xterm from swallowing them
+    // Keep split/clone chords (all Shift+: D | _ < "; Cmd on macOS) away from xterm. Shift is required
+    // so plain Ctrl+D (EOF) and Ctrl+\ (SIGQUIT) still reach the shell.
     const isSplitOrCloneKey =
       (e.ctrlKey || e.metaKey) &&
-      (e.key === '|' || e.key === '\\' || e.key === '_' || e.key === '-' || e.key?.toLowerCase() === 'd');
+      (e.key === '-' ||
+        (e.shiftKey &&
+          (e.key === '|' ||
+            e.key === '\\' ||
+            e.key === '_' ||
+            e.key?.toLowerCase() === 'd' ||
+            e.key === '<' ||
+            e.key === '"')));
 
     if (isSplitOrCloneKey) {
-      if (isSplitDownDisabled && (e.key === '_' || e.key === '-')) {
+      if (isSplitDownDisabled && isVerticalStackKey) {
         e.preventDefault();
         e.stopPropagation();
       }

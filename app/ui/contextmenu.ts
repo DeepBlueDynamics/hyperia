@@ -44,8 +44,12 @@ const contextMenuTemplate = (
   menu.push(separator);
   menu.push({label: 'Split Right', accelerator: commandKeys['pane:splitRight'], click: cmd('pane:splitRight')});
   menu.push({label: 'Split Down', accelerator: commandKeys['pane:splitDown'], click: cmd('pane:splitDown')});
+  menu.push({label: 'Split Left', accelerator: commandKeys['pane:splitLeft'], click: cmd('pane:splitLeft')});
+  menu.push({label: 'Split Up', accelerator: commandKeys['pane:splitUp'], click: cmd('pane:splitUp')});
   menu.push({label: 'Clone Right', accelerator: commandKeys['pane:cloneRight'], click: cmd('pane:cloneRight')});
   menu.push({label: 'Clone Down', accelerator: commandKeys['pane:cloneDown'], click: cmd('pane:cloneDown')});
+  menu.push({label: 'Clone Left', accelerator: commandKeys['pane:cloneLeft'], click: cmd('pane:cloneLeft')});
+  menu.push({label: 'Clone Up', accelerator: commandKeys['pane:cloneUp'], click: cmd('pane:cloneUp')});
   menu.push({label: 'Close Pane', accelerator: commandKeys['pane:close'], click: cmd('pane:close')});
 
   menu.push(separator);

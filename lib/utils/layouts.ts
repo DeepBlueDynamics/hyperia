@@ -1,5 +1,8 @@
 import rpc from '../rpc';
 
+import {cloneLaunchFor} from './clone-launch';
+import type {CloneLaunch} from './clone-launch';
+
 const uuidv4 = () => {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0,
@@ -8,7 +11,18 @@ const uuidv4 = () => {
   });
 };
 
-export const openLayout = (pattern: string, activeUid: string, cloneProfile?: string) => {
+/** Clone launch for the pane `uid` from the live store — the input to a clone layout. */
+export const cloneLaunchForUid = (uid: string | null | undefined): CloneLaunch => {
+  try {
+    const state = (window as any).store?.getState?.();
+    return cloneLaunchFor(uid ? state?.sessions?.sessions?.[uid] : null, state?.ui?.profiles || []);
+  } catch {
+    return {profile: 'picker'};
+  }
+};
+
+// `clone` set: every new pane launches it (profile + command); unset: every new pane is a picker.
+export const openLayout = (pattern: string, activeUid: string, clone?: CloneLaunch) => {
   // Inherit the SOURCE pane's working directory into every new pane, exactly
   // like a split does (requestSplit reads it from the active session). Without
   // this the quick-layout pickers were born in the home directory instead of
@@ -27,8 +41,10 @@ export const openLayout = (pattern: string, activeUid: string, cloneProfile?: st
       activeUid: parentUid,
       splitDirection: direction,
       isNewGroup: false,
-      profile: cloneProfile || 'picker',
-      cwd
+      profile: clone?.profile || 'picker',
+      cwd: clone?.cwd || cwd,
+      // No layoutPattern here, so the pane only runs clone.command — it doesn't fan out again.
+      clone
     });
   };
 

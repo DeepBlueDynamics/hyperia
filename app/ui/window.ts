@@ -711,6 +711,8 @@ export function newWindow(
       resumeOnce: (extraOptions as any).resumeOnce,
       prefillCommand: (extraOptions as any).prefillCommand,
       layoutPattern: (extraOptions as any).layoutPattern,
+      // Clone split/layout: renderer runs clone.command once and fans a layout out with it.
+      clone: (extraOptions as any).clone,
       shellState: (session as any).shellState,
       isAgentInitiated: (extraOptions as any).isAgentInitiated
     });
@@ -929,11 +931,12 @@ export function newWindow(
       rpc.emit('split web pane req', options);
     }
   );
-  rpc.on('clone request vertical', () => {
-    rpc.emit('clone request vertical', undefined as any);
+  // Pass options through: the pane band sends {activeUid, splitPlacement} for clone left/up.
+  rpc.on('clone request vertical', (options: any) => {
+    rpc.emit('clone request vertical', options);
   });
-  rpc.on('clone request horizontal', () => {
-    rpc.emit('clone request horizontal', undefined as any);
+  rpc.on('clone request horizontal', (options: any) => {
+    rpc.emit('clone request horizontal', options);
   });
   // Same deal as above, grabbing the window titlebar when the window
   // is maximized on Windows results in unmaximize, without hitting any

@@ -39,11 +39,24 @@ const commands: Record<string, (focusedWindow?: BrowserWindow) => void> = {
   'pane:splitDown': (focusedWindow) => {
     focusedWindow?.rpc?.emit('split request horizontal', {});
   },
+  // Left/Up are the same splits placed BEFORE the source pane (what the pane-band buttons emit).
+  'pane:splitLeft': (focusedWindow) => {
+    focusedWindow?.rpc?.emit('split request vertical', {splitPlacement: 'BEFORE'});
+  },
+  'pane:splitUp': (focusedWindow) => {
+    focusedWindow?.rpc?.emit('split request horizontal', {splitPlacement: 'BEFORE'});
+  },
   'pane:cloneRight': (focusedWindow) => {
     focusedWindow?.rpc?.emit('clone request vertical', {});
   },
   'pane:cloneDown': (focusedWindow) => {
     focusedWindow?.rpc?.emit('clone request horizontal', {});
+  },
+  'pane:cloneLeft': (focusedWindow) => {
+    focusedWindow?.rpc?.emit('clone request vertical', {splitPlacement: 'BEFORE'});
+  },
+  'pane:cloneUp': (focusedWindow) => {
+    focusedWindow?.rpc?.emit('clone request horizontal', {splitPlacement: 'BEFORE'});
   },
   'pane:close': (focusedWindow) => {
     focusedWindow?.rpc?.emit('termgroup close req');

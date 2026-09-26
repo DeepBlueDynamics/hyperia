@@ -2,7 +2,10 @@ import React, {forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useCallb
 
 import type {TabsProps} from '../../typings/hyper';
 import rpc from '../rpc';
+import {describeCloneLaunch} from '../utils/clone-launch';
+import type {CloneLaunch} from '../utils/clone-launch';
 import {ipcRenderer} from '../utils/ipc';
+import {cloneLaunchForUid} from '../utils/layouts';
 import {decorate, getTabProps} from '../utils/plugins';
 import {dropIndexForX, reorderOffsets} from '../utils/tab-drag';
 import type {TabMetrics} from '../utils/tab-drag';
@@ -253,6 +256,24 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   // Two-click delete: first click on a row's trash arms it (name here), second
   // confirms. Reset when the + menu closes (mouseleave) so it never lingers.
   const [confirmDeleteWs, setConfirmDeleteWs] = useState<string | null>(null);
+  // "+" clone layouts copy the ACTIVE pane of the current tab (its focused session).
+  const activeTabLaunch = useCallback((): CloneLaunch => {
+    const state = (window as any).store?.getState?.();
+    const root = state?.termGroups?.activeRootGroup;
+    const uid = root ? state?.termGroups?.activeSessions?.[root] : state?.sessions?.activeUid;
+    return cloneLaunchForUid(uid);
+  }, []);
+  const [layoutCloneDesc, setLayoutCloneDesc] = useState('');
+  const openNewTabLayout = (layoutPattern: string, clone: boolean) => {
+    const launch = clone ? activeTabLaunch() : undefined;
+    if (launch && launch.profile !== 'picker') {
+      rpc.emit('new', {isNewGroup: true, profile: launch.profile, cwd: launch.cwd, layoutPattern, clone: launch});
+    } else {
+      rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern});
+    }
+  };
+  const layoutHint = `Click: new panes open pickers · Shift+click: clone ${layoutCloneDesc || 'the active pane'} into every pane`;
+
   // rpc.emit THROWS 'Not ready' until the ipc channel id arrives (see
   // web-url-sync.ts) — and this component mounts before that. Guard every
   // emit; the hover refresh covers whatever an early fetch misses.
@@ -457,7 +478,10 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
         <div
           className="tabs_newTab_tooltip_trigger"
           style={{position: 'relative', display: 'inline-flex'}}
-          onMouseEnter={requestWorkspaceList}
+          onMouseEnter={() => {
+            requestWorkspaceList();
+            setLayoutCloneDesc(describeCloneLaunch(activeTabLaunch()));
+          }}
         >
           <button
             className="tabs_newTabBtn"
@@ -482,8 +506,8 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             <div className="tabs_layout_grid">
               <div
                 className="tabs_layout_item"
-                onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: '3cols'} as any)}
-                title="3 Columns"
+                onClick={(e) => openNewTabLayout('3cols', e.shiftKey)}
+                title={`3 Columns · ${layoutHint}`}
               >
                 <div className="layout-preview-box l-3cols">
                   <div />
@@ -493,8 +517,8 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
               </div>
               <div
                 className="tabs_layout_item"
-                onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: '3rows'} as any)}
-                title="3 Rows"
+                onClick={(e) => openNewTabLayout('3rows', e.shiftKey)}
+                title={`3 Rows · ${layoutHint}`}
               >
                 <div className="layout-preview-box l-3rows">
                   <div />
@@ -504,8 +528,8 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
               </div>
               <div
                 className="tabs_layout_item"
-                onClick={() => rpc.emit('new', {isNewGroup: true, profile: 'picker', layoutPattern: 'grid2x2'} as any)}
-                title="Grid 2x2"
+                onClick={(e) => openNewTabLayout('grid2x2', e.shiftKey)}
+                title={`Grid 2x2 · ${layoutHint}`}
               >
                 <div className="layout-preview-box l-grid2x2">
                   <div />
@@ -514,6 +538,9 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                   <div />
                 </div>
               </div>
+            </div>
+            <div style={{fontSize: '10px', color: 'var(--text-secondary)', marginTop: '8px', textAlign: 'center'}}>
+              {layoutHint}
             </div>
             {/* Bookmark-style tab-workspaces (#183): saved via a tab's
                 right-click menu, restored ADDITIVELY into a new tab here. */}
