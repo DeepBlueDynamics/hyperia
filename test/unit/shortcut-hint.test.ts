@@ -1,11 +1,18 @@
+import {readFileSync} from 'fs';
+import {join} from 'path';
+
 import test from 'ava';
 
-import darwin from '../../app/keymaps/darwin.json';
-import linux from '../../app/keymaps/linux.json';
-import win32 from '../../app/keymaps/win32.json';
 import {formatShortcut, firstBinding, shortcutHint, SPLIT_COMMANDS} from '../../lib/utils/shortcut-hint';
 
-const PLATFORMS: Record<string, Record<string, string | string[]>> = {win32, darwin, linux};
+// Read at runtime: the root tsconfig doesn't include app/keymaps/*.json, so importing them breaks tsc.
+const keymap = (os: string): Record<string, string | string[]> =>
+  JSON.parse(readFileSync(join(process.cwd(), 'app', 'keymaps', `${os}.json`), 'utf8'));
+const PLATFORMS: Record<string, Record<string, string | string[]>> = {
+  win32: keymap('win32'),
+  darwin: keymap('darwin'),
+  linux: keymap('linux')
+};
 const ALL = [...Object.values(SPLIT_COMMANDS.split), ...Object.values(SPLIT_COMMANDS.clone)];
 
 test('formatShortcut keeps keymap order and capitalizes', (t) => {
