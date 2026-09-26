@@ -234,7 +234,8 @@ pub async fn store_approved(bridge: &Bridge, msg: &PreparedMessage) -> Result<St
 /// (a child's pane_bind binds its parent), so the principal here is never a
 /// child and needs no parent view; a child reading its parent's mail writes an
 /// `onBehalfOf` receipt, which clears the parent's count too.
-pub async fn unread_for_pane(bridge: &Bridge, pane: &str) -> Result<usize, ApiError> {
+/// Unread count for a pane plus its newest unread message (inbox is newest-first).
+pub async fn unread_for_pane(bridge: &Bridge, pane: &str) -> Result<(usize, Option<mailbox::MessageEnvelope>), ApiError> {
     let store = context()?;
     let (principal, _) = {
         let sessions = bridge.sessions().await;
@@ -242,8 +243,9 @@ pub async fn unread_for_pane(bridge: &Bridge, pane: &str) -> Result<usize, ApiEr
             &Principal::Pane(pane.into()), |pane| sessions.contains_key(pane),
         ).map_err(mailbox_error)?
     };
-    Ok(mailbox::inbox(&store.messages, &store.reads, &principal, Some(pane), true, 2000)
-        .map_err(mailbox_error)?.len())
+    let unread = mailbox::inbox(&store.messages, &store.reads, &principal, Some(pane), true, 2000)
+        .map_err(mailbox_error)?;
+    Ok((unread.len(), unread.into_iter().next()))
 }
 
 fn limit(params: &HashMap<String, String>) -> usize {
