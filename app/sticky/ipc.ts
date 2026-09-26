@@ -1,15 +1,44 @@
 import {BrowserWindow, dialog, ipcMain, shell} from 'electron';
 
 import {translateContainerPath} from './constants';
+import {isSafeExternalUrl} from './external-url';
 import {showStickyContextMenu, toggleStickySeeThrough} from './menu';
 import {loadStickySeeThrough, readStickyHidden} from './preferences';
 import {SEARCH_WIN_ID, stickyWindows} from './registry';
-import {scheduleSticky, startScheduler, unscheduleSticky} from './scheduler';
+import {readHistory} from './runs/history';
+import {N8_INSTALL_URL, n8ConfigPath} from './runs/runners';
+import {listOpenPanes, replyError, sidecarRequest} from './runs/sidecar';
+import {clearRun, pauseRun, runNow, setRun, startScheduler} from './scheduler';
 import {handleStickyHighlight} from './security';
 import {readAllNotes} from './store';
 import {buildStickysSummary} from './summary';
-import type {StickySchedule} from './types';
+import type {StickyRun} from './types';
 import {closeStickyNote, createStickyNote, hideAllStickys, hideSticky, showAllStickys} from './window';
+
+function registerRunIpc(): void {
+  ipcMain.handle('sticky-run-set', (_event, id: string, run: StickyRun) => setRun(id, run, {human: true}));
+  ipcMain.handle('sticky-run-clear', (_event, id: string) => clearRun(id));
+  ipcMain.handle('sticky-run-now', (_event, id: string) => runNow(id));
+  ipcMain.handle('sticky-run-pause', (_event, id: string, paused: boolean) => pauseRun(id, !!paused));
+  ipcMain.handle('sticky-run-history', (_event, id: string, limit?: number) =>
+    readHistory(id, Number.isInteger(limit) && (limit as number) > 0 ? (limit as number) : 50)
+  );
+  ipcMain.handle('sticky-run-panes', async () => {
+    const r = await listOpenPanes();
+    return r.ok ? r.panes : [];
+  });
+  ipcMain.handle('sticky-n8-status', async () => {
+    const extra = {config_path: n8ConfigPath(), install_url: N8_INSTALL_URL};
+    const r = await sidecarRequest('GET', '/api/n8/status');
+    if (!r.ok) return {installed: false, running: false, providers: [], error: replyError(r), ...extra};
+    return {...r.data, ...extra};
+  });
+  ipcMain.handle('sticky-n8-start', async () => {
+    const r = await sidecarRequest('POST', '/api/n8/start', {}, 20000);
+    if (!r.ok) return {ok: false, running: false, error: replyError(r)};
+    return {ok: !!r.data?.ok, running: !!r.data?.running, error: r.data?.error};
+  });
+}
 
 export function initSticky(): void {
   ipcMain.on('new-sticky', (_event, options?: {filePath?: string; text?: string}) => {
@@ -62,12 +91,7 @@ export function initSticky(): void {
     return res.canceled || !res.filePaths.length ? null : res.filePaths[0];
   });
 
-  ipcMain.on('sticky-schedule', (_event, noteId: string, sched: StickySchedule) => {
-    scheduleSticky(noteId, sched);
-  });
-  ipcMain.on('sticky-unschedule', (_event, noteId: string) => {
-    unscheduleSticky(noteId);
-  });
+  registerRunIpc();
 
   startScheduler();
   loadStickySeeThrough();
@@ -102,6 +126,11 @@ export function initSticky(): void {
   });
 
   ipcMain.on('sticky-open-external', (_event, url: string) => {
+    // Sticky text is agent-writable; only web and mail links may reach the OS handler.
+    if (!isSafeExternalUrl(url)) {
+      console.warn('[sticky] refused to open non-web link:', String(url).slice(0, 200));
+      return;
+    }
     void shell.openExternal(url);
   });
 

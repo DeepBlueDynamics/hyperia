@@ -20,7 +20,7 @@
     <input type="text" class="titlebar-input" id="titleInput" style="display:none" spellcheck="false" />
     <span class="titlebar-spacer"></span>
     <span class="titlebar-btn lines-btn" id="linesBtn" style="display:none" title="Toggle line numbers">#</span>
-    <span class="titlebar-btn schedule-btn" id="scheduleBtn" title="Schedule this sticky (run on a timer)">
+    <span class="titlebar-btn schedule-btn" id="scheduleBtn" title="Run this sticky (now, at a time, or on a schedule)">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <circle cx="12" cy="12" r="9" />
@@ -63,75 +63,60 @@
   <div class="ai-highlight-banner" id="aiBanner" style="display:none"></div>
   <div class="content" id="content"></div>
 
-  <!-- Scheduling panel — picker-style overlay, opened by the ⏰ titlebar button. -->
+  <!-- Run panel: picker-style overlay opened by the ⏰ button; schedule-ui.js wires it. -->
   <div class="sched-overlay" id="schedOverlay" style="display:none">
     <div class="sched-panel">
-      <div class="sched-head">
-        <span>⏰ Schedule this sticky</span>
-        <span class="sched-close" id="schedCancel" title="Cancel">×</span>
+      <div class="sched-head"><span>⏰ Run this sticky</span><span class="sched-close" id="schedCancel" title="Cancel">×</span></div>
+      <div class="sched-row"><label>When</label>
+        <div class="seg" id="segWhen"><span data-v="now">Now</span><span data-v="at">At</span><span data-v="every">Every</span></div>
       </div>
-
-      <div class="sched-row">
-        <label>When</label>
-        <select id="schedWhen">
-          <option value="once">Once — run now</option>
-          <option value="reminder">Reminder — once, after a delay</option>
-          <option value="at">At — once, at a date/time</option>
-          <option value="cron">Recurring — cron schedule</option>
-        </select>
+      <div class="sched-row" id="rowAt"><label></label><input type="datetime-local" id="runAt" /></div>
+      <div class="sched-sub" id="rowEvery">
+        <div class="sched-row"><label></label>
+          <select id="everyKind"><option value="interval">Interval</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="cron">Advanced (cron)</option></select>
+        </div>
+        <div class="sched-row" id="rowInterval"><label>every</label><input type="number" id="intervalN" min="1" value="15" />
+          <select id="intervalUnit"><option value="m">minutes</option><option value="h">hours</option></select></div>
+        <div class="sched-row" id="rowDaily"><label>at</label><input type="time" id="dailyTime" /></div>
+        <div class="sched-row sched-days" id="rowWeekly"><label>on</label><span id="weeklyDays"></span></div>
+        <div class="sched-row" id="rowWeeklyTime"><label>at</label><input type="time" id="weeklyTime" /></div>
+        <div class="sched-row" id="rowCron"><label>cron</label><input type="text" id="cronExpr" placeholder="0 9 * * 1-5" spellcheck="false" /></div>
       </div>
-
-      <div class="sched-row" id="rowReminder">
-        <label>In</label>
-        <input type="number" id="schedDelay" min="1" value="10" />
-        <select id="schedUnit">
-          <option value="m">minutes</option>
-          <option value="h">hours</option>
-          <option value="d">days</option>
-        </select>
+      <div class="sched-row"><label>Run</label>
+        <div class="seg" id="segTarget"><span data-v="notify">Notify</span><span data-v="agent">Agent</span><span data-v="pane">Pane</span></div>
       </div>
-
-      <div class="sched-row" id="rowAt" style="display:none">
-        <label>At</label>
-        <input type="datetime-local" id="schedAt" />
+      <div class="sched-sub" id="rowAgent">
+        <div class="sched-note" id="n8Notice" style="display:none"></div>
+        <div class="sched-row"><label>Agent</label><select id="agentProvider"></select></div>
+        <div class="sched-row"><label>Image</label><input type="text" id="agentImage" value="default" disabled />
+          <span class="sched-hint">Picking an image: coming soon</span></div>
+        <div class="sched-row"><label>Dir</label><input type="text" id="agentDir" placeholder="folder to mount" spellcheck="false" />
+          <span class="sched-pick" id="agentPickDir" title="Pick directory">📁</span></div>
+        <div class="sched-row"><label></label><label class="sched-check"><input type="checkbox" id="agentDanger" /> danger mode</label></div>
       </div>
-
-      <div class="sched-row" id="rowCron" style="display:none">
-        <label>Cron</label>
-        <input type="text" id="schedCron" placeholder="*/15 * * * *" />
-        <select id="schedCronPreset">
-          <option value="">presets…</option>
-          <option value="*/15 * * * *">every 15 min</option>
-          <option value="0 * * * *">hourly</option>
-          <option value="0 9 * * *">daily 9am</option>
-          <option value="0 9 * * 1">Mondays 9am</option>
-        </select>
+      <div class="sched-sub" id="rowPane">
+        <div class="sched-row"><label>Pane</label><select id="paneSelect"></select></div>
+        <div class="sched-hint">Needs your approval when you schedule.</div>
       </div>
-
-      <div class="sched-row">
-        <label>Run</label>
-        <select id="schedRunner">
-          <option value="notify">Notification only (no execution)</option>
-          <option value="shell">Hyperia terminal — runs visibly in its own tab</option>
-          <option value="n8shell">Nemesis8 shell — command in the n8 container</option>
-          <option value="n8agent">Nemesis8 agent — hand the note to the agent</option>
-        </select>
-      </div>
-
-      <div class="sched-row" id="rowDir" style="display:none">
-        <label>Dir</label>
-        <input type="text" id="schedDir" placeholder="working directory" />
-        <span class="sched-pick" id="schedPickDir" title="Pick directory">📁</span>
-      </div>
-
-      <div class="sched-note" id="schedHardNote" style="display:none">
-        ⚡ Scheduling with a runner locks this note read-only (a “hard” sticky) until you unschedule.
-      </div>
-
+      <div class="sched-row"><label>History</label><label class="sched-check"><input type="checkbox" id="historyKeep" /> keep</label>
+        <input type="number" id="historyLimit" min="1" value="50" /><span class="sched-hint">runs</span></div>
+      <div class="sched-error" id="runError" style="display:none"></div>
+      <div class="sched-status" id="runStatus" style="display:none"></div>
       <div class="sched-actions">
         <span class="sched-btn ghost" id="schedUnschedule" style="display:none">Unschedule</span>
+        <span class="sched-spacer"></span>
+        <span class="sched-btn plain" id="schedCancelBtn">Cancel</span>
+        <span class="sched-btn" id="schedRunNow">Run now</span>
         <span class="sched-btn" id="schedConfirm">Schedule</span>
       </div>
+    </div>
+  </div>
+
+  <!-- Run history: same overlay look, filled by run-view.js. -->
+  <div class="sched-overlay" id="histOverlay" style="display:none">
+    <div class="sched-panel hist-panel">
+      <div class="sched-head"><span id="histTitle">History</span><span class="sched-close" id="histClose" title="Close">×</span></div>
+      <div class="hist-list" id="histList"></div>
     </div>
   </div>
 

@@ -2,7 +2,7 @@
 // (components/consent-modal.tsx). Kept free of Electron/React so the three
 // variants — pane access, messaging, mailbox binding — are unit-testable.
 
-export type ConsentKind = 'access' | 'message' | 'bind';
+export type ConsentKind = 'access' | 'message' | 'bind' | 'sticky_run';
 
 export type ConsentVariant = {
   kind: ConsentKind;
@@ -24,6 +24,16 @@ export function consentVariant(action?: string): ConsentVariant {
       tail: '— approving delivers the waiting message.',
       accessChip: 'This recipient',
       showDuration: true
+    };
+  }
+  if (action === 'sticky_run') {
+    // The sidecar puts the full sentence (prompt, target, When) in `purpose`.
+    return {
+      kind: 'sticky_run',
+      verb: ' asks to arm sticky ',
+      tail: '— approving arms this run only; denying clears it.',
+      accessChip: 'This run',
+      showDuration: false
     };
   }
   if (action?.startsWith('bind:')) {
@@ -61,6 +71,8 @@ export type ConsentTarget = {
 export function consentTargetName(req: ConsentTarget, sessionName?: string): string {
   // Sentinel targets aren't panes: __audio__ gates host audio (epic #162).
   if (req.targetPane === '__audio__') return '🔊 audio on this machine';
+  // Sticky runs name the sticky (sidecar-supplied), not the pane.
+  if (req.action === 'sticky_run' && req.recipientLabel?.trim()) return `'${req.recipientLabel.trim()}'`;
   if (consentVariant(req.action).kind === 'message') {
     const label = req.recipientLabel?.trim();
     if (label) return label;

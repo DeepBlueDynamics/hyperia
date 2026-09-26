@@ -18,6 +18,9 @@ use tokio::sync::Mutex;
 /// real pane target). Kept out-of-band so it can't collide with a real uid.
 pub const CREATE_KEY: &str = "__create__";
 
+/// Consent action for a sticky run awaiting approval (main.rs resolves it).
+pub const STICKY_RUN_ACTION: &str = "sticky_run";
+
 /// A pending consent prompt awaiting a human decision.
 #[derive(Clone)]
 pub struct PermRequest {
@@ -462,17 +465,19 @@ impl PermStore {
         let is_cap = req.action.starts_with("cap:");
         let message_recipient = req.action.strip_prefix("message:");
         let is_bind = req.action.starts_with("bind:");
+        // A sticky run approval arms that run only; it must never become a drive grant.
+        let is_sticky_run = req.action == STICKY_RUN_ACTION;
         // Denials/grants key: create on the sentinel, cap on its action string,
         // drive on the target pane.
         let key = if is_create {
             CREATE_KEY.to_string()
-        } else if is_cap || message_recipient.is_some() || is_bind {
+        } else if is_cap || message_recipient.is_some() || is_bind || is_sticky_run {
             req.action.clone()
         } else {
             req.target_pane.clone()
         };
         if allow {
-            if is_bind {
+            if is_bind || is_sticky_run {
                 // Binding approval is consumed by the mailbox service. It grants no drive access.
             } else if is_cap {
                 let cap = req.action.strip_prefix("cap:").unwrap_or("");
@@ -810,6 +815,15 @@ impl PermStore {
 #[cfg(test)]
 mod pane_close_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn approving_a_sticky_run_grants_no_pane_access() {
+        let perms = PermStore::for_tests();
+        let req = perms.create_request("agent:latin-flea", "", "pane-target", STICKY_RUN_ACTION, "Send sticky").await;
+        assert!(perms.respond(&req.id, true, "any", None).await.is_some());
+        let snap = perms.snapshot().await;
+        assert!(snap["grants"].as_array().unwrap().is_empty(), "sticky_run must not create a drive grant: {snap}");
+    }
 
     #[tokio::test]
     async fn closing_a_pane_returns_and_removes_prompts_aimed_at_or_from_it() {

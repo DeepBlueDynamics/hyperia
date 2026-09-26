@@ -711,7 +711,7 @@ impl Bridge {
                 let mins =
                     until.saturating_duration_since(std::time::Instant::now()).as_secs() / 60 + 1;
                 return Err(format!(
-                    "REFUSED: idle pokes for this pane are suspended (~{mins} min left) after {RATE_BLOCK_AT} fires inside {} minutes. When the block clears, schedule further out — fewer fires with a longer horizon — or use sticky_note_schedule for a timed check instead.",
+                    "REFUSED: idle pokes for this pane are suspended (~{mins} min left) after {RATE_BLOCK_AT} fires inside {} minutes. When the block clears, re-arm pane_on_idle further out — fewer fires with a longer horizon — or, for a timed check, use sticky_note_run with target='pane' on your own pane (a human approves it once).",
                     RATE_WINDOW_SECS / 60
                 ));
             }
@@ -1173,7 +1173,7 @@ impl Bridge {
                                 to_fire.push((
                                     c.pane.clone(),
                                     format!(
-                                        "[Hyperia] Idle pokes for this pane hit {n} in {} minutes and are now SUSPENDED for 1 hour — this is the last one, and pane_on_idle re-arms will be refused until the block clears. When you are back, schedule further out instead of re-arming in a loop: fewer pokes with a longer horizon, or sticky_note_schedule for a timed reminder.",
+                                        "[Hyperia] Idle pokes for this pane hit {n} in {} minutes and are now SUSPENDED for 1 hour — this is the last one, and pane_on_idle re-arms will be refused until the block clears. When you are back, schedule further out instead of re-arming in a loop: fewer pokes with a longer horizon, or sticky_note_run with target='pane' on your own pane for a timed reminder (a human approves it once).",
                                         RATE_WINDOW_SECS / 60
                                     ),
                                     None,
@@ -1183,7 +1183,7 @@ impl Bridge {
                             } else {
                                 let keys = if n >= RATE_WARN_AT {
                                     format!(
-                                        "{}\n[Hyperia rate warning] This is idle poke {n} in {} minutes for this pane. Reschedule instead of re-arming hot — a longer horizon, fewer fires, or sticky_note_schedule — because at {RATE_BLOCK_AT} pokes in the window, idle pokes are cut off for 1 hour.",
+                                        "{}\n[Hyperia rate warning] This is idle poke {n} in {} minutes for this pane. Reschedule instead of re-arming hot — a longer horizon, fewer fires, or a sticky_note_run pane target on your own pane — because at {RATE_BLOCK_AT} pokes in the window, idle pokes are cut off for 1 hour.",
                                         c.keys,
                                         RATE_WINDOW_SECS / 60
                                     )

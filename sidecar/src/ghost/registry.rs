@@ -976,7 +976,12 @@ impl ToolRegistry {
             }
             "sticky_note_update" => {
                 let id = input["id"].as_str().unwrap_or("");
-                let body = serde_json::json!({ "text": input["text"] });
+                let mut body = serde_json::json!({});
+                for k in ["text", "result"] {
+                    if input[k].is_string() {
+                        body[k] = input[k].clone();
+                    }
+                }
                 self.client
                     .patch(format!("{}/api/notes/{}", base, id))
                     .json(&body)
@@ -2340,14 +2345,15 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
         },
         {
             "name": "sticky_note_update",
-            "description": "Update the text of an existing sticky note.",
+            "description": "Update a sticky note: `text` replaces its prompt, `result` replaces its result. Changing `text` on a note with an armed run is refused (409).",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "id": { "type": "string", "description": "Note id from note_list" },
-                    "text": { "type": "string", "description": "New note content" }
+                    "text": { "type": "string", "description": "New note content (the prompt)" },
+                    "result": { "type": "string", "description": "New result (replaces the previous one)" }
                 },
-                "required": ["id", "text"]
+                "required": ["id"]
             }
         },
         {

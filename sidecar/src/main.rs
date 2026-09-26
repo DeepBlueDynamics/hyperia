@@ -19,6 +19,7 @@ mod mcp_sessions;
 mod messages;
 mod models;
 mod msgbus;
+mod n8;
 mod messaging;
 mod delivery;
 mod delivery_service;
@@ -27,6 +28,7 @@ mod process;
 mod lume_store;
 mod screen;
 mod stream;
+mod sticky_runs;
 mod util;
 mod workspace;
 mod settings;
@@ -1982,6 +1984,7 @@ async fn enforce_note_access(
         std::env::var("HOME").ok()
     };
     let mut creator: Option<String> = None;
+    let mut note_val: Option<serde_json::Value> = None;
     if let Some(home) = home {
         let path = std::path::PathBuf::from(home)
             .join(".hyperia")
@@ -1991,6 +1994,7 @@ async fn enforce_note_access(
             if let Ok(notes) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
                 if let Some(note) = resolve_note(&notes, note_id) {
                     creator = note["creator"].as_str().map(String::from);
+                    note_val = Some(note.clone());
                 }
             }
         }
@@ -2010,6 +2014,14 @@ async fn enforce_note_access(
 
     // Check if caller is the owner
     if owner == Some(caller_label.as_str()) {
+        return Ok(());
+    }
+
+    // First-touch grant: a nemesis8 agent working this note's in-flight approved run.
+    // Scoped to this note and this request; nothing is persisted.
+    let principal = id.principal_key();
+    if note_val.as_ref().is_some_and(|n| sticky_runs::first_touch_grant(&principal, n)) {
+        tracing::info!("sticky first-touch grant: {principal} -> note {note_id} (approved run in flight)");
         return Ok(());
     }
 
@@ -2172,6 +2184,9 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
                 &req.action,
                 &req.target_pane,
             );
+            if req.action == sticky_runs::APPROVAL_ACTION {
+                resolve_sticky_run_approval(&state, &req.id, allow).await;
+            }
             // Retained terminal/mail operations are resolved above and executed by the worker.
             // A held CREATE (split/new-tab/web-pane) executes on approval — the
             // human said "ok, that's fine", so DO the thing, don't just grant
@@ -4008,78 +4023,304 @@ async fn patch_note(
     if let Err(resp) = enforce_note_access(&state, &headers, &id).await {
         return resp;
     }
+    let err = |code: StatusCode, msg: &str| (code, serde_json::json!({"ok": false, "error": msg}).to_string());
     let payload: serde_json::Value = match serde_json::from_str(&body) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()),
+        Err(e) => return err(StatusCode::BAD_REQUEST, &e.to_string()),
     };
-    let text = match payload["text"].as_str() {
-        Some(t) => t.to_string(),
-        None => return (StatusCode::BAD_REQUEST, "Missing 'text' field".into()),
+    let text = match payload.get("text") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(t)) => Some(t.clone()),
+        Some(_) => return err(StatusCode::BAD_REQUEST, "'text' must be a string"),
     };
-
-    let home = if cfg!(windows) {
-        std::env::var("USERPROFILE").ok()
-    } else {
-        std::env::var("HOME").ok()
+    let result = match payload.get("result") {
+        None => None,
+        Some(serde_json::Value::Null) => Some(String::new()),
+        Some(serde_json::Value::String(r)) => Some(r.clone()),
+        Some(_) => return err(StatusCode::BAD_REQUEST, "'result' must be a string"),
     };
-    let Some(home) = home else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "No home directory".into());
-    };
-
-    let path = std::path::PathBuf::from(home)
-        .join(".hyperia")
-        .join("stickys")
-        .join("notes.json");
-
-    let mut notes = match std::fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str::<Vec<serde_json::Value>>(&content).unwrap_or_default(),
-        Err(_) => return (StatusCode::NOT_FOUND, String::new()),
-    };
-
-    let found = notes.iter_mut().find(|n| n["id"].as_str() == Some(id.as_str()));
-    let Some(note) = found else {
-        return (StatusCode::NOT_FOUND, String::new());
-    };
-    note["text"] = serde_json::Value::String(text.clone());
-
-    let serialized = match serde_json::to_string_pretty(&notes) {
-        Ok(content) => content,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    };
-    if let Err(e) = std::fs::write(&path, serialized) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    if text.is_none() && result.is_none() {
+        return err(StatusCode::BAD_REQUEST, "Provide 'text' (the prompt) and/or 'result'");
+    }
+    if result.as_ref().is_some_and(|r| r.len() > sticky_runs::RESULT_MAX_BYTES) {
+        return err(StatusCode::PAYLOAD_TOO_LARGE, "'result' is too large (max 256 KB)");
     }
 
-    let cmd = serde_json::json!({"type": "NoteUpdate", "id": id, "text": text});
-    match state.bridge.send_command(cmd).await {
-        Ok(_) => (StatusCode::OK, serde_json::json!({"ok": true}).to_string()),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    let notes = match sticky_runs::load_notes() {
+        Ok(n) => n,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
+    let Some(note) = resolve_note(&notes, &id) else {
+        return err(StatusCode::NOT_FOUND, &format!("Note {id} not found"));
+    };
+    let note_id = note["id"].as_str().unwrap_or(&id).to_string();
+    let caller = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    if let Err(msg) = sticky_runs::check_prompt_edit(note, text.as_deref(), caller.is_system()) {
+        return err(StatusCode::CONFLICT, msg);
+    }
+
+    // Main owns notes.json (one atomic writer). A result-only patch still carries
+    // the current text so an older NoteUpdate handler can't blank the prompt.
+    let mut cmd = serde_json::json!({"type": "NoteUpdate", "id": note_id});
+    match (&text, note["text"].as_str()) {
+        (Some(t), _) => cmd["text"] = serde_json::json!(t),
+        (None, Some(current)) => cmd["text"] = serde_json::json!(current),
+        (None, None) => {}
+    }
+    if let Some(r) = &result {
+        cmd["result"] = serde_json::json!(r);
+    }
+    match sticky_runs::parse_engine_reply(state.bridge.send_command(cmd).await) {
+        Ok(_) => (StatusCode::OK, serde_json::json!({"ok": true, "id": note_id}).to_string()),
+        Err((code, body)) => (StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_GATEWAY), body.to_string()),
     }
 }
 
-/// Schedule (or with body {"schedule":null} unschedule) a sticky. The schedule
-/// object is forwarded verbatim to Electron, which owns the timer + runners.
-async fn post_note_schedule(
+/// Who a consent prompt names: the pane codename, the agent label, or "You".
+async fn sticky_requester_name(state: &AppState, id: &identity::CallerIdentity) -> String {
+    if id.is_system() {
+        return "You".into();
+    }
+    requester_display_name(state, id).await.unwrap_or_else(|| id.label())
+}
+
+/// POST /api/notes/{id}/run — arm, change, pause or clear a sticky's run.
+/// Body: a StickyRun, `{clear:true}`, or `{paused:bool}`. Validates, stamps
+/// `created_by`, decides consent, then hands it to Electron's engine (NoteRun).
+async fn post_note_run(
     State(state): State<AppState>,
     headers: HeaderMap,
-    axum::extract::Path(id): axum::extract::Path<String>,
+    Path(id): Path<String>,
     body: String,
+) -> (StatusCode, String) {
+    use sticky_runs::{CallerKind, RunTarget};
+    let err = |code: StatusCode, msg: &str| (code, serde_json::json!({"ok": false, "error": msg}).to_string());
+    let reply = |r: Result<serde_json::Value, (u16, serde_json::Value)>| match r {
+        Ok(v) => (StatusCode::OK, v.to_string()),
+        Err((code, body)) => (StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_GATEWAY), body.to_string()),
+    };
+
+    let caller = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    if caller.is_anonymous() {
+        return err(
+            StatusCode::UNAUTHORIZED,
+            "Identity required to schedule a sticky: present your HYPERIA_AGENT_TOKEN as \
+             'Authorization: Bearer <token>' (or call request_token), so the human can see who is asking.",
+        );
+    }
+    if let Err(resp) = enforce_note_access(&state, &headers, &id).await {
+        return resp;
+    }
+    let notes = match sticky_runs::load_notes() {
+        Ok(n) => n,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
+    let Some(note) = resolve_note(&notes, &id) else {
+        return err(StatusCode::NOT_FOUND, &format!("Note {id} not found"));
+    };
+    let note_id = note["id"].as_str().unwrap_or(&id).to_string();
+    let note_name = note["name"].as_str().filter(|n| !n.is_empty()).unwrap_or(&note_id).to_string();
+    let payload: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &format!("bad JSON: {e}")),
+    };
+
+    // Clear: drop any pending prompt, then unschedule.
+    if payload.get("clear").and_then(|c| c.as_bool()) == Some(true) {
+        dismiss_stale_sticky_prompt(&state, sticky_runs::drop_for_note(&note_id)).await;
+        let cmd = serde_json::json!({"type": "NoteRun", "id": note_id, "clear": true});
+        return reply(sticky_runs::parse_engine_reply(state.bridge.send_command(cmd).await));
+    }
+
+    // Pause/resume re-sends the stored run (approval kept: nothing new to approve).
+    if let Some(obj) = payload.as_object().filter(|o| o.len() == 1 && o.contains_key("paused")) {
+        let Some(paused) = obj["paused"].as_bool() else {
+            return err(StatusCode::BAD_REQUEST, "'paused' must be true or false");
+        };
+        let Some(mut run) = note.get("run").filter(|r| r.is_object()).cloned() else {
+            return err(StatusCode::CONFLICT, "This sticky has no run to pause");
+        };
+        run["paused"] = serde_json::json!(paused);
+        let cmd = serde_json::json!({"type": "NoteRun", "id": note_id, "run": run});
+        return reply(sticky_runs::parse_engine_reply(state.bridge.send_command(cmd).await));
+    }
+
+    let mut run = match sticky_runs::parse_run(&payload) {
+        Ok(r) => r,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &e),
+    };
+    if let Some(pane) = run.pane.as_mut() {
+        let live = state.bridge.sessions().await.get(&pane.uid).map(|s| s.shell_name.clone());
+        match live {
+            None => {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    &format!("pane.uid {:?} is not an open pane (see terminal_status)", pane.uid),
+                )
+            }
+            Some(name) if pane.name.trim().is_empty() => {
+                pane.name = if name.is_empty() { pane.uid.chars().take(8).collect() } else { name }
+            }
+            Some(_) => {}
+        }
+    }
+    let principal = caller.principal_key();
+    run.created_by = Some(sticky_runs::created_by_for(&principal, caller.is_system()));
+    run.approved = None; // never trusted from the caller
+    let kind = if caller.is_system() { CallerKind::Human } else { CallerKind::Agent };
+    let needs = sticky_runs::needs_approval(kind, run.target);
+    if !needs {
+        run.approved = Some(sticky_runs::Approved { at: sticky_runs::now_ms() });
+    }
+
+    // A re-post supersedes any earlier prompt for this note.
+    dismiss_stale_sticky_prompt(&state, sticky_runs::drop_for_note(&note_id)).await;
+    let cmd = serde_json::json!({"type": "NoteRun", "id": note_id, "run": run});
+    let mut out = match sticky_runs::parse_engine_reply(state.bridge.send_command(cmd).await) {
+        Ok(v) => v,
+        Err(e) => return reply(Err(e)),
+    };
+    if !needs {
+        return (StatusCode::OK, out.to_string());
+    }
+
+    // Held for the human: the engine has it as awaiting_approval (no `approved`).
+    let who = sticky_requester_name(&state, &caller).await;
+    let prompt_text = note["text"].as_str().unwrap_or("");
+    let purpose = sticky_runs::approval_text(kind, &who, &note_name, prompt_text, &run);
+    let requester_pane = match &caller {
+        identity::CallerIdentity::Pane { pane, .. } => pane.clone(),
+        _ => String::new(),
+    };
+    let target = match (&run.target, &run.pane) {
+        (RunTarget::Pane, Some(p)) => p.uid.clone(),
+        _ => format!("sticky:{note_id}"),
+    };
+    let req = state
+        .bridge
+        .perms()
+        .create_request(&principal, &requester_pane, &target, sticky_runs::APPROVAL_ACTION, &purpose)
+        .await;
+    sticky_runs::park(&note_id, &req.id, run);
+    consent_log::record_request(&req.id, &req.requester, &who, caller.kind(), &req.action, &req.target_pane, &req.purpose);
+    let _ = state
+        .bridge
+        .notify(serde_json::json!({
+            "type": "PermissionRequest",
+            "id": req.id,
+            "requester": req.requester,
+            "requesterName": who,
+            "requesterPane": req.requester_pane,
+            "targetPane": req.target_pane,
+            "action": req.action,
+            "purpose": req.purpose,
+            "recipientLabel": note_name,
+        }))
+        .await;
+    out["ok"] = serde_json::json!(true);
+    out["status"] = serde_json::json!("awaiting_approval");
+    out["approval"] = serde_json::json!({"id": req.id, "prompt": purpose});
+    (StatusCode::OK, out.to_string())
+}
+
+/// Consume a superseded sticky_run prompt so the UI drops it.
+async fn dismiss_stale_sticky_prompt(state: &AppState, perm_id: Option<String>) {
+    let Some(perm_id) = perm_id else { return };
+    if let Some(req) = state.bridge.perms().respond(&perm_id, false, "pane", None).await {
+        state.bridge.perms().clear_denial(&req.requester, &req.action).await;
+        let _ = state
+            .bridge
+            .notify(serde_json::json!({
+                "type": "PermissionResolved", "id": req.id, "targetPane": req.target_pane,
+                "requesterPane": req.requester_pane, "action": req.action, "decision": "expired",
+            }))
+            .await;
+    }
+}
+
+/// On the human's answer: approve → stamp `approved` and re-send; deny → clear.
+async fn resolve_sticky_run_approval(state: &AppState, perm_id: &str, allow: bool) {
+    let Some((note_id, mut run)) = sticky_runs::take_by_perm(perm_id) else {
+        tracing::info!("sticky_run approval {perm_id}: no pending run (superseded or cleared)");
+        return;
+    };
+    let cmd = if allow {
+        run.approved = Some(sticky_runs::Approved { at: sticky_runs::now_ms() });
+        serde_json::json!({"type": "NoteRun", "id": note_id, "run": run})
+    } else {
+        serde_json::json!({"type": "NoteRun", "id": note_id, "clear": true})
+    };
+    if let Err((_, e)) = sticky_runs::parse_engine_reply(state.bridge.send_command(cmd).await) {
+        tracing::warn!("sticky_run {perm_id} for {note_id}: engine refused: {e}");
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RunsQuery {
+    limit: Option<usize>,
+}
+
+/// GET /api/notes/{id}/runs?limit= — run history for one note, newest first.
+async fn get_note_runs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<RunsQuery>,
 ) -> (StatusCode, String) {
     if let Err(resp) = enforce_note_access(&state, &headers, &id).await {
         return resp;
     }
-    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
-    // Accept either the bare schedule object or {"schedule": {...}}.
-    let schedule = if parsed.get("schedule").is_some() {
-        parsed["schedule"].clone()
-    } else {
-        parsed
+    let notes = match sticky_runs::load_notes() {
+        Ok(n) => n,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, serde_json::json!({"ok": false, "error": e}).to_string()),
     };
-    let cmd = serde_json::json!({"type": "NoteSchedule", "id": id, "schedule": schedule});
-    match state.bridge.send_command(cmd).await {
-        Ok(_) => (StatusCode::OK, serde_json::json!({"ok": true}).to_string()),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e),
+    let Some(note) = resolve_note(&notes, &id) else {
+        return (StatusCode::NOT_FOUND, serde_json::json!({"ok": false, "error": format!("Note {id} not found")}).to_string());
+    };
+    let note_id = note["id"].as_str().unwrap_or(&id).to_string();
+    let limit = q.limit.unwrap_or(sticky_runs::HISTORY_DEFAULT_LIMIT as usize).clamp(1, sticky_runs::HISTORY_MAX_LIMIT as usize);
+    let runs = sticky_runs::read_history(&note_id, limit);
+    (StatusCode::OK, serde_json::json!({"id": note_id, "count": runs.len(), "runs": runs}).to_string())
+}
+
+/// GET /api/notes/runs — every note with a run, plus its run_state, that the caller may see.
+async fn get_notes_runs(State(state): State<AppState>, headers: HeaderMap) -> (StatusCode, String) {
+    use perms::AuthDecision;
+    let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+    let notes = match sticky_runs::load_notes() {
+        Ok(n) => n,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, serde_json::json!({"ok": false, "error": e}).to_string()),
+    };
+    let see_all = !state.bridge.perms().enforced()
+        || id.is_system()
+        || matches!(
+            state.bridge.authorize_capability(&id, "sticky:list_all").await,
+            AuthDecision::Allow | AuthDecision::RefuseHome
+        );
+    let label = id.label();
+    let principal = id.principal_key();
+    let mut runs = Vec::new();
+    for note in notes.iter().filter(|n| n.get("run").is_some_and(|r| r.is_object())) {
+        let nid = note["id"].as_str().unwrap_or("");
+        let mut visible = see_all
+            || note["creator"].as_str() == Some(label.as_str())
+            || note.pointer("/run/created_by").and_then(|c| c.as_str()) == Some(principal.as_str());
+        if !visible && !id.is_anonymous() {
+            visible = matches!(
+                state.bridge.authorize_capability(&id, &format!("sticky:access:{nid}")).await,
+                AuthDecision::Allow | AuthDecision::RefuseHome
+            );
+        }
+        if visible {
+            runs.push(serde_json::json!({
+                "id": nid,
+                "name": note["name"],
+                "run": note["run"],
+                "run_state": note.get("run_state").cloned().unwrap_or(serde_json::Value::Null),
+            }));
+        }
     }
+    (StatusCode::OK, serde_json::json!({"count": runs.len(), "runs": runs}).to_string())
 }
 
 /// Grapheme-safe transactional file edit, backed by the aegis-edit module.
@@ -4560,9 +4801,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/agent/config/edit", axum::routing::post(post_open_config_sticky))
         .route("/api/notes/highlight", axum::routing::post(post_notes_highlight))
         .route("/api/notes/{id}", axum::routing::get(get_note).delete(delete_note).patch(patch_note))
-        .route("/api/notes/{id}/schedule", axum::routing::post(post_note_schedule))
+        .route("/api/notes/runs", axum::routing::get(get_notes_runs))
+        .route("/api/notes/{id}/run", axum::routing::post(post_note_run))
+        .route("/api/notes/{id}/runs", axum::routing::get(get_note_runs))
         .route("/api/notes/close", axum::routing::post(post_note_close))
         .route("/api/notes/open", axum::routing::post(post_note_open))
+        .route("/api/n8/status", axum::routing::get(n8::get_status))
+        .route("/api/n8/start", axum::routing::post(n8::post_start))
+        .route("/api/n8/run", axum::routing::post(n8::post_run))
+        .route("/api/n8/run/{id}", axum::routing::get(n8::get_run).delete(n8::delete_run))
         .with_state(state);
 
     // Dashboard routes with their own state

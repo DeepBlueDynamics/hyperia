@@ -40,6 +40,7 @@ function start(ctx) {
   findWrap.appendChild(textarea);
   findWrap.appendChild(tickRail);
   content.appendChild(findWrap);
+  if (ctx.runView) ctx.runView.mount({textarea, content, promptWrap: findWrap});
 
   textarea.addEventListener('scroll', () => {
     highlightBackdrop.scrollTop = textarea.scrollTop;
@@ -117,8 +118,10 @@ function start(ctx) {
       if (doc.activeElement !== titleInput) titleInput.focus();
       return;
     }
-    const schedOverlay = doc.getElementById('schedOverlay');
-    if (schedOverlay && schedOverlay.style.display !== 'none') return;
+    for (const id of ['schedOverlay', 'histOverlay']) {
+      const ov = doc.getElementById(id);
+      if (ov && ov.style.display !== 'none') return;
+    }
     if (doc.activeElement !== textarea) {
       textarea.focus();
       if (setCursorAtEnd) textarea.setSelectionRange(textarea.value.length, textarea.value.length);
@@ -129,7 +132,9 @@ function start(ctx) {
   setTimeout(() => forceFocus(true), 200);
   setTimeout(() => forceFocus(true), 500);
   content.addEventListener('click', (e) => {
-    if (e.target !== textarea) forceFocus(false);
+    // Clicks in the result/footer (links, text selection) must not jump into the prompt.
+    const inRun = e.target && e.target.closest && e.target.closest('.run-result, .run-footer');
+    if (e.target !== textarea && !inRun) forceFocus(false);
   });
   doc.body.addEventListener('click', (e) => {
     if (e.target === doc.body) forceFocus(false);

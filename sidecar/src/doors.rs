@@ -190,7 +190,19 @@ pub const DOORS: &[Door] = &[
             "sticky_note_open",
             "sticky_note_close",
             "sticky_note_delete",
-            "sticky_note_schedule",
+        ],
+    },
+    // MCP-only for now: ghost has no run tools (its door count stays 9).
+    Door {
+        name: "sticky_runs",
+        description: "Schedule sticky runs (notify/agent/pane), list, history, pause",
+        ghost_tools: &[],
+        mcp_tools: &[
+            "sticky_note_run",
+            "sticky_note_runs",
+            "sticky_note_history",
+            "sticky_note_pause",
+            "sticky_note_unschedule",
         ],
     },
     Door {
@@ -728,9 +740,9 @@ mod tests {
 
     #[test]
     fn expected_door_counts_per_surface() {
-        // The shared messaging door extends the original 8 Ghost / 11 MCP doors.
+        // Messaging (shared) and sticky_runs (MCP-only) extend the original 8 Ghost / 11 MCP doors.
         assert_eq!(doors_for(Surface::Ghost).count(), 9, "ghost door count");
-        assert_eq!(doors_for(Surface::Mcp).count(), 12, "mcp door count");
+        assert_eq!(doors_for(Surface::Mcp).count(), 13, "mcp door count");
         assert_eq!(GHOST_CORE.len(), 11, "ghost core count");
         assert_eq!(MCP_CORE.len(), 14, "mcp core count");
     }
