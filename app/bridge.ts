@@ -19,8 +19,11 @@ import {
   closeStickyNote,
   deleteStickyNote,
   updateStickyNote,
-  scheduleSticky,
-  unscheduleSticky
+  setRun,
+  clearRun,
+  pauseRun,
+  runNow,
+  setResult
 } from './sticky';
 import {SYSTEM_TOKEN} from './system-token';
 import {capturePaneJpeg} from './web-pane-manager';
@@ -1263,15 +1266,17 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
-    case 'NoteSchedule': {
+    case 'NoteRun': {
+      // Sidecar has validated the caller and recorded created_by/approved; the engine re-validates.
       const noteId = msg.id as string;
-      const sched = msg.schedule as any;
-      if (sched) {
-        scheduleSticky(noteId, sched);
-      } else {
-        unscheduleSticky(noteId);
-      }
-      sendResult(seq, 'ok');
+      const action = (msg.action as string) || (msg.clear || msg.run === null ? 'clear' : 'set');
+      let res: unknown;
+      if (action === 'clear') res = clearRun(noteId);
+      else if (action === 'pause') res = pauseRun(noteId, msg.paused !== false);
+      else if (action === 'now') res = runNow(noteId);
+      else if (action === 'result') res = {ok: setResult(noteId, String(msg.result ?? ''))};
+      else res = setRun(noteId, msg.run as any);
+      sendResult(seq, JSON.stringify(res));
       break;
     }
 

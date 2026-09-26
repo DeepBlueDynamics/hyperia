@@ -19,6 +19,7 @@ mod mcp_sessions;
 mod messages;
 mod models;
 mod msgbus;
+mod n8;
 mod messaging;
 mod delivery;
 mod delivery_service;
@@ -4563,6 +4564,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/notes/{id}/schedule", axum::routing::post(post_note_schedule))
         .route("/api/notes/close", axum::routing::post(post_note_close))
         .route("/api/notes/open", axum::routing::post(post_note_open))
+        .route("/api/n8/status", axum::routing::get(n8::get_status))
+        .route("/api/n8/start", axum::routing::post(n8::post_start))
+        .route("/api/n8/run", axum::routing::post(n8::post_run))
+        .route("/api/n8/run/{id}", axum::routing::get(n8::get_run).delete(n8::delete_run))
         .with_state(state);
 
     // Dashboard routes with their own state

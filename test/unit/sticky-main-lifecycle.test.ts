@@ -57,8 +57,12 @@ test.serial('structural wiring: app/sticky facade exports all required public AP
     'closeStickyNote',
     'deleteStickyNote',
     'updateStickyNote',
-    'scheduleSticky',
-    'unscheduleSticky',
+    'setRun',
+    'clearRun',
+    'runNow',
+    'pauseRun',
+    'setResult',
+    'setRunState',
     'anyStickyVisible',
     'anyStickyHidden',
     'readAllNotes',
@@ -194,7 +198,7 @@ test.serial('deletion: explicit open of missing persisted ID returns win: null',
 test.serial('deletion: scheduler tick after note deletion does not resurrect note', async (t) => {
   const f = createStickyFixture(t);
   const res = f.sticky.createStickyNote({text: 'scheduled note'});
-  f.sticky.scheduleSticky(res.id, {when: 'reminder', runner: 'notify'});
+  f.sticky.setRun(res.id, {when: 'at', at: new Date().toISOString(), target: 'notify'});
 
   f.sticky.deleteStickyNote(res.id);
   t.is(f.sticky.readAllNotes().length, 0);

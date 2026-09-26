@@ -222,7 +222,7 @@ test.serial('scheduler: schedule runner while hidden keeps note hidden and un-fo
   const win = res.win as FakeBrowserWindow;
   win.emit('ready-to-show');
 
-  f.sticky.scheduleSticky(res.id, {when: 'reminder', delay: 0, unit: 'm', runner: 'notify'});
+  f.sticky.setRun(res.id, {when: 'at', at: new Date().toISOString(), target: 'notify'});
 
   f.ipcEmit('hide-all-stickys');
   t.true(f.sticky.readStickyHidden());
@@ -239,7 +239,7 @@ test.serial('scheduler: schedule runner while hidden keeps note hidden and un-fo
 test.serial('scheduler: closed scheduler note stays closed', async (t) => {
   const f = createStickyFixture(t);
   const res = f.sticky.createStickyNote({text: 'reminder'});
-  f.sticky.scheduleSticky(res.id, {when: 'reminder', delay: 0, unit: 'm', runner: 'notify'});
+  f.sticky.setRun(res.id, {when: 'at', at: new Date().toISOString(), target: 'notify'});
 
   // Note is closed by user
   f.sticky.closeStickyNote(res.id);
@@ -259,7 +259,7 @@ test.serial('scheduler: stale notification click after note delete does not resu
   const win = res.win as FakeBrowserWindow;
   win.emit('ready-to-show');
 
-  f.sticky.scheduleSticky(res.id, {when: 'reminder', delay: 0, unit: 'm', runner: 'notify'});
+  f.sticky.setRun(res.id, {when: 'at', at: new Date().toISOString(), target: 'notify'});
 
   await f.triggerSchedulerTick();
   const notif = f.notifications[0];

@@ -3,9 +3,18 @@
 
 export {initSticky} from './sticky/ipc';
 export {readStickyHidden} from './sticky/preferences';
-export {scheduleSticky, unscheduleSticky} from './sticky/scheduler';
-export {readAllNotes} from './sticky/store';
-export type {NoteData, StickyColor, StickyRef, StickySchedule, StickyWin} from './sticky/types';
+export {clearRun, pauseRun, runNow, setRun} from './sticky/scheduler';
+export {readAllNotes, setResult, setRunState} from './sticky/store';
+export type {
+  NoteData,
+  RunEvery,
+  RunRecord,
+  StickyColor,
+  StickyRef,
+  StickyRun,
+  StickyRunState,
+  StickyWin
+} from './sticky/types';
 export {
   anyStickyHidden,
   anyStickyVisible,
