@@ -68,6 +68,7 @@ jobs:
           if [ -z "$WIN_CSC_KEY_PASSWORD" ] ; then unset WIN_CSC_KEY_PASSWORD ; fi
           if [ -z "$APPLE_ID" ] ; then unset APPLE_ID ; fi
           if [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] ; then unset APPLE_APP_SPECIFIC_PASSWORD ; fi
+          if [ -z "$APPLE_TEAM_ID" ] ; then unset APPLE_TEAM_ID ; fi
           yarn run dist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -76,7 +77,8 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CERT_P12_BASE64 }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CERT_P12_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       - name: Archive Build Artifacts
         uses: actions/upload-artifact@v4
         with:
