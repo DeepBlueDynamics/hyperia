@@ -2336,12 +2336,18 @@ async fn post_pane_liveness(
     body: String,
 ) -> (StatusCode, String) {
     let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
-    let pane = match &id {
-        identity::CallerIdentity::Pane { pane, .. } => pane.clone(),
+    // Container agents carry their own identity token; use their verified pane binding.
+    let bound = match &id {
+        identity::CallerIdentity::Agent { .. } => messaging::actor_from_identity(&state.bridge, &id).await.ok().and_then(|a| a.pane),
+        _ => None,
+    };
+    let pane = match (&id, bound) {
+        (identity::CallerIdentity::Pane { pane, .. }, _) => pane.clone(),
+        (_, Some(pane)) => pane,
         _ => {
             return (
                 StatusCode::FORBIDDEN,
-                "Liveness is self-reported: send Authorization: Bearer <HYPERIA_AGENT_TOKEN> (your pane token, forwarded into the container env) so we know which pane. The token IS the correlation key — you don't need to send a pane id.".into(),
+                "Liveness is self-reported: send Authorization: Bearer <HYPERIA_AGENT_TOKEN> — a pane token, or an agent token with a verified pane binding (pane_bind) — so we know which pane. You don't need to send a pane id.".into(),
             )
         }
     };
