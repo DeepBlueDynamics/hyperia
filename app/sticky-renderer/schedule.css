@@ -55,3 +55,10 @@
 .sched-btn:hover { background: #1c6fd6; }
 .sched-btn.ghost { background: transparent; color: #c0392b; border: 1px solid rgba(192,57,43,0.4); font-weight: 500; }
 .sched-btn.ghost:hover { background: rgba(192,57,43,0.08); }
+
+/* Confirm dialog (same panel as scheduling). */
+.confirm-msg { opacity: 0.75; }
+.sched-btn.neutral { background: transparent; color: inherit; border: 1px solid rgba(0,0,0,0.2); font-weight: 500; }
+.sched-btn.neutral:hover { background: rgba(0,0,0,0.06); }
+.sched-btn.danger { background: #c0392b; }
+.sched-btn.danger:hover { background: #a93226; }
