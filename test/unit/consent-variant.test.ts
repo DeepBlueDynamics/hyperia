@@ -35,6 +35,17 @@ test('binding: fixed "This pane" chip, no For row, mailbox tail', (t) => {
   t.is(v.tail, '— approving links its mailbox to this pane.');
 });
 
+test('sticky run: fixed "This run" chip, no For row, names the sticky', (t) => {
+  const v = consentVariant('sticky_run');
+  t.is(v.kind, 'sticky_run');
+  t.is(v.accessChip, 'This run');
+  t.false(v.showDuration);
+  t.is(
+    consentTargetName({targetPane: 'sticky:note-1-abcd', action: 'sticky_run', recipientLabel: 'Weather Tokyo'}),
+    "'Weather Tokyo'"
+  );
+});
+
 test('target name: messaging prefers the recipient agent label over the pane', (t) => {
   const req = {targetPane: 'p-1234567890', action: 'message:agent:team/bob', recipientLabel: 'team/bob-label'};
   t.is(consentTargetName(req, 'shell pane'), 'team/bob-label');
