@@ -541,25 +541,74 @@ pub struct StickySearchRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct StickyScheduleRequest {
-    /// Note ID (from sticky_note_list).
+#[serde(deny_unknown_fields)]
+pub struct StickyNoteRunRequest {
+    /// Note ID (from sticky_note_list; the short suffix works too).
     pub id: String,
-    /// Trigger: "reminder" (delay+unit), "at" (absolute time), or "cron".
-    pub when: Option<String>,
-    /// Runner: "notify", "shell", "n8shell", or "n8agent".
-    pub runner: Option<String>,
-    /// reminder: how many `unit`s from now.
-    pub delay: Option<u64>,
-    /// reminder unit: "m" (minutes), "h" (hours), or "d" (days).
-    pub unit: Option<String>,
-    /// "at": ISO-8601 / datetime-local string (e.g. "2026-06-01T19:30").
+    /// "now" = once immediately, "at" = once at `at`, "every" = recurring per `every`.
+    pub when: crate::sticky_runs::RunWhen,
+    /// Required for when="at": ISO 8601 local or zoned date-time, e.g. "2026-10-01T08:00".
     pub at: Option<String>,
-    /// "cron": 5-field expression (e.g. "*/15 * * * *").
-    pub cron: Option<String>,
-    /// Working directory for shell/n8shell runners.
-    pub dir: Option<String>,
-    /// Pass true to clear the schedule and unlock the note.
-    pub unschedule: Option<bool>,
+    /// Required for when="every": {kind:"interval",minutes} | {kind:"daily",time:"HH:MM"} |
+    /// {kind:"weekly",days:[0..6 (0=Sun)],time:"HH:MM"} | {kind:"cron",expr:"<5 fields>"}.
+    pub every: Option<crate::sticky_runs::RunEvery>,
+    /// "notify" = raise the sticky + OS toast; "agent" = one-shot headless nemesis8 agent;
+    /// "pane" = send the sticky to an existing open pane.
+    pub target: crate::sticky_runs::RunTarget,
+    /// Required for target="agent": {provider, dir, danger?, model?, image?:"default"}.
+    pub agent: Option<crate::sticky_runs::AgentSpec>,
+    /// Required for target="pane": {uid} — a paneId from terminal_status (name is filled in).
+    pub pane: Option<crate::sticky_runs::PaneSpec>,
+    /// Optional {keep, limit}: keep past results (limit 1..500, default 50) and feed them to the agent.
+    pub history: Option<crate::sticky_runs::HistorySpec>,
+}
+
+impl StickyNoteRunRequest {
+    /// The POST body for /api/notes/{id}/run (no created_by/approved: the server stamps those).
+    fn run_body(&self) -> serde_json::Value {
+        let mut v = serde_json::json!({"when": self.when, "target": self.target});
+        if let Some(at) = &self.at {
+            v["at"] = serde_json::json!(at);
+        }
+        if let Some(e) = &self.every {
+            v["every"] = serde_json::json!(e);
+        }
+        if let Some(a) = &self.agent {
+            v["agent"] = serde_json::json!(a);
+        }
+        if let Some(p) = &self.pane {
+            v["pane"] = serde_json::json!(p);
+        }
+        if let Some(h) = &self.history {
+            v["history"] = serde_json::json!(h);
+        }
+        v
+    }
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StickyNoteHistoryRequest {
+    /// Note ID.
+    pub id: String,
+    /// Max runs returned, newest first (1..500, default 50).
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StickyNotePauseRequest {
+    /// Note ID.
+    pub id: String,
+    /// true = pause (unlocks the prompt for editing), false = resume.
+    pub paused: bool,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StickyNoteUnscheduleRequest {
+    /// Note ID.
+    pub id: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -831,9 +880,12 @@ pub struct StickyNoteCreateCodeRequest {
 pub struct StickyNoteUpdateRequest {
     /// Note ID from sticky_note_list output
     pub id: String,
-    /// New text content for the note
+    /// New prompt/text for the note. Refused (409) while a run is armed: pause or unschedule first.
     #[serde(alias = "content", alias = "body")]
-    pub text: String,
+    pub text: Option<String>,
+    /// New RESULT for the note (replaces the previous one; Markdown ok). This is how a
+    /// scheduled run's agent reports back. Allowed while a run is armed.
+    pub result: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -2318,8 +2370,8 @@ impl HyperiaMcp {
             },
             {
                 "name": "stickies",
-                "description": "Create and manage floating sticky notes, including file-linked code notes with syntax highlighting. Search, read, update, schedule, reopen, and close them.",
-                "tools": ["sticky_note_create", "sticky_note_create_code", "sticky_note_list", "sticky_note_search", "sticky_note_read", "sticky_note_update", "sticky_note_open", "sticky_note_close", "sticky_note_delete", "sticky_note_schedule"]
+                "description": "Create and manage floating sticky notes, including file-linked code notes with syntax highlighting. Search, read, update (prompt or result), reopen, and close them. Runs: arm a sticky to notify, run a nemesis8 agent, or send to a pane now/at/every; agent-created and pane runs need human approval.",
+                "tools": ["sticky_note_create", "sticky_note_create_code", "sticky_note_list", "sticky_note_search", "sticky_note_read", "sticky_note_update", "sticky_note_open", "sticky_note_close", "sticky_note_delete", "sticky_note_run", "sticky_note_runs", "sticky_note_history", "sticky_note_pause", "sticky_note_unschedule"]
             },
             {
                 "name": "snapshots",
@@ -2982,27 +3034,60 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Schedule a sticky note to run on a timer (Hyperia owns the timer + runners; the schedule survives restart). when='reminder' fires once after delay+unit (m/h/d); when='at' fires once at an ISO/datetime-local time; when='cron' fires on a 5-field cron expression. runner='notify' just shows a notification; 'shell' runs the note's text in a new Hyperia tab (in `dir` if given); 'n8shell' runs it in the nemesis8 container; 'n8agent' hands the note to the nemesis8 agent. Any runner other than notify LOCKS the note read-only (a 'hard' sticky) until unscheduled. Omit the schedule fields / pass unschedule=true to clear.")]
-    async fn sticky_note_schedule(
+    #[tool(description = "Arm (or replace) a sticky note's RUN. The note's text is the PROMPT; each run REPLACES the note's RESULT. when: 'now' (once, immediately) | 'at' (once, ISO 8601 `at`) | 'every' (recurring: every={kind:'interval',minutes} | {kind:'daily',time:'HH:MM'} | {kind:'weekly',days:[0-6, 0=Sun],time} | {kind:'cron',expr}). target: 'notify' (raise the sticky + OS toast, nothing executes) | 'agent' (one-shot headless nemesis8 agent: agent={provider, dir (workspace folder, required), danger?, model?}) | 'pane' (send the sticky's name, id and prompt to an OPEN pane: pane={uid} from terminal_status). Nothing is scraped from output: the agent that runs writes the result itself with sticky_note_update {id, result}. APPROVAL: a run created by an agent (any target) and every pane target need a HUMAN approval prompt; until then this returns {ok:true, status:'awaiting_approval'} and nothing fires — don't retry, the run arms when they approve and is cleared if they deny. While a run is armed the prompt is locked (sticky_note_update text → 409); pause or unschedule to edit. Returns {ok, next_run?, status} or {ok:false, error}. Use pane_on_idle for a quick self-poke instead of a schedule.")]
+    async fn sticky_note_run(
         &self,
-        Parameters(req): Parameters<StickyScheduleRequest>,
+        Parameters(req): Parameters<StickyNoteRunRequest>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let body = if req.unschedule.unwrap_or(false) {
-            serde_json::json!({"schedule": serde_json::Value::Null})
-        } else {
-            serde_json::json!({
-                "when": req.when.unwrap_or_else(|| "reminder".into()),
-                "runner": req.runner.unwrap_or_else(|| "notify".into()),
-                "delay": req.delay,
-                "unit": req.unit,
-                "at": req.at,
-                "cron": req.cron,
-                "dir": req.dir,
-            })
-        };
         let resp = self
-            .post_json_as(&format!("/api/notes/{}/schedule", req.id), &body, forwarded_auth(&ctx).as_deref())
+            .post_json_as(&format!("/api/notes/{}/run", urlencoding::encode(&req.id)), &req.run_body(), forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "List sticky notes that have a run (armed, paused or awaiting approval) that you can see, with each one's run and run_state {next_run, last_run, last_status: ok|failed|halted|skipped|running|awaiting_approval, last_error}. Returns {count, runs:[{id, name, run, run_state}]}.")]
+    async fn sticky_note_runs(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let resp = self.get_as("/api/notes/runs", forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Past runs of one sticky, newest first: {id, count, runs:[{run_id, started, finished, status, error?, target, agent?, pane?, result?}]}. `result` is the note's result as it stood when that run finished. History is only recorded when the run has history.keep on.")]
+    async fn sticky_note_history(
+        &self,
+        Parameters(req): Parameters<StickyNoteHistoryRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut path = format!("/api/notes/{}/runs", urlencoding::encode(&req.id));
+        if let Some(l) = req.limit {
+            path.push_str(&format!("?limit={l}"));
+        }
+        let resp = self.get_as(&path, forwarded_auth(&ctx).as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Pause (paused=true) or resume (paused=false) a sticky's run. The schedule and its approval are kept. A paused sticky's prompt can be edited. Returns {ok, next_run?}.")]
+    async fn sticky_note_pause(
+        &self,
+        Parameters(req): Parameters<StickyNotePauseRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"paused": req.paused});
+        let resp = self
+            .post_json_as(&format!("/api/notes/{}/run", urlencoding::encode(&req.id)), &body, forwarded_auth(&ctx).as_deref())
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(resp)]))
+    }
+
+    #[tool(description = "Remove a sticky's run entirely (and drop any pending approval). The note, its prompt and its last result stay. Returns {ok}.")]
+    async fn sticky_note_unschedule(
+        &self,
+        Parameters(req): Parameters<StickyNoteUnscheduleRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"clear": true});
+        let resp = self
+            .post_json_as(&format!("/api/notes/{}/run", urlencoding::encode(&req.id)), &body, forwarded_auth(&ctx).as_deref())
             .await?;
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
@@ -3089,13 +3174,22 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
-    #[tool(description = "Update the text content of an existing sticky note. Use sticky_note_list to get IDs. For a note you don't own, Hyperia asks the user to approve access first: the call may return a held/pending response while they decide, then completes once approved (don't retry in a loop — wait). Requires identity (send your token) if you're anonymous.")]
+    #[tool(description = "Update a sticky note: `text` replaces its PROMPT/body, `result` replaces its RESULT (the area a scheduled run reports into; Markdown ok, keep it concise). Pass either or both. If you were started by a sticky run (the prompt names the sticky id), write your answer with {id, result} — nothing is captured automatically. While a run is armed, changing `text` is refused with 409 (pause or unschedule first); `result` is always allowed. For a note you don't own, Hyperia asks the user to approve access first: the call may return a held/pending response while they decide, then completes once approved (don't retry in a loop — wait). Requires identity (send your token) if you're anonymous.")]
     async fn sticky_note_update(
         &self,
         Parameters(req): Parameters<StickyNoteUpdateRequest>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let body = serde_json::json!({"text": req.text});
+        if req.text.is_none() && req.result.is_none() {
+            return Err(ErrorData::invalid_params("sticky_note_update needs `text` and/or `result`", None));
+        }
+        let mut body = serde_json::json!({});
+        if let Some(t) = &req.text {
+            body["text"] = serde_json::json!(t);
+        }
+        if let Some(r) = &req.result {
+            body["result"] = serde_json::json!(r);
+        }
         let resp = self
             .patch_json_as(&format!("/api/notes/{}", req.id), &body, forwarded_auth(&ctx).as_deref())
             .await?;
@@ -4270,7 +4364,14 @@ impl ServerHandler for HyperiaMcp {
                  terminal_split, terminal_focus, terminal_close, terminal_new_tab, terminal_new_window, \
                  terminal_where_pane, tab_snapshot, shell_state, shell_confirm, open_web_pane. \
                  \n\nSticky notes: sticky_note_list, sticky_note_create, sticky_note_create_code, \
-                 sticky_note_update, sticky_note_close, sticky_note_delete. \
+                 sticky_note_read, sticky_note_update, sticky_note_close, sticky_note_delete. \
+                 A sticky has a PROMPT (its text) and a RESULT. Sticky runs: sticky_note_run arms a run \
+                 (when now|at|every; target notify|agent|pane), sticky_note_runs lists them, \
+                 sticky_note_history shows past results, sticky_note_pause / sticky_note_unschedule. \
+                 Runs you create, and every pane target, wait for HUMAN approval (status awaiting_approval) — \
+                 don't retry. When a sticky run starts you, write your answer with \
+                 sticky_note_update {id, result}; nothing is captured from your output. An armed sticky's \
+                 prompt is locked (409) until paused or unscheduled. \
                  \n\nAgent: agent_status, auto_describe. \
                  \n\nMessage bus: msg_send, msg_inbox, msg_read, msg_search. \
                  \n\nStyles: style_list, style_create, style_delete. \
@@ -4370,6 +4471,26 @@ mod sticky_param_tests {
         assert!(serde_json::from_value::<NoteCreateRequest>(serde_json::json!({"title": "t", "text": "hello"})).is_err());
         assert!(serde_json::from_value::<StickyNoteUpdateRequest>(serde_json::json!({"id": "n", "txt": "hello"})).is_err());
         let req: StickyNoteUpdateRequest = serde_json::from_value(serde_json::json!({"id": "n", "content": "hello"})).unwrap();
-        assert_eq!(req.text, "hello");
+        assert_eq!(req.text.as_deref(), Some("hello"));
+        let req: StickyNoteUpdateRequest = serde_json::from_value(serde_json::json!({"id": "n", "result": "22°C"})).unwrap();
+        assert_eq!((req.text, req.result.as_deref()), (None, Some("22°C")));
+    }
+
+    #[test]
+    fn sticky_run_params_are_typed_and_never_carry_approval() {
+        let req: StickyNoteRunRequest = serde_json::from_value(serde_json::json!({
+            "id": "abcd", "when": "every", "every": {"kind": "daily", "time": "08:00"},
+            "target": "agent", "agent": {"provider": "claude", "dir": "/work"}})).unwrap();
+        let body = req.run_body();
+        assert_eq!(body["every"], serde_json::json!({"kind": "daily", "time": "08:00"}));
+        assert_eq!(body["agent"]["image"], "default");
+        assert!(body.get("approved").is_none() && body.get("created_by").is_none());
+        crate::sticky_runs::parse_run(&body).expect("MCP body is a valid run");
+        // Enums reject junk; approval can't be smuggled in.
+        assert!(serde_json::from_value::<StickyNoteRunRequest>(serde_json::json!({"id": "a", "when": "later", "target": "notify"})).is_err());
+        assert!(serde_json::from_value::<StickyNoteRunRequest>(serde_json::json!({"id": "a", "when": "now", "target": "shell"})).is_err());
+        assert!(serde_json::from_value::<StickyNoteRunRequest>(serde_json::json!({"id": "a", "when": "now", "target": "notify", "approved": {"at": 1}})).is_err());
+        let schema = serde_json::to_value(schemars::schema_for!(StickyNoteRunRequest)).unwrap().to_string();
+        assert!(schema.contains("\"notify\"") && schema.contains("\"interval\""), "enums in schema: {schema}");
     }
 }

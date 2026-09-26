@@ -92,11 +92,22 @@ A **pulse** is a recurring prompt the sidecar re-submits into a pane on its own 
 | `sticky_note_list` | List notes you can see (yours + those the user granted). |
 | `sticky_note_read` | Read a note's full text by id. |
 | `sticky_note_search` | Full-text (BM25) search across note content. |
-| `sticky_note_update` | Edit a note's text (live-updates the open window). |
+| `sticky_note_update` | Set a note's `text` (its prompt) and/or `result`. Changing `text` while a run is armed returns 409; `result` is always allowed. |
 | `sticky_note_open` | Reopen/raise a note window by id. |
 | `sticky_note_close` | Close a note window (keeps the record). |
 | `sticky_note_delete` | Permanently delete a note. |
-| `sticky_note_schedule` | Schedule a note to fire/run on a timer (survives restart). |
+
+### Sticky runs (`sticky_runs` door)
+
+See [stickies.md](stickies.md) for the full model.
+
+| Tool | Description |
+|------|-------------|
+| `sticky_note_run` | Arm or replace a run: `when` now/at/every, `target` notify/agent/pane. Runs created by an agent, and every pane target, return `status:"awaiting_approval"` until a human approves. |
+| `sticky_note_runs` | List notes with a run, with `run_state` (next run, last status, last error). |
+| `sticky_note_history` | Past runs of one note, newest first (`limit`, default 50). |
+| `sticky_note_pause` | Pause or resume a run. The approval is kept. |
+| `sticky_note_unschedule` | Remove a note's run and drop any pending approval. |
 
 ## Output & media
 
