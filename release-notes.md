@@ -1,40 +1,28 @@
-# Hyperia v0.20.20 — every agent gets its own voice 🐙
+# Hyperia v0.20.21 — tabs that stay put, folders one click away 📂
 
-Spoken summaries got a rebuild, web panes got a Stop button, and a batch of agent-plumbing fixes make the swarm quieter and more reliable.
+Fixes for moving panes between tabs, a way to jump from a pane to its folder, and a cleaner shell list on Linux and macOS.
 
-## A voice for every pane
+## Move pane to new tab works
 
-Text-to-speech is rewritten in Rust on top of the Kokoro model: no Python, no espeak. Pronunciation comes from the misaki 0.9.4 dictionaries, downloaded once on first use. Every English voice is available.
+Moving a pane into a new tab used to leave the old tab pointing at it, so clicking either tab showed the moved pane and the old tab only came back after closing the new one. Each tab now selects itself.
 
-Each agent now speaks in its own voice. The pane's name is hashed into a blend of voices, so two agents never sound alike, and the same pane always sounds the same. An agent signs off with its pane name as its callsign and ends with "Over and out." Agents running several sessions speak as the pane they live in.
+## Open the folder in your file browser
 
-## Web panes: Stop, and a Back that works
+Right-click the path pill in the pane bar for **Open in Explorer** (Windows), **Open in Finder** (macOS) or **Open in File Manager** (Linux), plus **Copy Path**. The directory picker's footer has the same button for the folder you're browsing. It's disabled when the folder isn't on this machine.
 
-- A **Stop** button (and **Esc**) halts a page that's stuck loading. It turns back into Reload when the page is done.
-- **Back** and **Forward** stop the current load first, so going back from a slow page is instant.
-- The spinner follows the page itself, not ads and embedded frames that never finish, and no longer clears early while the next page is still starting.
-- Switching tabs no longer re-checks the page or flashes white.
+## Only shells this machine can run
 
-## Picker opens the shell it shows
+On Linux and macOS, profiles from old configs that point at Windows shells or shells that aren't installed (a `/bin/zsh` on a box without zsh, "Claude Code (macOS)" on Linux) are dropped when the config loads. Your config file isn't rewritten.
 
-The directory picker's **Go** button and new panes now launch the shell the pulldown shows: your last-used shell. Launching a shell no longer quietly changes your default profile.
+## Agents
 
-The recent-directory chips have a **clear** button.
+- The mail notice names the pane that sent the newest unread message and when, in UTC: `Latest from Clear Bee (pane 11e87950) at 2026-09-26T18:04:12Z`.
+- n8 containers' liveness pulse is accepted again. Containers now carry their own agent identity; Hyperia maps it to the pane it's bound to, so busy agents stop getting poked.
+- Telemetry accepts **Edit** events: which file, which lines, lines added and removed, per pane. nemesis8 0.26.3 sends them from its file-edit tools.
 
-## Consent prompts that clean up after themselves
+## Housekeeping
 
-A permission prompt disappears as soon as its request is gone: answered elsewhere, expired, or its pane closed. Clicking a stale prompt no longer does nothing. Access, messaging and pane-binding prompts share one layout.
+- Removed the leftover Hyper auto-updater, which pointed at Vercel's update server, and every hyper.is link.
+- GitHub issues now post to Discord when opened, closed or commented on.
 
-## Agent messaging and identity
-
-- Agents using a pane token can check their mail again (a deadlock is fixed).
-- Delivery responses say what actually happened. Queued messages no longer claim to be "waiting for approval".
-- Container agents can register as a single session, and child sessions read their parent's mail.
-- Clearer notices when two agents claim the same pane, plus stable identity error codes.
-
-## Small fixes
-
-- **Ctrl+^** reaches the terminal, so nemesis8's detach key works.
-- Tests only listen on 127.0.0.1, which ends the Windows Firewall prompts during development.
-
-Coming from further back? [v0.20.12](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.20.12) made the picker's install buttons open a real shell, and [v0.20.11](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.20.11) brought the directory picker, correctly sized terminals and per-session agent identity.
+Coming from further back? [v0.20.20](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.20.20) gave every agent its own voice and added the web pane Stop button.
