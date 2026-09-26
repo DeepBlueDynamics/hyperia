@@ -16,8 +16,8 @@ assignees: ''
 -->
 
 <!-- Checked checkbox should look like this: [x] -->
-- [ ] I am on the [latest](https://github.com/vercel/hyper/releases/latest) Hyper.app version
-- [ ] I have searched the [issues](https://github.com/vercel/hyper/issues) of this repo and believe that this is not a duplicate
+- [ ] I am on the [latest](https://github.com/DeepBlueDynamics/hyperia/releases/latest) Hyperia version
+- [ ] I have searched the [issues](https://github.com/DeepBlueDynamics/hyperia/issues) of this repo and believe that this is not a duplicate
 
 <!--
   Once those are done, if you're able to fill in the following list with your information,

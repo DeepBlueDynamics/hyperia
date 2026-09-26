@@ -43,7 +43,6 @@ import {decorateSessionOptions, decorateSessionClass} from '../plugins';
 import createRPC from '../rpc';
 import Session from '../session';
 import {startSessionLog, writeSessionLog, endSessionLog} from '../session-logger';
-import updater from '../updater';
 import {getAppIcon} from '../utils/icon';
 import {setRendererType, unsetRendererType} from '../utils/renderer-utils';
 import toElectronBackgroundColor from '../utils/to-electron-background-color';
@@ -581,12 +580,6 @@ export function newWindow(
     }
     app.windowCallback = undefined;
     fetchNotifications();
-    // auto updates
-    if (!isDev) {
-      updater(window);
-    } else {
-      console.log('ignoring auto updates during dev');
-    }
   });
 
   function createSession(extraOptions: sessionExtraOptions = {}) {

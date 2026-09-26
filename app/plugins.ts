@@ -211,9 +211,9 @@ function syncPackageJSON() {
     description: 'Auto-generated from `hyper.json`!',
     private: true,
     version: '0.0.1',
-    repository: 'vercel/hyper',
+    repository: 'DeepBlueDynamics/hyperia',
     license: 'MIT',
-    homepage: 'https://hyper.is',
+    homepage: 'https://hyperia.nuts.services',
     dependencies
   };
 

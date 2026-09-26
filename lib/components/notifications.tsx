@@ -78,7 +78,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>((props, ref
               void window.require('electron').shell.openExternal(ev.currentTarget.href);
               ev.preventDefault();
             }}
-            href={`https://github.com/vercel/hyper/releases/tag/${props.updateVersion}`}
+            href={`https://github.com/DeepBlueDynamics/hyperia/releases/tag/v${props.updateVersion}`}
           >
             notes
           </a>
