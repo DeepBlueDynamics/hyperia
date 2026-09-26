@@ -8,6 +8,7 @@ const links = require('./links');
 const syntaxMod = require('./syntax');
 const fileBindMod = require('./file-bind');
 const scheduleUi = require('./schedule-ui');
+const runViewMod = require('./run-view');
 const chrome = require('./chrome');
 const searchMode = require('./search-mode');
 const codeMode = require('./code-mode');
@@ -86,6 +87,8 @@ function boot(opts) {
   ctx.fileBind = fileBind;
   fileBind.start();
   links.start(ctx);
+  // Run state comes from the saved note first; sticky-run-state pushes update it.
+  ctx.runView = runViewMod.createRunView(ctx);
   scheduleUi.start(ctx);
   // Title copy/rename before mode dispatch — original sticky.html ~1516.
   chrome.start(ctx);
@@ -111,15 +114,6 @@ function boot(opts) {
     const el = doc.getElementById('noteText');
     if (el) clipboard.writeText(el.value);
   });
-  ipc.on('sticky-lock', (_e, locked) => {
-    const ta = doc.getElementById('noteText');
-    if (ta) ta.readOnly = !!locked;
-    doc.body.classList.toggle('sched-armed', !!locked);
-  });
-  ipc.on('sticky-armed', (_e, armed) => {
-    const btn = doc.getElementById('scheduleBtn');
-    if (btn) btn.classList.toggle('armed', !!armed);
-  });
   doc.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     const textarea = doc.getElementById('noteText');
@@ -134,7 +128,9 @@ function boot(opts) {
     ipc.send('sticky-close', noteId);
   });
   ipc.on('note-updated', (_e, payload) => {
-    const text = payload && typeof payload.text === 'string' ? payload.text : '';
+    // A payload without text (e.g. a result-only update) must not blank the prompt.
+    if (!payload || typeof payload.text !== 'string') return;
+    const text = payload.text;
     const ta = doc.getElementById('noteText');
     if (ta) {
       if (ta.value !== text) ta.value = text;

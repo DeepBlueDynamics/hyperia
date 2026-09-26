@@ -4,44 +4,114 @@
 const URL_RE = /https?:\/\/[^\s"'<>)\]]+/g;
 const NOTE_FROM_RE = /\[From:\s*([^\]]+)\]/g;
 const NOTE_URL_RE = /app:\/\/sticky\/([^\s"'<>)\]]+)/g;
+const WIKI_RE = /\[\[([^[\]\n]+?)\]\]/g;
+const STICKY_ID_RE = /(?<![\w/:])sticky:([A-Za-z0-9][\w.-]*[A-Za-z0-9]|[A-Za-z0-9])/g;
 
-function linkTokenAt(text, pos) {
-  const tries = [
-    {re: URL_RE, kind: 'url', cap: 0},
-    {re: NOTE_URL_RE, kind: 'note', cap: 1},
-    {re: NOTE_FROM_RE, kind: 'note', cap: 1}
-  ];
-  for (const {re, kind, cap} of tries) {
+// Sentence punctuation after a bare URL belongs to the sentence, not the URL.
+const TRAILING_PUNCT_RE = /[.,;:!?]+$/;
+
+const PATTERNS = [
+  {re: URL_RE, kind: 'url', cap: 0, trim: true},
+  {re: NOTE_URL_RE, kind: 'note', cap: 1, trim: true},
+  {re: WIKI_RE, kind: 'note', cap: 1},
+  {re: STICKY_ID_RE, kind: 'note', cap: 1},
+  {re: NOTE_FROM_RE, kind: 'note', cap: 1}
+];
+
+// Every link token in text, sorted and non-overlapping: {start, end, kind, value}.
+function findLinks(text) {
+  const found = [];
+  const s = String(text || '');
+  for (const {re, kind, cap, trim} of PATTERNS) {
     re.lastIndex = 0;
     let m;
-    while ((m = re.exec(text)) !== null) {
-      const from = m.index,
-        to = from + m[0].length;
-      if (pos >= from && pos <= to) {
-        return {kind, value: (cap ? m[cap] : m[0]).trim()};
+    while ((m = re.exec(s)) !== null) {
+      let raw = m[0];
+      let value = cap ? m[cap] : m[0];
+      if (trim) {
+        const cut = (TRAILING_PUNCT_RE.exec(raw) || [''])[0].length;
+        raw = raw.slice(0, raw.length - cut);
+        if (!cap) value = raw;
+        else if (cut) value = value.slice(0, value.length - cut);
       }
+      value = value.trim();
+      if (value) found.push({start: m.index, end: m.index + raw.length, kind, value});
     }
+  }
+  found.sort((a, b) => a.start - b.start || b.end - a.end);
+  const out = [];
+  let end = -1;
+  for (const tok of found) {
+    if (tok.start >= end) {
+      out.push(tok);
+      end = tok.end;
+    }
+  }
+  return out;
+}
+
+// A Markdown link target → {kind, value}, or null for anything we won't open.
+function classifyHref(href) {
+  const h = String(href || '').trim();
+  if (/^https?:\/\/[^\s"'<>]+$/i.test(h)) return {kind: 'url', value: h};
+  let m = /^sticky:(.+)$/i.exec(h);
+  if (m) return {kind: 'note', value: decodeSafe(m[1])};
+  m = /^app:\/\/sticky\/(.+)$/i.exec(h);
+  if (m) return {kind: 'note', value: decodeSafe(m[1])};
+  m = /^\[\[(.+)\]\]$/.exec(h);
+  if (m) return {kind: 'note', value: m[1].trim()};
+  return null;
+}
+
+function decodeSafe(s) {
+  try {
+    return decodeURIComponent(s).trim();
+  } catch (e) {
+    return s.trim();
+  }
+}
+
+function linkTokenAt(text, pos) {
+  for (const tok of findLinks(text)) {
+    if (pos >= tok.start && pos <= tok.end) return {kind: tok.kind, value: tok.value};
   }
   return null;
 }
 
 function allLinkRanges(text) {
-  const ranges = [];
-  for (const re of [URL_RE, NOTE_FROM_RE, NOTE_URL_RE]) {
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(text)) !== null) ranges.push([m.index, m.index + m[0].length]);
-  }
-  ranges.sort((a, b) => a[0] - b[0]);
-  return ranges;
+  return findLinks(text).map((t) => [t.start, t.end]);
+}
+
+// Route a token to main: URLs via the external-open IPC, notes by id or name.
+function openLink(ipc, tok) {
+  if (!tok || !tok.value) return false;
+  if (tok.kind === 'url') {
+    if (!/^https?:\/\//i.test(tok.value)) return false;
+    ipc.send('sticky-open-external', tok.value);
+  } else if (tok.kind === 'note') {
+    ipc.send('sticky-open-note', tok.value);
+  } else return false;
+  return true;
 }
 
 function followLinkInTextarea(textarea, ipc) {
-  const tok = linkTokenAt(textarea.value, textarea.selectionStart);
-  if (!tok) return false;
-  if (tok.kind === 'url') ipc.send('sticky-open-external', tok.value);
-  else ipc.send('sticky-open-note', tok.value);
-  return true;
+  return openLink(ipc, linkTokenAt(textarea.value, textarea.selectionStart));
+}
+
+// Rendered Markdown links (a.md-link) open on click without focusing or selecting.
+function bindRenderedLinks(el, ipc) {
+  if (!el) return;
+  const hit = (e) => e.target && e.target.closest && e.target.closest('a.md-link');
+  el.addEventListener('mousedown', (e) => {
+    if (hit(e)) e.preventDefault();
+  });
+  el.addEventListener('click', (e) => {
+    const a = hit(e);
+    if (!a) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openLink(ipc, {kind: a.getAttribute('data-kind'), value: a.getAttribute('data-target')});
+  });
 }
 
 function showToast(doc, msg) {
@@ -66,12 +136,8 @@ function showToast(doc, msg) {
 }
 
 function linkRangeAt(text, pos) {
-  URL_RE.lastIndex = 0;
-  let m;
-  while ((m = URL_RE.exec(text)) !== null) {
-    const s = m.index,
-      e = s + m[0].length;
-    if (pos >= s && pos <= e) return [s, e];
+  for (const tok of findLinks(text)) {
+    if (tok.kind === 'url' && pos >= tok.start && pos <= tok.end) return [tok.start, tok.end];
   }
   return null;
 }
@@ -90,9 +156,13 @@ function start(ctx) {
 
 module.exports = {
   URL_RE,
+  findLinks,
+  classifyHref,
   linkTokenAt,
   allLinkRanges,
+  openLink,
   followLinkInTextarea,
+  bindRenderedLinks,
   showToast,
   linkRangeAt,
   start

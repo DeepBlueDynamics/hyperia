@@ -1,6 +1,6 @@
 // Frozen IPC contract between sticky.html renderer modules and app/sticky.ts.
-// Channel names must match the main-process listeners. Structural extraction
-// does not rename any of these.
+// Channel names must match the main-process listeners. Run channels follow
+// plan/sticky-schedules/CONTRACT.md.
 'use strict';
 
 const SEND = Object.freeze([
@@ -10,8 +10,6 @@ const SEND = Object.freeze([
   'sticky-color',
   'sticky-context-menu',
   'sticky-open-file',
-  'sticky-schedule',
-  'sticky-unschedule',
   'sticky-close',
   'generate-summary-sticky',
   'open-matching-stickys'
@@ -26,15 +24,25 @@ const ON = Object.freeze([
   'sticky-file-changed',
   'sticky-set-color',
   'sticky-copy-all',
-  'sticky-lock',
-  'sticky-armed',
+  'sticky-run-state',
+  'sticky-result',
   'note-updated',
   'sticky-rename',
   'sticky-delete',
   'stickys-changed'
 ]);
 
-const INVOKE = Object.freeze(['sticky-pick-dir']);
+const INVOKE = Object.freeze([
+  'sticky-pick-dir',
+  'sticky-run-set',
+  'sticky-run-clear',
+  'sticky-run-now',
+  'sticky-run-pause',
+  'sticky-run-history',
+  'sticky-run-panes',
+  'sticky-n8-status',
+  'sticky-n8-start'
+]);
 
 module.exports = {
   SEND,
