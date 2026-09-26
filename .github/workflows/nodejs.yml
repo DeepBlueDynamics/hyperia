@@ -63,7 +63,9 @@ jobs:
       - name: Build
         run: |
           if [ -z "$CSC_LINK" ] ; then unset CSC_LINK ; fi
-          if [ "$RUNNER_OS" != "macOS" ] ; then unset CSC_LINK CSC_KEY_PASSWORD ; fi
+          # Canary CI is a build check; signing and notarization belong to the release workflow (build.yml).
+          unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+          export CSC_IDENTITY_AUTO_DISCOVERY=false
           if [ -z "$CSC_KEY_PASSWORD" ] ; then unset CSC_KEY_PASSWORD ; fi
           if [ -z "$WIN_CSC_LINK" ] ; then unset WIN_CSC_LINK ; fi
           if [ -z "$WIN_CSC_KEY_PASSWORD" ] ; then unset WIN_CSC_KEY_PASSWORD ; fi
