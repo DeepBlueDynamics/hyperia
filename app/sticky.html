@@ -135,6 +135,21 @@
     </div>
   </div>
 
+  <!-- Styled confirm (replaces the native window.confirm box). -->
+  <div class="sched-overlay" id="confirmOverlay" style="display:none">
+    <div class="sched-panel">
+      <div class="sched-head">
+        <span id="confirmTitle">Delete this note?</span>
+        <span class="sched-close" id="confirmClose" title="Cancel">×</span>
+      </div>
+      <div class="confirm-msg" id="confirmMsg">This can't be undone.</div>
+      <div class="sched-actions">
+        <span class="sched-btn neutral" id="confirmCancel">Cancel</span>
+        <span class="sched-btn danger" id="confirmOk">Delete</span>
+      </div>
+    </div>
+  </div>
+
 <script src="sticky-renderer/boot.js"></script>
 </body>
 </html>
