@@ -19,8 +19,12 @@ import {
   closeStickyNote,
   deleteStickyNote,
   updateStickyNote,
-  scheduleSticky,
-  unscheduleSticky
+  setRun,
+  clearRun,
+  pauseRun,
+  runNow,
+  setResult,
+  getNote
 } from './sticky';
 import {SYSTEM_TOKEN} from './system-token';
 import {capturePaneJpeg} from './web-pane-manager';
@@ -1256,22 +1260,29 @@ function handleCommand(msg: Record<string, unknown>) {
     }
 
     case 'NoteUpdate': {
+      // Main is the only notes.json writer; the sidecar sends text and/or result here.
       const noteId = msg.id as string;
-      const text = msg.text as string;
-      const updated = updateStickyNote(noteId, text);
-      sendResult(seq, updated ? 'ok' : 'Note not found');
+      let ok = true;
+      if (typeof msg.result === 'string') ok = setResult(noteId, msg.result);
+      const note = getNote(noteId);
+      if (ok && typeof msg.text === 'string' && (!note || note.text !== msg.text)) {
+        ok = updateStickyNote(noteId, msg.text);
+      }
+      sendResult(seq, ok ? 'ok' : 'Note not found');
       break;
     }
 
-    case 'NoteSchedule': {
+    case 'NoteRun': {
+      // Sidecar has validated the caller and recorded created_by/approved; the engine re-validates.
       const noteId = msg.id as string;
-      const sched = msg.schedule as any;
-      if (sched) {
-        scheduleSticky(noteId, sched);
-      } else {
-        unscheduleSticky(noteId);
-      }
-      sendResult(seq, 'ok');
+      const action = (msg.action as string) || (msg.clear || msg.run === null ? 'clear' : 'set');
+      let res: unknown;
+      if (action === 'clear') res = clearRun(noteId);
+      else if (action === 'pause') res = pauseRun(noteId, msg.paused !== false);
+      else if (action === 'now') res = runNow(noteId);
+      else if (action === 'result') res = {ok: setResult(noteId, String(msg.result ?? ''))};
+      else res = setRun(noteId, msg.run as any);
+      sendResult(seq, JSON.stringify(res));
       break;
     }
 

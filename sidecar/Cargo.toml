@@ -100,6 +100,16 @@ pulldown-cmark = "0.13.4"
 # locally in Docker (`docker compose up ferricula`) or point at a remote URL.
 # No crate dependency — the sidecar builds anywhere without ferricula source.
 
+# nemesis8 gateway token (n8.rs): the same per-target keychain backends n8 uses.
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["linux-native"] }
+
 # Windows PE VERSIONINFO resource — populates the Authenticode-independent
 # "publisher" field that the Windows Defender Firewall dialog reads.
 [target.'cfg(windows)'.build-dependencies]

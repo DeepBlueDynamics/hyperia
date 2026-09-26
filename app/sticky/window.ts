@@ -11,7 +11,7 @@ import {getStickyDefaultSize, stickyOpacityNow} from './preferences';
 import {SEARCH_WIN_ID, stickyWindows} from './registry';
 import {setSchedulerNoteOpener} from './scheduler';
 import {installStickySecurityGuards, STICKY_WEB_PREFERENCES} from './security';
-import {deleteNote, getNote, readAllNotes, updateNote, upsertNote} from './store';
+import {deleteNote, getNote, readAllNotes, sendRunState, updateNote, upsertNote} from './store';
 import type {StickyRef} from './types';
 import {
   anyStickyHidden,
@@ -176,6 +176,8 @@ export function createStickyNote(
   void win.loadFile(htmlPath, {search: queryParams.toString()});
 
   win.once('ready-to-show', () => {
+    // Re-send run state so an armed sticky shows armed after a restart or reopen.
+    if (!options.filePath && noteId !== SEARCH_WIN_ID) sendRunState(noteId);
     if (savedNote?.source?.kind === 'file' && savedNote.source.path) {
       startFileWatch(noteId, savedNote.source.path);
     } else if (options.filePath) {
