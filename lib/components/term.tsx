@@ -1635,15 +1635,18 @@ export default class Term extends React.PureComponent<
       return false;
     }
 
-    // Keep split/clone chords (D | _, plus Shift+< / Shift+" for left/up; Cmd on macOS) away from xterm
+    // Keep split/clone chords (all Shift+: D | _ < "; Cmd on macOS) away from xterm. Shift is required
+    // so plain Ctrl+D (EOF) and Ctrl+\ (SIGQUIT) still reach the shell.
     const isSplitOrCloneKey =
       (e.ctrlKey || e.metaKey) &&
-      (e.key === '|' ||
-        e.key === '\\' ||
-        e.key === '_' ||
-        e.key === '-' ||
-        e.key?.toLowerCase() === 'd' ||
-        (e.shiftKey && (e.key === '<' || e.key === '"')));
+      (e.key === '-' ||
+        (e.shiftKey &&
+          (e.key === '|' ||
+            e.key === '\\' ||
+            e.key === '_' ||
+            e.key?.toLowerCase() === 'd' ||
+            e.key === '<' ||
+            e.key === '"')));
 
     if (isSplitOrCloneKey) {
       if (isSplitDownDisabled && isVerticalStackKey) {
