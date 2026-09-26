@@ -789,7 +789,7 @@ fn now_rfc3339() -> String {
 
 /// Minimal UTC formatter (proleptic Gregorian, valid for the epoch range we
 /// care about).
-fn epoch_to_rfc3339(secs: u64) -> String {
+pub(crate) fn epoch_to_rfc3339(secs: u64) -> String {
     let days = secs / 86_400;
     let rem = secs % 86_400;
     let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);

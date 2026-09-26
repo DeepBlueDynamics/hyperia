@@ -131,6 +131,24 @@ pub struct MsgNotify {
     pub last_fire: Option<std::time::Instant>,
 }
 
+/// The mailbox notice typed into an agent pane. Count-free so it stays accurate
+/// once queued (epic #162 bug R); names the newest unread sender and its UTC time.
+pub fn mail_notice_text(latest: Option<(&str, &str, u64)>) -> String {
+    let from = match latest {
+        Some((name, pane, ts_ms)) => {
+            let who = match (name.is_empty(), pane.is_empty()) {
+                (false, false) => format!("{name} (pane {})", pane.get(..8).unwrap_or(pane)),
+                (false, true) => name.to_string(),
+                (true, false) => format!("pane {}", pane.get(..8).unwrap_or(pane)),
+                (true, true) => "unknown sender".to_string(),
+            };
+            format!(" Latest from {who} at {}.", crate::workspace::epoch_to_rfc3339(ts_ms / 1000))
+        }
+        None => String::new(),
+    };
+    format!("[Hyperia] You have unread messages.{from} Use msg_check to fetch and acknowledge, or msg_inbox to preview. Automated mailbox notice.")
+}
+
 impl MsgNotify {
     pub fn new(now: std::time::Instant) -> Self {
         Self {
@@ -1238,15 +1256,22 @@ impl Bridge {
         for (pane, armed_at) in notify_candidates {
             let Some(candidate) = self.classification_for(&pane).await else { continue };
             if !matches!(candidate.notice, NoticeDisposition::Arm { .. }) { continue; }
-            let unread = match crate::messaging::unread_for_pane(self, &pane).await {
-                Ok(count) => count,
+            let (unread, latest) = match crate::messaging::unread_for_pane(self, &pane).await {
+                Ok(found) => found,
                 Err(_) => continue, // Do not consume a notice on storage failure.
             };
             let mut consumed = unread == 0;
             if unread > 0 {
                 let pid = self.inner.sessions.lock().await.get(&pane).map(|s| s.pid).unwrap_or(0);
-                // Keep notice text count-free so it stays accurate once typed into the prompt queue (epic #162 bug R).
-                let notice = "[Hyperia] You have unread messages. Use msg_check to fetch and acknowledge, or msg_inbox to preview. Automated mailbox notice.";
+                let mut sender = None;
+                if let Some(m) = &latest {
+                    let name = match m.from_pane.as_str() {
+                        "" => None,
+                        uid => self.pane_display_name(uid).await,
+                    };
+                    sender = Some((name.unwrap_or_else(|| m.from_label.clone()), m.from_pane.clone(), m.ts));
+                }
+                let notice = mail_notice_text(sender.as_ref().map(|(n, p, ts)| (n.as_str(), p.as_str(), *ts)));
                 let response = self.guarded_input(&pane, serde_json::json!({
                     "type": "GuardedInput", "uid": pane, "pid": pid,
                     "text": notice, "submit": true, "agent": true,
@@ -2358,6 +2383,16 @@ async fn handle_socket(socket: WebSocket, bridge: Bridge) {
 mod tests {
     use super::*;
 
+
+    #[test]
+    fn mail_notice_names_sender_pane_and_zulu_time() {
+        let text = mail_notice_text(Some(("Clear Bee", "11e87950-aaaa-bbbb", 1_787_936_000_123)));
+        assert!(text.contains("Latest from Clear Bee (pane 11e87950) at 2026-08-28T16:53:20Z."), "{text}");
+        assert!(text.contains("msg_check"));
+        let external = mail_notice_text(Some(("codex-agent", "", 1_787_936_000_000)));
+        assert!(external.contains("Latest from codex-agent at 2026-08-28T16:53:20Z."), "{external}");
+        assert!(!mail_notice_text(None).contains("Latest"));
+    }
     fn session_info(window_id: u32, root_tab_uid: &str, split_label: &str, tab_active: bool, pane_active: bool) -> SessionInfo {
         SessionInfo {
             name: "shell".into(),
