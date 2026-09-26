@@ -32,11 +32,15 @@
     "ctrl+shift+|"
   ],
   "pane:splitDown": "ctrl+shift+_",
+  "pane:splitLeft": "ctrl+shift+<",
+  "pane:splitUp": "ctrl+shift+\"",
   "pane:cloneRight": [
     "ctrl+alt+shift+d",
     "ctrl+alt+shift+|"
   ],
   "pane:cloneDown": "ctrl+alt+shift+_",
+  "pane:cloneLeft": "ctrl+alt+shift+<",
+  "pane:cloneUp": "ctrl+alt+shift+\"",
   "pane:close": "ctrl+shift+w",
   "editor:undo": "ctrl+shift+z",
   "editor:redo": "ctrl+shift+y",

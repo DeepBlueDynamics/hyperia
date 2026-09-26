@@ -8,6 +8,7 @@ import {clearWebPane, userExitTermGroup, splitWebPane, popOutPane} from '../acti
 import {markTabBell, clearTabBell} from '../actions/ui';
 import {subscribePermsOverlay} from '../permissions-bus';
 import rpc from '../rpc';
+import {acceleratorFor} from '../utils/keymaps';
 import {toNavigableUrl} from '../utils/navigable-url';
 import {countPathHorizontalStacks} from '../utils/term-groups';
 import {getSecurityState, normalizeUrlKey, stripUrlQuery, isOAuthUrl, isValidUrl} from '../utils/web-pane-helpers';
@@ -2111,7 +2112,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     menu.append(
       new MenuItem({
         label: 'Split Right',
-        accelerator: 'Ctrl+Shift+|',
+        accelerator: acceleratorFor('pane:splitRight'),
         registerAccelerator: false,
         enabled: !this.state.isNarrow,
         click: () => {
@@ -2126,7 +2127,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     menu.append(
       new MenuItem({
         label: 'Split Down',
-        accelerator: 'Ctrl+Shift+_',
+        accelerator: acceleratorFor('pane:splitDown'),
         registerAccelerator: false,
         enabled: !isSplitDownDisabled,
         click: () => {
@@ -2138,7 +2139,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     menu.append(
       new MenuItem({
         label: 'Clone Right',
-        accelerator: 'Ctrl+Alt+Shift+|',
+        accelerator: acceleratorFor('pane:cloneRight'),
         registerAccelerator: false,
         enabled: !this.state.isNarrow,
         click: () => {
@@ -2150,7 +2151,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     menu.append(
       new MenuItem({
         label: 'Clone Down',
-        accelerator: 'Ctrl+Alt+Shift+_',
+        accelerator: acceleratorFor('pane:cloneDown'),
         registerAccelerator: false,
         enabled: !isSplitDownDisabled,
         click: () => {

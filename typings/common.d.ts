@@ -27,6 +27,8 @@ export type Session = {
   prefillCommand?: string;
   splitPlacement?: 'BEFORE' | 'AFTER';
   layoutPattern?: string;
+  // Clone launch (lib/utils/clone-launch.ts): its command runs once here; a layout clones it into every pane.
+  clone?: {profile: string; command?: string; cwd?: string};
   shellState?: {
     state: 'idle' | 'busy' | 'running';
     lastExit?: number;
@@ -54,6 +56,7 @@ export type sessionExtraOptions = {
   groupUid?: string;
   url?: string;
   layoutPattern?: string;
+  clone?: {profile: string; command?: string; cwd?: string};
   isAgentInitiated?: boolean;
 };
 
