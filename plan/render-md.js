@@ -5,7 +5,7 @@ const path = require('path');
 const src = process.argv[2];
 if (!src) throw new Error('usage: node plan/render-md.js <file.md>');
 const md = fs.readFileSync(src, 'utf8');
-const title = (md.match(/^# (.+)$/m) || [, path.basename(src)])[1];
+const title = (md.match(/^# (.+)$/m) || [])[1] || path.basename(src);
 const out = src.replace(/\.md$/i, '.html');
 const esc = (s) => s.replace(/[&<>]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'})[c]);
 
