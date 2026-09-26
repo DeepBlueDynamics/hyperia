@@ -22,6 +22,7 @@ import rpc from '../rpc';
 import terms from '../terms';
 import {altArrowSequence} from '../utils/alt-arrow-sequence';
 import {ctrlCaretSequence} from '../utils/ctrl-caret';
+import {fileBrowserLabel, isLocalDir} from '../utils/file-browser';
 import {isPlainShell, pickNativeShell} from '../utils/native-shell';
 import {toNavigableUrl} from '../utils/navigable-url';
 import processClipboard from '../utils/paste';
@@ -482,6 +483,44 @@ export default class Term extends React.PureComponent<
       }
     } catch (err) {
       console.error('[term] screenshot failed:', err);
+    }
+  };
+
+  isLocalDirPath = (dir: string | null | undefined): boolean => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const fs = require('fs');
+    return isLocalDir(dir, fs.statSync);
+  };
+
+  openInFileBrowser = (dir: string | null | undefined) => {
+    if (!dir || !this.isLocalDirPath(dir)) return;
+    void shell.openPath(dir).then((err) => {
+      if (err) console.error('[term] open in file browser failed:', err);
+    });
+  };
+
+  // Right-click on the path pill: open/copy the cwd. Stops propagation so the
+  // band's split menu doesn't also pop, and never toggles the navigator.
+  handlePathBarContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const cwd = this.props.sessionCwd;
+    if (!cwd) return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const {Menu, MenuItem} = require('@electron/remote');
+      const menu = new Menu();
+      menu.append(
+        new MenuItem({
+          label: fileBrowserLabel(),
+          enabled: this.isLocalDirPath(cwd),
+          click: () => this.openInFileBrowser(cwd)
+        })
+      );
+      menu.append(new MenuItem({label: 'Copy Path', click: () => clipboard.writeText(cwd)}));
+      menu.popup();
+    } catch (err) {
+      console.error('[term] path context menu failed:', err);
     }
   };
 
@@ -2959,6 +2998,8 @@ export default class Term extends React.PureComponent<
   };
 
   renderNavigatorFooter = () => {
+    const browsed = this.state.navigatorCurrentPath;
+    const canOpenLocally = this.isLocalDirPath(browsed);
     return (
       <div
         className="term_navigatorFooter"
@@ -3004,6 +3045,28 @@ export default class Term extends React.PureComponent<
           onChange={this.handleSearchInputChange}
           onKeyDown={this.handleSearchInputKeyDown}
         />
+        <span
+          onClick={canOpenLocally ? () => this.openInFileBrowser(browsed) : undefined}
+          onMouseDown={(e) => e.preventDefault()}
+          className="term_navigatorOpenFolder"
+          style={{
+            cursor: canOpenLocally ? 'pointer' : 'not-allowed',
+            display: 'inline-flex',
+            alignItems: 'center',
+            fontSize: '12px',
+            color: canOpenLocally ? 'var(--text-info)' : 'var(--text-secondary)',
+            border: '0.5px solid var(--border-neutral)',
+            borderRadius: 'var(--radius-3)',
+            padding: '1px var(--space-6)',
+            background: 'var(--bg-secondary)',
+            userSelect: 'none',
+            whiteSpace: 'nowrap',
+            opacity: canOpenLocally ? 1 : 0.5
+          }}
+          title={canOpenLocally ? fileBrowserLabel() : 'Not a local directory'}
+        >
+          <i className="ti ti-external-link" aria-hidden="true" />
+        </span>
         <span
           onClick={this.isTerminalBusy() ? undefined : this.goToNavigatorDir}
           onMouseDown={(e) => e.preventDefault()}
@@ -3807,6 +3870,7 @@ export default class Term extends React.PureComponent<
                   e.stopPropagation();
                   this.toggleDirNavigator();
                 }}
+                onContextMenu={this.handlePathBarContextMenu}
                 onMouseEnter={() => {
                   // Pane containers clip with overflow:hidden (rounded
                   // corners), so the tooltip goes position:fixed, placed from
