@@ -452,7 +452,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           isWebPane ? 'tab_webPane' : ''
         } ${isFirstRun ? 'tab_firstRun' : ''} ${props.isDragging ? 'tab_dragging' : ''} ${
           props.isDragSource ? 'tab_dragSource' : ''
-        } ${isPinned ? 'tab_pinned' : ''}`}
+        } ${isPinned ? 'tab_pinned' : ''} ${renaming ? 'tab_renaming' : ''}`}
         ref={ref}
       >
         <div
@@ -477,15 +477,17 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           )}
           <span
             title={isPinned ? parsed.text || props.text : props.text !== displayText ? props.text : ''}
-            className={`tab_textInner ${isActive ? 'tab_textInnerActive' : ''}`}
+            className={`tab_textInner ${isActive ? 'tab_textInnerActive' : ''} ${renaming ? 'tab_textInnerRenaming' : ''}`}
             onDoubleClick={handleDoubleClick}
           >
-            {hasBell && <span className="tab_bell">🔔</span>}
+            {hasBell && !renaming && <span className="tab_bell">🔔</span>}
             {renaming ? (
               <div className="tab_renameContainer">
                 <input
                   ref={inputRef}
                   className="tab_renameInput"
+                  // Size to the full name so nothing is clipped while editing.
+                  style={{width: `${Math.max(renameValue.length + 3, 12)}ch`}}
                   value={renameValue}
                   onChange={(e) => setRenameValue(e.target.value)}
                   onKeyDown={handleRenameKey}
@@ -561,6 +563,17 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         .tab_pinned:active {
           cursor: default;
         }
+        /* While renaming, the tab grows to fit the whole name. */
+        .tab_renaming {
+          flex: 0 0 auto;
+          max-width: none;
+        }
+        .tab_textInnerRenaming {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
         .tab_pinned .tab_text {
           width: auto;
           padding-left: 12px;
@@ -693,7 +706,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           font-size: 12px;
           padding: 1px 6px;
           outline: none;
-          width: 100%;
+          max-width: 60vw;
           text-align: center;
           font-family: inherit;
         }

@@ -44,6 +44,23 @@ const shellMenu = (
         }
       },
       {
+        label: 'Split Up',
+        accelerator: commandKeys['pane:splitUp'],
+        click(item, focusedWindow) {
+          execCommand('pane:splitUp', focusedWindow);
+        }
+      },
+      {
+        label: 'Split Left',
+        accelerator: commandKeys['pane:splitLeft'],
+        click(item, focusedWindow) {
+          execCommand('pane:splitLeft', focusedWindow);
+        }
+      },
+      {
+        type: 'separator'
+      },
+      {
         label: 'Clone Down',
         accelerator: commandKeys['pane:cloneDown'],
         click(item, focusedWindow) {
@@ -55,6 +72,20 @@ const shellMenu = (
         accelerator: commandKeys['pane:cloneRight'],
         click(item, focusedWindow) {
           execCommand('pane:cloneRight', focusedWindow);
+        }
+      },
+      {
+        label: 'Clone Up',
+        accelerator: commandKeys['pane:cloneUp'],
+        click(item, focusedWindow) {
+          execCommand('pane:cloneUp', focusedWindow);
+        }
+      },
+      {
+        label: 'Clone Left',
+        accelerator: commandKeys['pane:cloneLeft'],
+        click(item, focusedWindow) {
+          execCommand('pane:cloneLeft', focusedWindow);
         }
       },
       {

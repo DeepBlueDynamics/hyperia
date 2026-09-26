@@ -20,6 +20,7 @@ import {BrowserWindow, WebContentsView, ipcMain, session, shell, Menu, clipboard
 import type {Session, WebContents} from 'electron';
 
 import {getConfig} from './config';
+import {fullPageClip} from './utils/fullpage-clip';
 import {ERR_ABORTED, initialLoadState, nextLoadState} from './utils/web-pane-loading';
 import type {WebPaneLoadEvent, WebPaneLoadState} from './utils/web-pane-loading';
 
@@ -639,6 +640,45 @@ function positionViews(entry: WebPaneEntry) {
   }
 }
 
+// Whole scrollable page via CDP captureBeyondViewport; null on any failure so the
+// caller falls back to the visible-viewport capture.
+async function captureFullPage(wc: WebContents): Promise<string | null> {
+  const dbg = wc.debugger;
+  // Reuse an attachment someone else owns, and leave it attached afterwards.
+  const ours = !dbg.isAttached();
+  try {
+    if (ours) dbg.attach('1.3');
+  } catch {
+    return null;
+  }
+  try {
+    const m = await dbg.sendCommand('Page.getLayoutMetrics');
+    const size = m?.cssContentSize || m?.contentSize;
+    const dpr = Number(await wc.executeJavaScript('window.devicePixelRatio', true)) || 1;
+    const clip = fullPageClip(size, dpr);
+    if (!clip) return null;
+    const {truncated, ...cdpClip} = clip;
+    if (truncated) console.warn(`[web-pane] full-page shot capped at ${clip.height}px of ${size.height}px`);
+    const shot = await dbg.sendCommand('Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: true,
+      clip: cdpClip
+    });
+    return shot?.data ? `data:image/png;base64,${shot.data}` : null;
+  } catch (err) {
+    console.error('[web-pane] full-page capture failed:', err);
+    return null;
+  } finally {
+    if (ours) {
+      try {
+        dbg.detach();
+      } catch {
+        /* already detached */
+      }
+    }
+  }
+}
+
 async function screenshotPane(uid: string) {
   const entry = panes.get(uid);
   if (!entry) return;
@@ -925,10 +965,14 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
     }
   });
 
-  ipcMain.handle('web-pane:capture', async (_e, {uid}: {uid: string}) => {
+  ipcMain.handle('web-pane:capture', async (_e, {uid, fullPage}: {uid: string; fullPage?: boolean}) => {
     const wc = wcOf(uid);
     if (!wc) return null;
     try {
+      if (fullPage) {
+        const full = await captureFullPage(wc);
+        if (full) return full;
+      }
       const img = await wc.capturePage();
       return img.toDataURL();
     } catch {

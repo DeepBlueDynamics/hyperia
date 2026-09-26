@@ -21,6 +21,43 @@ function resolveMode(params, filePath) {
   return 'note';
 }
 
+// In-note confirm styled like the schedule panel; resolves true on Delete/Enter, false otherwise.
+// Falls back to the native box if the overlay markup is missing.
+function styledConfirm(doc, msg) {
+  const overlay = doc.getElementById('confirmOverlay');
+  if (!overlay) return doc.defaultView.confirm(msg);
+  doc.getElementById('confirmTitle').textContent = msg;
+  overlay.style.display = 'flex';
+  return new Promise((resolve) => {
+    const ok = doc.getElementById('confirmOk');
+    const buttons = [ok, doc.getElementById('confirmCancel'), doc.getElementById('confirmClose')];
+    const done = (result) => {
+      overlay.style.display = 'none';
+      buttons.forEach((b) => b && b.removeEventListener('click', b._confirmHandler));
+      overlay.removeEventListener('mousedown', onBackdrop);
+      doc.removeEventListener('keydown', onKey, true);
+      resolve(result);
+    };
+    const onBackdrop = (e) => {
+      if (e.target === overlay) done(false);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape' || e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        done(e.key === 'Enter');
+      }
+    };
+    buttons.forEach((b) => {
+      if (!b) return;
+      b._confirmHandler = () => done(b === ok);
+      b.addEventListener('click', b._confirmHandler);
+    });
+    overlay.addEventListener('mousedown', onBackdrop);
+    doc.addEventListener('keydown', onKey, true);
+  });
+}
+
 function boot(opts) {
   opts = opts || {};
   const electron = opts.electron || require('electron');
@@ -48,7 +85,7 @@ function boot(opts) {
     clipboard,
     doc,
     win,
-    confirm: opts.confirm || ((msg) => win.confirm(msg)),
+    confirm: opts.confirm || ((msg) => styledConfirm(doc, msg)),
     els: {
       titleText: doc.getElementById('titleText'),
       titleInput: doc.getElementById('titleInput'),
@@ -123,9 +160,12 @@ function boot(opts) {
     ipc.send('sticky-context-menu', noteId, hasSelection, ctx.state.bgColor, !!ctx.state.boundFilePath, link);
   });
   ipc.on('sticky-delete', () => {
-    if (!ctx.confirm('Delete this note?')) return;
-    persist.writeNotes(persist.readNotes().filter((n) => n.id !== noteId));
-    ipc.send('sticky-close', noteId);
+    // confirm may be sync (tests) or a Promise (the styled overlay).
+    Promise.resolve(ctx.confirm('Delete this note?')).then((ok) => {
+      if (!ok) return;
+      persist.writeNotes(persist.readNotes().filter((n) => n.id !== noteId));
+      ipc.send('sticky-close', noteId);
+    });
   });
   ipc.on('note-updated', (_e, payload) => {
     // A payload without text (e.g. a result-only update) must not blank the prompt.

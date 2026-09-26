@@ -72,10 +72,23 @@ export function addSession(data: Session) {
       isAgentInitiated: (data as any).isAgentInitiated
     });
 
+    // A clone layout (Shift+click) fans the same launch out to every new pane; else pickers.
+    const clone = data.clone;
     if (layoutPattern) {
       setTimeout(() => {
-        openLayout(layoutPattern, uid);
+        openLayout(layoutPattern, uid, clone && clone.profile !== 'picker' ? clone : undefined);
       }, 50);
+    }
+
+    // Clone of a shell running a program: run it once the fresh shell settles (same
+    // delay as resume-once). The human asked for it via an explicit clone action.
+    if (clone?.command) {
+      setTimeout(() => {
+        const state = getState();
+        if (state.sessions.sessions[uid]) {
+          rpc.emit('data', {uid, data: `${clone.command}\r`});
+        }
+      }, 800);
     }
 
     // Type (but never run) a command into the fresh PTY: restore re-types the

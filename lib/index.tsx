@@ -32,6 +32,7 @@ import * as permissionsBus from './permissions-bus';
 import rpc from './rpc';
 import {getRootGroups} from './selectors';
 import configureStore from './store/configure-store';
+import {cloneLaunchFor} from './utils/clone-launch';
 import * as config from './utils/config';
 import {getBase64FileData} from './utils/file';
 import {serializeLayoutState} from './utils/layout-serialize';
@@ -443,45 +444,38 @@ rpc.on('split request vertical', ({activeUid, profile, url, splitPlacement, isAg
   );
 });
 
-rpc.on('clone request vertical', () => {
+// Keybinding + pane-band clone share this: the source pane (explicit activeUid, else the
+// focused one) is re-launched via cloneLaunchFor; splitPlacement BEFORE = left/up.
+const cloneSplit = (
+  direction: 'VERTICAL' | 'HORIZONTAL',
+  opts: {activeUid?: string | null; splitPlacement?: 'BEFORE' | 'AFTER'} = {}
+) => {
   const state = store_.getState();
   const activeTermGroup = state.termGroups.activeTermGroup;
   const activeGroup = activeTermGroup ? state.termGroups.termGroups[activeTermGroup] : null;
 
-  if (activeGroup && activeGroup.webUrl !== undefined) {
+  if (!opts.activeUid && activeGroup && activeGroup.webUrl !== undefined) {
     store_.dispatch({
       type: 'TERM_GROUP_SPLIT_WEB',
       activeUid: activeTermGroup,
       url: activeGroup.webUrl || '',
-      splitDirection: 'VERTICAL'
+      splitDirection: direction
     } as any);
-  } else {
-    const activeUid = state.sessions.activeUid;
-    const activeSession = activeUid ? state.sessions.sessions[activeUid] : null;
-    const profile = activeSession ? activeSession.profile : undefined;
-    store_.dispatch(termGroupActions.requestVerticalSplit(activeUid ?? undefined, profile ?? undefined));
+    return;
   }
-});
+  const activeUid = opts.activeUid || state.sessions.activeUid;
+  const activeSession = activeUid ? state.sessions.sessions[activeUid] : null;
+  const launch = cloneLaunchFor(activeSession, (state.ui as any).profiles || []);
+  const split =
+    direction === 'VERTICAL' ? termGroupActions.requestVerticalSplit : termGroupActions.requestHorizontalSplit;
+  store_.dispatch(
+    split(activeUid ?? undefined, launch.profile, undefined, opts.splitPlacement, undefined, launch.cwd, launch)
+  );
+};
 
-rpc.on('clone request horizontal', () => {
-  const state = store_.getState();
-  const activeTermGroup = state.termGroups.activeTermGroup;
-  const activeGroup = activeTermGroup ? state.termGroups.termGroups[activeTermGroup] : null;
+rpc.on('clone request vertical', (opts) => cloneSplit('VERTICAL', opts || {}));
 
-  if (activeGroup && activeGroup.webUrl !== undefined) {
-    store_.dispatch({
-      type: 'TERM_GROUP_SPLIT_WEB',
-      activeUid: activeTermGroup,
-      url: activeGroup.webUrl || '',
-      splitDirection: 'HORIZONTAL'
-    } as any);
-  } else {
-    const activeUid = state.sessions.activeUid;
-    const activeSession = activeUid ? state.sessions.sessions[activeUid] : null;
-    const profile = activeSession ? activeSession.profile : undefined;
-    store_.dispatch(termGroupActions.requestHorizontalSplit(activeUid ?? undefined, profile ?? undefined));
-  }
-});
+rpc.on('clone request horizontal', (opts) => cloneSplit('HORIZONTAL', opts || {}));
 
 rpc.on('reset fontSize req', () => {
   const state = store_.getState();
