@@ -37,7 +37,34 @@ pub enum TelemetryEvent {
         cache: u64,
         model: String,
     },
+    /// One successful file edit from an agent's edit tool (n8 nuts_edit/replace/write).
+    #[serde(alias = "edit")]
+    Edit {
+        path: String,
+        #[serde(default)]
+        tool: String,
+        #[serde(default)]
+        lines_added: u64,
+        #[serde(default)]
+        lines_removed: u64,
+        #[serde(default)]
+        substitutions: u64,
+        #[serde(default)]
+        regions: Vec<EditRegion>,
+        bytes_before: Option<u64>,
+        bytes_after: Option<u64>,
+    },
 }
+
+/// 1-based, inclusive line range touched by an edit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditRegion {
+    pub start_line: u64,
+    pub end_line: u64,
+}
+
+/// Producers cap regions at 20; enforce it here too so one event can't bloat the rings.
+pub const MAX_EDIT_REGIONS: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FileOp {
@@ -73,6 +100,11 @@ pub struct PaneMetrics {
     pub file_renames: u64,
     pub file_reads: u64,
     pub file_bytes_written: u64,
+    pub file_edits: u64,
+    pub lines_added: u64,
+    pub lines_removed: u64,
+    /// Most recent edit, for a per-pane "editing X, lines a–b, +N −M" line.
+    pub last_edit: Option<TelemetryEvent>,
     pub net_inbound_bytes: u64,
     pub net_outbound_bytes: u64,
     pub net_hosts: Vec<String>,
@@ -110,6 +142,12 @@ impl PaneMetrics {
                 self.tokens_in += input;
                 self.tokens_out += output;
                 self.tokens_cache += cache;
+            }
+            TelemetryEvent::Edit { lines_added, lines_removed, .. } => {
+                self.file_edits += 1;
+                self.lines_added += lines_added;
+                self.lines_removed += lines_removed;
+                self.last_edit = Some(event.clone());
             }
         }
         // Bounded per-pane history (was unbounded — leak).
@@ -167,7 +205,10 @@ impl TelemetryStore {
     }
 
     /// Record an event for a pane.
-    pub fn record(&self, pane_uid: &str, event: TelemetryEvent) {
+    pub fn record(&self, pane_uid: &str, mut event: TelemetryEvent) {
+        if let TelemetryEvent::Edit { regions, .. } = &mut event {
+            regions.truncate(MAX_EDIT_REGIONS);
+        }
         let mut store = self.inner.lock().unwrap();
         if !store.enabled {
             return;
@@ -185,7 +226,7 @@ impl TelemetryStore {
             pane_uid: pane_uid.to_string(),
             event: event.clone(),
         });
-        if matches!(event, TelemetryEvent::FileOp { .. }) {
+        if matches!(event, TelemetryEvent::FileOp { .. } | TelemetryEvent::Edit { .. }) {
             if store.recent_files.len() >= 300 {
                 store.recent_files.pop_front();
             }
@@ -253,6 +294,9 @@ impl TelemetryStore {
                     agg.file_renames += pm.file_renames;
                     agg.file_reads += pm.file_reads;
                     agg.file_bytes_written += pm.file_bytes_written;
+                    agg.file_edits += pm.file_edits;
+                    agg.lines_added += pm.lines_added;
+                    agg.lines_removed += pm.lines_removed;
                     agg.net_inbound_bytes += pm.net_inbound_bytes;
                     agg.net_outbound_bytes += pm.net_outbound_bytes;
                     agg.tokens_in += pm.tokens_in;
@@ -299,5 +343,49 @@ impl TelemetryStore {
             }
             _ => serde_json::json!({"error": "level must be 'pane' or 'window'"}),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edit_event_parses_and_accumulates() {
+        let body = r#"{"kind":"Edit","path":"/workspace/a.py","tool":"nuts_edit","lines_added":12,"lines_removed":3,"substitutions":0,"regions":[{"start_line":40,"end_line":61}],"bytes_before":8193,"bytes_after":8410}"#;
+        let ev: TelemetryEvent = serde_json::from_str(body).unwrap();
+        let store = TelemetryStore::new();
+        store.record("p1", ev);
+        let pm = store.pane_snapshot("p1").unwrap();
+        assert_eq!((pm.file_edits, pm.lines_added, pm.lines_removed), (1, 12, 3));
+        assert!(matches!(pm.last_edit, Some(TelemetryEvent::Edit { .. })));
+        assert_eq!(store.window_snapshot().recent_files.len(), 1);
+    }
+
+    #[test]
+    fn edit_minimal_body_and_region_cap() {
+        let regions: Vec<String> = (1..=30).map(|i| format!(r#"{{"start_line":{i},"end_line":{i}}}"#)).collect();
+        let body = format!(r#"{{"kind":"edit","path":"x","regions":[{}]}}"#, regions.join(","));
+        let store = TelemetryStore::new();
+        store.record("p", serde_json::from_str(&body).unwrap());
+        match store.pane_snapshot("p").unwrap().last_edit {
+            Some(TelemetryEvent::Edit { regions, .. }) => assert_eq!(regions.len(), MAX_EDIT_REGIONS),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn edit_parses_inside_the_ingest_envelope() {
+        // Mirrors post_telemetry_event's flattened {pane_uid, ...event} body.
+        #[derive(serde::Deserialize)]
+        struct Envelope {
+            pane_uid: String,
+            #[serde(flatten)]
+            event: TelemetryEvent,
+        }
+        let body = r#"{"pane_uid":"abc","kind":"Edit","path":"f","tool":"nuts_replace","substitutions":4,"regions":[{"start_line":1,"end_line":2}]}"#;
+        let env: Envelope = serde_json::from_str(body).unwrap();
+        assert_eq!(env.pane_uid, "abc");
+        assert!(matches!(env.event, TelemetryEvent::Edit { substitutions: 4, .. }));
     }
 }

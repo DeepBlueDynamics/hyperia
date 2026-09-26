@@ -2759,7 +2759,7 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "Record a telemetry event (file op, network, tokens) for a pane. `event` is an object like {\"kind\":\"Tokens\",\"input\":120,\"output\":40,\"cache\":0,\"model\":\"...\"} — kinds: Tokens, Network (direction: Inbound|Outbound, host, bytes), FileOp (op: Create|Write|Delete|Rename, path, bytes?).")]
+    #[tool(description = "Record a telemetry event (file op, network, tokens) for a pane. `event` is an object like {\"kind\":\"Tokens\",\"input\":120,\"output\":40,\"cache\":0,\"model\":\"...\"} — kinds: Tokens, Network (direction: Inbound|Outbound, host, bytes), FileOp (op: Create|Write|Delete|Rename, path, bytes?), Edit (path, tool, lines_added, lines_removed, substitutions, regions: [{start_line,end_line}] 1-based, bytes_before?, bytes_after?).")]
     async fn telemetry_record(
         &self,
         Parameters(req): Parameters<TelemetryEventRequest>,
