@@ -46,6 +46,10 @@ On first run Hyperia casts a one-time splash, then opens a terminal. The built-i
 
 See [configuration.md](configuration.md) for the full config shape and [ghost-agent.md](ghost-agent.md) for the built-in agent.
 
+## Debugging the UI
+
+Agents can check renderer and layout fixes in a real window without asking the human to click around: launch a dev copy with `--remote-debugging-port`, then measure and screenshot it with `scripts/cdp.js`. See [ui-debugging.md](ui-debugging.md).
+
 ## Connect an agent (MCP over HTTP)
 
 While Hyperia is running, the sidecar exposes its MCP server over **streamable HTTP** at `${HYPERIA_MCP_URL:-http://localhost:9800/mcp}`.
