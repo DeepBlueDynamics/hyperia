@@ -1321,10 +1321,17 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    #[tool(description = "List all open windows, tabs, and panes in a nested hierarchy. Each window has an `id` field — pass that exact value as the `window` parameter in other tools (it is NOT 0-based; the first window is typically id=1). Each pane has a friendly `name` and a stable `paneId`. Address panes and tabs in other tools by their NAME or by paneId (full UUID or its 4+ char prefix) — there is no positional a/b/c label.")]
-    async fn terminal_status(&self) -> Result<CallToolResult, ErrorData> {
+    #[tool(description = "List all open windows, tabs, and panes in a nested hierarchy. Each window has an `id` field — pass that exact value as the `window` parameter in other tools (it is NOT 0-based; the first window is typically id=1). Each pane has a friendly `name` and a stable `paneId`. Address panes and tabs in other tools by their NAME or by paneId (full UUID or its 4+ char prefix) — there is no positional a/b/c label. Each pane has a `kind`: \"terminal\" (a shell) or \"web\" (an embedded browser). `you` is your own pane when your identity maps to one, and `hints` lists ready-to-use tool calls with paneIds filled in (web page beside a pane, new shell, read, close).")]
+    async fn terminal_status(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
         let text = self.get("/api/status").await?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        let Ok(mut status) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return Ok(CallToolResult::success(vec![Content::text(text)]));
+        };
+        let own = self.caller_pane(&ctx).await;
+        let (you, hints) = status_hints(&status, own.as_deref());
+        status["you"] = you;
+        status["hints"] = hints;
+        Ok(CallToolResult::success(vec![Content::text(status.to_string())]))
     }
 
     #[tool(description = "Render a black-and-white schematic image of a tab's pane layout — proportional rectangles for every split, labeled with pane letter, kind, title, and cwd. Returns the PNG as inline image content (multimodal agents can view it directly) plus the saved file path on disk under ~/.hyperia/snapshots/. Much faster to grok than walking terminal_status JSON when you just need to orient yourself. Omit window/tab for the active tab.")]
@@ -3721,6 +3728,51 @@ fn detect_shell_state(screen: &str) -> ShellStateInfo {
     }
 }
 
+/// `you` + `hints` for terminal_status (#120): concrete, paneId-filled calls for
+/// the common intents, anchored on the caller's own pane, else the focused one.
+fn status_hints(status: &serde_json::Value, own_pane: Option<&str>) -> (serde_json::Value, serde_json::Value) {
+    use serde_json::{json, Value};
+    let panes: Vec<&Value> = status["windows"].as_array().into_iter().flatten()
+        .flat_map(|w| w["tabs"].as_array().into_iter().flatten())
+        .flat_map(|t| t["panes"].as_array().into_iter().flatten())
+        .collect();
+    let mine = own_pane.and_then(|id| panes.iter().copied().find(|p| p["paneId"].as_str() == Some(id)));
+    let model = "window → tab → pane. A pane holds EITHER a terminal (a shell) OR a web view — see each pane's `kind`. \
+                 \"Open a web pane in this tab\" = terminal_split with a `url`. Address panes by paneId.";
+    let you = mine.map_or(Value::Null, |p| json!({"paneId": p["paneId"], "name": p["name"], "kind": p["kind"]}));
+    let Some(anchor) = mine
+        .or_else(|| panes.iter().copied().find(|p| p["focused"].as_bool() == Some(true)))
+        .or_else(|| panes.first().copied())
+    else {
+        return (you, json!({"model": model, "openWebPane": "open_web_pane { url: \"https://...\" }"}));
+    };
+    let id = anchor["paneId"].as_str().unwrap_or_default();
+    let is_web = anchor["kind"].as_str() == Some("web");
+    let about = if mine.is_some() { "your own pane" } else { "the focused pane" };
+    let mut hints = json!({
+        "model": model,
+        "anchor": format!("{id} ({}) — {about}", anchor["name"].as_str().unwrap_or("")),
+        "webPaneBesideIt": format!("terminal_split {{ pane: \"{id}\", url: \"https://...\" }}"),
+        "webPaneNewTab": "open_web_pane { url: \"https://...\" }",
+        "shellBesideIt": format!("terminal_split {{ pane: \"{id}\" }}, then terminal_run {{ pane: \"<new paneId>\", command: \"...\" }}"),
+    });
+    if is_web {
+        hints["readIt"] = json!(format!("web_pane_content {{ pane: \"{id}\" }}"));
+    } else if mine.is_some() {
+        // Agents can't drive their own pane (see instructions): point at a worker split.
+        hints["runCommand"] = json!("you can't drive your own pane — use shellBesideIt and run it there");
+    } else {
+        hints["runInIt"] = json!(format!("terminal_run {{ pane: \"{id}\", command: \"...\" }}"));
+        hints["readIt"] = json!(format!("terminal_screen {{ pane: \"{id}\" }}"));
+    }
+    hints["closeIt"] = if mine.is_some() {
+        json!("don't close your own pane — terminal_close { pane: \"<paneId>\" } the splits you opened")
+    } else {
+        json!(format!("terminal_close {{ pane: \"{id}\" }}"))
+    };
+    (you, hints)
+}
+
 // -- Helper methods --
 
 impl HyperiaMcp {
@@ -3752,6 +3804,15 @@ impl HyperiaMcp {
 
     async fn get(&self, path: &str) -> Result<String, ErrorData> {
         self.get_as(path, None).await
+    }
+
+    /// The paneId the caller is running in, per whoami. None when anonymous
+    /// or the identity isn't tied to a pane.
+    async fn caller_pane(&self, ctx: &RequestContext<RoleServer>) -> Option<String> {
+        let auth = forwarded_auth(ctx)?;
+        let who = self.get_as("/api/identity/whoami", Some(&auth)).await.ok()?;
+        let who: serde_json::Value = serde_json::from_str(&who).ok()?;
+        who["pane"].as_str().filter(|p| !p.is_empty()).map(str::to_owned)
     }
 
     /// GET that forwards a caller Authorization header so identity-gated read
@@ -4299,6 +4360,10 @@ impl ServerHandler for HyperiaMcp {
                  causes: two failed attempts is the ceiling. A wrong guess costs the human far more \
                  than a pause does, and repeated calls can make the breakage worse. Use report_bug \
                  to file it. \
+                 \n\nLAYOUT MODEL: window → tab → pane. A pane holds EITHER a terminal (a shell) OR \
+                 a web view (`kind` in terminal_status). \"Open a web pane in this tab\" means \
+                 `terminal_split` with a `url`; `open_web_pane` always makes a NEW tab. Address panes \
+                 by paneId. terminal_status's `hints` block has ready-to-use calls with IDs filled in. \
                  \n\nCRITICAL — UI-FIRST PRINCIPLE: Hyperia gives you unlimited terminal panes and \
                  tabs. NEVER use shell-level backgrounding to run servers, watchers, REPLs, or any \
                  long-running task. That includes: PowerShell `Start-Process`, `nohup`, `tmux`, \
@@ -4441,6 +4506,51 @@ pub fn streamable_http_service(
             ..Default::default()
         },
     )
+}
+
+#[cfg(test)]
+mod status_hints_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn status() -> serde_json::Value {
+        json!({"windows": [{"id": 1, "tabs": [{"panes": [
+            {"paneId": "aaaa-1", "name": "Agent", "kind": "terminal", "focused": false},
+            {"paneId": "bbbb-2", "name": "Shell", "kind": "terminal", "focused": true},
+            {"paneId": "cccc-3", "name": "Docs", "kind": "web", "focused": false},
+        ]}]}]})
+    }
+
+    #[test]
+    fn own_pane_anchors_hints_and_never_suggests_driving_it() {
+        let (you, hints) = status_hints(&status(), Some("aaaa-1"));
+        assert_eq!(you["paneId"], "aaaa-1");
+        assert_eq!(hints["webPaneBesideIt"], "terminal_split { pane: \"aaaa-1\", url: \"https://...\" }");
+        assert!(hints.get("runInIt").is_none());
+        assert!(hints["closeIt"].as_str().unwrap().starts_with("don't close your own pane"));
+    }
+
+    #[test]
+    fn falls_back_to_focused_pane_when_caller_has_none() {
+        let (you, hints) = status_hints(&status(), None);
+        assert!(you.is_null());
+        assert_eq!(hints["runInIt"], "terminal_run { pane: \"bbbb-2\", command: \"...\" }");
+        assert_eq!(hints["closeIt"], "terminal_close { pane: \"bbbb-2\" }");
+        // Unknown own pane (e.g. stale token) also falls back.
+        let (you, hints) = status_hints(&status(), Some("gone"));
+        assert!(you.is_null());
+        assert!(hints["anchor"].as_str().unwrap().starts_with("bbbb-2"));
+    }
+
+    #[test]
+    fn web_anchor_reads_page_content_and_empty_status_still_explains_model() {
+        let (_, hints) = status_hints(&status(), Some("cccc-3"));
+        assert_eq!(hints["readIt"], "web_pane_content { pane: \"cccc-3\" }");
+        let (you, hints) = status_hints(&json!({"windows": []}), None);
+        assert!(you.is_null());
+        assert!(hints["model"].as_str().unwrap().starts_with("window → tab → pane"));
+        assert!(hints.get("anchor").is_none());
+    }
 }
 
 #[cfg(test)]
