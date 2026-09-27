@@ -12,7 +12,7 @@ import isDev from 'electron-is-dev';
 import WebSocket from 'ws';
 
 import {getProfiles, getConfig} from './config';
-import {submitInput} from './guarded-input';
+import {submitInput, pendingEnterDecision, PENDING_ENTER_POLL_MS, type PendingEnter} from './guarded-input';
 import type Session from './session';
 import {
   createStickyNote,
@@ -86,6 +86,8 @@ interface QueuedWrite {
 }
 const agentQueues = new Map<string, QueuedWrite[]>();
 const inputAttempts = new Set<string>();
+const pendingEnters = new Map<string, PendingEnter>();
+let pendingEnterTimer: NodeJS.Timeout | null = null;
 let drainTimer: NodeJS.Timeout | null = null;
 
 // Callback for downstream commands from sidecar
@@ -255,6 +257,46 @@ function isUserActive(uid: string): boolean {
 
 function inputReserved(uid: string): boolean {
   return inputAttempts.has(uid);
+}
+
+/** Human is typing in, or focused on, this pane: agent Enter must wait. */
+function paneProtected(uid: string, tracked: TrackedSession): boolean {
+  const win = getHyperiaWindowById(tracked.windowId);
+  return isUserActive(uid) || !!(win?.isFocused() && tracked.tabActive && tracked.paneActive);
+}
+
+// The sidecar counts a withheld Enter as consumed and never retries, so main
+// submits it once the pane is free, unless the human has typed there since.
+function armPendingEnter(uid: string, pid: number, writtenAt: number) {
+  pendingEnters.set(uid, {uid, pid, writtenAt});
+  console.log(`[bridge] Pending Enter armed for ${uid} (Enter withheld from agent input)`);
+  if (!pendingEnterTimer) pendingEnterTimer = setInterval(tickPendingEnters, PENDING_ENTER_POLL_MS);
+}
+
+function tickPendingEnters() {
+  const now = Date.now();
+  for (const pending of Array.from(pendingEnters.values())) {
+    const tracked = trackedSessions.get(pending.uid);
+    const sameIncarnation = !!tracked && tracked.session.pty?.pid === pending.pid;
+    const decision = pendingEnterDecision(pending, {
+      now,
+      sameIncarnation,
+      protected: !!tracked && paneProtected(pending.uid, tracked),
+      lastUserActivityAt: lastUserActivity.get(pending.uid)
+    });
+    if (decision.action === 'wait') continue;
+    pendingEnters.delete(pending.uid);
+    if (decision.action === 'send' && tracked?.session.pty) {
+      tracked.session.pty.write('\r');
+      console.log(`[bridge] Pending Enter sent for ${pending.uid} after ${now - pending.writtenAt}ms`);
+    } else if (decision.action === 'abandon') {
+      console.log(`[bridge] Pending Enter abandoned for ${pending.uid}: ${decision.reason}; text left visible`);
+    }
+  }
+  if (pendingEnters.size === 0 && pendingEnterTimer) {
+    clearInterval(pendingEnterTimer);
+    pendingEnterTimer = null;
+  }
 }
 
 function enqueueOrWrite(uid: string, keys: string, seq: number | undefined, interrupt = false) {
@@ -436,7 +478,8 @@ function handleCommand(msg: Record<string, unknown>) {
         );
         break;
       }
-      if (inputAttempts.has(uid) || (agentQueues.get(uid)?.length || 0) > 0) {
+      // A pending Enter would submit the next paste glued onto the earlier text.
+      if (inputAttempts.has(uid) || pendingEnters.has(uid) || (agentQueues.get(uid)?.length || 0) > 0) {
         sendResult(
           seq,
           JSON.stringify({state: 'deferred', detail: 'Another input operation is pending for this pane.'})
@@ -450,11 +493,11 @@ function handleCommand(msg: Record<string, unknown>) {
           alive: () => trackedSessions.get(uid) === tracked && tracked.session.pty?.pid === pid,
           protected: () => {
             if (msg.control === true && msg.interrupt === true) return false;
-            const win = getHyperiaWindowById(tracked.windowId);
-            return isUserActive(uid) || !!(win?.isFocused() && tracked.tabActive && tracked.paneActive);
+            return paneProtected(uid, tracked);
           },
           write: (bytes) => tracked.session.pty!.write(bytes),
-          settle: () => new Promise((resolve) => setTimeout(resolve, 150))
+          settle: () => new Promise((resolve) => setTimeout(resolve, 150)),
+          enterWithheld: (writtenAt) => armPendingEnter(uid, pid, writtenAt)
         }
       )
         .then((result) => sendResult(seq, JSON.stringify(result)))
