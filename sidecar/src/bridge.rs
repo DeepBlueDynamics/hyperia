@@ -1952,6 +1952,8 @@ impl Bridge {
                         serde_json::json!({
                             "paneId": uid,
                             "name": friendly,
+                            // What the pane holds: a shell or an embedded browser (#120).
+                            "kind": if info.name == "web" { "web" } else { "terminal" },
                             "shell": shell,
                             "process": process,
                             "cols": info.cols,
