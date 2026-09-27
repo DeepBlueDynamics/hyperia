@@ -11,6 +11,7 @@ const SEND = Object.freeze([
   'sticky-context-menu',
   'sticky-open-file',
   'sticky-close',
+  'sticky-fit',
   'generate-summary-sticky',
   'open-matching-stickys'
 ]);

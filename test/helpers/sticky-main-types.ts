@@ -18,6 +18,7 @@ export interface StickyFixture {
   defaultsFile: string;
   sticky: StickyTestApi;
   ipcEmit: (channel: string, ...args: any[]) => boolean;
+  ipcEmitFrom: (sender: unknown, channel: string, ...args: any[]) => void;
   ipcInvoke: (channel: string, event: any, ...args: any[]) => Promise<any>;
   ipcHasHandler: (channel: string) => boolean;
   triggerStartupRestore: () => void;

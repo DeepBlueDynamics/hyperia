@@ -13,7 +13,7 @@ import {handleStickyHighlight} from './security';
 import {readAllNotes} from './store';
 import {buildStickysSummary} from './summary';
 import type {StickyRun} from './types';
-import {closeStickyNote, createStickyNote, hideAllStickys, hideSticky, showAllStickys} from './window';
+import {applyStickyFit, closeStickyNote, createStickyNote, hideAllStickys, hideSticky, showAllStickys} from './window';
 
 function registerRunIpc(): void {
   ipcMain.handle('sticky-run-set', (_event, id: string, run: StickyRun) => setRun(id, run, {human: true}));
@@ -43,6 +43,10 @@ function registerRunIpc(): void {
 export function initSticky(): void {
   ipcMain.on('new-sticky', (_event, options?: {filePath?: string; text?: string}) => {
     createStickyNote({...options, focus: true});
+  });
+
+  ipcMain.on('sticky-fit', (event, noteId: string, size: {width: number; height: number}) => {
+    applyStickyFit(event.sender, noteId, size);
   });
 
   ipcMain.on('new-sticky-file', (_event, filePath: string) => {

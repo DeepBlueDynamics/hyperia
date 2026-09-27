@@ -65,10 +65,14 @@ export class FakeBrowserWindow {
   __startedHidden?: boolean;
   backgroundColor = '#fff';
   loadedFile: string | null = null;
+  loadedSearch: string | null = null;
 
   constructor(public opts: any = {}) {
     FakeBrowserWindow.instances.push(this);
     this.visible = !!opts.show;
+    if (opts.width != null && opts.height != null) {
+      this.bounds = {x: opts.x ?? 100, y: opts.y ?? 100, width: opts.width, height: opts.height};
+    }
     this.backgroundColor = opts.backgroundColor;
   }
 
@@ -177,8 +181,9 @@ export class FakeBrowserWindow {
 
   moveTop() {}
 
-  loadFile(filePath: string) {
+  loadFile(filePath: string, opts?: {search?: string}) {
     this.loadedFile = filePath;
+    this.loadedSearch = opts?.search ?? null;
     return Promise.resolve();
   }
 
@@ -267,6 +272,9 @@ export function createStickyFixture(t: ExecutionContext, options: {autoInit?: bo
   const ipcHandlers = new Map<string, Function>();
 
   const ipcMain = {
+    emitFrom: (sender: unknown, channel: string, ...args: any[]) => {
+      for (const fn of ipcListeners.get(channel) || []) fn({sender}, ...args);
+    },
     on: (channel: string, listener: Function) => {
       const list = ipcListeners.get(channel) || [];
       list.push(listener);
@@ -365,6 +373,7 @@ export function createStickyFixture(t: ExecutionContext, options: {autoInit?: bo
     defaultsFile,
     sticky,
     ipcEmit: (channel: string, ...args: any[]) => ipcMain.emit(channel, ...args),
+    ipcEmitFrom: (sender: unknown, channel: string, ...args: any[]) => ipcMain.emitFrom(sender, channel, ...args),
     ipcInvoke: async (channel: string, event: any, ...args: any[]) => {
       const handler = ipcHandlers.get(channel);
       if (!handler) throw new Error(`No handler registered for ${channel}`);
