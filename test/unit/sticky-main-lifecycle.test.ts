@@ -245,3 +245,59 @@ test.serial('default size: explicit width/height still win', (t) => {
   t.is(win.opts.width, 700);
   t.is(win.opts.height, 500);
 });
+
+// ── Fit to content (#280) ───────────────────────────────────────────────────
+
+const fitParam = (win: FakeBrowserWindow) => new URLSearchParams(win.loadedSearch || '').get('fit');
+
+test.serial('fit: new note with text is offered a one-shot fit with grow-only caps', (t) => {
+  const f = createStickyFixture(t);
+  const win = f.sticky.createStickyNote({text: 'lots of instructions'}).win as FakeBrowserWindow;
+  // max 60% x 70% of 1920x1080; min = the default it opened at (grow only)
+  t.is(fitParam(win), '1152,756,480,378');
+});
+
+test.serial('fit: code note may shrink to the plain default', (t) => {
+  const f = createStickyFixture(t);
+  const win = f.sticky.createStickyNote({text: 'x', color: 'code:dark'}).win as FakeBrowserWindow;
+  t.is(fitParam(win), '1152,756,480,378');
+});
+
+test.serial('fit: not offered for empty, explicitly sized, or reopened notes', (t) => {
+  const f = createStickyFixture(t);
+  t.is(fitParam(f.sticky.createStickyNote().win as FakeBrowserWindow), null);
+  t.is(fitParam(f.sticky.createStickyNote({text: 'hi', width: 500, height: 400}).win as FakeBrowserWindow), null);
+  const {id} = f.sticky.createStickyNote({text: 'hi'});
+  f.sticky.closeStickyNote(id);
+  t.is(fitParam(f.sticky.createStickyNote({id}).win as FakeBrowserWindow), null);
+});
+
+test.serial('fit: applied once, clamped, kept on-screen, and persisted', (t) => {
+  const f = createStickyFixture(t);
+  const {win, id} = f.sticky.createStickyNote({text: 'hi', x: 1700, y: 900}) as {win: FakeBrowserWindow; id: string};
+  f.ipcEmitFrom(win.webContents, 'sticky-fit', id, {width: 5000, height: 600});
+  const b = win.getBounds();
+  t.deepEqual(b, {x: 1920 - 1152, y: 1080 - 600, width: 1152, height: 600});
+  const saved = JSON.parse(readFileSync(f.notesFile, 'utf8')).find((n: any) => n.id === id);
+  t.like(saved, {x: b.x, y: b.y, width: 1152, height: 600});
+  t.false(win.focused, 'fit must not focus the note');
+
+  // Second request is ignored.
+  f.ipcEmitFrom(win.webContents, 'sticky-fit', id, {width: 600, height: 500});
+  t.deepEqual(win.getBounds(), b);
+});
+
+test.serial('fit: plain note never shrinks below where it opened', (t) => {
+  const f = createStickyFixture(t);
+  const {win, id} = f.sticky.createStickyNote({text: 'hi'}) as {win: FakeBrowserWindow; id: string};
+  f.ipcEmitFrom(win.webContents, 'sticky-fit', id, {width: 100, height: 100});
+  t.like(win.getBounds(), {width: 480, height: 378});
+});
+
+test.serial('fit: request from another note window is ignored', (t) => {
+  const f = createStickyFixture(t);
+  const a = f.sticky.createStickyNote({text: 'a'}) as {win: FakeBrowserWindow; id: string};
+  const b = f.sticky.createStickyNote({text: 'b'}) as {win: FakeBrowserWindow; id: string};
+  f.ipcEmitFrom(b.win.webContents, 'sticky-fit', a.id, {width: 900, height: 700});
+  t.like(a.win.getBounds(), {width: 480, height: 378});
+});

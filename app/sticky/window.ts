@@ -2,6 +2,7 @@ import {existsSync} from 'fs';
 import {basename, resolve} from 'path';
 
 import {app, BrowserWindow, screen} from 'electron';
+import type {Rectangle, WebContents} from 'electron';
 
 import isDev from 'electron-is-dev';
 
@@ -124,6 +125,23 @@ export function createStickyNote(
   x = Math.max(wa.x, Math.min(x, wa.x + wa.width - width));
   y = Math.max(wa.y, Math.min(y, wa.y + wa.height - height));
 
+  // Brand-new notes with content get one fit-to-content pass from the renderer (#280).
+  // Plain notes only grow; code notes may shrink to the plain default for short files.
+  const fit =
+    !savedNote && !options.width && !options.height && !!(options.text || options.filePath) && noteId !== SEARCH_WIN_ID
+      ? {
+          wa,
+          maxW: Math.max(width, Math.round(wa.width * FIT_MAX_FRACTION.w)),
+          maxH: Math.max(height, Math.round(wa.height * FIT_MAX_FRACTION.h)),
+          ...(isCode
+            ? (() => {
+                const floor = getStickyDefaultSize(wa, 'text');
+                return {minW: Math.min(width, floor.width), minH: Math.min(height, floor.height)};
+              })()
+            : {minW: width, minH: height})
+        }
+      : null;
+
   const existingNames = readAllNotes().map((n) => n.name || '');
   const displayName = options.name || savedNote?.name || generateNoteName(existingNames);
   const colorHex = options.color || savedNote?.color || nextColor().bg;
@@ -179,6 +197,10 @@ export function createStickyNote(
   queryParams.set('name', displayName);
   if (options.filePath) queryParams.set('file', options.filePath);
   if (noteId === 'sticky-search-window') queryParams.set('mode', 'search');
+  if (fit) {
+    queryParams.set('fit', [fit.maxW, fit.maxH, fit.minW, fit.minH].join(','));
+    pendingFits.set(noteId, fit);
+  }
   void win.loadFile(htmlPath, {search: queryParams.toString()});
 
   win.once('ready-to-show', () => {
@@ -218,12 +240,42 @@ export function createStickyNote(
   });
 
   win.on('closed', () => {
+    pendingFits.delete(noteId);
     unregister(noteId);
     stickyWindows.delete(noteId);
     stopFileWatch(noteId);
   });
 
   return {win, id: noteId, name: displayName};
+}
+
+// Upper bound for a fitted note, as a fraction of the work area.
+const FIT_MAX_FRACTION = {w: 0.6, h: 0.7};
+
+type PendingFit = {wa: Rectangle; maxW: number; maxH: number; minW: number; minH: number};
+const pendingFits = new Map<string, PendingFit>();
+
+// The renderer's one-shot fit-to-content request. Honoured once per new note, only
+// from that note's own window; resizes in place without focusing or raising it.
+export function applyStickyFit(sender: WebContents, noteId: string, size: {width: number; height: number}): boolean {
+  const fit = pendingFits.get(noteId);
+  const win = stickyWindows.get(noteId);
+  if (!fit || !win || win.isDestroyed() || BrowserWindow.fromWebContents(sender) !== win) return false;
+  pendingFits.delete(noteId);
+  if (!Number.isFinite(size?.width) || !Number.isFinite(size?.height)) return false;
+
+  const {wa} = fit;
+  const width = Math.round(Math.max(fit.minW, Math.min(size.width, fit.maxW, wa.width)));
+  const height = Math.round(Math.max(fit.minH, Math.min(size.height, fit.maxH, wa.height)));
+  const b = win.getBounds();
+  // Keep the top-left anchored; slide back on-screen only if the new size overflows.
+  const x = Math.max(wa.x, Math.min(b.x, wa.x + wa.width - width));
+  const y = Math.max(wa.y, Math.min(b.y, wa.y + wa.height - height));
+  win.setBounds({x, y, width, height});
+
+  const note = getNote(noteId);
+  if (note) upsertNote({...note, x, y, width, height});
+  return true;
 }
 
 // Wire opener into scheduler to break cycles

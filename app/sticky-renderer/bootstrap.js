@@ -14,6 +14,7 @@ const searchMode = require('./search-mode');
 const codeMode = require('./code-mode');
 const noteMode = require('./note-mode');
 const channels = require('./ipc-channels');
+const fit = require('./fit');
 
 function resolveMode(params, filePath) {
   if (params.get('mode') === 'search') return 'search';
@@ -190,6 +191,8 @@ function boot(opts) {
   if (mode === 'search') searchMode.start(ctx);
   else if (mode === 'code') codeMode.start(ctx);
   else noteMode.start(ctx);
+  const fitCaps = mode === 'search' ? null : fit.parseFitParam(params.get('fit'));
+  if (fitCaps) void fit.start(ctx, fitCaps);
   return {ok: true, mode, ctx};
 }
 
