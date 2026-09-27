@@ -32,13 +32,57 @@ export function writeStickyHidden(hidden: boolean): void {
   }
 }
 
-export function getStickyDefaultSize(): {width: number; height: number} {
+type WorkArea = {width: number; height: number};
+
+// Renderer's built-in stickyFontSize (sticky-renderer/theme.js); sizes below are tuned for it.
+const BASE_FONT_SIZE = 22;
+
+// Default window size as a fraction of the display's work area, bounded so it stays
+// sane on both small laptops and large monitors. Work areas are in DIPs, so this
+// also covers screens where the OS reports a 1.0 scale factor at high resolution.
+const DEFAULT_SIZING = {
+  text: {fw: 0.25, fh: 0.35, minW: 360, minH: 280, maxW: 560, maxH: 520},
+  code: {fw: 0.5, fh: 0.65, minW: 640, minH: 480, maxW: 1100, maxH: 900}
+};
+
+function readStickyDefaults(): Record<string, any> {
   try {
-    const d = JSON.parse(readFileSync(join(stickysDir(), 'defaults.json'), 'utf8'));
-    return {width: d.width || 280, height: d.height || 220};
+    return JSON.parse(readFileSync(join(stickysDir(), 'defaults.json'), 'utf8')) || {};
   } catch {
-    return {width: 280, height: 220};
+    return {};
   }
+}
+
+function stickyFontSize(d: Record<string, any>): number {
+  if (typeof d.fontSize === 'number') return d.fontSize;
+  try {
+    const cfg = JSON.parse(readFileSync(join(homedir(), '.hyperia', 'hyperia.json'), 'utf8'));
+    if (typeof cfg?.config?.stickyFontSize === 'number') return cfg.config.stickyFontSize;
+  } catch {
+    // no config
+  }
+  return BASE_FONT_SIZE;
+}
+
+export function getStickyDefaultSize(
+  workArea: WorkArea,
+  kind: 'text' | 'code' = 'text'
+): {width: number; height: number} {
+  const d = readStickyDefaults();
+  const s = DEFAULT_SIZING[kind];
+  // Bigger font -> proportionally bigger window, so the same amount of content fits.
+  const scale = Math.max(0.75, Math.min(2, stickyFontSize(d) / BASE_FONT_SIZE));
+  const clamp = (v: number, lo: number, hi: number) => Math.round(Math.max(lo * scale, Math.min(v, hi * scale)));
+  const size = {
+    width: clamp(workArea.width * s.fw, s.minW, s.maxW),
+    height: clamp(workArea.height * s.fh, s.minH, s.maxH)
+  };
+  // An explicit width/height in defaults.json still wins for plain notes.
+  if (kind === 'text') {
+    if (typeof d.width === 'number' && d.width > 0) size.width = d.width;
+    if (typeof d.height === 'number' && d.height > 0) size.height = d.height;
+  }
+  return size;
 }
 
 export const STICKY_SEETHROUGH_OPACITY = 0.6;

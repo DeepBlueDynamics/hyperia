@@ -933,8 +933,8 @@ impl ToolRegistry {
                     "color": theme,
                     "x": input["x"],
                     "y": input["y"],
-                    "width": input["width"].as_i64().unwrap_or(500),
-                    "height": input["height"].as_i64().unwrap_or(400),
+                    "width": input["width"],
+                    "height": input["height"],
                 });
                 self.client
                     .post(format!("{}/api/notes", base))
@@ -2321,8 +2321,8 @@ fn builtin_tool_defs() -> Vec<ToolDef> {
                     "theme": { "type": "string", "enum": ["dark", "light"], "description": "dark (default) or light code theme" },
                     "x": { "type": "integer", "description": "X position (optional)" },
                     "y": { "type": "integer", "description": "Y position (optional)" },
-                    "width": { "type": "integer", "description": "Width in pixels (default 500)" },
-                    "height": { "type": "integer", "description": "Height in pixels (default 400)" }
+                    "width": { "type": "integer", "description": "Width in pixels (optional; defaults relative to screen size)" },
+                    "height": { "type": "integer", "description": "Height in pixels (optional; defaults relative to screen size)" }
                 },
                 "required": ["file_path"]
             }

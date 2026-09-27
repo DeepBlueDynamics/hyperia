@@ -101,16 +101,22 @@ export function createStickyNote(
     savedNote.source.path = translateContainerPath(savedNote.source.path);
   }
 
-  const defaultSize = getStickyDefaultSize();
+  const placedX = options.x ?? savedNote?.x;
+  const placedY = options.y ?? savedNote?.y;
+  const hasPlacedPos = placedX != null || placedY != null;
+  const targetDisplay = hasPlacedPos
+    ? screen.getDisplayNearestPoint({x: placedX ?? cursor.x, y: placedY ?? cursor.y})
+    : display;
+  const wa = targetDisplay.workArea;
+
+  const isCode = !!(options.filePath || savedNote?.source?.path) || !!options.color?.startsWith('code:');
+  const defaultSize = getStickyDefaultSize(wa, isCode ? 'code' : 'text');
   let width = options.width || savedNote?.width || defaultSize.width;
   let height = options.height || savedNote?.height || defaultSize.height;
 
-  const hasPlacedPos = options.x != null || options.y != null || savedNote?.x != null || savedNote?.y != null;
-  let x = options.x ?? savedNote?.x ?? Math.round(cursor.x - width / 2);
-  let y = options.y ?? savedNote?.y ?? Math.round(cursor.y - height / 2);
+  let x = placedX ?? Math.round(cursor.x - width / 2);
+  let y = placedY ?? Math.round(cursor.y - height / 2);
 
-  const targetDisplay = hasPlacedPos ? screen.getDisplayNearestPoint({x, y}) : display;
-  const wa = targetDisplay.workArea;
   width = Math.min(width, wa.width);
   height = Math.min(height, wa.height);
   width = Math.max(width, 220);

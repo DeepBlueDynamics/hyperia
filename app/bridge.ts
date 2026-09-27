@@ -1291,7 +1291,18 @@ function handleCommand(msg: Record<string, unknown>) {
       const color = msg.color as string | undefined;
       const filePath = msg.filePath as string | undefined;
       const creator = msg.creator as string | undefined;
-      const res = createStickyNote({text, color, filePath, creator}) as any;
+      // Geometry is optional; anything non-numeric falls back to the screen-relative default.
+      const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+      const res = createStickyNote({
+        text,
+        color,
+        filePath,
+        creator,
+        x: num(msg.x),
+        y: num(msg.y),
+        width: num(msg.width),
+        height: num(msg.height)
+      }) as any;
       if (res?.error) {
         // e.g. an unreachable code-sticky file — report it instead of "ok".
         sendResult(seq, JSON.stringify({ok: false, error: res.error}));
