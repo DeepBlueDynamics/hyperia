@@ -1056,7 +1056,7 @@ export function newWindow(
 
   // ---- tab-scoped workspaces (#183) --------------------------------------
 
-  rpc.on('save tab workspace', ({name, overwrite, layout}) => {
+  rpc.on('save tab workspace', ({name, overwrite, layout, autosave}) => {
     void (async () => {
       const bounds = window.getBounds();
       const geometry = {
@@ -1068,7 +1068,7 @@ export function newWindow(
       // (the sidecar rejects them) and fold any bare lastCommand into
       // annotations. resumeOnce passes through untouched.
       const result = await saveTabWorkspaceViaSidecar({name, overwrite, geometry, layout: toWorkspaceLayout(layout)});
-      rpc.emit('save tab workspace result', {name, ...result});
+      rpc.emit('save tab workspace result', {name, ...result, ...(autosave ? {autosave: true} : {})});
     })();
   });
 

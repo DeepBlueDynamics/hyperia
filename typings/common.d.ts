@@ -165,7 +165,7 @@ export type MainEvents = {
   /** Copy OS-dragged files into an idle terminal pane's cwd (drag-and-drop). */
   'pane copy files': {uid: string; cwd: string; paths: string[]};
   /** Tab-scoped workspace save (#183): renderer-captured tab layout + choices. */
-  'save tab workspace': {name: string; overwrite: boolean; layout: any};
+  'save tab workspace': {name: string; overwrite: boolean; layout: any; autosave?: boolean};
   /** Ask main for the tab-scoped workspace library (the + menu's list). */
   'list tab workspaces': never;
   /** Restore a saved tab-workspace into THIS window as a new tab (#183). */
@@ -299,7 +299,7 @@ export type RendererEvents = {
   /** Graft one saved tab into the running window (#183); uids pre-remapped. */
   'restore-tab-state': {layout: any; name?: string};
   'session n8 binding': {uid: string; binding: {kind: string; sessionId: string; workspace: string; resume: string}};
-  'save tab workspace result': {ok: boolean; name: string; error?: string; conflict?: boolean};
+  'save tab workspace result': {ok: boolean; name: string; error?: string; conflict?: boolean; autosave?: boolean};
   'tab workspaces list': {rows: Array<{name: string; savedAt: string; panes: number; webPanes: number}>};
   'web-pane-zoom-in': {uid: string};
   'web-pane-zoom-out': {uid: string};
