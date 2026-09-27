@@ -1,24 +1,45 @@
 use serde::{Deserialize, Serialize};
 use vt100::Parser;
 
+/// vt100 0.15.2 unwraps a missing cell and panics at 0 rows/cols, and on a wide
+/// char in a 1-column grid. A hidden pane can report those sizes, so clamp.
+const MIN_ROWS: u16 = 2;
+const MIN_COLS: u16 = 2;
+
+fn clamp_size(rows: u16, cols: u16) -> (u16, u16) {
+    (rows.max(MIN_ROWS), cols.max(MIN_COLS))
+}
+
 /// Wrapper around vt100::Parser with diff detection
 pub struct ScreenBuffer {
     parser: Parser,
+    scrollback: usize,
     last_snapshot: Option<ScreenDump>,
 }
 
 impl ScreenBuffer {
     /// Create a new screen buffer
     pub fn new(rows: u16, cols: u16, scrollback: usize) -> Self {
+        let (rows, cols) = clamp_size(rows, cols);
         Self {
             parser: Parser::new(rows, cols, scrollback),
+            scrollback,
             last_snapshot: None,
         }
     }
 
     /// Process PTY output bytes
     pub fn process(&mut self, data: &[u8]) {
-        self.parser.process(data);
+        // Runs on the Electron socket reader; a parser panic there once killed
+        // the reader and left the bridge half-dead, so contain it here.
+        let parser = &mut self.parser;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.process(data)));
+        if outcome.is_err() {
+            let (rows, cols) = clamp_size(self.parser.screen().size().0, self.parser.screen().size().1);
+            tracing::error!("vt100 parser panicked on {} bytes; resetting the {rows}x{cols} screen", data.len());
+            self.parser = Parser::new(rows, cols, self.scrollback);
+            self.last_snapshot = None;
+        }
     }
 
     /// Get current screen dimensions
@@ -140,6 +161,7 @@ impl ScreenBuffer {
 
     /// Resize the screen buffer
     pub fn resize(&mut self, rows: u16, cols: u16) {
+        let (rows, cols) = clamp_size(rows, cols);
         self.parser.set_size(rows, cols);
         self.last_snapshot = None; // Invalidate snapshot on resize
     }
@@ -223,4 +245,26 @@ fn unicode_width(s: &str) -> usize {
             }
         })
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn degenerate_sizes_do_not_panic() {
+        // Each of these panicked vt100 0.15.2 unclamped (the bridge-stall trigger).
+        let mut zero = ScreenBuffer::new(0, 0, 1000);
+        zero.process(b"hello\r\nworld\x1b[2J");
+        let mut shrunk = ScreenBuffer::new(24, 80, 1000);
+        shrunk.process(b"abc");
+        shrunk.resize(0, 80);
+        shrunk.process(b"x\r\n");
+        shrunk.resize(24, 0);
+        shrunk.process(b"x\r\ny");
+        let _ = shrunk.contents_formatted();
+        let mut narrow = ScreenBuffer::new(24, 1, 1000);
+        narrow.process("\u{65e5}\u{672c}\u{8a9e}\r\n".as_bytes());
+        assert_eq!(narrow.size(), (24, 2));
+    }
 }

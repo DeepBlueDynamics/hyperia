@@ -4618,9 +4618,11 @@ async fn post_agent_status(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Log panics to stderr so they appear in the Electron console
+    // Log panics to stderr (Electron console) AND the tracing file log: a task
+    // panic that only reached stderr left no trace of a stalled bridge reader.
     std::panic::set_hook(Box::new(|info| {
         eprintln!("[sidecar-panic] {info}");
+        tracing::error!("[sidecar-panic] {info}");
     }));
 
     let args = Args::parse();

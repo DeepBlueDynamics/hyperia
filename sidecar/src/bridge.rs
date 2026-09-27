@@ -19,6 +19,41 @@ pub use pane_class::{
     PaneClass,
 };
 
+/// Command never left the sidecar (callers may retry these two safely).
+const NO_CLIENT: &str = "No Electron client connected";
+const NOT_SENT_DISCONNECTED: &str = "Electron disconnected";
+/// Command was handed to the socket but the link died before a reply: outcome unknown.
+const LINK_LOST: &str = "Electron link lost before reply";
+const SEND_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+/// Electron heartbeats every 5s; three missed beats means the link is wedged.
+pub const ELECTRON_SILENCE_LIMIT: Duration = Duration::from_secs(15);
+const WATCHDOG_TICK: Duration = Duration::from_secs(1);
+
+/// Last time the socket reader finished handling a message from Electron.
+/// Stamped AFTER handling, so a reader stuck inside a handler reads as silent.
+#[derive(Debug)]
+pub struct LinkWatch {
+    last_progress: std::time::Instant,
+}
+
+impl LinkWatch {
+    pub fn new(now: std::time::Instant) -> Self {
+        Self { last_progress: now }
+    }
+
+    pub fn touch(&mut self, now: std::time::Instant) {
+        self.last_progress = self.last_progress.max(now);
+    }
+
+    pub fn silent_for(&self, now: std::time::Instant) -> Duration {
+        now.saturating_duration_since(self.last_progress)
+    }
+
+    pub fn is_stale(&self, now: std::time::Instant, limit: Duration) -> bool {
+        self.silent_for(now) > limit
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // Session info tracked per Electron PTY session
@@ -295,8 +330,11 @@ fn load_pulses() -> Vec<Pulse> {
 struct BridgeInner {
     /// Channel to send JSON messages downstream to Electron
     cmd_tx: Mutex<Option<mpsc::UnboundedSender<String>>>,
-    /// Pending request→response: seq → oneshot sender
-    pending: Mutex<HashMap<u64, oneshot::Sender<String>>>,
+    /// Generation of the socket that owns `cmd_tx`; changed only under the
+    /// `cmd_tx` lock so a late cleanup of an old socket can't wipe a newer one.
+    conn_gen: AtomicU64,
+    /// Pending request→response: seq → (socket generation, oneshot sender)
+    pending: Mutex<HashMap<u64, (u64, oneshot::Sender<Result<String, String>>)>>,
     /// Monotonic sequence counter
     seq: AtomicU64,
     /// Registered PTY sessions (uid → info)
@@ -376,6 +414,7 @@ impl Bridge {
         Self {
             inner: Arc::new(BridgeInner {
                 cmd_tx: Mutex::new(None),
+                conn_gen: AtomicU64::new(0),
                 pending: Mutex::new(HashMap::new()),
                 seq: AtomicU64::new(1),
                 sessions: Mutex::new(HashMap::new()),
@@ -1279,15 +1318,20 @@ impl Bridge {
                     "text": notice, "submit": true, "agent": true,
                 })).await;
                 let definitely_not_sent = matches!(&response, Err(error)
-                    if error == "No Electron client connected" || error == "Electron disconnected");
+                    if error == NO_CLIENT || error == NOT_SENT_DISCONNECTED);
                 if definitely_not_sent { continue; }
-                match response.ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()) {
-                    Some(result) if result["state"] == "submitted" || result["state"] == "indeterminate" => consumed = true,
-                    Some(result) if result["state"] == "deferred" || result["state"] == "failed" => {},
-                    _ => {
+                let parsed = match &response {
+                    Ok(body) => serde_json::from_str::<serde_json::Value>(body).map_err(|_| format!("non-JSON reply: {body:.200}")),
+                    Err(error) => Err(error.clone()),
+                };
+                match parsed {
+                    Ok(result) if result["state"] == "submitted" || result["state"] == "indeterminate" => consumed = true,
+                    Ok(result) if result["state"] == "deferred" || result["state"] == "failed" => {},
+                    other => {
                         // Unknown transport result may follow a successful write: never replay blindly.
                         consumed = true;
-                        tracing::warn!("Mail notice outcome indeterminate for pane {pane}");
+                        let detail = match other { Err(e) => e, Ok(v) => format!("unexpected reply: {v}") };
+                        tracing::warn!("Mail notice outcome indeterminate for pane {pane}: {detail}");
                     }
                 }
             }
@@ -1366,34 +1410,50 @@ impl Bridge {
         msg["seq"] = serde_json::json!(seq);
 
         let (tx, rx) = oneshot::channel();
-        self.inner.pending.lock().await.insert(seq, tx);
 
-        // Send downstream
+        // Register + send under the cmd_tx lock so the entry is tagged with the
+        // socket it actually went out on (a detach fails exactly those).
         {
             let guard = self.inner.cmd_tx.lock().await;
-            match guard.as_ref() {
-                Some(sender) => {
-                    if sender.send(msg.to_string()).is_err() {
-                        self.inner.pending.lock().await.remove(&seq);
-                        return Err("Electron disconnected".into());
-                    }
-                }
-                None => {
-                    self.inner.pending.lock().await.remove(&seq);
-                    return Err("No Electron client connected".into());
-                }
+            let Some(sender) = guard.as_ref() else {
+                return Err(NO_CLIENT.into());
+            };
+            let gen = self.inner.conn_gen.load(Ordering::SeqCst);
+            self.inner.pending.lock().await.insert(seq, (gen, tx));
+            if sender.send(msg.to_string()).is_err() {
+                self.inner.pending.lock().await.remove(&seq);
+                return Err(NOT_SENT_DISCONNECTED.into());
             }
         }
 
-        // Await response with timeout
-        match tokio::time::timeout(Duration::from_secs(10), rx).await {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(_)) => Err("Response channel dropped".into()),
+        match tokio::time::timeout(SEND_COMMAND_TIMEOUT, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(LINK_LOST.into()),
             Err(_) => {
                 self.inner.pending.lock().await.remove(&seq);
                 Err("Timeout waiting for Electron response".into())
             }
         }
+    }
+
+    /// Install a new Electron socket's outgoing channel; returns its generation.
+    async fn attach_client(&self, sender: mpsc::UnboundedSender<String>) -> u64 {
+        let mut guard = self.inner.cmd_tx.lock().await;
+        let gen = self.inner.conn_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        *guard = Some(sender);
+        gen
+    }
+
+    /// Fail every command still waiting on socket `gen`. Returns how many.
+    async fn fail_pending(&self, gen: u64, reason: &str) -> usize {
+        let mut pending = self.inner.pending.lock().await;
+        let seqs: Vec<u64> = pending.iter().filter(|(_, (g, _))| *g == gen).map(|(s, _)| *s).collect();
+        for seq in &seqs {
+            if let Some((_, tx)) = pending.remove(seq) {
+                let _ = tx.send(Err(reason.to_string()));
+            }
+        }
+        seqs.len()
     }
 
     /// Read the vt100 screen buffer for a session uid.
@@ -2236,13 +2296,16 @@ impl Bridge {
             "ToolResult" => {
                 let seq = msg["seq"].as_u64().unwrap_or(0);
                 let result = msg["result"].as_str().unwrap_or("").to_string();
-                let mut pending = self.inner.pending.lock().await;
-                if let Some(tx) = pending.remove(&seq) {
-                    let _ = tx.send(result);
+                let waiter = self.inner.pending.lock().await.remove(&seq);
+                if let Some((_, tx)) = waiter {
+                    let _ = tx.send(Ok(result));
                 }
             }
 
             "Heartbeat" => {
+                // Ack first: Electron's watchdog reconnects if these stop, which
+                // is how it notices this reader has stalled.
+                let _ = self.notify(serde_json::json!({ "type": "HeartbeatAck" })).await;
                 // Reconcile in BOTH directions. The renderer is the source of
                 // truth for which panes exist, so every heartbeat carries its
                 // full session-uid list.
@@ -2300,23 +2363,51 @@ impl Bridge {
                 }
             }
 
+            #[cfg(test)]
+            "TestPanic" => panic!("test handler panic"),
+
             _ => {
                 tracing::warn!("Unknown message type from Electron: {msg_type}");
             }
         }
     }
 
-    /// Called when a WebSocket client disconnects.
-    async fn on_disconnect(&self) {
-        *self.inner.cmd_tx.lock().await = None;
-        // Fail all pending requests
-        let mut pending = self.inner.pending.lock().await;
-        for (_, tx) in pending.drain() {
-            let _ = tx.send("Electron disconnected".into());
+    /// Tear down socket `gen`: fail its pending commands and, if it is still the
+    /// current socket, drop the client (send_command then fails fast) and sessions.
+    async fn on_disconnect(&self, gen: u64, reason: &str) {
+        let failed = self.fail_pending(gen, LINK_LOST).await;
+        let current = {
+            let mut guard = self.inner.cmd_tx.lock().await;
+            let current = self.inner.conn_gen.load(Ordering::SeqCst) == gen;
+            if current {
+                *guard = None;
+            }
+            current
+        };
+        if current {
+            self.inner.sessions.lock().await.clear();
+            tracing::info!("Electron disconnected ({reason}); {failed} pending command(s) failed, sessions cleared");
+        } else {
+            // A newer socket already owns the bridge and re-registered its sessions.
+            tracing::info!("Stale Electron socket closed ({reason}); {failed} pending command(s) failed");
         }
-        // Clear sessions
-        self.inner.sessions.lock().await.clear();
-        tracing::info!("Electron disconnected — sessions cleared");
+    }
+
+    /// Handle one inbound frame without letting a handler panic kill the reader.
+    async fn handle_message_guarded(&self, text: &str) {
+        use futures::FutureExt;
+        if let Err(panic) = std::panic::AssertUnwindSafe(self.handle_message(text)).catch_unwind().await {
+            let what = panic
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic".into());
+            let kind = serde_json::from_str::<serde_json::Value>(text)
+                .ok()
+                .and_then(|v| v["type"].as_str().map(str::to_string))
+                .unwrap_or_default();
+            tracing::error!("Electron message handler panicked on {kind:?}: {what}");
+        }
     }
 }
 
@@ -2334,7 +2425,7 @@ pub async fn ws_handler(
 }
 
 async fn handle_socket(socket: WebSocket, bridge: Bridge) {
-    let (mut ws_tx, mut ws_rx) = socket.split();
+    let (mut ws_tx, ws_rx) = socket.split();
 
     // Clear stale sessions from any previous connection that didn't disconnect cleanly
     {
@@ -2347,43 +2438,181 @@ async fn handle_socket(socket: WebSocket, bridge: Bridge) {
 
     // Create the command channel for this connection
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<String>();
-    *bridge.inner.cmd_tx.lock().await = Some(cmd_tx);
+    let gen = bridge.attach_client(cmd_tx).await;
 
-    tracing::info!("Electron WebSocket connected");
+    tracing::info!("Electron WebSocket connected (link {gen})");
 
-    // Writer task: forwards queued commands to the WebSocket
-    let writer = tokio::spawn(async move {
+    // Writer ends when detach drops the sender; it then sends a Close frame so
+    // Electron sees the socket end and reconnects.
+    let mut writer = tokio::spawn(async move {
         while let Some(msg) = cmd_rx.recv().await {
             if ws_tx.send(Message::Text(msg.into())).await.is_err() {
-                break;
+                return;
             }
         }
+        let _ = ws_tx.send(Message::Close(None)).await;
+        let _ = ws_tx.close().await;
     });
 
-    // Reader loop: process incoming messages from Electron
+    // The reader runs as its own task so the supervisor below can see it die
+    // (panic) or stall, and still run cleanup; before, either left cmd_tx live.
+    let watch = Arc::new(std::sync::Mutex::new(LinkWatch::new(std::time::Instant::now())));
+    let mut reader = tokio::spawn(read_loop(ws_rx, bridge.clone(), watch.clone()));
+    let mut tick = tokio::time::interval(WATCHDOG_TICK);
+    let reason = loop {
+        tokio::select! {
+            res = &mut reader => break match res {
+                Ok(()) => "socket closed",
+                Err(e) if e.is_panic() => "reader panicked",
+                Err(_) => "reader cancelled",
+            },
+            _ = tick.tick() => {
+                let silent = watch.lock().map(|w| w.silent_for(std::time::Instant::now())).unwrap_or_default();
+                if silent > ELECTRON_SILENCE_LIMIT {
+                    tracing::warn!(
+                        "Electron link {gen}: no message processed for {}s (heartbeat is 5s); closing so Electron reconnects",
+                        silent.as_secs()
+                    );
+                    reader.abort();
+                    break "watchdog: Electron silent";
+                }
+            }
+        }
+    };
+
+    bridge.on_disconnect(gen, reason).await;
+    // Bounded: a writer blocked on a full TCP buffer must not pin this task.
+    if tokio::time::timeout(Duration::from_secs(2), &mut writer).await.is_err() {
+        writer.abort();
+    }
+}
+
+/// Socket reader: handle each frame in order, stamping progress after each.
+async fn read_loop<S, E>(mut ws_rx: S, bridge: Bridge, watch: Arc<std::sync::Mutex<LinkWatch>>)
+where
+    S: futures::Stream<Item = Result<Message, E>> + Unpin,
+{
     while let Some(Ok(msg)) = ws_rx.next().await {
         match msg {
-            Message::Text(text) => {
-                bridge.handle_message(&text).await;
-            }
+            Message::Text(text) => bridge.handle_message_guarded(&text).await,
             Message::Binary(data) => {
                 if let Ok(text) = String::from_utf8(data.to_vec()) {
-                    bridge.handle_message(&text).await;
+                    bridge.handle_message_guarded(&text).await;
                 }
             }
             Message::Close(_) => break,
             _ => {}
         }
+        if let Ok(mut w) = watch.lock() {
+            w.touch(std::time::Instant::now());
+        }
     }
-
-    // Cleanup
-    writer.abort();
-    bridge.on_disconnect().await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_watch_goes_stale_only_past_the_limit() {
+        let t0 = std::time::Instant::now();
+        let mut w = LinkWatch::new(t0);
+        assert!(!w.is_stale(t0 + Duration::from_secs(15), ELECTRON_SILENCE_LIMIT));
+        assert!(w.is_stale(t0 + Duration::from_secs(16), ELECTRON_SILENCE_LIMIT));
+        w.touch(t0 + Duration::from_secs(10));
+        assert!(!w.is_stale(t0 + Duration::from_secs(16), ELECTRON_SILENCE_LIMIT));
+        // An out-of-order stamp never moves progress backwards.
+        w.touch(t0);
+        assert_eq!(w.silent_for(t0 + Duration::from_secs(12)), Duration::from_secs(2));
+        // A clock read before the stamp is "not silent", not a panic.
+        assert_eq!(w.silent_for(t0), Duration::ZERO);
+    }
+
+    fn text(v: serde_json::Value) -> Result<Message, std::convert::Infallible> {
+        Ok(Message::Text(v.to_string().into()))
+    }
+
+    /// Start send_command in the background and return it plus the seq it sent.
+    async fn start_command(
+        bridge: &Bridge,
+        out: &mut mpsc::UnboundedReceiver<String>,
+    ) -> (tokio::task::JoinHandle<Result<String, String>>, u64) {
+        let b = bridge.clone();
+        let call = tokio::spawn(async move { b.send_command(serde_json::json!({"type": "Keys"})).await });
+        let sent: serde_json::Value = serde_json::from_str(&out.recv().await.unwrap()).unwrap();
+        (call, sent["seq"].as_u64().unwrap())
+    }
+
+    #[tokio::test]
+    async fn disconnect_fails_pending_now_and_later_calls_fast() {
+        let bridge = Bridge::new();
+        let (tx, mut out) = mpsc::unbounded_channel();
+        let gen = bridge.attach_client(tx).await;
+        let (call, _) = start_command(&bridge, &mut out).await;
+        bridge.on_disconnect(gen, "test").await;
+        let res = tokio::time::timeout(Duration::from_secs(1), call).await.expect("pending failed promptly").unwrap();
+        assert_eq!(res, Err(LINK_LOST.to_string()));
+        let fast = tokio::time::timeout(Duration::from_millis(200), bridge.send_command(serde_json::json!({"type": "Keys"})))
+            .await
+            .expect("no client fails fast");
+        assert_eq!(fast, Err(NO_CLIENT.to_string()));
+    }
+
+    #[tokio::test]
+    async fn stale_socket_cleanup_leaves_newer_socket_alone() {
+        let bridge = Bridge::new();
+        let (old_tx, _old_out) = mpsc::unbounded_channel();
+        let old = bridge.attach_client(old_tx).await;
+        let (new_tx, mut new_out) = mpsc::unbounded_channel();
+        let _new = bridge.attach_client(new_tx).await;
+        bridge.inner.sessions.lock().await.insert("p".into(), session_info(1, "t", "a", true, true));
+        let (call, seq) = start_command(&bridge, &mut new_out).await;
+        bridge.on_disconnect(old, "late cleanup").await;
+        assert!(bridge.is_connected().await);
+        assert_eq!(bridge.session_count().await, 1);
+        bridge.handle_message(&serde_json::json!({"type": "ToolResult", "seq": seq, "result": "ok"}).to_string()).await;
+        assert_eq!(call.await.unwrap(), Ok("ok".to_string()));
+    }
+
+    /// The incident: a zero-size pane's output panicked vt100 inside the reader,
+    /// so the ToolResult behind it was never read. It must now be answered.
+    #[tokio::test]
+    async fn tool_result_after_degenerate_pane_output_is_still_delivered() {
+        let bridge = Bridge::new();
+        let (tx, mut out) = mpsc::unbounded_channel();
+        bridge.attach_client(tx).await;
+        let (frames, rx) = futures::channel::mpsc::unbounded();
+        let watch = Arc::new(std::sync::Mutex::new(LinkWatch::new(std::time::Instant::now())));
+        let reader = tokio::spawn(read_loop(rx, bridge.clone(), watch.clone()));
+        let (call, seq) = start_command(&bridge, &mut out).await;
+
+        let b64 = |s: &str| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, s.as_bytes());
+        for frame in [
+            serde_json::json!({"type": "SessionRegister", "uid": "web", "rows": 0, "cols": 0}),
+            serde_json::json!({"type": "SessionData", "uid": "web", "data": b64("hello\r\nworld")}),
+            serde_json::json!({"type": "Resize", "uid": "web", "rows": 24, "cols": 1}),
+            serde_json::json!({"type": "SessionData", "uid": "web", "data": b64("\u{65e5}\u{672c}\r\n")}),
+            serde_json::json!({"type": "TestPanic"}),
+            serde_json::json!({"type": "ToolResult", "seq": seq, "result": "delivered"}),
+        ] {
+            frames.unbounded_send(text(frame)).unwrap();
+        }
+        let res = tokio::time::timeout(Duration::from_secs(2), call).await.expect("reader kept going").unwrap();
+        assert_eq!(res, Ok("delivered".to_string()));
+        assert!(!reader.is_finished(), "reader must survive handler panics");
+        drop(frames);
+        tokio::time::timeout(Duration::from_secs(1), reader).await.expect("reader ends with the stream").unwrap();
+    }
+
+    #[tokio::test]
+    async fn heartbeat_is_acknowledged() {
+        let bridge = Bridge::new();
+        let (tx, mut out) = mpsc::unbounded_channel();
+        bridge.attach_client(tx).await;
+        bridge.handle_message(r#"{"type":"Heartbeat","sessionCount":0,"sessionUids":[]}"#).await;
+        let ack: serde_json::Value = serde_json::from_str(&out.try_recv().expect("ack sent")).unwrap();
+        assert_eq!(ack["type"], "HeartbeatAck");
+    }
 
 
     #[test]
