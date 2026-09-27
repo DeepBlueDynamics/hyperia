@@ -2,6 +2,8 @@
 // title click/copy, dblclick-rename, and sticky-rename BEFORE mode dispatch.
 'use strict';
 
+const {defaultTimers} = require('./timers');
+
 function titleCopyText(state) {
   if (state.boundFilePath) return state.boundFilePath;
   const shortId = (state.noteId || '').split('-').pop() || '';
@@ -25,7 +27,7 @@ function start(ctx) {
   const {doc, ipc, persist, clipboard} = ctx;
   const titleText = ctx.els.titleText;
   const titleInput = ctx.els.titleInput;
-  const timers = ctx.timers || {setTimeout, clearTimeout};
+  const timers = ctx.timers || defaultTimers();
 
   const titlebar = doc.querySelector('.titlebar');
   if (titlebar) {

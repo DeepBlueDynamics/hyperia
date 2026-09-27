@@ -4,13 +4,14 @@
 
 const fmt = require('./run-format');
 const links = require('./links');
+const {defaultTimers} = require('./timers');
 
 function start(ctx) {
   const {doc, ipc, persist} = ctx;
   const $ = (id) => doc.getElementById(id);
   const overlay = $('schedOverlay');
   if (!overlay) return null;
-  const timers = ctx.timers || {setTimeout, clearTimeout};
+  const timers = ctx.timers || defaultTimers();
   const now = ctx.now || (() => Date.now());
   const homeDir = () => {
     try {
