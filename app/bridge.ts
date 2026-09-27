@@ -11,6 +11,7 @@ import {app, BrowserWindow} from 'electron';
 import isDev from 'electron-is-dev';
 import WebSocket from 'ws';
 
+import {ACK_TIMEOUT_MS, ackOverdue, newAckWatch, recordAck, type AckWatch} from './bridge-watchdog';
 import {getProfiles, getConfig} from './config';
 import {submitInput, pendingEnterDecision, PENDING_ENTER_POLL_MS, type PendingEnter} from './guarded-input';
 import type Session from './session';
@@ -43,6 +44,7 @@ let reconnectTimer: NodeJS.Timeout | null = null;
 let reconnectDelay = RECONNECT_BASE_MS;
 let sidecarPort = 9800;
 let stopped = false;
+let ackWatch: AckWatch | null = null;
 
 // Session registry: uid → { session, rows, cols, name, tabName, description }
 interface TrackedSession {
@@ -132,17 +134,21 @@ function clearPendingSessionCallback() {
 
 function connect() {
   if (stopped) return;
+  let sock: WebSocket;
   try {
-    ws = new WebSocket(`ws://127.0.0.1:${sidecarPort}/ws`, {headers: {Authorization: `Bearer ${SYSTEM_TOKEN}`}});
+    sock = new WebSocket(`ws://127.0.0.1:${sidecarPort}/ws`, {headers: {Authorization: `Bearer ${SYSTEM_TOKEN}`}});
   } catch (err) {
     console.warn('[bridge] WebSocket create error:', err);
     scheduleReconnect();
     return;
   }
+  ws = sock;
 
-  ws.on('open', () => {
+  sock.on('open', () => {
     isDev && console.log('[bridge] Connected to sidecar');
     reconnectDelay = RECONNECT_BASE_MS;
+    ackWatch = newAckWatch(Date.now());
+    // Re-register everything: the sidecar drops all sessions when a socket ends.
     for (const [uid, tracked] of trackedSessions) {
       sendSessionRegister(uid, tracked);
     }
@@ -159,22 +165,30 @@ function connect() {
     startHeartbeat();
   });
 
-  ws.on('message', (raw: WebSocket.Data) => {
+  sock.on('message', (raw: WebSocket.Data) => {
     try {
       const msg = JSON.parse(String(raw)) as Record<string, unknown>;
+      if (msg.type === 'HeartbeatAck') {
+        // Handled here, not in handleCommand, which logs every command.
+        if (ackWatch) recordAck(ackWatch, Date.now());
+        return;
+      }
       handleCommand(msg);
     } catch (err) {
       console.warn('[bridge] Bad message from sidecar:', err);
     }
   });
 
-  ws.on('close', () => {
+  sock.on('close', () => {
+    // Only the current socket owns the shared state.
+    if (ws !== sock) return;
     stopHeartbeat();
     ws = null;
+    ackWatch = null;
     scheduleReconnect();
   });
 
-  ws.on('error', (err: Error) => {
+  sock.on('error', (err: Error) => {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== 'ECONNREFUSED' && code !== 'ECONNRESET') {
       isDev && console.warn('[bridge] WebSocket error:', err.message);
@@ -194,6 +208,13 @@ function scheduleReconnect() {
 function startHeartbeat() {
   stopHeartbeat();
   heartbeatTimer = setInterval(() => {
+    // A sidecar that stops acking has a stalled reader; the socket stays open
+    // so 'close' never fires on its own. Terminate to force the reconnect path.
+    if (ws && ackWatch && ackOverdue(ackWatch, Date.now())) {
+      console.warn(`[bridge] No HeartbeatAck from sidecar in ${ACK_TIMEOUT_MS / 1000}s; reconnecting`);
+      ws.terminate();
+      return;
+    }
     // Include session count so sidecar can detect drift
     const uids = Array.from(trackedSessions.keys());
     send({type: 'Heartbeat', sessionCount: uids.length, sessionUids: uids});

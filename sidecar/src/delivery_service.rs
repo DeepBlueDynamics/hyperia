@@ -462,8 +462,17 @@ pub async fn tick(bridge: &Bridge) {
             "text": text, "submit": submit, "agent": payload.agent,
             "control": payload.raw, "interrupt": payload.interrupt,
         })).await;
-        let outcome = result.ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            .unwrap_or_else(|| serde_json::json!({"state": "indeterminate", "detail": "Transport response missing; do not replay."}));
+        let outcome = match &result {
+            Ok(body) => serde_json::from_str::<serde_json::Value>(body).ok().or_else(|| {
+                tracing::warn!("Delivery {} to pane {}: non-JSON transport reply: {body:.200}", op.id, payload.pane);
+                None
+            }),
+            Err(error) => {
+                tracing::warn!("Delivery {} to pane {}: transport error: {error}", op.id, payload.pane);
+                None
+            }
+        }
+        .unwrap_or_else(|| serde_json::json!({"state": "indeterminate", "detail": "Transport response missing; do not replay."}));
         let state = match outcome["state"].as_str() {
             Some("submitted") => State::Submitted,
             Some("deferred") => State::Queued,
