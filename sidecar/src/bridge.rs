@@ -535,6 +535,8 @@ impl Bridge {
             CallerIdentity::Pane { pane, .. } if pane == target_pane => AuthDecision::RefuseHome,
             CallerIdentity::Anonymous => AuthDecision::SoftWall,
             _ => {
+                // Re-derive the verified pane slot so a rebound container keeps its grants.
+                crate::messaging::refresh_slot(self, id).await;
                 let label = id.principal_key();
                 let owned =
                     self.inner.perms.owner_of(target_pane).await.as_deref() == Some(label.as_str());

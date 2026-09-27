@@ -37,6 +37,9 @@ pub struct PermRequest {
     /// Caller-supplied rationale (from request_access purpose=). Shown on the
     /// consent prompt + audited so the human knows WHY. "" if none given.
     pub purpose: String,
+    /// Key a drive/message grant or denial is remembered under: the stable
+    /// `pane:<uid>` slot for a verified-bound agent, else `requester`.
+    pub grant_key: String,
 }
 
 /// A granted permission. `expires_at == None` means "always" — it lives until
@@ -82,6 +85,9 @@ pub enum AuthDecision {
 pub struct PermStore {
     // None is a revoked session; links are registered only from the durable identity store.
     parents: std::sync::RwLock<HashMap<String, Option<(String, Option<u64>)>>>,
+    /// Agent principal -> pane uid of its verified, live binding. Refreshed from the
+    /// BindingStore on each authorization (docs/mcp-session-identity.md).
+    slots: std::sync::RwLock<HashMap<String, String>>,
     pending: Mutex<HashMap<String, PermRequest>>,
     grants: Mutex<Vec<Grant>>,
     /// pane uid → access token. Minted lazily on first request, stable for the
@@ -308,6 +314,7 @@ impl Default for PermStore {
         let (tokens, owners, grants, create_grants, cap_grants) = load_persisted();
         Self {
             parents: std::sync::RwLock::default(),
+            slots: std::sync::RwLock::default(),
             pending: Mutex::default(),
             grants: Mutex::new(grants),
             tokens: Mutex::new(tokens),
@@ -327,6 +334,7 @@ impl PermStore {
     pub(crate) fn for_tests() -> Self {
         Self {
             parents: std::sync::RwLock::default(),
+            slots: std::sync::RwLock::default(),
             pending: Mutex::default(), grants: Mutex::default(), tokens: Mutex::default(),
             owners: Mutex::default(), denials: Mutex::default(), create_grants: Mutex::default(),
             cap_grants: Mutex::default(), enforce: AtomicBool::new(true),
@@ -343,6 +351,43 @@ impl PermStore {
 
     pub fn remove_parent(&self, child: &str) {
         self.parents.write().unwrap().insert(child.into(), None);
+    }
+
+    /// Record (or clear) the pane an agent is bound to. Callers pass only a
+    /// BindingStore-verified live pane, never a caller-supplied id.
+    pub fn set_slot(&self, requester: &str, pane: Option<&str>) {
+        let mut slots = self.slots.write().unwrap();
+        match pane.filter(|p| !p.is_empty() && requester.starts_with("agent:")) {
+            Some(pane) => { slots.insert(requester.into(), pane.into()); }
+            None => { slots.remove(requester); }
+        }
+    }
+
+    /// Stable `pane:<uid>` key for a bound agent. A revoked child has no grant
+    /// keys, so it gets no slot either.
+    pub fn slot_key(&self, requester: &str) -> Option<String> {
+        if self.grant_keys(requester).is_empty() { return None; }
+        self.slots.read().unwrap().get(requester).map(|pane| format!("pane:{pane}"))
+    }
+
+    /// Pane uid of the requester's slot, for prompt text.
+    pub fn slot_pane(&self, requester: &str) -> Option<String> {
+        self.slot_key(requester).map(|key| key["pane:".len()..].to_string())
+    }
+
+    /// Where a new drive/message grant or denial for `requester` is remembered.
+    pub fn grant_key_for(&self, requester: &str) -> String {
+        self.slot_key(requester).unwrap_or_else(|| requester.to_string())
+    }
+
+    /// Keys whose drive/message grants apply: own, parent's, and the verified pane
+    /// slot. Capability and create grants never widen to the slot.
+    fn drive_grant_keys(&self, requester: &str) -> Vec<String> {
+        let mut keys = self.grant_keys(requester);
+        if let Some(slot) = self.slot_key(requester) {
+            if !keys.contains(&slot) { keys.push(slot); }
+        }
+        keys
     }
 
     fn grant_keys(&self, requester: &str) -> Vec<String> {
@@ -436,6 +481,11 @@ impl PermStore {
             target_pane: target_pane.to_string(),
             action: action.to_string(),
             purpose: purpose.to_string(),
+            grant_key: if action == "drive" || action.starts_with("message:") {
+                self.grant_key_for(requester)
+            } else {
+                requester.to_string()
+            },
         };
         self.pending.lock().await.insert(req.id.clone(), req.clone());
         req
@@ -503,18 +553,21 @@ impl PermStore {
                     }
                 };
                 self.grants.lock().await.push(Grant {
-                    requester: req.requester.clone(),
+                    requester: req.grant_key.clone(),
                     scope: scope.into(),
                     pane: message_recipient.unwrap_or(&req.target_pane).to_string(),
                     expires_at,
                 });
             }
             // A fresh allow clears any prior denial for this pair.
-            self.denials.lock().await.remove(&(req.requester.clone(), key));
+            let mut denials = self.denials.lock().await;
+            denials.remove(&(req.grant_key.clone(), key.clone()));
+            denials.remove(&(req.requester.clone(), key));
+            drop(denials);
             self.save().await;
         } else {
             // Remember the "no" so the caller is told (not silently re-prompted).
-            self.denials.lock().await.insert((req.requester.clone(), key), Instant::now());
+            self.denials.lock().await.insert((req.grant_key.clone(), key), Instant::now());
         }
         Some(req)
     }
@@ -588,7 +641,7 @@ impl PermStore {
     /// Live (scope, pane) grant pairs for `requester`. Lets the bridge resolve
     /// tab-scoped grants (it can map a pane → tab; the store can't).
     pub async fn grants_for(&self, requester: &str) -> Vec<(String, String)> {
-        let keys = self.grant_keys(requester);
+        let keys = self.drive_grant_keys(requester);
         let now = Instant::now();
         let mut grants = self.grants.lock().await;
         grants.retain(|g| g.live(now));
@@ -601,7 +654,7 @@ impl PermStore {
 
     /// Message grants are recipient-scoped and cannot authorize terminal writes.
     pub async fn has_message_grant(&self, requester: &str, recipient: &str) -> bool {
-        let keys = self.grant_keys(requester);
+        let keys = self.drive_grant_keys(requester);
         let now = Instant::now();
         let mut grants = self.grants.lock().await;
         grants.retain(|g| g.live(now));
@@ -650,12 +703,16 @@ impl PermStore {
         let now = Instant::now();
         let mut denials = self.denials.lock().await;
         denials.retain(|_, t| now.duration_since(*t) < COOLDOWN);
-        denials.contains_key(&(requester.to_string(), target_pane.to_string()))
+        std::iter::once(requester.to_string()).chain(self.slot_key(requester))
+            .any(|key| denials.contains_key(&(key, target_pane.to_string())))
     }
 
     /// Clear a denial for a given requester and pane (used for reauth/re-prompt).
     pub async fn clear_denial(&self, requester: &str, target_pane: &str) {
-        self.denials.lock().await.remove(&(requester.to_string(), target_pane.to_string()));
+        let mut denials = self.denials.lock().await;
+        for key in std::iter::once(requester.to_string()).chain(self.slot_key(requester)) {
+            denials.remove(&(key, target_pane.to_string()));
+        }
     }
 
     /// Return the pane's access token, minting (and caching) one on first ask.
@@ -739,7 +796,10 @@ impl PermStore {
             .lock()
             .await
             .retain(|g| !(((g.scope == "pane" || g.scope == "tab") && g.pane == uid)
-                || (g.scope == "message" && g.pane == format!("pane:{uid}"))));
+                || (g.scope == "message" && g.pane == format!("pane:{uid}"))
+                // A pane's slot ends with it; its uid never returns.
+                || g.requester == format!("pane:{uid}")));
+        self.slots.write().unwrap().retain(|_, pane| pane != uid);
         self.tokens.lock().await.remove(uid);
         self.owners.lock().await.remove(uid);
         self.denials.lock().await.retain(|(_, p), _| p != uid);

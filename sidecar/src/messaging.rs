@@ -99,6 +99,8 @@ pub(crate) async fn actor_in(bridge: &Bridge, store: &MailContext, id: &CallerId
                 };
                 (principal, pane)
             };
+            // Only a verified, live binding (own or parent's) becomes the consent slot.
+            bridge.perms().set_slot(&requester, pane.as_deref());
             Ok(MailActor { principal, label: id.label(), pane, requester, parent })
         }
         CallerIdentity::Pane { pane, .. } => {
@@ -113,6 +115,39 @@ pub(crate) async fn actor_in(bridge: &Bridge, store: &MailContext, id: &CallerId
             let label = bridge.pane_display_name(pane).await.unwrap_or_else(|| pane.clone());
             Ok(MailActor { principal, label, pane: Some(pane.clone()), requester, parent: None })
         }
+    }
+}
+
+/// Refresh an agent's consent slot from the verified binding store before a drive
+/// check. Non-agents and store failures leave the slot cleared (fail closed).
+pub async fn refresh_slot(bridge: &Bridge, id: &CallerIdentity) {
+    if !matches!(id, CallerIdentity::Agent { .. }) { return; }
+    let pane = match context() {
+        Ok(store) => actor_in(bridge, store, id).await.ok().and_then(|actor| actor.pane),
+        Err(_) => None,
+    };
+    bridge.perms().set_slot(&id.principal_key(), pane.as_deref());
+}
+
+/// Grant key for a message recipient. An agent with a verified live binding is
+/// addressed as its pane, so `agent:X` and `pane:<X's pane>` share one grant.
+pub fn recipient_grant_key(recipient: &Principal, bound_pane: Option<&str>) -> String {
+    match (recipient, bound_pane) {
+        (Principal::Agent(_) | Principal::Pane(_), Some(pane)) => format!("pane:{pane}"),
+        _ => recipient.to_key(),
+    }
+}
+
+/// Prompt name for a requester: "n8-olive-crow (in pane Eldest Dog)" when a
+/// grant will be remembered for its pane slot.
+pub async fn requester_prompt_name(bridge: &Bridge, requester: &str, label: &str) -> String {
+    match bridge.perms().slot_pane(requester) {
+        Some(pane) => {
+            let short = label.rsplit('/').next().unwrap_or(label);
+            let pane_name = bridge.pane_display_name(&pane).await.unwrap_or(pane);
+            format!("{short} (in pane {pane_name})")
+        }
+        None => label.to_string(),
     }
 }
 
