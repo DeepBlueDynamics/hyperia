@@ -4,11 +4,12 @@
 
 const fmt = require('./run-format');
 const links = require('./links');
+const {defaultTimers} = require('./timers');
 const {renderMarkdown} = require('./markdown');
 
 function createRunView(ctx) {
   const {doc, ipc} = ctx;
-  const timers = ctx.timers || {setTimeout, clearTimeout, setInterval, clearInterval};
+  const timers = ctx.timers || defaultTimers();
   const now = ctx.now || (() => Date.now());
   const saved = ctx.state.saved || {};
   const model = {
