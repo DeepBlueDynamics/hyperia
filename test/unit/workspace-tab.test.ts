@@ -2,7 +2,13 @@
 
 import test from 'ava';
 
-import {filterLayoutToTab, resumeCandidatesForTab, applyResumeSelections} from '../../lib/utils/workspace-tab';
+import {
+  filterLayoutToTab,
+  resumeCandidatesForTab,
+  applyResumeSelections,
+  n8ResumeCommand,
+  launchedWithDanger
+} from '../../lib/utils/workspace-tab';
 
 const layout = () => ({
   activeUid: 's1',
@@ -109,4 +115,46 @@ test('applyResumeSelections stamps resumeOnce only on selected sessions', (t) =>
   t.deepEqual(out.sessions.s1.resumeOnce, {command: 'n8 resume abc', source: 'n8'});
   // Original untouched (pure), and unselected sessions carry nothing.
   t.is(tab.sessions.s1.resumeOnce, undefined);
+});
+
+test('n8ResumeCommand adds or removes --danger without duplicating it', (t) => {
+  t.is(n8ResumeCommand('n8 resume abc-123', true), 'n8 resume --danger abc-123');
+  t.is(n8ResumeCommand('n8 resume abc-123', false), 'n8 resume abc-123');
+  t.is(n8ResumeCommand('n8 resume --danger abc-123', true), 'n8 resume --danger abc-123');
+  t.is(n8ResumeCommand('n8 resume --danger abc-123', false), 'n8 resume abc-123');
+  t.is(n8ResumeCommand('n8.exe resume abc', true), 'n8.exe resume --danger abc');
+});
+
+test('launchedWithDanger reads the reported launch command or the danger profile', (t) => {
+  t.true(launchedWithDanger({shellState: {command: 'n8 --danger'}}));
+  t.true(launchedWithDanger({shellState: {app: {cmdline: 'n8 run --danger --provider claude'}}}));
+  t.true(launchedWithDanger({profile: 'Nemesis8 Danger'}));
+  t.false(launchedWithDanger({shellState: {command: 'n8 --dangerous-thing'}}));
+  t.false(launchedWithDanger({profile: 'nemesis8', shellState: {command: 'n8'}}));
+});
+
+test('n8 resume candidates carry --danger when the pane was launched with it', (t) => {
+  const tab = filterLayoutToTab(
+    {
+      ...layout(),
+      termGroups: {
+        root: {uid: 'root', parentUid: null, sessionUid: null, children: ['a', 'b']},
+        a: {uid: 'a', parentUid: 'root', sessionUid: 'wild', children: []},
+        b: {uid: 'b', parentUid: 'root', sessionUid: 'tame', children: []}
+      },
+      sessions: {wild: {uid: 'wild'}, tame: {uid: 'tame'}}
+    } as any,
+    'root'
+  )!;
+  const live = {
+    wild: {shellName: 'Wild', n8Binding: {resume: 'n8 resume w-1'}, shellState: {command: 'n8 --danger'}},
+    tame: {shellName: 'Tame', n8Binding: {resume: 'n8 resume t-2'}}
+  };
+  t.deepEqual(
+    resumeCandidatesForTab(tab, live as any).map((c) => [c.sessionUid, c.danger, c.command]),
+    [
+      ['wild', true, 'n8 resume --danger w-1'],
+      ['tame', false, 'n8 resume t-2']
+    ]
+  );
 });
