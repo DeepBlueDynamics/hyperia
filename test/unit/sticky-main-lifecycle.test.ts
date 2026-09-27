@@ -206,3 +206,42 @@ test.serial('deletion: scheduler tick after note deletion does not resurrect not
   await f.triggerSchedulerTick();
   t.is(f.sticky.readAllNotes().length, 0, 'scheduler tick must not resurrect deleted note');
 });
+
+// ── Default sizing (#77) ────────────────────────────────────────────────────
+
+test.serial('default size: plain note scales off the 1920x1080 work area', (t) => {
+  const f = createStickyFixture(t);
+  const win = f.sticky.createStickyNote({text: 'hi'}).win as FakeBrowserWindow;
+  t.is(win.opts.width, 480); // 25% of 1920, inside [360, 560]
+  t.is(win.opts.height, 378); // 35% of 1080, inside [280, 520]
+});
+
+test.serial('default size: code note opens large', (t) => {
+  const f = createStickyFixture(t);
+  const win = f.sticky.createStickyNote({text: 'x', color: 'code:dark'}).win as FakeBrowserWindow;
+  t.is(win.opts.width, 960);
+  t.is(win.opts.height, 702);
+});
+
+test.serial('default size: larger font size grows the bounds', (t) => {
+  const f = createStickyFixture(t);
+  writeFileSync(f.defaultsFile, JSON.stringify({fontSize: 44}));
+  const win = f.sticky.createStickyNote({text: 'hi'}).win as FakeBrowserWindow;
+  t.is(win.opts.width, 720); // min 360 * 2
+  t.is(win.opts.height, 560); // min 280 * 2
+});
+
+test.serial('default size: defaults.json width/height override plain notes', (t) => {
+  const f = createStickyFixture(t);
+  writeFileSync(f.defaultsFile, JSON.stringify({width: 300, height: 250}));
+  const win = f.sticky.createStickyNote({text: 'hi'}).win as FakeBrowserWindow;
+  t.is(win.opts.width, 300);
+  t.is(win.opts.height, 250);
+});
+
+test.serial('default size: explicit width/height still win', (t) => {
+  const f = createStickyFixture(t);
+  const win = f.sticky.createStickyNote({text: 'hi', width: 700, height: 500}).win as FakeBrowserWindow;
+  t.is(win.opts.width, 700);
+  t.is(win.opts.height, 500);
+});

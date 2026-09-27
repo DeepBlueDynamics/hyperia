@@ -46,7 +46,7 @@ export function initSticky(): void {
   });
 
   ipcMain.on('new-sticky-file', (_event, filePath: string) => {
-    createStickyNote({filePath, width: 600, height: 500, focus: true});
+    createStickyNote({filePath, focus: true});
   });
 
   ipcMain.on('search-stickies', () => {
