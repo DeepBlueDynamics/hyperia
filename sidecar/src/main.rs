@@ -1276,6 +1276,10 @@ async fn requester_display_name(
         identity::CallerIdentity::Pane { pane, .. } => {
             state.bridge.pane_display_name(pane).await
         }
+        // A bound agent's grant is remembered for its pane; name both on the prompt.
+        identity::CallerIdentity::Agent { .. } => Some(
+            messaging::requester_prompt_name(&state.bridge, &id.principal_key(), &id.label()).await,
+        ),
         _ => None,
     }
 }

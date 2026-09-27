@@ -541,7 +541,7 @@ async fn pane_bind_from_a_child_binds_its_registered_parent() {
     let second = format!("pane-{}", random_hex(8).unwrap());
     add_pane(&bridge, &second).await;
     let approval = |requester: String| crate::perms::PermRequest {
-        id: "req-1".into(), requester, requester_pane: String::new(),
+        id: "req-1".into(), grant_key: requester.clone(), requester, requester_pane: String::new(),
         target_pane: second.clone(), action: "bind:parent".into(), purpose: String::new(),
     };
     crate::messaging::approve_binding_in(&bridge, &mail, &approval(format!("agent:{}", child.name))).await.unwrap();
@@ -552,4 +552,105 @@ async fn pane_bind_from_a_child_binds_its_registered_parent() {
         let err = crate::messaging::approve_binding_in(&bridge, &mail, &approval(requester)).await.unwrap_err();
         assert_eq!(err.0, StatusCode::CONFLICT);
     }
+}
+
+// Consent slots: a verified pane binding keys drive/message grants on the pane,
+// so a container restarting under a new random identity keeps its approvals.
+async fn slot_fixture() -> (Fixture, Bridge, crate::messaging::MailContext, String, String) {
+    let fixture = Fixture::new();
+    let bridge = fixture.bridge();
+    let mail = fixture.mail();
+    let (home, target) = (format!("pane-{}", random_hex(8).unwrap()), format!("pane-{}", random_hex(8).unwrap()));
+    add_pane(&bridge, &home).await;
+    add_pane(&bridge, &target).await;
+    (fixture, bridge, mail, home, target)
+}
+
+#[tokio::test]
+async fn restarted_container_identities_in_the_same_pane_share_one_grant() {
+    let (_fixture, bridge, mail, home, target) = slot_fixture().await;
+    let (kiwi, crow) = ("nemesis8/n8-proud-kiwi", "nemesis8/n8-olive-crow");
+    let (kiwi_key, crow_key) = (format!("agent:{kiwi}"), format!("agent:{crow}"));
+    mail.bindings.verify_and_bind(kiwi, &home, mailbox::ProofOfResidency::System, |_, _| false).unwrap();
+    crate::messaging::actor_in(&bridge, &mail, &agent(kiwi)).await.unwrap();
+
+    let drive = bridge.perms().create_request(&kiwi_key, &home, &target, "drive", "").await;
+    assert_eq!(drive.grant_key, format!("pane:{home}"));
+    bridge.perms().respond(&drive.id, true, "pane", None).await.unwrap();
+    let message = bridge.perms().create_request(&kiwi_key, &home, &target, &format!("message:pane:{target}"), "").await;
+    bridge.perms().respond(&message.id, true, "message", None).await.unwrap();
+
+    // The container restarts in the same pane under a new random name.
+    mail.bindings.verify_and_bind(crow, &home, mailbox::ProofOfResidency::System, |_, _| false).unwrap();
+    crate::messaging::actor_in(&bridge, &mail, &agent(crow)).await.unwrap();
+    assert_eq!(bridge.perms().grants_for(&crow_key).await, vec![("pane".into(), target.clone())]);
+    assert!(bridge.perms().has_message_grant(&crow_key, &format!("pane:{target}")).await);
+    assert_eq!(bridge.perms().snapshot().await["grants"].as_array().unwrap().len(), 2, "one grant each, not per identity");
+
+    // The replaced identity lost its binding, so it no longer holds the slot.
+    crate::messaging::actor_in(&bridge, &mail, &agent(kiwi)).await.unwrap();
+    assert!(bridge.perms().grants_for(&kiwi_key).await.is_empty());
+    assert!(!bridge.perms().has_message_grant(&kiwi_key, &format!("pane:{target}")).await);
+
+    // Closing the pane ends the slot and its grants.
+    bridge.perms().cleanup_pane(&home).await;
+    assert!(bridge.perms().grants_for(&crow_key).await.is_empty());
+}
+
+#[tokio::test]
+async fn unbound_agent_needs_its_own_grant_and_cannot_claim_a_pane() {
+    let (_fixture, bridge, mail, home, target) = slot_fixture().await;
+    let bound = "nemesis8/n8-coral-toad";
+    mail.bindings.verify_and_bind(bound, &home, mailbox::ProofOfResidency::System, |_, _| false).unwrap();
+    crate::messaging::actor_in(&bridge, &mail, &agent(bound)).await.unwrap();
+    let req = bridge.perms().create_request(&format!("agent:{bound}"), &home, &target, "drive", "").await;
+    bridge.perms().respond(&req.id, true, "pane", None).await.unwrap();
+
+    // A caller-supplied requester pane is display only; it never selects a slot.
+    let lone = "agent:nemesis8/n8-lone-wolf";
+    crate::messaging::actor_in(&bridge, &mail, &agent("nemesis8/n8-lone-wolf")).await.unwrap();
+    assert!(bridge.perms().grants_for(lone).await.is_empty());
+    let own = bridge.perms().create_request(lone, &home, &target, "drive", "").await;
+    assert_eq!(own.grant_key, lone);
+    bridge.perms().respond(&own.id, true, "pane", None).await.unwrap();
+    assert_eq!(bridge.perms().grants_for(lone).await, vec![("pane".into(), target.clone())]);
+    // Slots are agent-only: a pane principal is never mapped onto another pane.
+    bridge.perms().set_slot("pane:elsewhere", Some(&home));
+    assert!(bridge.perms().slot_key("pane:elsewhere").is_none());
+}
+
+#[tokio::test]
+async fn child_session_uses_its_parents_pane_slot() {
+    let (_fixture, bridge, mail, home, target) = slot_fixture().await;
+    let child = bridge.identity().create_session("parent", json!({})).await.unwrap();
+    let child_key = format!("agent:{}", child.name);
+    bridge.perms().set_parent(&child_key, "agent:parent");
+    mail.bindings.verify_and_bind("parent", &home, mailbox::ProofOfResidency::System, |_, _| false).unwrap();
+    crate::messaging::actor_in(&bridge, &mail, &agent(&child.name)).await.unwrap();
+    assert_eq!(bridge.perms().slot_key(&child_key), Some(format!("pane:{home}")));
+    // A revoked child keeps no slot and no grants.
+    let req = bridge.perms().create_request(&child_key, "", &target, "drive", "").await;
+    bridge.perms().respond(&req.id, true, "pane", None).await.unwrap();
+    bridge.perms().remove_parent(&child_key);
+    assert!(bridge.perms().slot_key(&child_key).is_none());
+    assert!(bridge.perms().grants_for(&child_key).await.is_empty());
+}
+
+#[tokio::test]
+async fn agent_and_pane_addresses_resolve_to_the_same_message_grant() {
+    let (_fixture, bridge, mail, home, _target) = slot_fixture().await;
+    let recipient = "nemesis8/n8-olive-crow";
+    mail.bindings.verify_and_bind(recipient, &home, mailbox::ProofOfResidency::System, |_, _| false).unwrap();
+    let bound = mail.bindings.pane_for_agent(recipient);
+    let by_agent = crate::messaging::recipient_grant_key(&Principal::Agent(recipient.into()), bound.as_deref());
+    let by_pane = crate::messaging::recipient_grant_key(&Principal::Pane(home.clone()), Some(&home));
+    assert_eq!(by_agent, format!("pane:{home}"));
+    assert_eq!(by_agent, by_pane);
+
+    let sender = "agent:other";
+    let req = bridge.perms().create_request(sender, "", &home, &format!("message:{by_agent}"), "").await;
+    bridge.perms().respond(&req.id, true, "message", None).await.unwrap();
+    assert!(bridge.perms().has_message_grant(sender, &by_pane).await);
+    // An unbound agent recipient keeps its own address.
+    assert_eq!(crate::messaging::recipient_grant_key(&Principal::Agent("loose".into()), None), "agent:loose");
 }

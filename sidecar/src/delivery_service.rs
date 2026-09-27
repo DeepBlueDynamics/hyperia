@@ -105,8 +105,10 @@ async fn replay(sender: &MailActor, key: Option<&str>, kind: &str, request: &ser
     Ok(prior)
 }
 
-async fn message_allowed(bridge: &Bridge, sender: &MailActor, recipient: &Principal) -> bool {
+/// `recipient_key` is the canonical grant key; the raw principal key still honours older grants.
+async fn message_allowed(bridge: &Bridge, sender: &MailActor, recipient: &Principal, recipient_key: &str) -> bool {
     sender.principal == Principal::System || &sender.principal == recipient
+        || bridge.perms().has_message_grant(&sender.requester, recipient_key).await
         || bridge.perms().has_message_grant(&sender.requester, &recipient.to_key()).await
 }
 
@@ -172,7 +174,8 @@ async fn retain(
         }
         crate::consent_log::record_request(&req.id, &req.requester, &sender.label, sender.principal.kind_str(),
             &req.action, &req.target_pane, &req.purpose);
-        let prompt = prompt_json(&req, &sender.label, &details);
+        let requester_name = messaging::requester_prompt_name(bridge, &req.requester, &sender.label).await;
+        let prompt = prompt_json(&req, &requester_name, &details);
         if let Err(error) = bridge.notify(prompt.clone()).await {
             let mut pending = PROMPTS.lock().await;
             if !pending.iter().any(|(id, _)| id == &req.id) {
@@ -194,9 +197,10 @@ pub async fn send_mail(HttpState(state): HttpState<AppState>, headers: HeaderMap
     let msg = messaging::prepare(&state.bridge, &headers, req).await?;
     let mut payload = value(&msg)?;
     payload["request"] = request_metadata(original);
-    let approved = message_allowed(&state.bridge, &msg.sender, &msg.recipient).await;
+    let recipient_key = messaging::recipient_grant_key(&msg.recipient, msg.target_pane.as_deref());
+    let approved = message_allowed(&state.bridge, &msg.sender, &msg.recipient, &recipient_key).await;
     let target = msg.target_pane.clone().unwrap_or_else(|| msg.recipient.to_key());
-    let action = format!("message:{}", msg.recipient.to_key());
+    let action = format!("message:{recipient_key}");
     // A pane recipient with no shell name falls back to its raw uid as the
     // label; leave that out so the renderer can use the pane's own name.
     let details = PromptDetails {
@@ -264,7 +268,8 @@ pub async fn submit_input(bridge: &Bridge, headers: &HeaderMap, req: InputReques
     let recipient = messaging::context()?.bindings.agent_for_pane(&pane)
         .map(Principal::Agent).unwrap_or_else(|| Principal::Pane(pane.clone()));
     let (approved, action) = if agent {
-        (message_allowed(bridge, &sender, &recipient).await, format!("message:{}", recipient.to_key()))
+        let recipient_key = messaging::recipient_grant_key(&recipient, Some(&pane));
+        (message_allowed(bridge, &sender, &recipient, &recipient_key).await, format!("message:{recipient_key}"))
     } else {
         let id = bridge.resolve_caller(crate::bearer_token(headers).as_deref()).await;
         let decision = bridge.authorize_drive(&id, &pane).await;
@@ -564,7 +569,7 @@ mod tests {
         let req = crate::perms::PermRequest {
             id: "perm-1".into(), requester: "agent:alice".into(), requester_pane: "pA".into(),
             target_pane: "agent:bob".into(), action: "message:agent:bob".into(),
-            purpose: "Deliver stored mail to bob.".into(),
+            purpose: "Deliver stored mail to bob.".into(), grant_key: "agent:alice".into(),
         };
         let bare = prompt_json(&req, "Alice", &PromptDetails::default());
         assert_eq!(bare["type"], "PermissionRequest");

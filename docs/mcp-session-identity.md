@@ -41,6 +41,39 @@ session, and emits an audit entry and “pane <pane> re-bound to a new session�
 DELETE releases the claim immediately. Agent-token clients are not subject to
 this exclusive pane claim.
 
+## Pane consent slots
+
+nemesis8 containers mint a new random agent identity on every start
+(`agent:nemesis8/n8-proud-kiwi` becomes `agent:nemesis8/n8-olive-crow`). If
+grants were keyed on that name, every restart would turn each sender→recipient
+pair into a new prompt. Instead, drive and message grants for an agent with a
+**verified pane binding** are remembered under that pane: `pane:<uid>`.
+
+- **Sender key.** When an agent's binding is verified and its pane is live,
+  new drive grants (including `terminal_keys`) and message grants (`msg_send`,
+  `pane_send`) are stored as `pane:<uid>`. Any agent later bound to the same
+  pane holds them. Its own older `agent:` grants still apply. A child session
+  (`mcp-session/…`) uses its parent's binding. A revoked child has no slot.
+  Agents without a binding keep per-identity grants, as before.
+- **Recipient key.** A message to `agent:X` whose verified binding is pane P is
+  checked and approved as `message:pane:P`, so addressing X by name or by pane
+  shares one grant. Grants stored under the old `message:agent:X` form still
+  count.
+- **Prompt.** The consent prompt names both, e.g. "n8-olive-crow (in pane Eldest
+  Dog)". Approving it remembers the grant for that pane, not for that name.
+- **Lifetime.** Closing the pane removes its slot and every grant keyed on it.
+  Denials use the same key, so a "no" also holds when the container restarts.
+
+Security: the slot comes only from the binding store (`agent-bindings.json`),
+which records a binding only after proof of residency: the pane's own token,
+or the human approving a `bind:` prompt. A pane id sent by the caller, such as
+the requester pane on a request, never selects a slot. It is re-derived from the
+store on every authorization, so an identity whose binding was replaced loses
+the slot at once. A container that restarts in the same pane occupies the same
+human-approved slot. That is the intended trust boundary: anything running in
+that pane could already present the pane's token. Capability and create grants
+stay per identity and never use the slot.
+
 ## Storage and transport
 
 Session metadata lives beside agents.json in mcp-sessions.json. Writes are
