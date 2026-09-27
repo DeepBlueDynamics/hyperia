@@ -6,7 +6,12 @@ import {useStore} from 'react-redux';
 import type {HyperState} from '../../typings/hyper';
 import rpc from '../rpc';
 import {serializeLayoutState} from '../utils/layout-serialize';
-import {filterLayoutToTab, resumeCandidatesForTab, applyResumeSelections} from '../utils/workspace-tab';
+import {
+  filterLayoutToTab,
+  resumeCandidatesForTab,
+  applyResumeSelections,
+  n8ResumeCommand
+} from '../utils/workspace-tab';
 import type {ResumeCandidate} from '../utils/workspace-tab';
 
 import {activeTerminals} from './term';
@@ -55,12 +60,31 @@ const btnStyle = (primary: boolean): React.CSSProperties => ({
   cursor: 'pointer'
 });
 
+// Small pill after the pane name: red when the n8 resume will run with --danger.
+const dangerToggleStyle = (on: boolean, enabled: boolean): React.CSSProperties => ({
+  flexShrink: 0,
+  alignSelf: 'center',
+  padding: '0 7px',
+  fontSize: '10px',
+  lineHeight: '16px',
+  fontWeight: 600,
+  borderRadius: '8px',
+  border: '1px solid',
+  borderColor: on ? 'var(--accent-danger, #f85149)' : 'var(--border-neutral, rgba(255,255,255,0.15))',
+  background: on ? 'var(--accent-danger, #f85149)' : 'transparent',
+  color: on ? '#fff' : 'var(--text-secondary)',
+  opacity: enabled ? 1 : 0.4,
+  cursor: enabled ? 'pointer' : 'default'
+});
+
 const WorkspaceSaveToast: React.FC = () => {
   const store = useStore<HyperState>();
   const [open, setOpen] = useState<OpenDetail | null>(null);
   const [name, setName] = useState('');
   const [candidates, setCandidates] = useState<ResumeCandidate[]>([]);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
+  // Per-n8-row --danger toggle, seeded from how the pane was launched.
+  const [danger, setDanger] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
@@ -84,6 +108,7 @@ const WorkspaceSaveToast: React.FC = () => {
       layoutRef.current = tab;
       setCandidates(cands);
       setChecked(Object.fromEntries(cands.map((c) => [c.sessionUid, c.preChecked])));
+      setDanger(Object.fromEntries(cands.map((c) => [c.sessionUid, !!c.danger])));
       setName(detail.defaultName);
       setError(null);
       setConflict(false);
@@ -136,6 +161,11 @@ const WorkspaceSaveToast: React.FC = () => {
     };
   }, []);
 
+  const commandFor = useCallback(
+    (c: ResumeCandidate) => (c.source === 'n8' ? n8ResumeCommand(c.command, !!danger[c.sessionUid]) : c.command),
+    [danger]
+  );
+
   const save = useCallback(
     (overwrite: boolean) => {
       if (!layoutRef.current || !name.trim()) {
@@ -143,13 +173,13 @@ const WorkspaceSaveToast: React.FC = () => {
       }
       const selections = candidates
         .filter((c) => checked[c.sessionUid])
-        .map((c) => ({sessionUid: c.sessionUid, command: c.command, source: c.source}));
+        .map((c) => ({sessionUid: c.sessionUid, command: commandFor(c), source: c.source}));
       const layout = applyResumeSelections(layoutRef.current as any, selections);
       setBusy(true);
       setError(null);
       rpc.emit('save tab workspace', {name: name.trim(), overwrite, layout});
     },
-    [name, candidates, checked]
+    [name, candidates, checked, commandFor]
   );
 
   if (!open) {
@@ -252,6 +282,26 @@ const WorkspaceSaveToast: React.FC = () => {
                 onChange={(e) => setChecked({...checked, [c.sessionUid]: e.target.checked})}
               />
               <span style={{color: 'var(--text-secondary)', flexShrink: 0}}>{c.label}</span>
+              {c.source === 'n8' && (
+                <button
+                  type="button"
+                  aria-pressed={!!danger[c.sessionUid]}
+                  disabled={!checked[c.sessionUid]}
+                  title={
+                    danger[c.sessionUid]
+                      ? 'Resumes with --danger (no approvals, no sandbox). Click to turn off.'
+                      : 'Click to resume with --danger (no approvals, no sandbox).'
+                  }
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setDanger({...danger, [c.sessionUid]: !danger[c.sessionUid]});
+                  }}
+                  style={dangerToggleStyle(!!danger[c.sessionUid], !!checked[c.sessionUid])}
+                >
+                  danger
+                </button>
+              )}
               <span
                 style={{
                   fontFamily: 'var(--font-mono)',
@@ -260,9 +310,9 @@ const WorkspaceSaveToast: React.FC = () => {
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap'
                 }}
-                title={c.command}
+                title={commandFor(c)}
               >
-                {c.command}
+                {commandFor(c)}
               </span>
               {c.source === 'n8' && <span style={{fontSize: '10px', color: 'var(--info-text)'}}>n8</span>}
             </label>

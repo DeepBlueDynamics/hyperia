@@ -74,6 +74,21 @@ export type ResumeCandidate = {
   preChecked: boolean;
   /** Pane label for the toast row. */
   label: string;
+  /** n8 only: initial state of the row's danger toggle (was it launched with --danger?). */
+  danger?: boolean;
+};
+
+const DANGER_FLAG = /(^|\s)--danger(?=\s|$)/;
+
+/** Did this n8 pane start in danger mode? The resume binding doesn't say, so read
+ *  the shell-reported launch command or the "nemesis8 danger" profile. */
+export const launchedWithDanger = (live: any): boolean =>
+  DANGER_FLAG.test(reportedCommand(live) || '') || /danger/i.test(String(live?.profile || ''));
+
+/** `n8 resume <id>` with --danger added or removed per the toast toggle. */
+export const n8ResumeCommand = (resume: string, danger: boolean): string => {
+  const base = resume.replace(DANGER_FLAG, '$1').replace(/\s+/g, ' ').trim();
+  return danger ? base.replace(/^(n8(?:\.exe)?\s+resume)\b/, '$1 --danger') : base;
 };
 
 /**
@@ -112,7 +127,15 @@ export const resumeCandidatesForTab = (
     }
     const label = live.shellName || live.tabName || live.title || uid.slice(0, 8);
     if (live.n8Binding?.resume) {
-      out.push({sessionUid: uid, command: live.n8Binding.resume, source: 'n8', preChecked: true, label});
+      const danger = launchedWithDanger(live);
+      out.push({
+        sessionUid: uid,
+        command: n8ResumeCommand(live.n8Binding.resume, danger),
+        source: 'n8',
+        preChecked: true,
+        label,
+        danger
+      });
       continue;
     }
     const reported = reportedCommand(live);
