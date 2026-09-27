@@ -345,6 +345,8 @@ export function newWindow(
   // Re-emit an orphaned session as a fresh tab bound to its EXISTING live PTY.
   // isRestore avoids re-running any prefill command; the new Term fits itself and
   // resizes the live PTY, so an ssh/agent you'd lost comes back interactive.
+  // isReattach makes the term-groups reducer build the tab (it skips plain
+  // restores); isAgentInitiated keeps a background recovery from stealing focus.
   const reattachSession = (uid: string, session: any) => {
     rpc.emit('session add', {
       rows: 24,
@@ -356,8 +358,10 @@ export function newWindow(
       profile: session.profile,
       cwd: session.cwd,
       isNewGroup: true,
-      isRestore: true
-    });
+      isRestore: true,
+      isReattach: true,
+      isAgentInitiated: true
+    } as any);
   };
   // Live PTY sessions main holds that the visible layout doesn't show.
   const listOrphans = (minAgeMs: number): Array<[string, any]> => {

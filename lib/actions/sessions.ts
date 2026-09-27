@@ -68,6 +68,7 @@ export function addSession(data: Session) {
       cwd,
       isNewGroup,
       isRestore,
+      isReattach: (data as any).isReattach,
       lastCommand,
       isAgentInitiated: (data as any).isAgentInitiated
     });

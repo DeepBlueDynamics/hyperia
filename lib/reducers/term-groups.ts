@@ -354,7 +354,8 @@ const reducer: ITermGroupReducer = (state = initialState, action) => {
   const act = action as any;
   switch (act.type) {
     case SESSION_ADD: {
-      if (act.isRestore) {
+      // Restored panes already have their groups; an orphan reattach needs a new one.
+      if (act.isRestore && !act.isReattach) {
         return state;
       }
 
