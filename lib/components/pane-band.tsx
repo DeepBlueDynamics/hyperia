@@ -1205,7 +1205,9 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           /* Layouts grid */
           .pane-band-layout-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            /* Size cells to the preview; 1fr stretched them past it (dead space right). */
+            grid-template-columns: repeat(3, max-content);
+            justify-content: center;
             gap: 8px;
             padding: 4px;
           }
