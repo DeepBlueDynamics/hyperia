@@ -28,6 +28,8 @@ export type TabAutosave = {
 };
 
 export const AUTOSAVE_DEBOUNCE_MS = 2000;
+/** Constant churn (an agent animating its title) must not postpone a save forever. */
+export const AUTOSAVE_MAX_WAIT_MS = 10000;
 
 /** Window event fired after an autosave write lands; detail: {rootUid}. The tab
  *  uses it for a brief pulse of its top line. */
@@ -37,12 +39,67 @@ const bindings = new Map<string, TabAutosave>();
 
 export const getTabAutosave = (rootUid: string): TabAutosave | undefined => bindings.get(rootUid);
 
+// Which saved names autosave, kept across restarts so restoring the saved tab
+// re-binds it. The bindings themselves stay per-tab and in memory.
+const AUTOSAVE_NAMES_KEY = 'hyperia.tabAutosaveNames';
+const readNames = (): Record<string, true> => {
+  try {
+    return JSON.parse(globalThis.localStorage?.getItem(AUTOSAVE_NAMES_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+};
+const writeNames = (names: Record<string, true>) => {
+  try {
+    globalThis.localStorage?.setItem(AUTOSAVE_NAMES_KEY, JSON.stringify(names));
+  } catch {
+    /* storage unavailable: autosave just won't survive a restore */
+  }
+};
+export const isAutosaveName = (name: string): boolean => !!readNames()[name];
+
 export const setTabAutosave = (rootUid: string, binding: TabAutosave): void => {
+  // One writer per saved name: the newest binding wins.
+  for (const [uid, b] of bindings) if (uid !== rootUid && b.name === binding.name) bindings.delete(uid);
   bindings.set(rootUid, binding);
+  writeNames({...readNames(), [binding.name]: true});
 };
 
 export const clearTabAutosave = (rootUid: string): void => {
+  const b = bindings.get(rootUid);
   bindings.delete(rootUid);
+  if (b) {
+    const names = readNames();
+    delete names[b.name];
+    writeNames(names);
+  }
+};
+
+/** The saved tab is gone (deleted): end every binding to it and forget the name. */
+export const forgetAutosaveName = (name: string): void => {
+  for (const [uid, b] of bindings) if (b.name === name) bindings.delete(uid);
+  const names = readNames();
+  if (names[name]) {
+    delete names[name];
+    writeNames(names);
+  }
+};
+
+/**
+ * A saved tab was restored as `rootUid`: if that name autosaves, bind the new
+ * tab, carrying the resume commands the human approved when it was saved.
+ */
+export const bindRestoredTab = (rootUid: string, name: string | undefined, layout: SerializedLayout): boolean => {
+  if (!name || !isAutosaveName(name)) return false;
+  const approved: ApprovedResume[] = [];
+  for (const [sessionUid, sess] of Object.entries(layout.sessions || {})) {
+    const r = sess?.resumeOnce;
+    if (r?.command && (r.source === 'n8' || r.source === 'shell')) {
+      approved.push({sessionUid, command: r.command, source: r.source});
+    }
+  }
+  setTabAutosave(rootUid, {name, approved});
+  return true;
 };
 
 /**
@@ -67,6 +124,27 @@ export const buildAutosaveLayout = (
   return applyResumeSelections(tab, still);
 };
 
+/**
+ * What autosave compares: only what restoring the tab would recreate. Titles,
+ * focus, sizes, pids and typed command lines change constantly and restore none
+ * of that, so they never trigger a write.
+ */
+export const autosaveSignature = (layout: SerializedLayout): string => {
+  const sessions: Record<string, unknown> = {};
+  for (const [uid, sess] of Object.entries(layout.sessions || {})) {
+    sessions[uid] = {
+      cwd: sess.cwd,
+      profile: sess.profile,
+      shellName: sess.shellName,
+      tabName: sess.tabName,
+      title: sess.manualTitle ? sess.title : undefined,
+      container: sess.annotations?.container?.sessionId,
+      resumeOnce: sess.resumeOnce
+    };
+  }
+  return JSON.stringify({termGroups: layout.termGroups, sessions});
+};
+
 // n8 candidates carry the resume command with or without --danger depending on
 // how the pane launched; the human may have flipped that toggle in the toast.
 const sameCommand = (candidate: string, approved: string): boolean =>
@@ -86,9 +164,12 @@ const stripDanger = (cmd: string) =>
 export const startTabAutosave = (
   store: Store<HyperState>,
   getCommandLine: (uid: string) => string | undefined,
-  debounceMs = AUTOSAVE_DEBOUNCE_MS
+  debounceMs = AUTOSAVE_DEBOUNCE_MS,
+  maxWaitMs = AUTOSAVE_MAX_WAIT_MS
 ): (() => void) => {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  // When the current burst of changes began; the timer stops sliding after maxWaitMs.
+  let burstStart = 0;
   let seenGroups: unknown = null;
   let seenSessions: unknown = null;
   // Saved name -> tab, so a result (which carries only the name) finds its tab.
@@ -96,6 +177,7 @@ export const startTabAutosave = (
 
   const flush = () => {
     timer = null;
+    burstStart = 0;
     if (bindings.size === 0) {
       return;
     }
@@ -108,11 +190,11 @@ export const startTabAutosave = (
         bindings.delete(rootUid);
         continue;
       }
-      const json = JSON.stringify(layout);
-      if (json === binding.lastSaved) {
+      const sig = autosaveSignature(layout);
+      if (sig === binding.lastSaved) {
         continue;
       }
-      binding.lastSaved = json;
+      binding.lastSaved = sig;
       inFlight.set(binding.name, rootUid);
       rpc.emit('save tab workspace', {name: binding.name, overwrite: true, layout, autosave: true});
     }
@@ -128,11 +210,26 @@ export const startTabAutosave = (
     }
     seenGroups = termGroups;
     seenSessions = sessions;
-    if (timer) {
+    const now = Date.now();
+    if (!timer) {
+      burstStart = now;
+    } else if (now - burstStart < maxWaitMs) {
       clearTimeout(timer);
+    } else {
+      return; // max wait reached: let the pending flush fire
     }
     timer = setTimeout(flush, debounceMs);
   });
+
+  // The saved-tab library came back: a name missing from it was deleted.
+  const onList = ({rows}: {rows?: Array<{name: string}>}) => {
+    if (!Array.isArray(rows)) return;
+    const present = new Set(rows.map((r) => r.name));
+    const names = new Set([...bindings.values()].map((b) => b.name));
+    for (const n of Object.keys(readNames())) names.add(n);
+    for (const n of names) if (!present.has(n)) forgetAutosaveName(n);
+  };
+  rpc.on('tab workspaces list', onList);
 
   const onResult = (res: {ok: boolean; name: string; error?: string; autosave?: boolean}) => {
     if (!res.autosave) {
@@ -157,6 +254,7 @@ export const startTabAutosave = (
   return () => {
     unsubscribe();
     rpc.removeListener('save tab workspace result', onResult);
+    rpc.removeListener('tab workspaces list', onList);
     if (timer) {
       clearTimeout(timer);
     }
