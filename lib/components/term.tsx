@@ -2944,6 +2944,24 @@ export default class Term extends React.PureComponent<
       return;
     }
 
+    // Tab stays in the popup: the browser default moved focus to the picker behind
+    // it (opening its dropdown). Complete to the highlighted or only match instead.
+    if (key === 'Tab') {
+      e.preventDefault();
+      e.stopPropagation();
+      const pick =
+        focusedIndex >= 0 && focusedIndex < filteredDirs.length
+          ? filteredDirs[focusedIndex]
+          : filteredDirs.length === 1
+            ? filteredDirs[0]
+            : null;
+      if (pick) {
+        const name = typeof pick === 'string' ? pick : pick.name;
+        this.setState({searchBuffer: name, focusedIndex: 0});
+      }
+      return;
+    }
+
     if (key === 'Backspace' && searchBuffer.length === 0) {
       e.preventDefault();
       e.stopPropagation();
