@@ -38,6 +38,7 @@ import {
 import {execCommand} from '../commands';
 import {getDefaultProfile} from '../config';
 import {homeDirectory, cfgPath} from '../config/paths';
+import {getLastCwd, recordLastCwd} from '../config/windows';
 import fetchNotifications from '../notifications';
 import {decorateSessionOptions, decorateSessionClass} from '../plugins';
 import createRPC from '../rpc';
@@ -45,6 +46,7 @@ import Session from '../session';
 import {startSessionLog, writeSessionLog, endSessionLog} from '../session-logger';
 import {getAppIcon} from '../utils/icon';
 import {setRendererType, unsetRendererType} from '../utils/renderer-utils';
+import {pickStartDirectory} from '../utils/start-dir';
 import toElectronBackgroundColor from '../utils/to-electron-background-color';
 import {initWebPaneManager, destroyPanesForWindow, setWindowWebPanesSuppressed} from '../web-pane-manager';
 import {
@@ -624,12 +626,10 @@ export function newWindow(
       }
       argPath = normalize(argPath + sep);
     }
-    let workingDirectory = homeDirectory;
-    if (argPath && isAbsolute(argPath)) {
-      workingDirectory = argPath;
-    } else if (profileCfg.workingDirectory && isAbsolute(profileCfg.workingDirectory)) {
-      workingDirectory = profileCfg.workingDirectory;
-    }
+    const workingDirectory = pickStartDirectory(
+      {argPath, profileDir: profileCfg.workingDirectory, lastCwd: getLastCwd()},
+      homeDirectory
+    );
 
     // remove the rows and cols, the wrong value of them will break layout when init create
     // Validate the cwd before it reaches node-pty. An agent running in a
@@ -748,6 +748,9 @@ export function newWindow(
 
     session.on('cwd', (cwd: string) => {
       updateSessionCwd(options.uid, cwd);
+      // Only where the user is working — a background agent cd-ing around in
+      // an unfocused window shouldn't decide where the next terminal opens.
+      if (window.isFocused()) recordLastCwd(cwd);
       rpc.emit('session cwd', {uid: options.uid, cwd});
     });
 
