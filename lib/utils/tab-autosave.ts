@@ -29,6 +29,10 @@ export type TabAutosave = {
 
 export const AUTOSAVE_DEBOUNCE_MS = 2000;
 
+/** Window event fired after an autosave write lands; detail: {rootUid}. The tab
+ *  uses it for a brief pulse of its top line. */
+export const TAB_AUTOSAVED_EVENT = 'hyperia-tab-autosaved';
+
 const bindings = new Map<string, TabAutosave>();
 
 export const getTabAutosave = (rootUid: string): TabAutosave | undefined => bindings.get(rootUid);
@@ -87,6 +91,8 @@ export const startTabAutosave = (
   let timer: ReturnType<typeof setTimeout> | null = null;
   let seenGroups: unknown = null;
   let seenSessions: unknown = null;
+  // Saved name -> tab, so a result (which carries only the name) finds its tab.
+  const inFlight = new Map<string, string>();
 
   const flush = () => {
     timer = null;
@@ -107,6 +113,7 @@ export const startTabAutosave = (
         continue;
       }
       binding.lastSaved = json;
+      inFlight.set(binding.name, rootUid);
       rpc.emit('save tab workspace', {name: binding.name, overwrite: true, layout, autosave: true});
     }
   };
@@ -128,12 +135,21 @@ export const startTabAutosave = (
   });
 
   const onResult = (res: {ok: boolean; name: string; error?: string; autosave?: boolean}) => {
-    if (res.autosave && !res.ok) {
-      console.warn(`[workspace] autosave of tab '${res.name}' failed:`, res.error);
-      // Forget the snapshot so the next change retries the write.
-      for (const b of bindings.values()) {
-        if (b.name === res.name) b.lastSaved = undefined;
+    if (!res.autosave) {
+      return;
+    }
+    const rootUid = inFlight.get(res.name);
+    inFlight.delete(res.name);
+    if (res.ok) {
+      if (rootUid && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent(TAB_AUTOSAVED_EVENT, {detail: {rootUid}}));
       }
+      return;
+    }
+    console.warn(`[workspace] autosave of tab '${res.name}' failed:`, res.error);
+    // Forget the snapshot so the next change retries the write.
+    for (const b of bindings.values()) {
+      if (b.name === res.name) b.lastSaved = undefined;
     }
   };
   rpc.on('save tab workspace result', onResult);

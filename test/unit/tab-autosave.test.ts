@@ -145,3 +145,36 @@ test.serial('engine drops the binding when the tab closes, and retries after a f
   await tick(60);
   t.is(mod.getTabAutosave('root'), undefined);
 });
+
+test.serial('engine announces a landed autosave for its tab, and only then', async (t) => {
+  const g = globalThis as any;
+  const hadWindow = 'window' in g;
+  g.window = new EventTarget();
+  t.teardown(() => {
+    if (!hadWindow) delete g.window;
+  });
+  const seen: string[] = [];
+  g.window.addEventListener('hyperia-tab-autosaved', (e: any) => seen.push(e.detail.rootUid));
+
+  const {mod, rpc} = load();
+  t.is(mod.TAB_AUTOSAVED_EVENT, 'hyperia-tab-autosaved');
+  const store = fakeStore(hyperState('/a'));
+  const stop = mod.startTabAutosave(store, () => undefined, 20);
+  t.teardown(stop);
+  mod.setTabAutosave('root', {name: 'Dev', approved: []});
+
+  store.set(hyperState('/b'));
+  await tick(60);
+  t.deepEqual(seen, [], 'nothing until the write is confirmed');
+
+  rpc.emit('save tab workspace result', {ok: true, name: 'Dev'});
+  t.deepEqual(seen, [], 'a manual (non-autosave) save result is not ours');
+
+  rpc.emit('save tab workspace result', {ok: false, name: 'Dev', error: 'x', autosave: true});
+  t.deepEqual(seen, [], 'a failed write does not pulse');
+
+  store.set(hyperState('/c'));
+  await tick(60);
+  rpc.emit('save tab workspace result', {ok: true, name: 'Dev', autosave: true});
+  t.deepEqual(seen, ['root']);
+});
