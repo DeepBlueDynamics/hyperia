@@ -75,6 +75,13 @@ interface WebPaneEntry {
 // Keyed by pane uid (unique across windows).
 const panes = new Map<string, WebPaneEntry>();
 
+// A view whose page was closed or destroyed outside this manager (a crash, a
+// devtools/CDP close) has no usable webContents; treat it as gone, never throw.
+function viewGone(entry: WebPaneEntry | undefined): boolean {
+  const wc = entry?.view?.webContents;
+  return !wc || wc.isDestroyed();
+}
+
 // Paused HTTP-auth challenges (wc 'login' events) awaiting the human's answer
 // from the credential toast. Keyed by a one-shot id; the callback resumes (or
 // fails) the paused network request. Credentials pass through Chromium's HTTP
@@ -105,7 +112,7 @@ export function setWindowWebPanesSuppressed(win: BrowserWindow, suppressed: bool
   if (suppressed) suppressedWins.add(win.id);
   else suppressedWins.delete(win.id);
   for (const [uid, entry] of panes) {
-    if (entry.win !== win || entry.view.webContents.isDestroyed()) continue;
+    if (entry.win !== win || viewGone(entry)) continue;
     const token = (entry.swapToken = (entry.swapToken ?? 0) + 1);
     if (suppressed) {
       if (!entry.visible) {
@@ -128,7 +135,7 @@ export function setWindowWebPanesSuppressed(win: BrowserWindow, suppressed: bool
               panes.get(uid) === entry &&
               entry.swapToken === token &&
               suppressedWins.has(win.id) &&
-              !entry.view.webContents.isDestroyed()
+              !viewGone(entry)
             ) {
               entry.view.setVisible(false);
             }
@@ -175,7 +182,7 @@ function pushState(uid: string, partial: Record<string, unknown>) {
 // the pane isn't a live web pane or capture fails.
 export async function capturePaneJpeg(uid: string, w: number, h: number, quality = 60): Promise<string> {
   const entry = panes.get(uid);
-  if (!entry || entry.view.webContents.isDestroyed()) return '';
+  if (!entry || viewGone(entry)) return '';
   try {
     let img = await entry.view.webContents.capturePage();
     if (img.isEmpty()) return '';
@@ -257,13 +264,20 @@ function navState(wc: WebContents) {
 // from the webContents every time.
 function liveUidOf(wc: WebContents, fallback: string): string {
   for (const [id, e] of panes) {
-    if (!e.view.webContents.isDestroyed() && e.view.webContents === wc) return id;
+    if (!viewGone(e) && e.view.webContents === wc) return id;
   }
   return fallback;
 }
 
 function wireWebContents(initialUid: string, wc: WebContents) {
   const u = () => liveUidOf(wc, initialUid);
+  // Page destroyed outside destroyPane (crash, devtools/CDP close): tear its pane
+  // down now so no stale entry or orphaned native view is left behind.
+  wc.once('destroyed', () => {
+    for (const [id, e] of panes) {
+      if (e.view?.webContents === wc || viewGone(e)) destroyPane(id, true);
+    }
+  });
   // When a webContents `focus` lands right after a load START, it's LOAD-induced
   // (the page finished loading — e.g. an AGENT navigated the pane), NOT a human
   // click — so it must NOT steal the human's view. Only a genuine mouse/keyboard
@@ -519,7 +533,7 @@ function wireWebContents(initialUid: string, wc: WebContents) {
 // dom-ready because Chromium's per-origin zoom memory can reset it across
 // navigations.
 function applyPaneZoom(entry: WebPaneEntry) {
-  if (entry.view.webContents.isDestroyed()) return;
+  if (viewGone(entry)) return;
   entry.view.webContents.setZoomFactor((entry.baseZoom ?? 1) * (entry.userZoom ?? 1));
 }
 
@@ -784,7 +798,7 @@ function destroyPane(uid: string, immediate = false) {
   }
   try {
     // REQUIRED: WebContentsView webContents are not auto-destroyed.
-    if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close();
+    if (!viewGone(entry)) entry.view.webContents.close();
   } catch {
     /* ignore */
   }
@@ -844,19 +858,14 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
             // painted) that flashed when mousing page → header. Bail if a newer
             // transition (re-show) superseded this one.
             setTimeout(() => {
-              if (
-                panes.get(uid) === entry &&
-                entry.swapToken === token &&
-                !entry.visible &&
-                !entry.view.webContents.isDestroyed()
-              ) {
+              if (panes.get(uid) === entry && entry.swapToken === token && !entry.visible && !viewGone(entry)) {
                 entry.view.setVisible(false);
               }
             }, SWAP_BRIDGE_MS);
           } else {
             // Off-screen (tab switched away) — no still needed; just hide now.
             entrySend(uid, 'web-pane:frozen', {uid, shot: null});
-            if (panes.get(uid) === entry && !entry.view.webContents.isDestroyed()) entry.view.setVisible(false);
+            if (panes.get(uid) === entry && !viewGone(entry)) entry.view.setVisible(false);
           }
         } else if (!entry.visible && wantVisible) {
           entry.visible = true;
@@ -995,7 +1004,7 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
       dataURL: string;
     }> = [];
     for (const [uid, entry] of panes) {
-      if (entry.win !== win || entry.view.webContents.isDestroyed()) continue;
+      if (entry.win !== win || viewGone(entry)) continue;
       let bounds: {x: number; y: number; width: number; height: number};
       try {
         bounds = entry.view.getBounds();
