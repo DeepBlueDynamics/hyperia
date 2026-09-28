@@ -23,6 +23,7 @@ import {
 } from '../utils/workspace-tab';
 import type {ResumeCandidate} from '../utils/workspace-tab';
 
+import PaneCountBadge from './pane-count-badge';
 import {activeTerminals} from './term';
 
 /**
@@ -305,7 +306,7 @@ const WorkspaceSaveToast: React.FC = () => {
                   >
                     {ws.name}
                   </span>
-                  <span style={{fontSize: '10px', color: 'var(--text-tertiary)', flexShrink: 0}}>{total}▢</span>
+                  <PaneCountBadge count={total} webPanes={ws.webPanes} />
                 </div>
               );
             })}
