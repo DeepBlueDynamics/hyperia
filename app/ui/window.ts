@@ -1262,6 +1262,9 @@ export function newWindow(
   window.webContents.on('did-navigate', () => {
     if (i++) {
       deleteSessions();
+      // The reloaded page forgets its web panes; drop their native views too, or
+      // they stay painted over every tab with nothing owning them.
+      destroyPanesForWindow(window);
     }
   });
 
