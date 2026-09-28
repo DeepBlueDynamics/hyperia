@@ -321,12 +321,13 @@ export function newWindow(
   // Orphaned-session recovery. An orphan = a live PTY main still holds
   // (`sessions`) that the renderer's VISIBLE layout dropped — a renderer
   // crash/reload/desync loses the tab while the shell keeps running. We POLL for
-  // them (reconcile against every 'session layout sync' → renderedUids) and
-  // RECONNECT by re-emitting the session as a fresh tab bound to its EXISTING
-  // live PTY. `sessionBornAt` gates just-created sessions (their sync lags);
+  // them (reconcile against every 'session layout sync' → renderedUids). The auto
+  // sweep DELETES stranded sessions; only the manual "Recover Panes" reattaches
+  // them as tabs. `sessionBornAt` gates just-created sessions (their sync lags);
   // `orphanSince`/`reattachedUids` debounce the auto sweep and stop a reattach
   // loop if the layout sync is slow to reflect the recovered tab.
   let renderedUids = new Set<string>();
+  let layoutSynced = false;
   const sessionBornAt = new Map<string, number>();
   const orphanSince = new Map<string, number>();
   const reattachedUids = new Set<string>();
@@ -386,10 +387,26 @@ export function newWindow(
     console.log(`[recover] manual re-attach of ${orphans.length} orphaned pane(s)`);
     return orphans.length;
   };
-  // Auto sweep (stop-the-leak-at-source): a session that stays orphaned past the
-  // grace window is reattached ONCE — a legit pane close DESTROYS its session
-  // (it leaves `sessions`), so only true crash/desync orphans ever reach here.
+  // Kill a stranded session everywhere: PTY, main, sidecar, and the renderer's
+  // store (so it is never saved into last-session and respawned next launch).
+  const deleteStrandedSession = (uid: string, session: any) => {
+    session.removeAllListeners();
+    session.destroy();
+    forceRemoveSession(uid);
+    endSessionLog(uid);
+    unsetRendererType(uid);
+    sessions.delete(uid);
+    sessionBornAt.delete(uid);
+    orphanSince.delete(uid);
+    reattachedUids.delete(uid);
+    rpc.emit('session exit', {uid});
+  };
+  // Auto sweep: a session still stranded after the grace window is DELETED, not
+  // reattached. Reattaching surfaced dozens of dead restore leftovers as tabs.
+  // Never sweep before the first layout sync or when it reports no panes at all
+  // (renderer booting/reloading), so a slow renderer can't lose live panes.
   const reconcileOrphans = () => {
+    if (!layoutSynced || renderedUids.size === 0) return;
     for (const [uid, session] of listOrphans(ORPHAN_GRACE_MS)) {
       if (reattachedUids.has(uid)) continue;
       const since = orphanSince.get(uid);
@@ -398,10 +415,8 @@ export function newWindow(
         continue;
       }
       if (Date.now() - since < ORPHAN_GRACE_MS) continue;
-      reattachSession(uid, session);
-      reattachedUids.add(uid);
-      orphanSince.delete(uid);
-      console.log(`[recover] auto re-attached orphan ${uid.slice(0, 8)}`);
+      console.log(`[recover] deleting stranded session ${uid.slice(0, 8)} (pid ${session.pty?.pid ?? 'none'})`);
+      deleteStrandedSession(uid, session);
     }
   };
   const reconcileTimer = setInterval(reconcileOrphans, 5000);
@@ -874,6 +889,7 @@ export function newWindow(
       // can recover it.
       renderedUids = new Set<string>();
       payload.forEach((tab) => tab.panes?.forEach((p) => renderedUids.add(p.uid)));
+      layoutSynced = true;
       renderedUids.forEach((uid) => {
         orphanSince.delete(uid);
         reattachedUids.delete(uid);
