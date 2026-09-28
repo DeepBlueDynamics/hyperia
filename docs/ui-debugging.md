@@ -94,3 +94,7 @@ Confirm `hyperia-sidecar.exe` is gone too, then tell the human they can reopen H
 ## Reporting
 
 In the PR or your reply, give the measured numbers (before and after) and attach or describe the screenshots. Say plainly what you checked and what you didn't. For example, you might have checked the pane band but not the new-tab menu, or Windows but not macOS.
+
+## Automated lifecycle harness
+
+`node scripts/dev-harness.js` builds, then launches **sandboxed** dev copies (temp home and AppData, sidecar on :9801, CDP on :9333) and runs scripted scenarios: picker/shell swaps, last-tab close, stray-tab sweep, web views across a renderer reload, autosave and its pulse, autosave under title churn, the saved-tabs badge, and main surviving an externally destroyed web view. Scenarios that can close the window or crash main get their own launch. It refuses to start while Hyperia or a sidecar is running. `--no-build` reuses `target/`; `--only s1,s4` picks scenarios. Each group's logs stay in its sandbox folder, which is printed at the end.
