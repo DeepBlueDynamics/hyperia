@@ -50,6 +50,8 @@ export function addSession(data: Session) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     const {sessions} = getState();
     const resolvedActiveUid = activeUid ? activeUid : sessions.activeUid;
+    // In-pane swap (picker -> shell, shell -> "Picker"): the session this pane held.
+    const replacedUid = groupUid ? getState().termGroups.termGroups[groupUid]?.sessionUid : undefined;
     const now = Date.now();
     dispatch({
       type: SESSION_ADD,
@@ -72,6 +74,13 @@ export function addSession(data: Session) {
       lastCommand,
       isAgentInitiated: (data as any).isAgentInitiated
     });
+
+    // Close the replaced session AFTER the pane points at the new one, so the exit
+    // can't take the pane or tab with it. Left alive, it stranded in main with no
+    // pane, got saved into last-session, and resurfaced as a stray tab.
+    if (replacedUid && replacedUid !== uid) {
+      dispatch(userExitSession(replacedUid));
+    }
 
     // A clone layout (Shift+click) fans the same launch out to every new pane; else pickers.
     const clone = data.clone;
