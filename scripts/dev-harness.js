@@ -372,6 +372,36 @@ const scenarios = [
     }
   },
   {
+    id: 's11',
+    name: 'Double-clicking inside the + menu never maximizes; empty header space still does',
+    async run() {
+      await h();
+      const r = await run(async () => {
+        const {pause, win} = window.__h;
+        const dbl = (el) => el.dispatchEvent(new MouseEvent('dblclick', {bubbles: true, cancelable: true}));
+        const w = win();
+        if (w.isMaximized()) w.unmaximize();
+        await pause(600);
+        const menuItem = document.querySelector('.tabs_newTab_tooltip .tabs_layout_item, .tabs_newTab_tooltip div');
+        if (!menuItem) return {error: 'no + menu content found'};
+        dbl(menuItem);
+        await pause(800);
+        const afterMenu = w.isMaximized();
+        dbl(document.querySelector('.tabs_dragSpace'));
+        await pause(800);
+        const afterEmpty = w.isMaximized();
+        if (afterEmpty) w.unmaximize();
+        await pause(400);
+        return {afterMenu, afterEmpty};
+      });
+      if (r.error) return {pass: false, detail: r.error};
+      return {
+        pass: !r.afterMenu && r.afterEmpty,
+        detail: `maximized after menu double-click: ${r.afterMenu}; after empty-space double-click: ${r.afterEmpty}`
+      };
+    }
+  },
+  {
     id: 's7',
     name: 'Saved-tabs menu: pane count is a visible badge next to the delete button',
     async run() {
@@ -450,7 +480,7 @@ const scenarios = [
 
 // ---------- main ----------
 // Scenarios that can end the window or crash main get their own fresh launch.
-const GROUPS = [['s1', 's3', 's4', 's5', 's6', 's9', 's7', 's10'], ['s2'], ['s8']];
+const GROUPS = [['s1', 's3', 's4', 's5', 's6', 's9', 's7', 's10', 's11'], ['s2'], ['s8']];
 
 async function launch(pageUrl) {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'hyperia-harness-'));
