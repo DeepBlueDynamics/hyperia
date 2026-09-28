@@ -259,7 +259,7 @@ const scenarios = [
         return {log: events, manualPulse, pulseAt, autosaveWrites: events.filter((l) => l.autosave && l.ok).length};
       });
       if (r.error) return {pass: false, detail: r.error};
-      const pass = r.autosaveWrites > 0 && r.pulseAt !== null;
+      const pass = r.autosaveWrites > 0 && r.pulseAt !== null && r.manualPulse;
       return {
         pass,
         detail: `autosave writes after cd: ${r.autosaveWrites}; pulse after cd: ${r.pulseAt === null ? 'none' : r.pulseAt + 'ms'}; pulse on manual Save: ${r.manualPulse}`
@@ -282,7 +282,7 @@ const scenarios = [
         const spin = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴'];
         const t0 = Date.now();
         let i = 0;
-        while (Date.now() - t0 < 12000) {
+        while (Date.now() - t0 < 16000) {
           // What an agent CLI's animated title does (OSC 0 via the pty).
           window.rpc.emit('data', {
             uid,
@@ -295,7 +295,79 @@ const scenarios = [
       });
       return {
         pass: r.writes > 0,
-        detail: `autosave writes during 12 s of title churn: ${r.writes} (title now "${r.titleNow}")`
+        detail: `autosave writes during 16 s of title churn: ${r.writes} (title now "${r.titleNow}")`
+      };
+    }
+  },
+  {
+    id: 's9',
+    name: 'Restoring an autosave tab keeps autosaving (a cd writes and pulses)',
+    async run() {
+      await h();
+      const r = await run(async () => {
+        const {S, pause, roots} = window.__h;
+        const before = new Set(roots().map((g) => g.uid));
+        window.rpc.emit('restore tab workspace', {name: 'harness-autosave'});
+        await pause(5000);
+        const root = roots().find((g) => !before.has(g.uid));
+        if (!root) return {error: 'restore produced no new tab'};
+        const sess = Object.values(S().termGroups.termGroups).find(
+          (g) =>
+            g.sessionUid &&
+            (function up(x) {
+              while (x && x.parentUid) x = S().termGroups.termGroups[x.parentUid];
+              return x;
+            })(g)?.uid === root.uid
+        );
+        let writes = 0;
+        const onRes = (res) => res.autosave && res.ok && writes++;
+        window.rpc.on('save tab workspace result', onRes);
+        let pulsed = false;
+        window.rpc.emit('data', {uid: sess.sessionUid, data: 'cd ..' + String.fromCharCode(13)});
+        const t0 = Date.now();
+        while (Date.now() - t0 < 6000) {
+          if (document.querySelector('.tab_autosavePulse')) pulsed = true;
+          await pause(100);
+        }
+        window.rpc.removeListener('save tab workspace result', onRes);
+        return {writes, pulsed, active: S().termGroups.activeRootGroup === root.uid};
+      });
+      if (r.error) return {pass: false, detail: r.error};
+      return {
+        pass: r.writes > 0,
+        detail: `writes after cd in restored tab: ${r.writes}; pulse: ${r.pulsed} (restored tab active: ${r.active})`
+      };
+    }
+  },
+  {
+    id: 's10',
+    name: 'Deleting an autosaved tab stops autosave from re-creating it',
+    async run() {
+      await h();
+      const r = await run(async () => {
+        const {S, pause} = window.__h;
+        const listed = () =>
+          new Promise((res) => {
+            const f = ({rows}) => {
+              window.rpc.removeListener('tab workspaces list', f);
+              res((rows || []).map((x) => x.name));
+            };
+            window.rpc.on('tab workspaces list', f);
+            window.rpc.emit('list tab workspaces');
+          });
+        window.rpc.emit('delete tab workspace', {name: 'harness-autosave'});
+        await pause(1500);
+        const afterDelete = await listed();
+        const root = S().termGroups.activeRootGroup;
+        const uid = S().termGroups.activeSessions[root];
+        if (uid) window.rpc.emit('data', {uid, data: 'cd ~' + String.fromCharCode(13)});
+        await pause(5000);
+        const later = await listed();
+        return {deleted: !afterDelete.includes('harness-autosave'), recreated: later.includes('harness-autosave')};
+      });
+      return {
+        pass: r.deleted && !r.recreated,
+        detail: `deleted: ${r.deleted}; re-created by autosave afterwards: ${r.recreated}`
       };
     }
   },
@@ -378,7 +450,7 @@ const scenarios = [
 
 // ---------- main ----------
 // Scenarios that can end the window or crash main get their own fresh launch.
-const GROUPS = [['s1', 's3', 's4', 's5', 's6', 's7'], ['s2'], ['s8']];
+const GROUPS = [['s1', 's3', 's4', 's5', 's6', 's9', 's10', 's7'], ['s2'], ['s8']];
 
 async function launch(pageUrl) {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'hyperia-harness-'));
