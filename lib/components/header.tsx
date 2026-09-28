@@ -38,6 +38,15 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
     props.openHamburgerMenu({x, y});
   };
 
+  // Header double-click maximizes only on EMPTY header space. The + dropdown,
+  // tabs and buttons render inside the header, so their quick double clicks
+  // (e.g. trash then "Delete?") bubbled here and toggled maximize.
+  const EMPTY_HEADER_SPACE = ['header_header', 'header_bar', 'tabs_nav', 'tabs_list', 'tabs_dragSpace'];
+  const handleHeaderDoubleClick = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (EMPTY_HEADER_SPACE.some((c) => target.classList?.contains(c))) handleMaximizeClick();
+  };
+
   const handleMaximizeClick = () => {
     if (props.maximized) {
       props.unmaximize();
@@ -82,7 +91,7 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
       className={`header_header ${isMac && 'header_headerRounded'}`}
       onMouseDownCapture={handleHeaderMouseDown}
       onMouseUp={() => window.focusActiveTerm()}
-      onDoubleClick={handleMaximizeClick}
+      onDoubleClick={handleHeaderDoubleClick}
       ref={ref}
     >
       {/* Single row: tabs + new tab */}
