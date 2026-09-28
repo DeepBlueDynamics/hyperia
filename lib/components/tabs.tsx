@@ -12,6 +12,7 @@ import type {TabMetrics} from '../utils/tab-drag';
 import {nextScrollStop} from '../utils/tab-scroll';
 import type {TabSpan} from '../utils/tab-scroll';
 
+import PaneCountBadge from './pane-count-badge';
 import Tab_ from './tab';
 
 const Tab = decorate(Tab_, 'Tab');
@@ -568,21 +569,26 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                       style={{
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '6px',
+                        gap: '8px',
+                        minHeight: '18px',
                         padding: '4px 6px',
                         borderRadius: '4px',
                         cursor: 'pointer',
                         fontSize: '11px',
+                        lineHeight: '18px',
                         color: 'var(--text-primary)'
                       }}
                       onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--bg-tertiary)')}
                       onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
                     >
-                      <i className="ti ti-bookmark" style={{fontSize: '12px', color: 'var(--info-text)'}} />
+                      <i
+                        className="ti ti-bookmark"
+                        style={{fontSize: '12px', lineHeight: 1, color: 'var(--info-text)', flexShrink: 0}}
+                      />
                       <span style={{flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
                         {ws.name}
                       </span>
-                      <span style={{color: 'var(--text-tertiary)', flexShrink: 0}}>{ws.panes + ws.webPanes}▢</span>
+                      <PaneCountBadge count={ws.panes + ws.webPanes} webPanes={ws.webPanes} />
                       {confirmDeleteWs === ws.name ? (
                         <span
                           onClick={(e) => {
@@ -598,8 +604,9 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                           style={{
                             color: 'var(--danger-text, #ff5c57)',
                             flexShrink: 0,
-                            minWidth: '52px',
-                            textAlign: 'right',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            height: '18px',
                             whiteSpace: 'nowrap',
                             cursor: 'pointer',
                             fontWeight: 600
@@ -615,14 +622,17 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                           }}
                           title="Delete this saved tab"
                           style={{
-                            color: 'var(--text-tertiary)',
+                            color: 'var(--text-secondary)',
                             flexShrink: 0,
-                            minWidth: '52px',
-                            textAlign: 'right',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            width: '18px',
+                            height: '18px',
                             cursor: 'pointer'
                           }}
                         >
-                          <i className="ti ti-trash" style={{fontSize: '12px'}} />
+                          <i className="ti ti-trash" style={{fontSize: '13px', lineHeight: 1}} />
                         </span>
                       )}
                     </div>
