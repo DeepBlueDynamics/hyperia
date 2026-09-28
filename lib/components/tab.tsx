@@ -2,7 +2,7 @@ import React, {forwardRef, useState, useRef, useEffect} from 'react';
 
 import type {TabProps} from '../../typings/hyper';
 import rpc from '../rpc';
-import {clearTabAutosave, getTabAutosave} from '../utils/tab-autosave';
+import {clearTabAutosave, getTabAutosave, TAB_AUTOSAVED_EVENT} from '../utils/tab-autosave';
 
 const PICKER_EMOJIS = [
   '🌐',
@@ -76,6 +76,24 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   const [shotDone, setShotDone] = useState(false);
   const renamingRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Bumped each time an autosave of this tab lands; keys the indicator so the
+  // pulse restarts even if a second save arrives mid-animation.
+  const [savePulse, setSavePulse] = useState(0);
+  const [pulsing, setPulsing] = useState(false);
+  const isActiveRef = useRef(isActive);
+  isActiveRef.current = isActive;
+
+  useEffect(() => {
+    const onSaved = (e: Event) => {
+      // Active tab only: a pulse on a background tab would just be noise.
+      if ((e as CustomEvent<{rootUid: string}>).detail?.rootUid === props.uid && isActiveRef.current) {
+        setSavePulse((n) => n + 1);
+        setPulsing(true);
+      }
+    };
+    window.addEventListener(TAB_AUTOSAVED_EVENT, onSaved);
+    return () => window.removeEventListener(TAB_AUTOSAVED_EVENT, onSaved);
+  }, [props.uid]);
 
   useEffect(() => {
     if (renaming && inputRef.current) {
@@ -469,7 +487,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         ref={ref}
       >
         <div
-          className="tab_activeIndicator"
+          key={savePulse}
+          className={`tab_activeIndicator ${pulsing && isActive ? 'tab_autosavePulse' : ''}`}
+          onAnimationEnd={() => setPulsing(false)}
           style={{
             background: indicatorColor,
             // Show the pane-color strip on EVERY tab (dimmer when inactive) so a
@@ -604,6 +624,40 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           height: 2px;
           transition: opacity 0.15s ease;
           pointer-events: none;
+        }
+
+        /* An autosave of this tab just landed: the line briefly swells to double
+           height and saturates, then settles back. Transform + filter only, so
+           nothing reflows. */
+        .tab_autosavePulse {
+          transform-origin: top;
+          animation: tab-autosave-pulse 1.2s ease-out;
+        }
+
+        @keyframes tab-autosave-pulse {
+          0% {
+            transform: scaleY(1);
+            filter: saturate(1);
+          }
+          25% {
+            transform: scaleY(2);
+            filter: saturate(2.2) brightness(1.1);
+          }
+          100% {
+            transform: scaleY(1);
+            filter: saturate(1);
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .tab_autosavePulse {
+            animation-name: tab-autosave-pulse-still;
+          }
+          @keyframes tab-autosave-pulse-still {
+            25% {
+              filter: saturate(2.2) brightness(1.1);
+            }
+          }
         }
 
         .tab_tab:active {
