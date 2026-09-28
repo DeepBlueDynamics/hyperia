@@ -6,6 +6,8 @@ import {useStore} from 'react-redux';
 import type {HyperState} from '../../typings/hyper';
 import rpc from '../rpc';
 import {serializeLayoutState} from '../utils/layout-serialize';
+import {clearTabAutosave, getTabAutosave, setTabAutosave, startTabAutosave} from '../utils/tab-autosave';
+import type {ApprovedResume} from '../utils/tab-autosave';
 import {
   filterLayoutToTab,
   resumeCandidatesForTab,
@@ -88,6 +90,16 @@ const WorkspaceSaveToast: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
+  // Keep re-saving this tab under its name for the rest of the session.
+  const [autosave, setAutosave] = useState(false);
+  // What the in-flight save will bind if it succeeds.
+  const pendingRef = useRef<{
+    rootUid: string;
+    name: string;
+    approved: ApprovedResume[];
+    json: string;
+    autosave: boolean;
+  } | null>(null);
   // Previously saved tab-workspaces, newest first — listed under the name
   // field so a click prefills it (and flips straight to the Overwrite flow).
   const [existing, setExisting] = useState<Array<{name: string; savedAt: string; panes: number; webPanes: number}>>([]);
@@ -113,6 +125,7 @@ const WorkspaceSaveToast: React.FC = () => {
       setError(null);
       setConflict(false);
       setBusy(false);
+      setAutosave(!!getTabAutosave(detail.rootUid));
       setOpen(detail);
       try {
         rpc.emit('list tab workspaces');
@@ -145,10 +158,25 @@ const WorkspaceSaveToast: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => startTabAutosave(store, (uid) => activeTerminals.get(uid)?.getCurrentCommandLine()), [store]);
+
   useEffect(() => {
-    const onResult = (res: {ok: boolean; name: string; error?: string; conflict?: boolean}) => {
+    const onResult = (res: {ok: boolean; name: string; error?: string; conflict?: boolean; autosave?: boolean}) => {
+      // Background autosave writes share this channel; they're not ours.
+      if (res.autosave) {
+        return;
+      }
       setBusy(false);
+      const pending = pendingRef.current;
+      pendingRef.current = null;
       if (res.ok) {
+        if (pending) {
+          if (pending.autosave) {
+            setTabAutosave(pending.rootUid, {name: pending.name, approved: pending.approved, lastSaved: pending.json});
+          } else {
+            clearTabAutosave(pending.rootUid);
+          }
+        }
         setOpen(null);
       } else {
         setConflict(!!res.conflict);
@@ -177,9 +205,18 @@ const WorkspaceSaveToast: React.FC = () => {
       const layout = applyResumeSelections(layoutRef.current as any, selections);
       setBusy(true);
       setError(null);
+      if (open) {
+        pendingRef.current = {
+          rootUid: open.rootUid,
+          name: name.trim(),
+          approved: selections,
+          json: JSON.stringify(layout),
+          autosave
+        };
+      }
       rpc.emit('save tab workspace', {name: name.trim(), overwrite, layout});
     },
-    [name, candidates, checked, commandFor]
+    [name, candidates, checked, commandFor, open, autosave]
   );
 
   if (!open) {
@@ -319,6 +356,13 @@ const WorkspaceSaveToast: React.FC = () => {
           ))}
         </div>
       )}
+      <label
+        style={{display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', cursor: 'pointer'}}
+        title="Re-save this tab under the same name whenever it changes, until it's closed or Hyperia quits"
+      >
+        <input type="checkbox" checked={autosave} onChange={(e) => setAutosave(e.target.checked)} />
+        <span>Autosave changes to this tab for the rest of the session</span>
+      </label>
       {conflict && (
         <div style={{marginTop: '8px', color: 'var(--warning-text, #d9a300)'}}>
           A saved tab named “{name.trim()}” exists — overwrite it?

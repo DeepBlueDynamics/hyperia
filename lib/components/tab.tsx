@@ -2,6 +2,7 @@ import React, {forwardRef, useState, useRef, useEffect} from 'react';
 
 import type {TabProps} from '../../typings/hyper';
 import rpc from '../rpc';
+import {clearTabAutosave, getTabAutosave} from '../utils/tab-autosave';
 
 const PICKER_EMOJIS = [
   '🌐',
@@ -389,6 +390,18 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         }
       })
     );
+
+    const autosaved = getTabAutosave(props.uid);
+    if (autosaved) {
+      menu.append(
+        new MenuItem({
+          label: `Autosave “${autosaved.name}”`,
+          type: 'checkbox',
+          checked: true,
+          click: () => clearTabAutosave(props.uid)
+        })
+      );
+    }
 
     menu.append(new MenuItem({type: 'separator'}));
     menu.append(new MenuItem({label: 'Close', click: () => props.onClose()}));
