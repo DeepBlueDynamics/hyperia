@@ -6,7 +6,14 @@ import {useStore} from 'react-redux';
 import type {HyperState} from '../../typings/hyper';
 import rpc from '../rpc';
 import {serializeLayoutState} from '../utils/layout-serialize';
-import {clearTabAutosave, getTabAutosave, setTabAutosave, startTabAutosave} from '../utils/tab-autosave';
+import {
+  clearTabAutosave,
+  getTabAutosave,
+  setTabAutosave,
+  startTabAutosave,
+  autosaveSignature,
+  TAB_AUTOSAVED_EVENT
+} from '../utils/tab-autosave';
 import type {ApprovedResume} from '../utils/tab-autosave';
 import {
   filterLayoutToTab,
@@ -176,6 +183,8 @@ const WorkspaceSaveToast: React.FC = () => {
           } else {
             clearTabAutosave(pending.rootUid);
           }
+          // Confirm the save on the tab itself: same top-line pulse as an autosave.
+          window.dispatchEvent(new CustomEvent(TAB_AUTOSAVED_EVENT, {detail: {rootUid: pending.rootUid}}));
         }
         setOpen(null);
       } else {
@@ -210,7 +219,7 @@ const WorkspaceSaveToast: React.FC = () => {
           rootUid: open.rootUid,
           name: name.trim(),
           approved: selections,
-          json: JSON.stringify(layout),
+          json: autosaveSignature(layout as any),
           autosave
         };
       }

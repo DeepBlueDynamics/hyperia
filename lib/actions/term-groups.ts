@@ -18,6 +18,7 @@ import {getRootGroups} from '../selectors';
 import type {CloneLaunch} from '../utils/clone-launch';
 import {readLastUsedShell} from '../utils/picker-shell';
 import {restoredTabName} from '../utils/restored-tab-name';
+import {bindRestoredTab} from '../utils/tab-autosave';
 import {openTabDisplayNames} from '../utils/tab-display-name';
 import findBySession, {countPathHorizontalStacks} from '../utils/term-groups';
 
@@ -398,6 +399,9 @@ export function restoreTabState(layout: any, name?: string) {
       layout,
       name: finalName
     } as any);
+    // A saved tab that autosaves keeps autosaving once restored (by its saved name).
+    const restoredRoot = Object.values(layout.termGroups || {}).find((g: any) => g && !g.parentUid) as any;
+    if (restoredRoot) bindRestoredTab(restoredRoot.uid, name, layout);
 
     Object.keys(layout.sessions || {}).forEach((uid) => {
       const session = layout.sessions[uid];

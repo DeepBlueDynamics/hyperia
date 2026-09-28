@@ -178,3 +178,87 @@ test.serial('engine announces a landed autosave for its tab, and only then', asy
   rpc.emit('save tab workspace result', {ok: true, name: 'Dev', autosave: true});
   t.deepEqual(seen, ['root']);
 });
+
+// State whose only change is s1's title (what an agent's spinner does).
+const titled = (cwd: string, title: string) => {
+  const st: any = hyperState(cwd);
+  st.sessions.sessions = {...st.sessions.sessions, s1: {...st.sessions.sessions.s1, title}};
+  return st;
+};
+
+test.serial('title churn alone never writes, and the max wait still saves a real change under churn', async (t) => {
+  const {mod, rpc} = load();
+  const store = fakeStore(hyperState('/a'));
+  const stop = mod.startTabAutosave(store, () => undefined, 30, 120);
+  t.teardown(stop);
+  mod.setTabAutosave('root', {name: 'Busy', approved: []});
+  const saves = () => rpc.sent.filter(([ch]) => ch === 'save tab workspace');
+
+  // First settle writes the baseline.
+  store.set(hyperState('/a'));
+  await tick(80);
+  const base = saves().length;
+
+  // Titles only, fast enough to keep restarting the debounce: nothing to write.
+  for (let i = 0; i < 12; i++) {
+    store.set(titled('/a', `⠋ working ${i}`));
+    await tick(15);
+  }
+  await tick(80);
+  t.is(saves().length, base, 'no write for title-only changes');
+
+  // A real change (cwd) during continuous churn still saves within the max wait.
+  store.set(titled('/b', 'x'));
+  const t0 = Date.now();
+  while (Date.now() - t0 < 400 && saves().length === base) {
+    store.set(titled('/b', `⠙ ${Date.now()}`));
+    await tick(15);
+  }
+  t.is(saves().length, base + 1, 'saved despite churn');
+  t.is(saves()[base][1].layout.sessions.s1.cwd, '/b');
+});
+
+test.serial('one tab per saved name, deleted names end their bindings, restore re-binds', (t) => {
+  const store: Record<string, string> = {};
+  (globalThis as any).localStorage = {
+    getItem: (k: string) => store[k] ?? null,
+    setItem: (k: string, v: string) => (store[k] = v)
+  };
+  t.teardown(() => delete (globalThis as any).localStorage);
+  const {mod, rpc} = load();
+  const stop = mod.startTabAutosave(fakeStore(hyperState('/a')), () => undefined, 20);
+  t.teardown(stop);
+
+  mod.setTabAutosave('tabA', {name: 'Dev', approved: []});
+  mod.setTabAutosave('tabB', {name: 'Dev', approved: []});
+  t.is(mod.getTabAutosave('tabA'), undefined, 'older tab loses the name');
+  t.is(mod.getTabAutosave('tabB')?.name, 'Dev');
+  t.true(mod.isAutosaveName('Dev'));
+
+  // Restoring the saved tab re-binds the new root with its approved resumes.
+  const saved = {
+    termGroups: {r: {uid: 'r', parentUid: null}},
+    sessions: {s9: {resumeOnce: {command: 'n8 resume x', source: 'n8'}}}
+  };
+  t.true(mod.bindRestoredTab('restored', 'Dev', saved));
+  t.deepEqual(mod.getTabAutosave('restored')?.approved, [{sessionUid: 's9', command: 'n8 resume x', source: 'n8'}]);
+  t.false(mod.bindRestoredTab('other', 'NotAutosaved', saved));
+
+  // The library comes back without "Dev": it was deleted.
+  rpc.emit('tab workspaces list', {rows: [{name: 'Else'}]});
+  t.is(mod.getTabAutosave('restored'), undefined);
+  t.false(mod.isAutosaveName('Dev'));
+});
+
+test('autosaveSignature ignores titles, focus, sizes and pids but not cwd, splits or resumes', (t) => {
+  const {mod} = load();
+  const a: any = layout('/a');
+  const noisy = JSON.parse(JSON.stringify(a));
+  noisy.activeUid = 's2';
+  noisy.sessions.s1 = {...noisy.sessions.s1, title: 'spin', cols: 99, rows: 9, pid: 42};
+  t.is(mod.autosaveSignature(noisy), mod.autosaveSignature(a));
+  t.not(mod.autosaveSignature(layout('/b')), mod.autosaveSignature(a));
+  const resumed = JSON.parse(JSON.stringify(a));
+  resumed.sessions.s1.resumeOnce = {command: 'npm run dev', source: 'shell'};
+  t.not(mod.autosaveSignature(resumed), mod.autosaveSignature(a));
+});
