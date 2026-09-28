@@ -492,6 +492,8 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           onAnimationEnd={() => setPulsing(false)}
           style={{
             background: indicatorColor,
+            // Glow colour for the autosave pulse: the tab's (first) pane colour.
+            ['--tab-pulse-color' as any]: paneColors[0] || 'var(--text-info)',
             // Show the pane-color strip on EVERY tab (dimmer when inactive) so a
             // tab's panes are identifiable at a glance, brightest on the active one.
             opacity: isActive ? 1 : 0.5
@@ -634,18 +636,25 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           animation: tab-autosave-pulse 1.2s ease-out;
         }
 
+        /* The tints are pastel and the line is thin, so saturation alone barely
+           reads: push saturation hard, lift brightness, and add a soft glow in
+           the tab's own colour, held briefly at the peak. */
         @keyframes tab-autosave-pulse {
           0% {
             transform: scaleY(1);
-            filter: saturate(1);
+            filter: saturate(1) brightness(1);
+            box-shadow: 0 0 0 0 transparent;
           }
-          25% {
+          20%,
+          50% {
             transform: scaleY(2);
-            filter: saturate(2.2) brightness(1.1);
+            filter: saturate(3.5) brightness(1.5);
+            box-shadow: 0 0 6px 1px var(--tab-pulse-color);
           }
           100% {
             transform: scaleY(1);
-            filter: saturate(1);
+            filter: saturate(1) brightness(1);
+            box-shadow: 0 0 0 0 transparent;
           }
         }
 
@@ -654,8 +663,10 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
             animation-name: tab-autosave-pulse-still;
           }
           @keyframes tab-autosave-pulse-still {
-            25% {
-              filter: saturate(2.2) brightness(1.1);
+            20%,
+            50% {
+              filter: saturate(3.5) brightness(1.5);
+              box-shadow: 0 0 6px 1px var(--tab-pulse-color);
             }
           }
         }
