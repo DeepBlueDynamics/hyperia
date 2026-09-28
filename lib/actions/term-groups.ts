@@ -221,8 +221,11 @@ const findNextPaneUid = (state: ITermState, group: ITermGroup): string | undefin
     return leaves[0]?.uid;
   }
 
-  const {children} = state.termGroups[group.parentUid];
-  const nextUid = findPrevious(children.asMutable(), group.uid);
+  // Closing a whole tab removes the parent first; nothing to focus then. Throwing
+  // here aborted the close and stranded the remaining panes' sessions.
+  const parent = state.termGroups[group.parentUid];
+  if (!parent) return undefined;
+  const nextUid = findPrevious(parent.children.asMutable(), group.uid);
   const nextGroup = state.termGroups[nextUid];
   if (!nextGroup) return undefined;
   const leaves = findLeaves(state, nextGroup);
@@ -268,6 +271,20 @@ export function ptyExitTermGroup(sessionUid: string) {
 export function userExitTermGroup(uid: string) {
   return (dispatch: HyperDispatch, getState: () => HyperState) => {
     const {termGroups} = getState();
+    // Every pane session under this group, from BEFORE the exit. The walk below
+    // can skip one (closing the last split tab leaked its picker half), so any
+    // still alive afterwards is exited here; otherwise it strands in main.
+    const startGroup = termGroups.termGroups[uid];
+    const paneSessions = startGroup
+      ? findLeaves(termGroups, startGroup)
+          .map((g) => g.sessionUid)
+          .filter((s): s is string => !!s)
+      : [];
+    const exitLeftovers = () => {
+      for (const s of paneSessions) {
+        if (getState().sessions.sessions[s]) dispatch(userExitSession(s));
+      }
+    };
     dispatch({
       type: TERM_GROUP_EXIT,
       uid,
@@ -284,6 +301,7 @@ export function userExitTermGroup(uid: string) {
           if (group.sessionUid) {
             dispatch(userExitSession(group.sessionUid));
           }
+          exitLeftovers();
           return;
         }
 
@@ -316,6 +334,7 @@ export function userExitTermGroup(uid: string) {
             dispatch(userExitTermGroup(childUid));
           });
         }
+        exitLeftovers();
         // Web pane root tab with no children: TERM_GROUP_EXIT already removes the group
       }
     });
