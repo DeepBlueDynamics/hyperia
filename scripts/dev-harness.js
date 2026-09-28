@@ -450,7 +450,7 @@ const scenarios = [
 
 // ---------- main ----------
 // Scenarios that can end the window or crash main get their own fresh launch.
-const GROUPS = [['s1', 's3', 's4', 's5', 's6', 's9', 's10', 's7'], ['s2'], ['s8']];
+const GROUPS = [['s1', 's3', 's4', 's5', 's6', 's9', 's7', 's10'], ['s2'], ['s8']];
 
 async function launch(pageUrl) {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'hyperia-harness-'));
