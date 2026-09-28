@@ -220,8 +220,11 @@ const findNextPaneUid = (state: ITermState, group: ITermGroup): string | undefin
     return leaves[0]?.uid;
   }
 
-  const {children} = state.termGroups[group.parentUid];
-  const nextUid = findPrevious(children.asMutable(), group.uid);
+  // Closing a whole tab removes the parent first; nothing to focus then. Throwing
+  // here aborted the close and stranded the remaining panes' sessions.
+  const parent = state.termGroups[group.parentUid];
+  if (!parent) return undefined;
+  const nextUid = findPrevious(parent.children.asMutable(), group.uid);
   const nextGroup = state.termGroups[nextUid];
   if (!nextGroup) return undefined;
   const leaves = findLeaves(state, nextGroup);
