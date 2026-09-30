@@ -11,7 +11,17 @@ import {
   reviveRequest,
   type PermRequest
 } from '../permissions-bus';
+import {onToastLayerAction, setLayerToasts, useToastLayer} from '../toast-layer';
 import {consentSubject, consentTargetName, consentVariant} from '../utils/consent-variant';
+
+const CONSENT_PILL_ID = 'consent-modal-pill';
+
+function pillText(expiredReqs: PermRequest[]): string {
+  const first = expiredReqs[0];
+  return expiredReqs.length === 1
+    ? `${first.requesterName || first.requester} is waiting for approval — click to review`
+    : `${expiredReqs.length} agents waiting for approval — click to review`;
+}
 
 // Segmented-control pill (scope + duration rows). Mirrors the old per-pane card.
 const segStyle = (active: boolean): React.CSSProperties => ({
@@ -119,6 +129,31 @@ export default function ConsentModal(): React.ReactElement | null {
     return () => ipcRenderer.send('web-panes:suppress', {suppressed: false});
   }, [hasPrompt]);
 
+  // The collapsed "waiting" pill has no suppression of its own, so it used to
+  // vanish behind any web pane at the top of the window (#297). With the native
+  // toast layer it is drawn above web panes, over the live page; the DOM pill
+  // below is only the fallback.
+  const layer = useToastLayer();
+  const showPill = !hasPrompt && expiredReqs.length > 0;
+  React.useEffect(() => {
+    if (!layer) return undefined;
+    setLayerToasts(
+      'consent-pill',
+      1,
+      showPill
+        ? [{id: CONSENT_PILL_ID, kind: 'pill', emoji: '🛂', text: pillText(expiredReqs), title: 'Click to review'}]
+        : []
+    );
+    return () => setLayerToasts('consent-pill', 1, []);
+  }, [layer, showPill, expiredReqs]);
+  React.useEffect(() => {
+    if (!layer) return undefined;
+    return onToastLayerAction(({toastId}) => {
+      const first = expiredReqs[0];
+      if (toastId === CONSENT_PILL_ID && first) reviveRequest(first.targetPane, first.id);
+    });
+  }, [layer, expiredReqs]);
+
   // Resolve the friendly "where": the recipient agent for messaging, else the
   // target pane's name from the store (see consentTargetName).
   const paneName = useSelector((s: any) => {
@@ -132,7 +167,7 @@ export default function ConsentModal(): React.ReactElement | null {
   // request also re-opens by itself when the agent re-asks or retries the
   // gated action (the sidecar re-notifies → setRequest revives it).
   if (!req) {
-    if (expiredReqs.length === 0) return null;
+    if (expiredReqs.length === 0 || layer) return null;
     const first = expiredReqs[0];
     return (
       <div
@@ -166,11 +201,7 @@ export default function ConsentModal(): React.ReactElement | null {
       >
         <style>{`@keyframes hyConsentPill{0%,100%{box-shadow:0 6px 20px rgba(0,0,0,0.45)}50%{box-shadow:0 0 14px 2px var(--accent-primary, #6ea8fe)}}`}</style>
         <span style={{fontSize: '14px', lineHeight: 1}}>🛂</span>
-        <span>
-          {expiredReqs.length === 1
-            ? `${first.requesterName || first.requester} is waiting for approval — click to review`
-            : `${expiredReqs.length} agents waiting for approval — click to review`}
-        </span>
+        <span>{pillText(expiredReqs)}</span>
       </div>
     );
   }

@@ -82,6 +82,13 @@ const config: webpack.Configuration[] = [
             context: path.join(__dirname, 'app/sticky-renderer'),
             from: '**/*',
             to: './sticky-renderer'
+          },
+          {
+            // Toast layer page assets (preload + renderer + CSS) for the
+            // transparent overlay view above web panes. Layout: target/toast-layer/.
+            context: path.join(__dirname, 'app/toast-layer'),
+            from: '**/*',
+            to: './toast-layer'
           }
         ]
       })
