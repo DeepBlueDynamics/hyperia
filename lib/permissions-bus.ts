@@ -68,8 +68,17 @@ function emit(paneId: string): void {
 // occluded by an open web pane.
 // ---------------------------------------------------------------------------
 const overlayListeners = new Set<(active: boolean) => void>();
+// Whether create toasts count as an occluding overlay. The native toast layer
+// (lib/toast-layer.ts) draws them ABOVE web panes, so when it is in use a toast
+// no longer needs the freeze-swap; only the DOM fallback does (#297).
+let toastsOccludeWebPanes = true;
+export function setToastsOccludeWebPanes(occlude: boolean): void {
+  if (toastsOccludeWebPanes === occlude) return;
+  toastsOccludeWebPanes = occlude;
+  emitOverlay();
+}
 function overlayActive(): boolean {
-  return toasts.size > 0 || current.size > 0;
+  return (toastsOccludeWebPanes && toasts.size > 0) || current.size > 0;
 }
 function emitOverlay(): void {
   const a = overlayActive();

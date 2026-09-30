@@ -44,6 +44,7 @@ import {decorateSessionOptions, decorateSessionClass} from '../plugins';
 import createRPC from '../rpc';
 import Session from '../session';
 import {startSessionLog, writeSessionLog, endSessionLog} from '../session-logger';
+import {destroyToastLayerForWindow, initToastLayer} from '../toast-layer';
 import {getAppIcon} from '../utils/icon';
 import {setRendererType, unsetRendererType} from '../utils/renderer-utils';
 import {pickStartDirectory} from '../utils/start-dir';
@@ -197,6 +198,7 @@ export function newWindow(
   if (!webPaneManagerInited) {
     webPaneManagerInited = true;
     initWebPaneManager({configureSession: configureWebPaneSession});
+    initToastLayer();
   }
   const classOpts = Object.assign({uid: uuidv4()});
   app.plugins.decorateWindowClass(classOpts);
@@ -985,6 +987,7 @@ export function newWindow(
   // NOT auto-destroyed, so skipping this leaks renderer processes.
   window.on('closed', () => {
     destroyPanesForWindow(window);
+    destroyToastLayerForWindow(window);
     clearWindowWebUrls(window.id);
   });
 

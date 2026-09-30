@@ -30,7 +30,9 @@ Fork of [Hyper](https://github.com/vercel/hyper): React + Redux UI with xterm.js
 | `app/sticky.ts` | Floating sticky-note windows, including file-linked code notes |
 | `app/config/` | Config load + shell-profile detection (`detect.ts`) |
 | `lib/components/term.tsx` | Terminal pane + the new-pane Chooser / profile picker |
-| `lib/components/web-pane.tsx` | Embedded `<webview>` web panes |
+| `app/web-pane-manager.ts` | Native `WebContentsView` web panes: geometry, visibility, freeze-swap stills |
+| `app/toast-layer.ts` | Transparent native view per window that draws the top toasts above web panes (#297) |
+| `lib/components/web-pane.tsx` | Web pane chrome (band, URL bar, find) around the native view |
 
 ## Sidecar (`sidecar/src/`)
 

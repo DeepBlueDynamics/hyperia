@@ -20,6 +20,7 @@ import {BrowserWindow, WebContentsView, ipcMain, session, shell, Menu, clipboard
 import type {Session, WebContents} from 'electron';
 
 import {getConfig} from './config';
+import {raiseToastLayer} from './toast-layer';
 import {fullPageClip} from './utils/fullpage-clip';
 import {ERR_ABORTED, initialLoadState, nextLoadState} from './utils/web-pane-loading';
 import type {WebPaneLoadEvent, WebPaneLoadState} from './utils/web-pane-loading';
@@ -625,6 +626,8 @@ function createPane(win: BrowserWindow, uid: string, url: string) {
   // White ground avoids the black-flash-between-repaints the old <webview> hit.
   view.setBackgroundColor('#ffffff');
   win.contentView.addChildView(view);
+  // The toast layer must stay the topmost child view (see app/toast-layer.ts).
+  raiseToastLayer(win);
   const entry: WebPaneEntry = {view, win, url, visible: true};
   entry.baseZoom = win.webContents.getZoomFactor() || 1;
   entry.userZoom = 1;
@@ -727,6 +730,7 @@ function openInspector(uid: string, x: number, y: number) {
   try {
     const dt = new WebContentsView({webPreferences: {}});
     entry.win.contentView.addChildView(dt);
+    raiseToastLayer(entry.win);
     entry.devtools = dt;
     entry.view.webContents.setDevToolsWebContents(dt.webContents);
     entry.view.webContents.openDevTools();
