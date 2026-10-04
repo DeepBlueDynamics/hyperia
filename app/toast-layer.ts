@@ -79,11 +79,23 @@ function position(entry: LayerEntry): void {
   if (entry.win.isDestroyed()) return;
   const {width} = entry.win.getContentBounds();
   entry.view.setBounds(topCenterBounds(width, entry.cssW, entry.cssH, entry.zoom));
+  reportBounds(entry);
 }
 
 function applyVisible(entry: LayerEntry): void {
   const show = entry.hasItems && entry.loaded && entry.cssW > 0 && entry.cssH > 0;
   entry.view.setVisible(show);
+  reportBounds(entry);
+}
+
+// The layer covers the window's top drag strip. Windows hit-tests the HOST's
+// drag region before the click reaches this view, so a pill there started a
+// window drag instead of clicking. Tell the host where the visible layer is so
+// it can carve a no-drag hole of the same size.
+function reportBounds(entry: LayerEntry): void {
+  if (entry.win.isDestroyed() || entry.win.webContents.isDestroyed()) return;
+  const visible = entry.hasItems && entry.loaded && entry.cssW > 0 && entry.cssH > 0;
+  entry.win.webContents.send('toast-layer:bounds', visible ? entry.view.getBounds() : null);
 }
 
 function pushRender(entry: LayerEntry, payload: ToastLayerPayload): void {
