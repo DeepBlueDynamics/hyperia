@@ -211,11 +211,20 @@ const scenarios = [
       const r = await run(() => {
         const {S, win} = window.__h;
         const webGroups = Object.values(S().termGroups.termGroups).filter((g) => g.webUrl).length;
-        return {views: win().contentView.children.length, webGroups};
+        // The native toast layer (#298) is a permanent, non-web-pane child view.
+        const kids = win().contentView.children.map((v) => {
+          try {
+            return v.webContents.getURL();
+          } catch {
+            return '?';
+          }
+        });
+        const views = kids.filter((u) => !/toast-layer.html/.test(u));
+        return {views: views.length, webGroups, urls: kids.map((u) => u.split('/').pop()).join(', ')};
       });
       return {
         pass: before >= 1 && r.views <= r.webGroups,
-        detail: `views before reload ${before}; after reload ${r.views} native view(s) for ${r.webGroups} web pane(s)`
+        detail: `views before reload ${before}; after reload ${r.views} web view(s) for ${r.webGroups} web pane(s) [all child views: ${r.urls}]`
       };
     }
   },
