@@ -19,6 +19,8 @@ body {
   padding: 0;
   background: transparent;
   overflow: hidden;
+  /* Over the frameless window's top drag strip: never start a window drag. */
+  -webkit-app-region: no-drag;
 }
 .hy-tl-root {
   display: flex;

@@ -86,6 +86,42 @@ const hub = createToastLayerHub((items) => {
   }
 });
 
+// Mirror the visible layer's rect as a no-drag box in the host DOM. The layer
+// sits over the frameless window's top drag strip, and Windows hit-tests the
+// host's drag region first, so without this a pill click started a window drag.
+let noDragBox: HTMLDivElement | null = null;
+try {
+  ipcRenderer.on('toast-layer:bounds', (_e, b: {x: number; y: number; width: number; height: number} | null) => {
+    if (!b) {
+      if (noDragBox) noDragBox.style.display = 'none';
+      return;
+    }
+    if (!noDragBox) {
+      noDragBox = document.createElement('div');
+      noDragBox.id = 'hy-toast-layer-no-drag';
+      Object.assign(noDragBox.style, {position: 'fixed', zIndex: '2147483647', pointerEvents: 'none'});
+      (noDragBox.style as any).webkitAppRegion = 'no-drag';
+      document.body.appendChild(noDragBox);
+    }
+    let z = 1;
+    try {
+      z = webFrame.getZoomFactor() || 1;
+    } catch {
+      /* keep 1 */
+    }
+    // Window DIPs -> host CSS px.
+    Object.assign(noDragBox.style, {
+      display: 'block',
+      left: `${b.x / z}px`,
+      top: `${b.y / z}px`,
+      width: `${b.width / z}px`,
+      height: `${b.height / z}px`
+    });
+  });
+} catch {
+  /* no ipc (tests) */
+}
+
 /** Replace one source's toasts in the layer. Empty list = that source is gone. */
 export function setLayerToasts(source: string, order: number, items: ToastLayerItem[]): void {
   hub.set(source, order, items);
