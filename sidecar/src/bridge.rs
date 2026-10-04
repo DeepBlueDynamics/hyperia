@@ -168,20 +168,38 @@ pub struct MsgNotify {
 
 /// The mailbox notice typed into an agent pane. Count-free so it stays accurate
 /// once queued (epic #162 bug R); names the newest unread sender and its UTC time.
-pub fn mail_notice_text(latest: Option<(&str, &str, u64)>) -> String {
-    let from = match latest {
-        Some((name, pane, ts_ms)) => {
-            let who = match (name.is_empty(), pane.is_empty()) {
-                (false, false) => format!("{name} (pane {})", pane.get(..8).unwrap_or(pane)),
-                (false, true) => name.to_string(),
-                (true, false) => format!("pane {}", pane.get(..8).unwrap_or(pane)),
-                (true, true) => "unknown sender".to_string(),
-            };
-            format!(" Latest from {who} at {}.", crate::workspace::epoch_to_rfc3339(ts_ms / 1000))
-        }
-        None => String::new(),
+/// The newest unread message, as the notice shows it.
+pub struct NoticeMail<'a> {
+    pub from_name: &'a str,
+    pub from_pane: &'a str,
+    pub ts_ms: u64,
+    pub subject: &'a str,
+}
+
+/// One line, like an email header: who, when, subject, and how to read it.
+pub fn mail_notice_text(latest: Option<NoticeMail>, unread: usize) -> String {
+    let more = if unread > 1 { format!(" ({unread} unread)") } else { String::new() };
+    let Some(m) = latest else {
+        return format!("[Hyperia mail] New message{more}. Run msg_check to read.");
     };
-    format!("[Hyperia] You have unread messages.{from} Use msg_check to fetch and acknowledge, or msg_inbox to preview. Automated mailbox notice.")
+    let who = match (m.from_name.is_empty(), m.from_pane.is_empty()) {
+        (false, false) => format!("{} (pane {})", m.from_name, m.from_pane.get(..8).unwrap_or(m.from_pane)),
+        (false, true) => m.from_name.to_string(),
+        (true, false) => format!("pane {}", m.from_pane.get(..8).unwrap_or(m.from_pane)),
+        (true, true) => "unknown sender".to_string(),
+    };
+    // "2026-10-04T18:45:42Z" -> "2026-10-04 18:45Z"
+    let when = crate::workspace::epoch_to_rfc3339(m.ts_ms / 1000);
+    let when = format!("{} {}Z", when.get(..10).unwrap_or(&when), when.get(11..16).unwrap_or(""));
+    let subject: String = m.subject.split_whitespace().collect::<Vec<_>>().join(" ");
+    let subject = if subject.is_empty() {
+        "(no subject)".to_string()
+    } else if subject.chars().count() > 80 {
+        format!("{}…", subject.chars().take(79).collect::<String>())
+    } else {
+        subject
+    };
+    format!("[Hyperia mail] From: {who} · {when} · Subject: {subject}{more} — run msg_check to read.")
 }
 
 impl MsgNotify {
@@ -196,13 +214,9 @@ impl MsgNotify {
 
     /// Arm this entry on arrival of a new message.
     ///
-    /// If a notice has already been delivered to the pane and the agent hasn't
-    /// run msg_check/msg_inbox since, this is a NO-OP (at most ONE outstanding notice).
-    /// Returns true if armed, false if ignored due to outstanding delivered notice.
+    /// Every arrival arms a notice; the cooldown only merges bursts. Returns true.
     pub fn arm(&mut self, now: std::time::Instant) -> bool {
-        if self.delivered {
-            return false;
-        }
+        // Every new message gets a notice, even if the last one wasn't read yet.
         self.pending = true;
         self.armed_at = now;
         true
@@ -216,7 +230,7 @@ impl MsgNotify {
 
     /// Check if a notice is currently eligible to fire.
     pub fn can_fire(&self, now: std::time::Instant, cooldown_secs: u64) -> bool {
-        if !self.pending || self.delivered {
+        if !self.pending {
             return false;
         }
         match self.last_fire {
@@ -233,9 +247,9 @@ impl MsgNotify {
     }
 }
 
-/// Min seconds between two message-notice fires for a pane — rate-limits automated
-/// notices to at most one per ~60s even across checks (epic #162 bug R).
-const MSG_NOTIFY_COOLDOWN_SECS: u64 = 60;
+/// Min seconds between two message-notice fires for a pane. Short: it only merges
+/// a burst into one notice (which names the newest message and the unread count).
+const MSG_NOTIFY_COOLDOWN_SECS: u64 = 5;
 /// Retire completed notice bookkeeping after this interval. Pending notices survive
 /// focus delays; closing the pane removes its entry.
 const MSG_NOTIFY_TTL_SECS: u64 = 3600;
@@ -1304,15 +1318,23 @@ impl Bridge {
             let mut consumed = unread == 0;
             if unread > 0 {
                 let pid = self.inner.sessions.lock().await.get(&pane).map(|s| s.pid).unwrap_or(0);
-                let mut sender = None;
+                let mut sender_name = String::new();
                 if let Some(m) = &latest {
                     let name = match m.from_pane.as_str() {
                         "" => None,
                         uid => self.pane_display_name(uid).await,
                     };
-                    sender = Some((name.unwrap_or_else(|| m.from_label.clone()), m.from_pane.clone(), m.ts));
+                    sender_name = name.unwrap_or_else(|| m.from_label.clone());
                 }
-                let notice = mail_notice_text(sender.as_ref().map(|(n, p, ts)| (n.as_str(), p.as_str(), *ts)));
+                let notice = mail_notice_text(
+                    latest.as_ref().map(|m| NoticeMail {
+                        from_name: &sender_name,
+                        from_pane: &m.from_pane,
+                        ts_ms: m.ts,
+                        subject: &m.subject,
+                    }),
+                    unread,
+                );
                 let response = self.guarded_input(&pane, serde_json::json!({
                     "type": "GuardedInput", "uid": pane, "pid": pid,
                     "text": notice, "submit": true, "agent": true,
@@ -2618,13 +2640,20 @@ mod tests {
 
 
     #[test]
-    fn mail_notice_names_sender_pane_and_zulu_time() {
-        let text = mail_notice_text(Some(("Clear Bee", "11e87950-aaaa-bbbb", 1_787_936_000_123)));
-        assert!(text.contains("Latest from Clear Bee (pane 11e87950) at 2026-08-28T16:53:20Z."), "{text}");
-        assert!(text.contains("msg_check"));
-        let external = mail_notice_text(Some(("codex-agent", "", 1_787_936_000_000)));
-        assert!(external.contains("Latest from codex-agent at 2026-08-28T16:53:20Z."), "{external}");
-        assert!(!mail_notice_text(None).contains("Latest"));
+    fn mail_notice_reads_like_an_email_header() {
+        let mail = |name, pane, subject| NoticeMail { from_name: name, from_pane: pane, ts_ms: 1_787_936_000_123, subject };
+        assert_eq!(
+            mail_notice_text(Some(mail("Clear Bee", "11e87950-aaaa-bbbb", "Whistle ASR crate ready")), 1),
+            "[Hyperia mail] From: Clear Bee (pane 11e87950) · 2026-08-28 16:53Z · Subject: Whistle ASR crate ready — run msg_check to read."
+        );
+        let text = mail_notice_text(Some(mail("codex-agent", "", "  multi
+ line ")), 3);
+        assert!(text.contains("From: codex-agent ·"), "{text}");
+        assert!(text.contains("Subject: multi line (3 unread)"), "{text}");
+        assert!(mail_notice_text(Some(mail("x", "", "")), 1).contains("Subject: (no subject)"));
+        let long = "s".repeat(200);
+        assert!(mail_notice_text(Some(mail("x", "", &long)), 1).contains("…"));
+        assert_eq!(mail_notice_text(None, 2), "[Hyperia mail] New message (2 unread). Run msg_check to read.");
     }
     fn session_info(window_id: u32, root_tab_uid: &str, split_label: &str, tab_active: bool, pane_active: bool) -> SessionInfo {
         SessionInfo {
@@ -2773,55 +2802,29 @@ mod tests {
     }
 
     #[test]
-    fn test_msg_notify_coalescing_and_rate_limit() {
+    fn test_msg_notify_every_message_rate_limited_by_short_cooldown() {
         let start = std::time::Instant::now();
+        let secs = |n: u64| start + std::time::Duration::from_secs(n);
         let mut n = MsgNotify::new(start);
-
-        // Initially armed and pending, not yet delivered.
-        assert!(n.pending);
-        assert!(!n.delivered);
-        assert!(n.can_fire(start, 60));
-
-        // Fire the notice: marks delivered, clears pending, sets last_fire.
+        assert!(n.can_fire(start, 5));
         n.record_fire(start);
         assert!(!n.pending);
-        assert!(n.delivered);
-        assert_eq!(n.last_fire, Some(start));
 
-        // While delivered and unacknowledged, further arms are no-ops (coalescing).
-        let t1 = start + std::time::Duration::from_secs(10);
-        assert!(!n.arm(t1));
-        assert!(!n.can_fire(t1, 60));
+        // New mail while the last notice is still unread arms again (no more
+        // "one outstanding notice until msg_check").
+        assert!(n.arm(secs(2)));
+        assert!(n.pending);
+        // A burst inside the cooldown merges into the next notice...
+        assert!(!n.can_fire(secs(3), 5));
+        // ...which fires once the short cooldown passes.
+        assert!(n.can_fire(secs(6), 5));
+        n.record_fire(secs(6));
 
-        let t2 = start + std::time::Duration::from_secs(30);
-        assert!(!n.arm(t2));
-        assert!(!n.can_fire(t2, 60));
-
-        // Even after 60s cooldown has elapsed, if still unacknowledged, no fire.
-        let t3 = start + std::time::Duration::from_secs(70);
-        assert!(!n.arm(t3));
-        assert!(!n.can_fire(t3, 60));
-
-        // Agent runs msg_check / msg_inbox -> mailbox checked!
+        // Nothing new: nothing fires, checked or not.
+        assert!(!n.can_fire(secs(30), 5));
         n.on_mailbox_checked();
-        assert!(!n.delivered);
-        // Not pending because no new mail arrived yet.
-        assert!(!n.pending);
-        assert!(!n.can_fire(t3, 60));
-
-        // Rate-limit across checks: new mail arrives within 60s of previous fire.
-        let mut n2 = MsgNotify::new(start);
-        n2.record_fire(start);
-        let _t_check = start + std::time::Duration::from_secs(20);
-        n2.on_mailbox_checked();
-        let t_new_mail = start + std::time::Duration::from_secs(25);
-        assert!(n2.arm(t_new_mail)); // arms successfully
-        assert!(n2.pending);
-        // But rate-limited: 25s < 60s since last_fire.
-        assert!(!n2.can_fire(t_new_mail, 60));
-
-        // Once 60s cooldown elapses:
-        let t_ready = start + std::time::Duration::from_secs(61);
-        assert!(n2.can_fire(t_ready, 60));
+        assert!(!n.can_fire(secs(31), 5));
+        assert!(n.arm(secs(40)));
+        assert!(n.can_fire(secs(40), 5));
     }
 }
