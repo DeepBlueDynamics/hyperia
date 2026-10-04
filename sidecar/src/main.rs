@@ -2236,7 +2236,13 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
                     req.action
                 )
             };
-            if let Some(operation) = delivery_operations.first() {
+            // Retained operations: mail the requester only on DENIAL. An approved
+            // operation proceeds by itself and its sender already has the result
+            // (MCP reply + delivery_status); mailing "approved" just armed a notice
+            // that used the pane's one notice slot and hid real mail behind it.
+            if !delivery_operations.is_empty() && allow {
+                // Nothing to tell the requester.
+            } else if let Some(operation) = delivery_operations.first() {
                 if let Ok(recipient) = msgbus::mailbox::Principal::parse(&operation.requester) {
                     let notice = messaging::PreparedMessage {
                         sender: messaging::MailActor { principal: msgbus::mailbox::Principal::System,
