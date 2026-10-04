@@ -1,0 +1,136 @@
+/* Toast layer page. Everything outside a card is transparent — the native view
+   is shrink-wrapped to .hy-tl-root, so keep the root's padding to what the
+   card shadow needs. Colors come from the host theme snapshot
+   (render.js applyTheme) with the same fallbacks the DOM toasts use. */
+:root {
+  --bg-elevated: #1c1c22;
+  --bg-secondary: #1c1c22;
+  --text-primary: #e8e8ea;
+  --text-secondary: #9a9aa2;
+  --accent-primary: #6ea8fe;
+  --accent-success: #3fb950;
+  --accent-danger: #f85149;
+  --border-neutral: rgba(255, 255, 255, 0.15);
+  --font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  /* Over the frameless window's top drag strip: never start a window drag. */
+  -webkit-app-region: no-drag;
+}
+.hy-tl-root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  /* 12px = the DOM toast's `top: 12`; sides/bottom leave room for the shadow. */
+  padding: 12px 24px 28px;
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+  user-select: none;
+}
+.hy-tl-card {
+  background: var(--bg-elevated, var(--bg-secondary));
+  border: 1px solid var(--accent-primary);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+  padding: 12px 14px;
+  min-width: 340px;
+  max-width: 520px;
+  animation: hyToastIn 160ms ease;
+}
+.hy-tl-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.hy-tl-emoji {
+  font-size: 15px;
+  line-height: 1;
+}
+.hy-tl-text {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.hy-tl-text b {
+  color: var(--text-primary);
+}
+.hy-tl-buttons {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.hy-tl-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  border-radius: 6px;
+  border: 1px solid var(--border-neutral);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.hy-tl-btn:hover {
+  background: var(--border-neutral);
+}
+.hy-tl-btn-allow {
+  border-color: var(--accent-success);
+  background: var(--accent-success);
+  color: #06140a;
+}
+.hy-tl-btn-allow:hover {
+  filter: brightness(1.1);
+  background: var(--accent-success);
+}
+.hy-tl-btn-deny {
+  border-color: var(--accent-danger);
+  color: var(--accent-danger);
+}
+.hy-tl-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-primary);
+  background: var(--bg-elevated, var(--bg-secondary));
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  animation: hyToastPill 2.4s ease-in-out infinite;
+  max-width: 520px;
+}
+.hy-tl-pill .hy-tl-emoji {
+  font-size: 14px;
+}
+@keyframes hyToastIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes hyToastPill {
+  0%,
+  100% {
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 14px 2px var(--accent-primary);
+  }
+}

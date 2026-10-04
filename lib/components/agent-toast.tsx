@@ -2,6 +2,8 @@ import {ipcRenderer} from 'electron';
 import React from 'react';
 
 import {subscribeToasts, subscribeExpiredToasts, reviveToast, clearToast, type ToastRequest} from '../permissions-bus';
+import {onToastLayerAction, setLayerToasts, useToastLayer} from '../toast-layer';
+import type {ToastLayerItem} from '../toast-layer';
 
 // action → full verb phrase for the prompt ("wants to <phrase>").
 const CREATE_SURFACE: Record<string, string> = {
@@ -44,6 +46,46 @@ function respond(id: string, body: Record<string, unknown>): void {
     .catch((err) => console.error('create-consent respond failed:', err));
 }
 
+// The five decisions, keyed by the button id the toast layer echoes back.
+const DECISIONS: Record<string, Record<string, unknown>> = {
+  deny: {decision: 'deny'},
+  once: {decision: 'allow', scope: 'once'},
+  '15m': {decision: 'allow', durationSecs: 900},
+  '1h': {decision: 'allow', durationSecs: 3600},
+  always: {decision: 'allow', durationSecs: null}
+};
+const LAYER_BUTTONS: ToastLayerItem['buttons'] = [
+  {id: 'deny', label: 'Deny', style: 'deny'},
+  {id: 'once', label: 'Just once'},
+  {id: '15m', label: '15 min'},
+  {id: '1h', label: '1 hour'},
+  {id: 'always', label: 'Always', style: 'allow'}
+];
+const AGENT_PILL_ID = 'agent-toast-pill';
+
+function pillText(expired: ToastRequest[]): string {
+  const first = expired[0];
+  return expired.length === 1
+    ? `${first.requesterName || first.requester} is waiting to ${actionPhrase(first.action)} — click to review`
+    : `${expired.length} agent requests waiting — click to review`;
+}
+
+// What the native toast layer shows for the current requests + collapsed pill.
+export function layerItemsFor(reqs: ToastRequest[], expired: ToastRequest[]): ToastLayerItem[] {
+  const items: ToastLayerItem[] = reqs.map((r) => ({
+    id: r.id,
+    kind: 'card',
+    emoji: '🤖',
+    who: r.requesterName || r.requester,
+    text: `wants to ${actionPhrase(r.action)}.`,
+    buttons: LAYER_BUTTONS
+  }));
+  if (!reqs.length && expired.length) {
+    items.push({id: AGENT_PILL_ID, kind: 'pill', emoji: '🤖', text: pillText(expired), title: 'Click to review'});
+  }
+  return items;
+}
+
 const btn: React.CSSProperties = {
   padding: '5px 12px',
   fontSize: '12px',
@@ -68,11 +110,39 @@ const denyBtn: React.CSSProperties = {
 
 // Window-level create-consent toast. A new tab/window has no target pane, so
 // these can't live in a pane band — they stack top-center over everything.
+//
+// Rendering has two paths. With the native toast layer (the normal case) the
+// cards and pill are drawn by a transparent WebContentsView ABOVE the window's
+// web panes, over the live page (#297); this component only describes them and
+// handles the clicks relayed back. Without it (layer unavailable) it renders
+// the DOM version below, and the permissions bus freeze-swaps web panes.
 export default function AgentToast(): React.ReactElement | null {
   const [reqs, setReqs] = React.useState<ToastRequest[]>([]);
   const [expired, setExpired] = React.useState<ToastRequest[]>([]);
   React.useEffect(() => subscribeToasts(setReqs), []);
   React.useEffect(() => subscribeExpiredToasts(setExpired), []);
+  const layer = useToastLayer();
+
+  React.useEffect(() => {
+    if (!layer) return undefined;
+    setLayerToasts('agent-toast', 0, layerItemsFor(reqs, expired));
+    return () => setLayerToasts('agent-toast', 0, []);
+  }, [layer, reqs, expired]);
+
+  React.useEffect(() => {
+    if (!layer) return undefined;
+    return onToastLayerAction(({toastId, buttonId}) => {
+      if (toastId === AGENT_PILL_ID) {
+        if (expired[0]) reviveToast(expired[0].id);
+        return;
+      }
+      const body = DECISIONS[buttonId];
+      if (body && reqs.some((r) => r.id === toastId)) respond(toastId, body);
+    });
+  }, [layer, reqs, expired]);
+
+  if (layer) return null;
+
   if (!reqs.length) {
     // Unanswered toasts collapse to a persistent pill (mirrors the per-pane
     // consent pill) instead of vanishing — the request is STILL pending
@@ -109,11 +179,7 @@ export default function AgentToast(): React.ReactElement | null {
       >
         <style>{`@keyframes hyToastPill{0%,100%{box-shadow:0 6px 20px rgba(0,0,0,0.45)}50%{box-shadow:0 0 14px 2px var(--accent-primary, #6ea8fe)}}`}</style>
         <span style={{fontSize: '14px', lineHeight: 1}}>🤖</span>
-        <span>
-          {expired.length === 1
-            ? `${first.requesterName || first.requester} is waiting to ${actionPhrase(first.action)} — click to review`
-            : `${expired.length} agent requests waiting — click to review`}
-        </span>
+        <span>{pillText(expired)}</span>
       </div>
     );
   }
@@ -169,23 +235,19 @@ export default function AgentToast(): React.ReactElement | null {
             </span>
           </div>
           <div style={{display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap'}}>
-            <button type="button" style={denyBtn} onClick={() => respond(r.id, {decision: 'deny'})}>
+            <button type="button" style={denyBtn} onClick={() => respond(r.id, DECISIONS.deny)}>
               Deny
             </button>
-            <button type="button" style={btn} onClick={() => respond(r.id, {decision: 'allow', scope: 'once'})}>
+            <button type="button" style={btn} onClick={() => respond(r.id, DECISIONS.once)}>
               Just once
             </button>
-            <button type="button" style={btn} onClick={() => respond(r.id, {decision: 'allow', durationSecs: 900})}>
+            <button type="button" style={btn} onClick={() => respond(r.id, DECISIONS['15m'])}>
               15 min
             </button>
-            <button type="button" style={btn} onClick={() => respond(r.id, {decision: 'allow', durationSecs: 3600})}>
+            <button type="button" style={btn} onClick={() => respond(r.id, DECISIONS['1h'])}>
               1 hour
             </button>
-            <button
-              type="button"
-              style={allowBtn}
-              onClick={() => respond(r.id, {decision: 'allow', durationSecs: null})}
-            >
+            <button type="button" style={allowBtn} onClick={() => respond(r.id, DECISIONS.always)}>
               Always
             </button>
           </div>
