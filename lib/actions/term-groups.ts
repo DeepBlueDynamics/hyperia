@@ -18,6 +18,7 @@ import {getRootGroups} from '../selectors';
 import type {CloneLaunch} from '../utils/clone-launch';
 import {readLastUsedShell} from '../utils/picker-shell';
 import {restoredTabName} from '../utils/restored-tab-name';
+import {savedBirthSize} from '../utils/saved-birth-size';
 import {bindRestoredTab} from '../utils/tab-autosave';
 import {openTabDisplayNames} from '../utils/tab-display-name';
 import findBySession, {countPathHorizontalStacks} from '../utils/term-groups';
@@ -429,6 +430,7 @@ export function restoreTabState(layout: any, name?: string) {
           uid,
           cwd: session.cwd,
           profile: session.profile,
+          ...savedBirthSize(session),
           isRestore: true,
           lastCommand: session.annotations?.lastCommand ?? session.lastCommand,
           resumeOnce: session.resumeOnce
@@ -453,6 +455,7 @@ export function restoreLayoutState(savedState: any) {
             uid,
             cwd: session.cwd,
             profile: session.profile,
+            ...savedBirthSize(session),
             isRestore: true,
             // New saves carry the scraped command under annotations
             // (display-only, epic #146); old blobs had it bare.
