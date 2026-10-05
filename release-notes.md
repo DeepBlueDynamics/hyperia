@@ -1,44 +1,23 @@
-# Hyperia v0.21.4 — tabs that behave, stickies that save 🧹
+# Hyperia v0.21.7 — mail that reads like mail, toasts you can see 📬
 
-A cleanup release: stray tabs, stuck web pages and lost sticky text are fixed, and saved tabs got autosave.
+Agent mail notices now arrive for every message, approval toasts show over web pages, and restored tabs stop doubling their prompt.
 
-## Stickies save again
+## Agent mail
 
-Text typed into a sticky since v0.21.0 wasn't being saved. It is now. **Before updating, copy out anything you typed into a text sticky on 0.21.0–0.21.3**: the restart loses text that was never saved.
+- **A notice for every message.** Each new message drops a one-line, email-style header into the recipient's pane: who it's from, when, the subject, and how many are unread. Bursts arriving within 5 seconds merge into one notice.
+- **Approvals no longer send mail.** Approving an agent's queued operation used to mail the sender a "delivered" note it already knew about, and that noise could hold back real notices. It's gone. Denials still tell the sender.
 
-New stickies also open at a size that suits your screen and grow to fit their content, and notes created through the API get the position and size they asked for.
+## Toasts over web panes
 
-## No more stray tabs
+- Approval cards and notifications at the top of the window now draw **above web panes** instead of hiding behind them, without freezing the page underneath.
+- On Windows, the minimized pill and the card buttons up in the title-bar strip are clickable again, not just their border.
 
-Hidden shells kept turning into surprise tabs, and agents saw tabs you couldn't. Three leaks caused it:
+## Restore
 
-- **Closing a split tab** crashed partway, so its other panes' sessions never closed.
-- **Launching from a picker** (or switching a pane back to a picker) left the old session running with no pane. The **Picker** menu item even left your shell running, hidden.
-- Leftovers were saved into the last session and brought back on every launch.
-
-All three are fixed. If a stranded session still turns up, Hyperia now closes it quietly instead of opening it as a tab.
-
-## Web panes
-
-- A reload no longer leaves half a web page stuck over every tab.
-- A web page closing unexpectedly no longer crashes Hyperia.
-
-## Saved tabs and autosave
-
-- **Autosave a saved tab:** tick "Autosave changes to this tab" in Save Tab, and every folder change, split, rename or web URL change is saved about 2 seconds later. The tab's top line pulses when it saves, and when you click **Save**.
-- Autosave keeps working in tabs full of busy agents. It saves at least every 10 seconds, and only when something you'd get back on restore has changed.
-- Restoring a saved tab that autosaves keeps autosaving. Deleting it stops autosave from re-creating it. Only one tab autosaves to a given name.
-- **n8 panes keep `--danger`:** each n8 row in Save Tab has a **danger** toggle, on by default for panes started with `--danger`, and restore resumes them the same way.
-- The pane count next to saved tabs is a bright window badge, and the delete button sits right beside it.
-- Deleting the last saved tab no longer maximizes the window. Double-clicking inside the header's menus no longer does either; only empty header space does.
-
-## Also
-
-- New windows open in the folder you were last in, even after a restart.
-- **Tab** in the directory picker's search box completes the highlighted folder instead of jumping to the picker behind it.
+- Restored shells start at the size they were saved at, so a restored pane no longer shows its prompt twice.
 
 ## For contributors
 
-`node scripts/dev-harness.js` runs a sandboxed copy of Hyperia and checks all of the above end to end. It never touches your own `~/.hyperia`.
+The dev harness now checks the toast layer too: `node scripts/dev-harness.js`.
 
-Coming from further back? [v0.21.1](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.21.1) fixed hidden tabs coming back; [v0.21.0](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.21.0) added sticky runs.
+Coming from further back? [v0.21.4](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.21.4) fixed stray tabs and sticky saving and added autosave for saved tabs.
