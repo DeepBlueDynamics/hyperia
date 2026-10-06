@@ -1,6 +1,6 @@
 import test from 'ava';
 
-import {bottomRightBounds, topCenterBounds} from '../../app/utils/toast-layer-bounds';
+import {bottomRightBounds, centerBounds, topCenterBounds} from '../../app/utils/toast-layer-bounds';
 
 test('topCenterBounds: centers the content-sized view at the top edge', (t) => {
   t.deepEqual(topCenterBounds(1000, 400, 120, 1), {x: 300, y: 0, width: 400, height: 120});
@@ -25,4 +25,10 @@ test('bottomRightBounds: pins the content-sized view to the bottom-right corner'
 test('bottomRightBounds: never larger than the window', (t) => {
   t.deepEqual(bottomRightBounds(200, 100, 300, 400, 1), {x: 0, y: 0, width: 200, height: 100});
   t.deepEqual(bottomRightBounds(800, 600, 0, 0, 1), {x: 799, y: 599, width: 1, height: 1});
+});
+
+test('centerBounds: centers the content-sized view in the window', (t) => {
+  t.deepEqual(centerBounds(1000, 800, 400, 200, 1), {x: 300, y: 300, width: 400, height: 200});
+  t.deepEqual(centerBounds(1200, 800, 400, 100, 1.2), {x: 360, y: 340, width: 480, height: 120});
+  t.deepEqual(centerBounds(300, 200, 400, 400, 1), {x: 0, y: 0, width: 300, height: 200});
 });

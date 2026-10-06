@@ -36,3 +36,19 @@ export function bottomRightBounds(
   const height = Math.min(Math.max(1, Math.ceil(cssH * z)), h);
   return {x: w - width, y: h - height, width, height};
 }
+
+// Window-centered, for the consent cards.
+export function centerBounds(
+  contentWidth: number,
+  contentHeight: number,
+  cssW: number,
+  cssH: number,
+  zoom: number
+): LayerRect {
+  const z = zoom > 0 ? zoom : 1;
+  const w = Math.max(1, Math.floor(contentWidth));
+  const h = Math.max(1, Math.floor(contentHeight));
+  const width = Math.min(Math.max(1, Math.ceil(cssW * z)), w);
+  const height = Math.min(Math.max(1, Math.ceil(cssH * z)), h);
+  return {x: Math.round((w - width) / 2), y: Math.round((h - height) / 2), width, height};
+}

@@ -115,6 +115,10 @@ body {
 .hy-tl-pill .hy-tl-emoji {
   font-size: 14px;
 }
+/* Centered consent cards: even room on all sides for the shadow. */
+.hy-tl-root[data-anchor='center'] {
+  padding: 24px;
+}
 /* Bottom-right notice stack — matches the DOM toast-stack it replaces. */
 .hy-tl-root[data-anchor='bottom-right'] {
   align-items: flex-end;

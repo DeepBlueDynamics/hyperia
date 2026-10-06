@@ -1,6 +1,6 @@
 // ToastLayer — transparent WebContentsViews per BrowserWindow, one per anchor:
-// 'top' hosts the agent create-consent cards and "waiting" pills; 'bottom-right'
-// hosts the stacking notices (drag-drop copy results, audio, update, messages).
+// 'center' hosts the agent consent cards, 'top' the collapsed "waiting" pills,
+// 'bottom-right' the stacking notices (drag-drop copies, audio, update, messages).
 //
 // Why a native view: a web pane's WebContentsView paints above the whole
 // renderer DOM, so a DOM toast sits BEHIND any web pane it overlaps (#297). The
@@ -24,9 +24,10 @@ import {BrowserWindow, WebContentsView, app, ipcMain} from 'electron';
 
 import isDev from 'electron-is-dev';
 
-import {bottomRightBounds, topCenterBounds} from './utils/toast-layer-bounds';
+import {bottomRightBounds, centerBounds, topCenterBounds} from './utils/toast-layer-bounds';
 
-export type ToastLayerAnchor = 'top' | 'bottom-right';
+// 'center' holds the consent cards, matching the centered pane-access prompt.
+export type ToastLayerAnchor = 'top' | 'center' | 'bottom-right';
 
 export interface ToastLayerButton {
   id: string;
@@ -75,7 +76,7 @@ interface LayerEntry {
 const layers = new Map<string, LayerEntry>();
 const layerKey = (win: BrowserWindow, anchor: ToastLayerAnchor) => `${win.id}:${anchor}`;
 export const normalizeToastLayerAnchor = (a: unknown): ToastLayerAnchor =>
-  a === 'bottom-right' ? 'bottom-right' : 'top';
+  a === 'bottom-right' || a === 'center' ? a : 'top';
 // Set once creating a layer throws (e.g. an Electron build where transparent
 // child views don't exist) — the renderer then keeps its DOM toasts.
 let broken = false;
@@ -95,7 +96,9 @@ function position(entry: LayerEntry): void {
   entry.view.setBounds(
     entry.anchor === 'bottom-right'
       ? bottomRightBounds(width, height, entry.cssW, entry.cssH, entry.zoom)
-      : topCenterBounds(width, entry.cssW, entry.cssH, entry.zoom)
+      : entry.anchor === 'center'
+        ? centerBounds(width, height, entry.cssW, entry.cssH, entry.zoom)
+        : topCenterBounds(width, entry.cssW, entry.cssH, entry.zoom)
   );
   reportBounds(entry);
 }
