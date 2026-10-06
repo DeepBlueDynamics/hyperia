@@ -500,15 +500,15 @@ const scenarios = [
         const [cw, ch] = w.getContentSize();
         const kids = w.contentView.children;
         const info = kids.map((v, i) => {
-          let url = '?';
+          let page = '?';
           try {
-            url = v.webContents.getURL().split('/').pop();
+            page = v.webContents.getURL().split('/').pop();
           } catch {
             /* gone */
           }
           const b = v.getBounds();
           const visible = typeof v.getVisible === 'function' ? v.getVisible() : null;
-          return {i, url, b, visible};
+          return {i, url: page, b, visible};
         });
         const layers = info.filter((k) => /toast-layer.html/.test(k.url) && k.visible !== false);
         const bottom = layers.find((k) => k.b.x + k.b.width >= cw - 1 && k.b.y + k.b.height >= ch - 1 && k.b.y > 0);
