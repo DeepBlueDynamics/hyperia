@@ -25,6 +25,7 @@
 
   api.onRender((payload) => {
     R.applyTheme(document, payload && payload.theme);
+    root.setAttribute('data-anchor', (payload && payload.anchor) === 'bottom-right' ? 'bottom-right' : 'top');
     count = R.render(document, root, payload && payload.items, (toastId, buttonId) => api.action(toastId, buttonId));
     // Measure NOW: getBoundingClientRect forces layout even while the view is
     // hidden, whereas rAF and ResizeObserver only run once it paints — and

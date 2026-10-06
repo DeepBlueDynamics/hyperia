@@ -1,5 +1,7 @@
 import React from 'react';
 
+import {useSuppressWebPanes} from '../utils/web-pane-suppress';
+
 // In-app (styled) confirmation for closing a window/tab or quitting when panes
 // are running a foreground program. Replaces the native OS dialog. Driven by a
 // tiny module bus that lib/index.tsx feeds from the main-process 'close-confirm'
@@ -38,6 +40,8 @@ function subscribe(cb: (r: CloseConfirmReq | null) => void): () => void {
 export default function CloseConfirmModal(): JSX.Element | null {
   const [req, setReq] = React.useState<CloseConfirmReq | null>(null);
   React.useEffect(() => subscribe(setReq), []);
+  // Main also suppresses for window/quit; this covers every other path.
+  useSuppressWebPanes(!!req, 'close-confirm');
 
   const done = React.useCallback((ok: boolean) => {
     if (current) current.answer(ok);

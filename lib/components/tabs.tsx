@@ -11,6 +11,7 @@ import {dropIndexForX, reorderOffsets} from '../utils/tab-drag';
 import type {TabMetrics} from '../utils/tab-drag';
 import {nextScrollStop} from '../utils/tab-scroll';
 import type {TabSpan} from '../utils/tab-scroll';
+import {newSuppressHolder, suppressWebPanes, useSuppressWebPanes} from '../utils/web-pane-suppress';
 
 import PaneCountBadge from './pane-count-badge';
 import Tab_ from './tab';
@@ -26,6 +27,8 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   const [canScrollRight, setCanScrollRight] = useState(false);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
+  // Full-window modal: web panes would paint over it.
+  useSuppressWebPanes(isModalOpen, 'tabs-modal');
   const [profileName, setProfileName] = useState('');
   const [shellPath, setShellPath] = useState('');
   const [shellArgs, setShellArgs] = useState('');
@@ -167,13 +170,13 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
   // cluster below. An arrow can unmount under the cursor (scrolled to the end),
   // which skips mouseleave, so its disappearance also releases the suppression.
   const hoveredArrow = useRef<'left' | 'right' | null>(null);
+  const arrowHolder = useRef(newSuppressHolder('tab-arrow'));
   const setWebPanesSuppressed = useCallback((suppressed: boolean) => {
-    try {
-      ipcRenderer.send('web-panes:suppress', {suppressed});
-    } catch {
-      /* ipc not ready */
-    }
+    suppressWebPanes(arrowHolder.current, suppressed);
   }, []);
+  // The +/window/sticky cluster's hover menus (below) hold their own key.
+  const [menuHover, setMenuHover] = useState(false);
+  useSuppressWebPanes(menuHover, 'tab-menu');
   const arrowHover = (dir: 'left' | 'right') => ({
     onMouseEnter: () => {
       hoveredArrow.current = dir;
@@ -454,20 +457,10 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           the menus render above; restore on leave. */}
       <div
         className="tabs_newTabPair"
-        onMouseEnter={() => {
-          try {
-            ipcRenderer.send('web-panes:suppress', {suppressed: true});
-          } catch {
-            /* ipc not ready */
-          }
-        }}
+        onMouseEnter={() => setMenuHover(true)}
         onMouseLeave={() => {
           setConfirmDeleteWs(null);
-          try {
-            ipcRenderer.send('web-panes:suppress', {suppressed: false});
-          } catch {
-            /* ipc not ready */
-          }
+          setMenuHover(false);
         }}
       >
         {/* New-tab "+" with its quick-layout hover menu (#140). The menu was

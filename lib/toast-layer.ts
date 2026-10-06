@@ -12,9 +12,9 @@ import React from 'react';
 
 import {setToastsOccludeWebPanes} from './permissions-bus';
 import {createToastLayerHub} from './utils/toast-layer-hub';
-import type {ToastLayerItem} from './utils/toast-layer-hub';
+import type {ToastLayerAnchor, ToastLayerHub, ToastLayerItem} from './utils/toast-layer-hub';
 
-export type {ToastLayerItem, ToastLayerButton} from './utils/toast-layer-hub';
+export type {ToastLayerAnchor, ToastLayerItem, ToastLayerButton} from './utils/toast-layer-hub';
 
 let available: boolean | null = null;
 let probe: Promise<boolean> | null = null;
@@ -72,19 +72,28 @@ function themeSnapshot(): Record<string, string> {
   return out;
 }
 
-const hub = createToastLayerHub((items) => {
-  let zoom = 1;
-  try {
-    zoom = webFrame.getZoomFactor() || 1;
-  } catch {
-    /* keep 1 */
+// One hub per anchor; each anchor is its own native view.
+const hubs = new Map<ToastLayerAnchor, ToastLayerHub>();
+function hubFor(anchor: ToastLayerAnchor): ToastLayerHub {
+  let hub = hubs.get(anchor);
+  if (!hub) {
+    hub = createToastLayerHub((items) => {
+      let zoom = 1;
+      try {
+        zoom = webFrame.getZoomFactor() || 1;
+      } catch {
+        /* keep 1 */
+      }
+      try {
+        ipcRenderer.send('toast-layer:render', {items, theme: themeSnapshot(), zoom, anchor});
+      } catch {
+        /* main not ready */
+      }
+    });
+    hubs.set(anchor, hub);
   }
-  try {
-    ipcRenderer.send('toast-layer:render', {items, theme: themeSnapshot(), zoom});
-  } catch {
-    /* main not ready */
-  }
-});
+  return hub;
+}
 
 // Mirror the visible layer's rect as a no-drag box in the host DOM. The layer
 // sits over the frameless window's top drag strip, and Windows hit-tests the
@@ -123,8 +132,13 @@ try {
 }
 
 /** Replace one source's toasts in the layer. Empty list = that source is gone. */
-export function setLayerToasts(source: string, order: number, items: ToastLayerItem[]): void {
-  hub.set(source, order, items);
+export function setLayerToasts(
+  source: string,
+  order: number,
+  items: ToastLayerItem[],
+  anchor: ToastLayerAnchor = 'top'
+): void {
+  hubFor(anchor).set(source, order, items);
 }
 
 export type ToastLayerAction = {toastId: string; buttonId: string};

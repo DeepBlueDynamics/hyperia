@@ -1,13 +1,14 @@
-// ToastLayer — one transparent WebContentsView per BrowserWindow that hosts the
-// window-level TOP toasts (agent create-consent cards and the "waiting" pills).
+// ToastLayer — transparent WebContentsViews per BrowserWindow, one per anchor:
+// 'top' hosts the agent create-consent cards and "waiting" pills; 'bottom-right'
+// hosts the stacking notices (drag-drop copy results, audio, update, messages).
 //
 // Why a native view: a web pane's WebContentsView paints above the whole
-// renderer DOM, so a DOM toast at top-center sits BEHIND any web pane it
-// overlaps (#297). The old answer was to freeze-swap the web pane (screenshot,
-// hide the native view, show the still) for as long as the toast was up — a
-// visible repaint on every toast and a dead page underneath. A sibling view
-// that is (a) transparent and (b) always re-added LAST in the window's view
-// tree composites above every web pane with the page still live below it.
+// renderer DOM, so a DOM toast sits BEHIND any web pane it overlaps (#297). The
+// old answer was to freeze-swap the web pane (screenshot, hide the native view,
+// show the still) for as long as the toast was up — a visible repaint on every
+// toast and a dead page underneath. A sibling view that is (a) transparent and
+// (b) always re-added LAST in the window's view tree composites above every
+// web pane with the page still live below it.
 //
 // The renderer stays the source of truth: it sends the toast list + a theme
 // snapshot over `toast-layer:render`; the layer page (app/toast-layer.html)
@@ -23,7 +24,9 @@ import {BrowserWindow, WebContentsView, app, ipcMain} from 'electron';
 
 import isDev from 'electron-is-dev';
 
-import {topCenterBounds} from './utils/toast-layer-bounds';
+import {bottomRightBounds, topCenterBounds} from './utils/toast-layer-bounds';
+
+export type ToastLayerAnchor = 'top' | 'bottom-right';
 
 export interface ToastLayerButton {
   id: string;
@@ -33,21 +36,28 @@ export interface ToastLayerButton {
 
 export interface ToastLayerItem {
   id: string;
-  kind: 'card' | 'pill';
+  // 'toast' = a bottom-right notice: icon + text + optional buttons + close.
+  kind: 'card' | 'pill' | 'toast';
   emoji?: string;
   who?: string;
   text: string;
   title?: string;
   buttons?: ToastLayerButton[];
+  tone?: 'info' | 'error';
+  // Show a × that sends the 'close' action.
+  dismissable?: boolean;
 }
 
 export interface ToastLayerPayload {
   items: ToastLayerItem[];
   theme?: Record<string, string>;
   zoom?: number;
+  anchor?: ToastLayerAnchor;
 }
 
 interface LayerEntry {
+  key: string;
+  anchor: ToastLayerAnchor;
   view: WebContentsView;
   win: BrowserWindow;
   loaded: boolean;
@@ -61,7 +71,11 @@ interface LayerEntry {
   onResize: () => void;
 }
 
-const layers = new Map<number, LayerEntry>();
+// Keyed by `${win.id}:${anchor}`.
+const layers = new Map<string, LayerEntry>();
+const layerKey = (win: BrowserWindow, anchor: ToastLayerAnchor) => `${win.id}:${anchor}`;
+export const normalizeToastLayerAnchor = (a: unknown): ToastLayerAnchor =>
+  a === 'bottom-right' ? 'bottom-right' : 'top';
 // Set once creating a layer throws (e.g. an Electron build where transparent
 // child views don't exist) — the renderer then keeps its DOM toasts.
 let broken = false;
@@ -77,8 +91,12 @@ export function resolveToastLayerHtmlPath(isDevMode: boolean = isDev, appPath?: 
 
 function position(entry: LayerEntry): void {
   if (entry.win.isDestroyed()) return;
-  const {width} = entry.win.getContentBounds();
-  entry.view.setBounds(topCenterBounds(width, entry.cssW, entry.cssH, entry.zoom));
+  const {width, height} = entry.win.getContentBounds();
+  entry.view.setBounds(
+    entry.anchor === 'bottom-right'
+      ? bottomRightBounds(width, height, entry.cssW, entry.cssH, entry.zoom)
+      : topCenterBounds(width, entry.cssW, entry.cssH, entry.zoom)
+  );
   reportBounds(entry);
 }
 
@@ -88,11 +106,12 @@ function applyVisible(entry: LayerEntry): void {
   reportBounds(entry);
 }
 
-// The layer covers the window's top drag strip. Windows hit-tests the HOST's
-// drag region before the click reaches this view, so a pill there started a
-// window drag instead of clicking. Tell the host where the visible layer is so
-// it can carve a no-drag hole of the same size.
+// The top layer covers the window's top drag strip. Windows hit-tests the
+// HOST's drag region before the click reaches this view, so a pill there
+// started a window drag instead of clicking. Tell the host where the visible
+// layer is so it can carve a no-drag hole of the same size.
 function reportBounds(entry: LayerEntry): void {
+  if (entry.anchor !== 'top') return;
   if (entry.win.isDestroyed() || entry.win.webContents.isDestroyed()) return;
   const visible = entry.hasItems && entry.loaded && entry.cssW > 0 && entry.cssH > 0;
   entry.win.webContents.send('toast-layer:bounds', visible ? entry.view.getBounds() : null);
@@ -115,10 +134,10 @@ function pushRender(entry: LayerEntry, payload: ToastLayerPayload): void {
   entry.view.webContents.send('toast-layer:render', payload);
 }
 
-function dropLayer(winId: number): void {
-  const entry = layers.get(winId);
+function dropLayer(key: string): void {
+  const entry = layers.get(key);
   if (!entry) return;
-  layers.delete(winId);
+  layers.delete(key);
   try {
     if (!entry.win.isDestroyed()) {
       entry.win.off('resize', entry.onResize);
@@ -135,8 +154,9 @@ function dropLayer(winId: number): void {
   }
 }
 
-function ensureLayer(win: BrowserWindow): LayerEntry | null {
-  const existing = layers.get(win.id);
+function ensureLayer(win: BrowserWindow, anchor: ToastLayerAnchor): LayerEntry | null {
+  const key = layerKey(win, anchor);
+  const existing = layers.get(key);
   if (existing) return existing;
   if (broken || win.isDestroyed()) return null;
   try {
@@ -151,6 +171,8 @@ function ensureLayer(win: BrowserWindow): LayerEntry | null {
     });
     view.setBackgroundColor('#00000000');
     const entry: LayerEntry = {
+      key,
+      anchor,
       view,
       win,
       loaded: false,
@@ -161,7 +183,7 @@ function ensureLayer(win: BrowserWindow): LayerEntry | null {
       hasItems: false,
       onResize: () => position(entry)
     };
-    layers.set(win.id, entry);
+    layers.set(key, entry);
     view.setVisible(false);
     view.setBounds({x: 0, y: 0, width: 1, height: 1});
     win.contentView.addChildView(view);
@@ -175,7 +197,7 @@ function ensureLayer(win: BrowserWindow): LayerEntry | null {
         console.warn(`[toast-layer] page ${level === 3 ? 'error' : 'warning'}: ${message} (line ${line})`);
     });
     wc.on('did-finish-load', () => {
-      if (layers.get(win.id) !== entry) return;
+      if (layers.get(key) !== entry) return;
       entry.loaded = true;
       try {
         wc.setZoomFactor(entry.zoom);
@@ -188,46 +210,50 @@ function ensureLayer(win: BrowserWindow): LayerEntry | null {
     // the terminal keeps the keyboard (focus-never-steal).
     wc.on('focus', () => {
       setTimeout(() => {
-        if (!win.isDestroyed() && layers.get(win.id) === entry) win.webContents.focus();
+        if (!win.isDestroyed() && layers.get(key) === entry) win.webContents.focus();
       }, REFOCUS_MS);
     });
     wc.on('render-process-gone', () => {
       // Rebuilt lazily on the next render; the renderer's DOM fallback is not
       // needed for a one-off crash.
-      dropLayer(win.id);
+      dropLayer(key);
     });
     win.on('resize', entry.onResize);
-    win.once('closed', () => dropLayer(win.id));
+    win.once('closed', () => dropLayer(key));
     void wc.loadFile(resolveToastLayerHtmlPath()).catch((err) => {
       console.warn('[toast-layer] load failed:', err);
-      dropLayer(win.id);
+      dropLayer(key);
     });
     return entry;
   } catch (err) {
     console.warn('[toast-layer] unavailable, keeping DOM toasts:', err);
     broken = true;
-    dropLayer(win.id);
+    dropLayer(key);
     return null;
   }
 }
 
 /**
- * Keep the layer above every other child view. Call after ANY other
+ * Keep the layers above every other child view. Call after ANY other
  * WebContentsView (web pane, docked devtools) is added to the window —
  * re-adding an attached view moves it to the top of the stack.
  */
 export function raiseToastLayer(win: BrowserWindow): void {
-  const entry = layers.get(win.id);
-  if (!entry || win.isDestroyed()) return;
-  try {
-    win.contentView.addChildView(entry.view);
-  } catch {
-    /* ignore */
+  if (win.isDestroyed()) return;
+  for (const entry of layers.values()) {
+    if (entry.win !== win) continue;
+    try {
+      win.contentView.addChildView(entry.view);
+    } catch {
+      /* ignore */
+    }
   }
 }
 
 export function destroyToastLayerForWindow(win: BrowserWindow): void {
-  dropLayer(win.id);
+  for (const entry of Array.from(layers.values())) {
+    if (entry.win === win) dropLayer(entry.key);
+  }
 }
 
 /** True when the layer can be used (never tried, or tried and worked). */
@@ -252,14 +278,17 @@ export function initToastLayer(): void {
 
   ipcMain.handle('toast-layer:available', () => toastLayerAvailable());
 
-  // Host renderer → layer: the full list of top toasts (empty = hide).
+  // Host renderer → layer: the full list for one anchor (empty = hide).
   ipcMain.on('toast-layer:render', (e, payload: ToastLayerPayload) => {
     const win = winOf(e);
     if (!win || win.isDestroyed()) return;
     const items = Array.isArray(payload?.items) ? payload.items : [];
-    const entry = ensureLayer(win);
+    const anchor = normalizeToastLayerAnchor(payload?.anchor);
+    // Don't build a view just to tell it there's nothing to show.
+    if (items.length === 0 && !layers.has(layerKey(win, anchor))) return;
+    const entry = ensureLayer(win, anchor);
     if (!entry) return;
-    pushRender(entry, {items, theme: payload?.theme, zoom: payload?.zoom});
+    pushRender(entry, {items, theme: payload?.theme, zoom: payload?.zoom, anchor});
   });
 
   // Layer → main: its rendered content size, in the layer's CSS px.

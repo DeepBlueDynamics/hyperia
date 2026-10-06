@@ -21,6 +21,7 @@ type FakeNode = {
   appendChild: (n: FakeNode) => void;
   removeChild: (n: FakeNode) => void;
   setAttribute: (k: string, v: string) => void;
+  getAttribute: (k: string) => string | null;
   addEventListener: (type: string, fn: () => void) => void;
   click: () => void;
 };
@@ -45,6 +46,9 @@ function node(tag: string): FakeNode {
     },
     setAttribute(k, v) {
       n.attrs[k] = v;
+    },
+    getAttribute(k) {
+      return k in n.attrs ? n.attrs[k] : null;
     },
     addEventListener(type, fn) {
       (n.handlers[type] = n.handlers[type] || []).push(fn);
@@ -177,4 +181,58 @@ test('layer page assets exist and the page wires them with a CSP', (t) => {
   // The renderer's theme list must match the page's.
   const client = readFileSync(join(__dirname, '../../lib/toast-layer.ts'), 'utf8');
   for (const v of R.THEME_VARS) t.true(client.includes(`'${v}'`), `${v} mirrored by lib/toast-layer.ts`);
+});
+
+test('render: a bottom-right toast has its text, links and a close that reports "close"', (t) => {
+  const doc = fakeDoc();
+  const root = node('div');
+  const clicks: string[] = [];
+  R.render(
+    doc,
+    root,
+    [
+      {
+        id: 'note-update',
+        kind: 'toast',
+        text: 'Version 1.2.3 ready.',
+        buttons: [{id: 'notes', label: 'Notes'}],
+        dismissable: true
+      },
+      {id: 'stack-1', kind: 'toast', tone: 'error', text: "Couldn't copy"}
+    ],
+    (id: string, b: string) => clicks.push(`${id}:${b}`)
+  );
+  const [update, error] = root.children;
+  t.is(update.className, 'hy-tl-toast');
+  t.true(text(update).includes('Version 1.2.3 ready.'));
+  const close = update.children[update.children.length - 1];
+  t.is(close.className, 'hy-tl-close');
+  close.click();
+  update.children[1].children[1].children[0].click();
+  t.deepEqual(clicks, ['note-update:close', 'note-update:notes']);
+  t.is(error.className, 'hy-tl-toast hy-tl-toast-error');
+  t.false(
+    error.children.some((c) => c.className === 'hy-tl-close'),
+    'no × unless dismissable'
+  );
+});
+
+test('render: unchanged items keep their node so their entry animation does not replay', (t) => {
+  const doc = fakeDoc();
+  const root = node('div');
+  R.render(doc, root, [{id: 'a', kind: 'toast', text: 'one'}], () => {});
+  const first = root.children[0];
+  R.render(
+    doc,
+    root,
+    [
+      {id: 'a', kind: 'toast', text: 'one'},
+      {id: 'b', kind: 'toast', text: 'two'}
+    ],
+    () => {}
+  );
+  t.is(root.children[0], first);
+  R.render(doc, root, [{id: 'a', kind: 'toast', text: 'changed'}], () => {});
+  t.not(root.children[0], first, 'a changed item is rebuilt');
+  t.true(text(root.children[0]).includes('changed'));
 });

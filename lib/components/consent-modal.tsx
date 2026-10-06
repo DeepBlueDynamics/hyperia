@@ -13,6 +13,7 @@ import {
 } from '../permissions-bus';
 import {onToastLayerAction, setLayerToasts, useToastLayer} from '../toast-layer';
 import {consentSubject, consentTargetName, consentVariant} from '../utils/consent-variant';
+import {useSuppressWebPanes} from '../utils/web-pane-suppress';
 
 const CONSENT_PILL_ID = 'consent-modal-pill';
 
@@ -123,11 +124,7 @@ export default function ConsentModal(): React.ReactElement | null {
   // is up, pull the window's web panes off-screen (frozen-still, no blank) so it
   // renders on top; restore on close. Only for the full modal, not the pill.
   const hasPrompt = !!req;
-  React.useEffect(() => {
-    if (!hasPrompt) return undefined;
-    ipcRenderer.send('web-panes:suppress', {suppressed: true});
-    return () => ipcRenderer.send('web-panes:suppress', {suppressed: false});
-  }, [hasPrompt]);
+  useSuppressWebPanes(hasPrompt, 'consent-modal');
 
   // The collapsed "waiting" pill has no suppression of its own, so it used to
   // vanish behind any web pane at the top of the window (#297). With the native

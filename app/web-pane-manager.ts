@@ -109,7 +109,37 @@ function nativeVisible(entry: WebPaneEntry): boolean {
 // of z-index. Uses the SAME freeze-swap as a per-pane overlay: hand the renderer
 // a still of the live page BEFORE pulling the native view, so the pane shows a
 // frozen frame, not a blank white rectangle (the #195 blank-on-save regression).
-export function setWindowWebPanesSuppressed(win: BrowserWindow, suppressed: boolean): void {
+//
+// Ref-counted by `holder`: two overlays can be up at once (consent prompt +
+// Save Tab), and the first one closing must not un-hide the panes under the other.
+const suppressHolders = new Map<number, Set<string>>();
+
+export function setWindowWebPanesSuppressed(win: BrowserWindow, suppressed: boolean, holder = 'main'): void {
+  let set = suppressHolders.get(win.id);
+  if (!set) suppressHolders.set(win.id, (set = new Set()));
+  const was = set.size > 0;
+  if (suppressed) set.add(holder);
+  else set.delete(holder);
+  if (set.size === 0) suppressHolders.delete(win.id);
+  if (set.size > 0 === was) return;
+  applyWindowSuppressed(win, set.size > 0);
+}
+
+// Drop every holder for a window whose renderer reloaded or went away — its
+// overlays are gone, so their holds would hide the web panes forever.
+export function clearRendererWebPaneSuppression(win: BrowserWindow): void {
+  const set = suppressHolders.get(win.id);
+  if (!set) return;
+  for (const h of Array.from(set)) {
+    if (h.startsWith('r:')) set.delete(h);
+  }
+  if (set.size === 0) {
+    suppressHolders.delete(win.id);
+    if (!win.isDestroyed()) applyWindowSuppressed(win, false);
+  }
+}
+
+function applyWindowSuppressed(win: BrowserWindow, suppressed: boolean): void {
   if (suppressed) suppressedWins.add(win.id);
   else suppressedWins.delete(win.id);
   for (const [uid, entry] of panes) {
@@ -811,6 +841,7 @@ function destroyPane(uid: string, immediate = false) {
 // Tear down every pane belonging to a window (call on window close).
 export function destroyPanesForWindow(win: BrowserWindow) {
   suppressedWins.delete(win.id);
+  suppressHolders.delete(win.id);
   for (const [uid, entry] of panes) {
     if (entry.win === win) destroyPane(uid, true);
   }
@@ -1032,9 +1063,19 @@ export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
   // native web panes pulled off-screen while it's up — native WebContentsViews
   // always paint ABOVE the DOM, so a web pane would sit on top of the toast.
   // Mirrors the main-side suppression the close-confirm modal already uses; the
-  // overlay sends true on open and false on close.
-  ipcMain.on('web-panes:suppress', (e, {suppressed}: {suppressed: boolean}) => {
+  // overlay sends true on open and false on close, under its own `holder` key.
+  const watchedHosts = new WeakSet<Electron.WebContents>();
+  ipcMain.on('web-panes:suppress', (e, msg: {suppressed: boolean; holder?: string}) => {
     const win = BrowserWindow.fromWebContents(e.sender);
-    if (win && !win.isDestroyed()) setWindowWebPanesSuppressed(win, !!suppressed);
+    if (!win || win.isDestroyed()) return;
+    if (!watchedHosts.has(e.sender)) {
+      watchedHosts.add(e.sender);
+      // A reload drops the renderer's overlays without their "false".
+      e.sender.on('did-start-loading', () => {
+        if (!win.isDestroyed()) clearRendererWebPaneSuppression(win);
+      });
+    }
+    const holder = `r:${typeof msg?.holder === 'string' && msg.holder ? msg.holder : 'default'}`;
+    setWindowWebPanesSuppressed(win, !!msg?.suppressed, holder);
   });
 }

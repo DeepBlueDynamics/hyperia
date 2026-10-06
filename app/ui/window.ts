@@ -494,11 +494,11 @@ export function newWindow(
       // would cover the (DOM) close-confirm modal — the terminal dims but the
       // modal is hidden behind the page. Pull the window's web views off-screen
       // while the modal is up; restore them when the choice is made.
-      if (!window.isDestroyed()) setWindowWebPanesSuppressed(window, true);
+      if (!window.isDestroyed()) setWindowWebPanesSuppressed(window, true, `close-confirm-${id}`);
       const finish = (ok: boolean) => {
         if (settled) return;
         settled = true;
-        if (!window.isDestroyed()) setWindowWebPanesSuppressed(window, false);
+        if (!window.isDestroyed()) setWindowWebPanesSuppressed(window, false, `close-confirm-${id}`);
         const e = pendingClose.get(id);
         if (e) clearTimeout(e.ackTimer);
         pendingClose.delete(id);

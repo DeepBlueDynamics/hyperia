@@ -6,7 +6,7 @@
 
 import type {ToastLayerItem} from '../../app/toast-layer';
 
-export type {ToastLayerItem, ToastLayerButton} from '../../app/toast-layer';
+export type {ToastLayerAnchor, ToastLayerItem, ToastLayerButton} from '../../app/toast-layer';
 
 export interface ToastLayerHub {
   /** Replace `source`'s items. Lower `order` renders higher up. */

@@ -11,6 +11,7 @@ import type {CloneLaunch} from '../utils/clone-launch';
 import {useShortcutHints} from '../utils/keymaps';
 import {cloneLaunchForUid, openLayout} from '../utils/layouts';
 import {SPLIT_COMMANDS} from '../utils/shortcut-hint';
+import {useSuppressWebPanes} from '../utils/web-pane-suppress';
 
 type SplitDir = 'right' | 'down' | 'left' | 'up';
 const SPLIT_LABELS: Record<SplitDir, string> = {right: 'Right', down: 'Down', left: 'Left', up: 'Up'};
@@ -238,6 +239,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
     // the agent consent gate. We only show the active state + a compact editor.
     const [pulseOpen, setPulseOpen] = React.useState(false);
     const [pulseActive, setPulseActive] = React.useState(false);
+    // It can overhang a neighboring web pane, which would paint over it.
+    useSuppressWebPanes(pulseOpen, 'pulse-popover');
     // Popover position in viewport coords. Pane containers clip with
     // overflow:hidden, so the old absolute popover was cut off in short or
     // narrow panes and could land over a neighbor. position:fixed from the

@@ -115,6 +115,87 @@ body {
 .hy-tl-pill .hy-tl-emoji {
   font-size: 14px;
 }
+/* Bottom-right notice stack — matches the DOM toast-stack it replaces. */
+.hy-tl-root[data-anchor='bottom-right'] {
+  align-items: flex-end;
+  padding: 24px 16px 16px 24px;
+}
+.hy-tl-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 400px;
+  padding: 10px 10px 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-neutral);
+  background: var(--bg-secondary);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.45;
+  user-select: text;
+  animation: hyToastUp 180ms ease;
+}
+.hy-tl-toast-error {
+  border-color: var(--accent-danger);
+}
+.hy-tl-toast-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--accent-primary);
+}
+.hy-tl-toast-error .hy-tl-toast-icon {
+  color: var(--accent-danger);
+}
+.hy-tl-toast-body {
+  flex: 1;
+  min-width: 0;
+}
+.hy-tl-toast-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.hy-tl-toast-links {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+.hy-tl-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent-primary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.hy-tl-close {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  font-size: 14px;
+  line-height: 18px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.hy-tl-close:hover {
+  background: var(--border-neutral);
+  color: var(--text-primary);
+}
+@keyframes hyToastUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 @keyframes hyToastIn {
   from {
     opacity: 0;
