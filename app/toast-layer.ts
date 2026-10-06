@@ -47,6 +47,10 @@ export interface ToastLayerItem {
   tone?: 'info' | 'error';
   // Show a × that sends the 'close' action.
   dismissable?: boolean;
+  // 0..1 draws a progress bar under the text; -1 = indeterminate.
+  progress?: number;
+  // Secondary line under the text (sizes, status).
+  detail?: string;
 }
 
 export interface ToastLayerPayload {

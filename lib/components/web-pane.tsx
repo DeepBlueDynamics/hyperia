@@ -19,6 +19,7 @@ import FindBar from './find-bar';
 import {PaneBand} from './pane-band';
 import {activeTerminals} from './term';
 import {UrlNavigator} from './url-navigator';
+import {TOGGLE_DOWNLOADS_EVENT} from './web-downloads';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {ipcMain, ipcRenderer} = require('electron');
@@ -2508,6 +2509,29 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                         }}
                       >
                         Copy to clipboard + save to ~/.hyperia/snapshots
+                      </div>
+                    </div>
+                  </span>
+                  <span
+                    className="term_controlIcon term_tooltipTrigger"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      window.dispatchEvent(new CustomEvent(TOGGLE_DOWNLOADS_EVENT));
+                    }}
+                    style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
+                  >
+                    <i className="ti ti-download" style={{fontSize: '14px'}} aria-hidden="true" />
+                    <div className="term_tooltip" style={{minWidth: '160px'}}>
+                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Downloads</div>
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          fontFamily: 'var(--font-mono)',
+                          color: 'var(--text-secondary)',
+                          marginTop: 'var(--space-2)'
+                        }}
+                      >
+                        Progress + recent files
                       </div>
                     </div>
                   </span>
