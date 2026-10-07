@@ -553,7 +553,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
                     {shownText}
                   </span>
                 ) : (
-                  shownText
+                  <span className="tab_label">{shownText}</span>
                 )}
               </span>
             )}
@@ -795,6 +795,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         }
 
         .tab_bell {
+          flex-shrink: 0;
           font-size: 10px;
           margin-right: 4px;
           animation: tab-bell-ring 0.6s ease;
@@ -819,7 +820,13 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           }
         }
 
+        /* Flex row: the bell and icons keep their size and only the name
+           shrinks with an ellipsis. As an inline-flex box the whole name
+           was swapped for "…" once the bell made it overflow. */
         .tab_textInner {
+          display: flex;
+          align-items: center;
+          justify-content: center;
           padding: 0 12px;
           text-align: center;
           text-overflow: ellipsis;
@@ -835,8 +842,17 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         }
 
         .tab_textContent {
-          display: inline-flex;
+          display: flex;
           align-items: center;
+          min-width: 0;
+          overflow: hidden;
+        }
+
+        .tab_label {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          min-width: 0;
         }
 
         .tab_webIcon {
@@ -854,7 +870,8 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           font-size: 11px;
           opacity: 0.75;
           max-width: 100%;
-          display: inline-block;
+          min-width: 0;
+          display: block;
         }
 
         .tab_webUrlScroll {
