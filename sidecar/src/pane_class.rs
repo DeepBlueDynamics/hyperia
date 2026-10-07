@@ -201,7 +201,9 @@ struct ProcNode {
 enum ForegroundWalk {
     NoChild,
     One(u32),
-    Ambiguous,
+    /// More than one child at some level; carries the last process above
+    /// the split (None = the shell itself has several children).
+    Ambiguous(Option<u32>),
 }
 
 pub fn observe_process(shell_pid: u32) -> ProcessObs {
@@ -259,11 +261,12 @@ fn observe_nodes(root: u32, nodes: &[ProcNode]) -> ProcessObs {
                 ambiguous: false,
             }
         }
-        ForegroundWalk::Ambiguous => ProcessObs {
+        ForegroundWalk::Ambiguous(above) => ProcessObs {
             alive: true,
             foreground_name: String::new(),
             foreground_cmdline: String::new(),
-            foreground_chain: Vec::new(),
+            // The unambiguous part: n8 with two children still shows n8.
+            foreground_chain: above.map(|pid| chain_to(root, pid, nodes)).unwrap_or_default(),
             ambiguous: true,
         },
     }
@@ -294,7 +297,9 @@ fn chain_to(root: u32, leaf: u32, nodes: &[ProcNode]) -> Vec<String> {
 fn walk_foreground(pid: u32, nodes: &[ProcNode]) -> ForegroundWalk {
     let mut children: Vec<u32> = nodes
         .iter()
-        .filter(|node| node.parent == Some(pid))
+        // Windows' console host rides along with console programs; it is
+        // never the foreground and must not make a tree look ambiguous.
+        .filter(|node| node.parent == Some(pid) && basename_token(&node.name) != "conhost")
         .map(|node| node.pid)
         .collect();
     children.sort_unstable();
@@ -302,9 +307,10 @@ fn walk_foreground(pid: u32, nodes: &[ProcNode]) -> ForegroundWalk {
         0 => ForegroundWalk::NoChild,
         1 => match walk_foreground(children[0], nodes) {
             ForegroundWalk::NoChild => ForegroundWalk::One(children[0]),
+            ForegroundWalk::Ambiguous(None) => ForegroundWalk::Ambiguous(Some(children[0])),
             other => other,
         },
-        _ => ForegroundWalk::Ambiguous,
+        _ => ForegroundWalk::Ambiguous(None),
     }
 }
 
@@ -362,15 +368,12 @@ fn find_agent(evidence: &ClassEvidence) -> Option<&'static str> {
     if live_is_runtime && matches!(recorded_token, Some("n8" | "nemesis8")) {
         return recorded_token;
     }
-    // The process tree itself shows the launcher: pwsh -> n8 -> docker attach.
-    // Needs no shell integration, so cmd.exe panes and stale records work too.
-    if live_is_runtime {
-        if let Some(token) = evidence
-            .foreground_chain
-            .iter()
-            .filter_map(|name| agent_token(name))
-            .find(|token| matches!(*token, "n8" | "nemesis8"))
-        {
+    // The process tree itself shows the agent, no shell integration needed
+    // (cmd.exe panes, stale records): pwsh -> n8 -> docker attach, or
+    // claude -> bash while it runs a tool. Anything else in front (vim, a long
+    // node command) is a real foreground program, not the agent's input.
+    if let Some(token) = chain_agent(evidence) {
+        if live_is_runtime || is_shell_token(&live) {
             return Some(token);
         }
     }
@@ -391,6 +394,11 @@ fn find_agent(evidence: &ClassEvidence) -> Option<&'static str> {
         return Some(token);
     }
     None
+}
+
+/// The outermost agent program in the foreground chain.
+fn chain_agent(evidence: &ClassEvidence) -> Option<&'static str> {
+    evidence.foreground_chain.iter().find_map(|name| agent_token(name))
 }
 
 /// App name/cmdline left behind after the command exited are not a live app.
@@ -480,6 +488,14 @@ pub fn classify(evidence: &ClassEvidence) -> Classification {
     }
 
     if evidence.process_ambiguous {
+        // n8 --danger runs a gateway beside its docker attach: two children,
+        // but the agent above the split is certain.
+        if let Some(token) = chain_agent(evidence) {
+            return Classification {
+                class: PaneClass::Agent { token: token.to_string() },
+                summary: format!("agent {token}: running in the process tree; its children are ambiguous"),
+            };
+        }
         return classify_ambiguous(evidence);
     }
 
@@ -806,6 +822,69 @@ mod tests {
         vim.foreground_name = "vim".into();
         vim.foreground_chain = vec!["n8".into(), "vim".into()];
         assert!(classify(&vim).agent_token().is_none());
+    }
+
+    #[test]
+    fn an_agent_running_a_tool_shell_is_still_the_agent() {
+        let mut evidence = idle_shell("pwsh");
+        evidence.shell_has_integration = false;
+        evidence.foreground_name = "bash".into();
+        evidence.foreground_chain = vec!["claude".into(), "bash".into(), "bash".into()];
+        assert_eq!(classify(&evidence).agent_token(), Some("claude"));
+    }
+
+    #[test]
+    fn n8_with_a_gateway_beside_docker_is_n8_not_ambiguous() {
+        let node = |pid: u32, parent: u32, name: &str| ProcNode {
+            pid,
+            parent: Some(parent),
+            name: name.into(),
+            cmdline: String::new(),
+        };
+        // pwsh -> n8 --danger -> {n8 serve -> conhost, docker attach}
+        let nodes = vec![
+            node(10, 1, "pwsh.exe"),
+            node(20, 10, "n8.exe"),
+            node(21, 20, "n8.exe"),
+            node(22, 21, "conhost.exe"),
+            node(23, 20, "docker.exe"),
+        ];
+        let obs = observe_nodes(10, &nodes);
+        assert!(obs.ambiguous);
+        assert_eq!(obs.foreground_chain, vec!["n8".to_string()]);
+        let mut evidence = idle_shell("pwsh");
+        evidence.shell_has_integration = false;
+        evidence.process_ambiguous = true;
+        evidence.foreground_chain = obs.foreground_chain;
+        assert_eq!(classify(&evidence).agent_token(), Some("n8"));
+    }
+
+    #[test]
+    fn conhost_is_never_the_foreground_or_a_second_child() {
+        let node = |pid: u32, parent: u32, name: &str| ProcNode {
+            pid,
+            parent: Some(parent),
+            name: name.into(),
+            cmdline: String::new(),
+        };
+        let nodes = vec![node(10, 1, "pwsh.exe"), node(20, 10, "claude.exe"), node(21, 20, "conhost.exe")];
+        let obs = observe_nodes(10, &nodes);
+        assert!(!obs.ambiguous);
+        assert_eq!(obs.foreground_name, "claude");
+    }
+
+    #[test]
+    fn a_shell_with_two_children_stays_ambiguous() {
+        let node = |pid: u32, parent: u32, name: &str| ProcNode {
+            pid,
+            parent: Some(parent),
+            name: name.into(),
+            cmdline: String::new(),
+        };
+        let nodes = vec![node(10, 1, "pwsh.exe"), node(20, 10, "claude.exe"), node(21, 10, "python.exe")];
+        let obs = observe_nodes(10, &nodes);
+        assert!(obs.ambiguous);
+        assert!(obs.foreground_chain.is_empty(), "no agent is borrowed from one branch");
     }
 
     #[test]
