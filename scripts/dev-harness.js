@@ -484,12 +484,95 @@ const scenarios = [
         detail: `web view existed: ${hadView}; main uncaught exception: ${crashed}; renderer reachable: ${alive}`
       };
     }
+  },
+  {
+    id: 's12',
+    name: 'Bottom-right toasts draw on the native layer above a web pane',
+    async run(ctx) {
+      await h();
+      const r = await run(async (url) => {
+        const {pause, win} = window.__h;
+        (window.store || window.rpc.store).dispatch({type: 'TERM_GROUP_ADD_WEB_TAB', url, name: 'harness'});
+        await pause(3000);
+        window.rpc.emitter.emit('pane copy files done', {uid: 'x', ok: true, dir: '/tmp', count: 1, names: ['a.txt']});
+        await pause(1500);
+        const w = win();
+        const [cw, ch] = w.getContentSize();
+        const kids = w.contentView.children;
+        const info = kids.map((v, i) => {
+          let page = '?';
+          try {
+            page = v.webContents.getURL().split('/').pop();
+          } catch {
+            /* gone */
+          }
+          const b = v.getBounds();
+          const visible = typeof v.getVisible === 'function' ? v.getVisible() : null;
+          return {i, url: page, b, visible};
+        });
+        const layers = info.filter((k) => /toast-layer.html/.test(k.url) && k.visible !== false);
+        const bottom = layers.find((k) => k.b.x + k.b.width >= cw - 1 && k.b.y + k.b.height >= ch - 1 && k.b.y > 0);
+        const lastWeb = Math.max(-1, ...info.filter((k) => !/toast-layer.html/.test(k.url)).map((k) => k.i));
+        // The DOM fallback must not render while the layer is up.
+        const domToast = [...document.querySelectorAll('div')].some(
+          (d) => d.style.position === 'fixed' && d.style.bottom === '16px' && d.innerText.includes('a.txt')
+        );
+        return {cw, ch, info, bottom: bottom || null, lastWeb, domToast};
+      }, ctx.pageUrl);
+      const pass = !!r.bottom && r.bottom.i > r.lastWeb && !r.domToast;
+      return {
+        pass,
+        detail: `bottom-right layer ${r.bottom ? JSON.stringify(r.bottom.b) : 'missing'} (window ${r.cw}x${r.ch}); above web view: ${r.bottom ? r.bottom.i > r.lastWeb : false}; DOM fallback shown: ${r.domToast}`
+      };
+    }
+  },
+  {
+    id: 's13',
+    name: 'Web-pane suppression is held until the LAST overlay lets go',
+    async run(ctx) {
+      await h();
+      const r = await run(async (url) => {
+        const {pause, win} = window.__h;
+        const {ipcRenderer} = require('electron');
+        (window.store || window.rpc.store).dispatch({type: 'TERM_GROUP_ADD_WEB_TAB', url, name: 'harness'});
+        await pause(3000);
+        const webView = () =>
+          win().contentView.children.find((v) => {
+            try {
+              return !/toast-layer.html/.test(v.webContents.getURL());
+            } catch {
+              return false;
+            }
+          });
+        const vis = () => {
+          const v = webView();
+          return v && typeof v.getVisible === 'function' ? v.getVisible() : null;
+        };
+        const send = (holder, suppressed) => ipcRenderer.send('web-panes:suppress', {holder, suppressed});
+        const start = vis();
+        send('harness-a', true);
+        send('harness-b', true);
+        await pause(600);
+        const both = vis();
+        send('harness-a', false);
+        await pause(600);
+        const oneLeft = vis();
+        send('harness-b', false);
+        await pause(600);
+        return {start, both, oneLeft, end: vis()};
+      }, ctx.pageUrl);
+      const pass = r.start === true && r.both === false && r.oneLeft === false && r.end === true;
+      return {
+        pass,
+        detail: `visible: start ${r.start}, both held ${r.both}, after first release ${r.oneLeft}, after last ${r.end}`
+      };
+    }
   }
 ];
 
 // ---------- main ----------
 // Scenarios that can end the window or crash main get their own fresh launch.
-const GROUPS = [['s1', 's3', 's4', 's5', 's6', 's9', 's7', 's10', 's11'], ['s2'], ['s8']];
+const GROUPS = [['s1', 's3', 's4', 's5', 's6', 's9', 's7', 's10', 's11', 's12', 's13'], ['s2'], ['s8']];
 
 async function launch(pageUrl) {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'hyperia-harness-'));

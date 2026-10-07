@@ -1,4 +1,3 @@
-import {ipcRenderer} from 'electron';
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 
 import {useStore} from 'react-redux';
@@ -15,6 +14,7 @@ import {
   TAB_AUTOSAVED_EVENT
 } from '../utils/tab-autosave';
 import type {ApprovedResume} from '../utils/tab-autosave';
+import {useSuppressWebPanes} from '../utils/web-pane-suppress';
 import {
   filterLayoutToTab,
   resumeCandidatesForTab,
@@ -150,11 +150,7 @@ const WorkspaceSaveToast: React.FC = () => {
   // behind any web pane in the tab. Pull the window's web panes off-screen while
   // the toast is open (same suppression the close-confirm modal uses); restore
   // on close/unmount.
-  useEffect(() => {
-    if (!open) return undefined;
-    ipcRenderer.send('web-panes:suppress', {suppressed: true});
-    return () => ipcRenderer.send('web-panes:suppress', {suppressed: false});
-  }, [open]);
+  useSuppressWebPanes(!!open, 'save-tab');
 
   useEffect(() => {
     const onList = ({rows}: {rows: Array<{name: string; savedAt: string; panes: number; webPanes: number}>}) => {

@@ -8,6 +8,8 @@
 // file-copy result; generic enough for any transient notice.
 import React from 'react';
 
+import {onToastLayerAction, setLayerToasts, useToastLayer} from '../toast-layer';
+
 export interface ToastOptions {
   kind?: 'info' | 'error';
   /** Auto-expire after this many ms (default 30s). */
@@ -123,7 +125,28 @@ export default function ToastStack(): React.ReactElement | null {
     };
   }, [beginDismiss]);
 
-  if (toasts.length === 0) return null;
+  // On the native layer the stack draws above web panes; the DOM below is the
+  // fallback when the layer isn't available.
+  const layer = useToastLayer();
+  React.useEffect(() => {
+    if (!layer) return;
+    setLayerToasts(
+      'toast-stack',
+      0,
+      toasts
+        .filter((t) => !leaving.has(t.id))
+        .map((t) => ({id: `stack-${t.id}`, kind: 'toast', text: t.text, tone: t.kind, dismissable: true})),
+      'bottom-right'
+    );
+  }, [layer, toasts, leaving]);
+  React.useEffect(() => {
+    if (!layer) return;
+    return onToastLayerAction(({toastId, buttonId}) => {
+      if (buttonId === 'close' && toastId.startsWith('stack-')) beginDismiss(Number(toastId.slice(6)));
+    });
+  }, [layer, beginDismiss]);
+
+  if (layer || toasts.length === 0) return null;
 
   return (
     <div

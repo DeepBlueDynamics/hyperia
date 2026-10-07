@@ -73,15 +73,64 @@
     return pill;
   }
 
-  // Rebuild `root` from `items`. `send(toastId, buttonId)` is the action sink.
-  function render(doc, root, items, send) {
-    while (root.firstChild) root.removeChild(root.firstChild);
-    const list = Array.isArray(items) ? items : [];
-    for (const item of list) {
-      if (!item || typeof item.id !== 'string') continue;
-      root.appendChild(item.kind === 'pill' ? buildPill(doc, item, send) : buildCard(doc, item, send));
+  // Bottom-right notice: tone icon, text, optional buttons, optional ×.
+  function buildToast(doc, item, send) {
+    const toast = el(doc, 'div', 'hy-tl-toast' + (item.tone === 'error' ? ' hy-tl-toast-error' : ''));
+    toast.setAttribute('data-toast-id', item.id);
+    toast.appendChild(el(doc, 'span', 'hy-tl-toast-icon', item.emoji || (item.tone === 'error' ? '⚠' : '✓')));
+    const body = el(doc, 'div', 'hy-tl-toast-body');
+    body.appendChild(el(doc, 'div', 'hy-tl-toast-text', item.text || ''));
+    const buttons = Array.isArray(item.buttons) ? item.buttons : [];
+    if (buttons.length) {
+      const row = el(doc, 'div', 'hy-tl-toast-links');
+      for (const b of buttons) {
+        const btn = el(doc, 'button', 'hy-tl-link', b.label);
+        btn.setAttribute('type', 'button');
+        btn.addEventListener('click', () => send(item.id, b.id));
+        row.appendChild(btn);
+      }
+      body.appendChild(row);
     }
-    return list.length;
+    toast.appendChild(body);
+    if (item.dismissable) {
+      const close = el(doc, 'button', 'hy-tl-close', '×');
+      close.setAttribute('type', 'button');
+      close.setAttribute('aria-label', 'Dismiss');
+      close.title = 'Dismiss';
+      close.addEventListener('click', () => send(item.id, 'close'));
+      toast.appendChild(close);
+    }
+    return toast;
+  }
+
+  function build(doc, item, send) {
+    if (item.kind === 'pill') return buildPill(doc, item, send);
+    if (item.kind === 'toast') return buildToast(doc, item, send);
+    return buildCard(doc, item, send);
+  }
+
+  // Sync `root` to `items`. Unchanged items keep their node, so a new toast
+  // doesn't replay the entry animation on the ones already up.
+  // `send(toastId, buttonId)` is the action sink.
+  function render(doc, root, items, send) {
+    const all = Array.isArray(items) ? items : [];
+    const list = all.filter((i) => i && typeof i.id === 'string');
+    const old = new Map();
+    for (const node of Array.from(root.children)) old.set(node.getAttribute('data-toast-id'), node);
+    const next = list.map((item) => {
+      const sig = JSON.stringify(item);
+      const prev = old.get(item.id);
+      if (prev && prev.__hySig === sig) {
+        old.delete(item.id);
+        return prev;
+      }
+      const node = build(doc, item, send);
+      node.__hySig = sig;
+      return node;
+    });
+    while (root.firstChild) root.removeChild(root.firstChild);
+    for (const node of next) root.appendChild(node);
+    return all.length;
   }
 
   return {THEME_VARS, applyTheme, render};

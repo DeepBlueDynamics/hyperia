@@ -109,7 +109,7 @@ const denyBtn: React.CSSProperties = {
 };
 
 // Window-level create-consent toast. A new tab/window has no target pane, so
-// these can't live in a pane band — they stack top-center over everything.
+// these can't live in a pane band — the cards stack mid-window over everything.
 //
 // Rendering has two paths. With the native toast layer (the normal case) the
 // cards and pill are drawn by a transparent WebContentsView ABOVE the window's
@@ -125,8 +125,25 @@ export default function AgentToast(): React.ReactElement | null {
 
   React.useEffect(() => {
     if (!layer) return undefined;
-    setLayerToasts('agent-toast', 0, layerItemsFor(reqs, expired));
-    return () => setLayerToasts('agent-toast', 0, []);
+    // Cards sit mid-window like the pane-access prompt; the collapsed pill
+    // stays in the top strip.
+    const items = layerItemsFor(reqs, expired);
+    setLayerToasts(
+      'agent-toast',
+      0,
+      items.filter((i) => i.kind !== 'pill'),
+      'center'
+    );
+    setLayerToasts(
+      'agent-pill',
+      0,
+      items.filter((i) => i.kind === 'pill'),
+      'top'
+    );
+    return () => {
+      setLayerToasts('agent-toast', 0, [], 'center');
+      setLayerToasts('agent-pill', 0, [], 'top');
+    };
   }, [layer, reqs, expired]);
 
   React.useEffect(() => {
@@ -187,9 +204,9 @@ export default function AgentToast(): React.ReactElement | null {
     <div
       style={{
         position: 'fixed',
-        top: 12,
+        top: '50%',
         left: '50%',
-        transform: 'translateX(-50%)',
+        transform: 'translate(-50%, -50%)',
         zIndex: 99999,
         display: 'flex',
         flexDirection: 'column',

@@ -1,5 +1,7 @@
 import React, {useState, useEffect, useRef} from 'react';
 
+import {useSuppressWebPanes} from '../utils/web-pane-suppress';
+
 type Callback = (url: string) => void;
 let _show: ((cb: Callback) => void) | null = null;
 
@@ -44,6 +46,9 @@ const WebPaneDialog = () => {
   };
 
   const cancel = () => setOpen(false);
+
+  // A centered modal over the pane area: web panes would paint over it.
+  useSuppressWebPanes(open, 'web-pane-dialog');
 
   if (!open) return null;
 
