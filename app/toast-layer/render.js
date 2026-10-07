@@ -80,6 +80,14 @@
     toast.appendChild(el(doc, 'span', 'hy-tl-toast-icon', item.emoji || (item.tone === 'error' ? '⚠' : '✓')));
     const body = el(doc, 'div', 'hy-tl-toast-body');
     body.appendChild(el(doc, 'div', 'hy-tl-toast-text', item.text || ''));
+    if (item.detail) body.appendChild(el(doc, 'div', 'hy-tl-toast-detail', item.detail));
+    if (typeof item.progress === 'number') {
+      const track = el(doc, 'div', 'hy-tl-progress' + (item.progress < 0 ? ' hy-tl-progress-busy' : ''));
+      const bar = el(doc, 'div', 'hy-tl-progress-bar');
+      if (item.progress >= 0) bar.setAttribute('style', 'width:' + Math.round(Math.min(1, item.progress) * 100) + '%');
+      track.appendChild(bar);
+      body.appendChild(track);
+    }
     const buttons = Array.isArray(item.buttons) ? item.buttons : [];
     if (buttons.length) {
       const row = el(doc, 'div', 'hy-tl-toast-links');
@@ -126,6 +134,8 @@
       }
       const node = build(doc, item, send);
       node.__hySig = sig;
+      // An update (e.g. download progress) must not replay the entry animation.
+      if (prev) node.className += ' hy-tl-noanim';
       return node;
     });
     while (root.firstChild) root.removeChild(root.firstChild);

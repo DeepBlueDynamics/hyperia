@@ -236,3 +236,32 @@ test('render: unchanged items keep their node so their entry animation does not 
   t.not(root.children[0], first, 'a changed item is rebuilt');
   t.true(text(root.children[0]).includes('changed'));
 });
+
+test('render: a toast with progress gets a bar sized to the fraction, -1 is indeterminate', (t) => {
+  const doc = fakeDoc();
+  const root = node('div');
+  R.render(
+    doc,
+    root,
+    [
+      {id: 'a', kind: 'toast', text: 'file.zip', detail: '1 MB of 4 MB · 25%', progress: 0.25},
+      {id: 'b', kind: 'toast', text: 'stream.bin', progress: -1}
+    ],
+    () => {}
+  );
+  const body = root.children[0].children[1];
+  t.true(text(body).includes('1 MB of 4 MB'));
+  const track = body.children.find((c) => c.className.startsWith('hy-tl-progress'))!;
+  t.is(track.children[0].attrs.style, 'width:25%');
+  const busy = root.children[1].children[1].children.find((c) => c.className.startsWith('hy-tl-progress'))!;
+  t.is(busy.className, 'hy-tl-progress hy-tl-progress-busy');
+});
+
+test('render: an updated item is rebuilt without replaying its entry animation', (t) => {
+  const doc = fakeDoc();
+  const root = node('div');
+  R.render(doc, root, [{id: 'a', kind: 'toast', text: 'f', progress: 0.1}], () => {});
+  t.false(root.children[0].className.includes('hy-tl-noanim'));
+  R.render(doc, root, [{id: 'a', kind: 'toast', text: 'f', progress: 0.2}], () => {});
+  t.true(root.children[0].className.includes('hy-tl-noanim'));
+});

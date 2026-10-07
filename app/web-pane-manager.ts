@@ -24,6 +24,7 @@ import {raiseToastLayer} from './toast-layer';
 import {fullPageClip} from './utils/fullpage-clip';
 import {ERR_ABORTED, initialLoadState, nextLoadState} from './utils/web-pane-loading';
 import type {WebPaneLoadEvent, WebPaneLoadState} from './utils/web-pane-loading';
+import {attachWebDownloads, initWebDownloads} from './web-downloads';
 
 const PARTITION = 'persist:hyperia-web';
 // DevTools docks into the bottom of the pane, taking this fraction of its height.
@@ -193,6 +194,12 @@ function getSharedSession(): Session {
   if (!sharedSession) {
     sharedSession = session.fromPartition(PARTITION);
     configureSession?.(sharedSession);
+    attachWebDownloads(sharedSession, (wc) => {
+      for (const [uid, entry] of panes) {
+        if (!viewGone(entry) && entry.view.webContents === wc) return {win: entry.win, uid};
+      }
+      return null;
+    });
   }
   return sharedSession;
 }
@@ -853,6 +860,7 @@ export function destroyPanesForWindow(win: BrowserWindow) {
  */
 export function initWebPaneManager(deps: {configureSession: ConfigureSession}) {
   configureSession = deps.configureSession;
+  initWebDownloads();
 
   const winOf = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) => BrowserWindow.fromWebContents(e.sender);
   const wcOf = (uid: string) => panes.get(uid)?.view.webContents;
