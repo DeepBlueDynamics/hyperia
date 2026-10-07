@@ -7,6 +7,7 @@ mod bridge;
 mod bugs;
 mod consent_log;
 mod dashboard;
+mod dashboard_comms;
 mod doors;
 mod identity;
 mod fsnav;
@@ -4832,6 +4833,8 @@ async fn main() -> anyhow::Result<()> {
     let dash_routes = axum::Router::new()
         .route("/dashboard", axum::routing::get(dashboard::get_dashboard))
         .route("/api/dashboard/version", axum::routing::get(dashboard::get_dashboard_version))
+        // Metadata-only comms graph for the dashboard (no subjects/bodies/payloads).
+        .route("/api/dashboard/comms", axum::routing::get(dashboard_comms::get_dashboard_comms))
         .route("/api/maximus/toggle", axum::routing::post(dashboard::post_maximus_toggle))
         .route("/api/telemetry/snapshot", axum::routing::get(dashboard::get_telemetry_snapshot))
         .route("/api/telemetry/toggle", axum::routing::post(dashboard::post_telemetry_toggle))
