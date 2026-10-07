@@ -1049,6 +1049,7 @@ impl Bridge {
             shell_binary,
             foreground_name: obs.foreground_name,
             foreground_cmdline: obs.foreground_cmdline,
+            foreground_chain: obs.foreground_chain,
             shell_has_integration,
             shell_state,
             shell_app_name,
