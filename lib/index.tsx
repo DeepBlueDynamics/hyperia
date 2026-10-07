@@ -25,6 +25,7 @@ import CloseConfirmModal, {showCloseConfirm} from './components/close-confirm-mo
 import ConsentModal from './components/consent-modal';
 import {activeTerminals} from './components/term';
 import ToastStack, {pushToast, pushStickyToast, dismissStickyToast} from './components/toast-stack';
+import WebDownloads from './components/web-downloads';
 import WebPaneDialog, {showWebPaneDialog} from './components/web-pane-dialog';
 import WorkspaceSaveToast from './components/workspace-save-toast';
 import HyperContainer from './containers/hyper';
@@ -798,6 +799,7 @@ root.render(
     <AgentToast />
     <WorkspaceSaveToast />
     <ToastStack />
+    <WebDownloads />
     <ConsentModal />
     <CloseConfirmModal />
   </Provider>
