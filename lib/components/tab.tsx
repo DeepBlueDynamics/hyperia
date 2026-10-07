@@ -153,6 +153,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
   };
 
   const handleDoubleClick = (event: React.MouseEvent) => {
+    // A double-click inside the editor selects a word; it must not restart
+    // the rename (which resets the text and re-rolls the emoji).
+    if (renamingRef.current) return;
     event.preventDefault();
     event.stopPropagation();
     startRename();
@@ -468,7 +471,9 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
         onClick={props.onClick}
         onMouseDown={handleMouseDown}
         onContextMenu={handleContextMenu}
-        draggable={!isPinned}
+        // Not while renaming: a press-and-drag in the input would drag the tab
+        // instead of selecting text, and the blur ends the rename.
+        draggable={!isPinned && !renaming}
         onDragStart={props.onDragStart}
         onDragEnd={props.onDragEnd}
         style={{
