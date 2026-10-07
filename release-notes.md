@@ -1,23 +1,30 @@
-# Hyperia v0.21.7 — mail that reads like mail, toasts you can see 📬
+# Hyperia v0.21.8 — downloads, a comms dashboard, and agents that hear their mail ⬇
 
-Agent mail notices now arrive for every message, approval toasts show over web pages, and restored tabs stop doubling their prompt.
+Web panes can download files properly, the dashboard gains a live comms view, and agents running in n8 containers now get their mail notices.
 
-## Agent mail
+## Agents get their mail
 
-- **A notice for every message.** Each new message drops a one-line, email-style header into the recipient's pane: who it's from, when, the subject, and how many are unread. Bursts arriving within 5 seconds merge into one notice.
-- **Approvals no longer send mail.** Approving an agent's queued operation used to mail the sender a "delivered" note it already knew about, and that noise could hold back real notices. It's gone. Denials still tell the sender.
+Agents running inside n8 (Docker) containers never saw the "[Hyperia mail]" notice: their mail was stored, but nobody told them, and typing into their pane was refused as "not a supported agent". Hyperia now recognizes n8 by the whole process chain (`n8 → docker attach`), even when it runs a gateway alongside or the shell didn't record it. Agents running a tool still count as the agent.
 
-## Toasts over web panes
+## Downloads in web panes
 
-- Approval cards and notifications at the top of the window now draw **above web panes** instead of hiding behind them, without freezing the page underneath.
-- On Windows, the minimized pill and the card buttons up in the title-bar strip are clickable again, not just their border.
+- Downloads go straight to your Downloads folder, no Save dialog, with Chrome-style names (`report (1).pdf`).
+- A progress toast shows the file, size and a bar, with **Pause/Resume** and **Cancel**. When it finishes: **Open** and **Show in folder**.
+- A new **Downloads** button in the web pane header lists recent downloads, kept across restarts.
 
-## Restore
+## Toasts and prompts over web pages
 
-- Restored shells start at the size they were saved at, so a restored pane no longer shows its prompt twice.
+- Bottom-right toasts (drag-drop copies, downloads, audio, update notices) now draw above web panes instead of hiding behind them.
+- Agent permission cards ("run JavaScript in a web pane", "open a tab"…) now sit in the middle of the window, like the pane-access prompt.
+- Dialogs and menus over web panes no longer reappear under the page when another overlay closes. The Open Browser dialog, the pulse popover and every close confirmation now stay on top.
 
-## For contributors
+## Dashboard: proto_viz
 
-The dev harness now checks the toast layer too: `node scripts/dev-harness.js`.
+A new **proto_viz** tab on the dashboard: a live view of who's talking to whom. Agents and panes form a ring, with mail and pane access drawn between them, a sorted top-comms list and live stream, an agent-to-agent mail donut, plus file edits, tokens and services. It shows only who contacted whom and when, never message contents.
 
-Coming from further back? [v0.21.4](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.21.4) fixed stray tabs and sticky saving and added autosave for saved tabs.
+## Tabs
+
+- A tab that rings its bell no longer shows just "🔔 …"; the name stays readable.
+- Renaming a tab: click-drag and double-click now select text instead of ending the rename.
+
+Coming from further back? [v0.21.7](https://github.com/DeepBlueDynamics/hyperia/releases/tag/v0.21.7) made mail notices email-style and put toasts above web panes.
