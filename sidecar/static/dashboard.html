@@ -170,6 +170,65 @@
   .pill .led{width:6px;height:6px;border-radius:50%}
   @media(max-width:1500px){.shell{grid-template-columns:240px 1fr}.chatcol,.filecol{display:none}}
   @media(max-width:1000px){.shell{grid-template-columns:1fr}aside{position:static}.row-flow{grid-template-columns:1fr}}
+
+  /* ---- proto_viz tab (#proto_viz): ops-console view of real stats ---- */
+  body.proto > :not(.topbar):not(#proto):not(script){display:none !important}
+  body.proto .tb-right .ghost{display:none}
+  body:not(.proto) #proto{display:none}
+  #proto{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 370px;gap:8px;padding:8px 10px 10px;
+    background:#05070b;font-family:var(--mono);color:#cbd5e1;align-content:start}
+  .pv-p{border:1px solid #1b2433;background:#070a10;min-width:0}
+  .pv-t{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#7c8aa0;padding:7px 10px 4px;
+    display:flex;justify-content:space-between;gap:8px;white-space:nowrap;overflow:hidden}
+  .pv-t b{color:#f59e0b;font-weight:600}
+  .pv-head{grid-column:1/-1;display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:7px 10px}
+  .pv-title{font-size:13px;font-weight:700;letter-spacing:.16em;color:#e5e7eb;white-space:nowrap}
+  .pv-title::before{content:"| ";color:#f59e0b}
+  .pv-ctr{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#7c8aa0;display:flex;gap:14px;flex-wrap:wrap}
+  .pv-ctr b{color:#e5e7eb;font-weight:600}
+  .pv-ctr b.am{color:#f59e0b}
+  .pv-chips{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:4px;padding:6px 8px}
+  .pv-chip{font-size:10px;padding:3px 10px;border:1px solid;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pv-chip.ag{color:#fbbf24;border-color:#b45309;background:#1c1204}
+  .pv-chip.sh{color:#7dd3fc;border-color:#1d4ed8;background:#06101f}
+  .pv-chip.wb{color:#86efac;border-color:#15803d;background:#05150b}
+  .pv-chip.dm{color:#64748b;border-color:#1e293b;background:#080b11}
+  .pv-chip.focus{outline:1px solid currentColor;outline-offset:1px}
+  .pv-ring{position:relative;min-height:560px}
+  #pv-ring{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .pv-right{display:flex;flex-direction:column;gap:8px;min-width:0}
+  .pv-rows{padding:2px 10px 8px;font-size:10.5px}
+  .pv-row{display:grid;grid-template-columns:minmax(0,1fr) auto 34px;gap:8px;align-items:center;padding:3px 0 2px;border-top:1px solid #0f1622}
+  .pv-row:first-child{border-top:0}
+  .pv-row .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cbd5e1}
+  .pv-row .nm i{font-style:normal;color:#475569}
+  .pv-row .ct{text-align:right}
+  .pv-row .ag{color:#64748b;text-align:right;font-size:9.5px}
+  .pv-row .br{grid-column:1/-1;height:2px;background:#0f1622}
+  .pv-row .br i{display:block;height:100%}
+  .pv-ev{display:grid;grid-template-columns:8px 30px minmax(0,1fr);gap:7px;align-items:center;padding:2px 0;font-size:10px}
+  .pv-ev .mk{width:7px;height:7px}
+  .pv-ev .tm{color:#475569;font-size:9.5px;text-align:right}
+  .pv-ev .tx{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pv-ev .tx i{font-style:normal;color:#64748b}
+  .pv-kv{display:grid;grid-template-columns:1fr auto 1fr auto;gap:2px 10px;padding:2px 10px 8px;font-size:10px}
+  .pv-kv span{color:#7c8aa0;text-transform:uppercase;letter-spacing:.06em}
+  .pv-kv b{color:#e5e7eb;font-weight:500;text-align:right}
+  .pv-kv b.up{color:#22c55e} .pv-kv b.dn{color:#ef4444}
+  .pv-pods{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;padding:2px 10px 9px}
+  .pv-pod{height:18px;font-size:8.5px;letter-spacing:.05em;text-transform:uppercase;display:flex;align-items:center;
+    justify-content:center;overflow:hidden;white-space:nowrap;padding:0 3px}
+  .pv-pod.up{background:#166534;color:#dcfce7} .pv-pod.dn{background:#7f1d1d;color:#fecaca} .pv-pod.na{background:#141c28;color:#64748b}
+  .pv-key{display:flex;flex-wrap:wrap;gap:6px 12px;padding:2px 10px 9px;font-size:9.5px;color:#7c8aa0;text-transform:uppercase}
+  .pv-key i{display:inline-block;width:12px;height:2px;vertical-align:middle;margin-right:5px}
+  .pv-key i.dot{width:6px;height:6px;border-radius:50%}
+  .pv-flow{grid-column:1/-1}
+  #pv-flow{width:100%;height:74px;display:block}
+  .pv-bottom{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr) minmax(0,1.25fr);gap:8px}
+  .pv-bottom canvas{width:100%;height:200px;display:block}
+  canvas.pv-hist{width:100%;height:38px;display:block}
+  .pv-none{color:#475569;font-size:10px;padding:6px 0;text-transform:uppercase;letter-spacing:.08em}
+  @media(max-width:1250px){#proto{grid-template-columns:minmax(0,1fr)}.pv-bottom{grid-template-columns:minmax(0,1fr)}.pv-ring{min-height:460px}}
 </style></head><body>
 
 <div class="topbar">
@@ -179,6 +238,7 @@
     <a class="on" href="/dashboard">Telemetry</a>
     <a href="/agent/config">Config</a>
     <a href="/guide">Guide</a>
+    <a href="#proto_viz">proto_viz</a>
   </nav>
   <div class="tb-right">
     <span class="uptime num" id="uptime">SESSION 00:00:00</span>
@@ -187,6 +247,36 @@
     <button class="ghost" id="btn-reset" title="Clear all telemetry counters">Reset</button>
   </div>
 </div>
+
+<section id="proto" aria-label="proto_viz">
+  <div class="pv-p pv-head">
+    <span class="pv-title">HYPERIA / PROTO_VIZ</span>
+    <span class="pv-ctr" id="pv-ctr"></span>
+    <span style="flex:1"></span>
+    <span class="pv-ctr" id="pv-ctr2"></span>
+  </div>
+  <div class="pv-p pv-chips" id="pv-chips"></div>
+  <div class="pv-p pv-ring"><canvas id="pv-ring"></canvas></div>
+  <div class="pv-right">
+    <div class="pv-p"><div class="pv-t"><span>Top comms | sorted</span><b id="pv-top-n"></b></div><div class="pv-rows" id="pv-top"></div></div>
+    <div class="pv-p"><div class="pv-t"><span>Live stream | comms</span><span id="pv-stream-n"></span></div><div class="pv-rows" id="pv-stream"></div></div>
+    <div class="pv-p"><div class="pv-t"><span>File edits | per min · 30 min</span><b id="pv-ed-n"></b></div>
+      <div style="padding:0 10px"><canvas class="pv-hist" id="pv-hist"></canvas></div><div class="pv-kv" id="pv-files"></div></div>
+    <div class="pv-p"><div class="pv-t"><span>Services</span><span id="pv-svc-n"></span></div><div class="pv-pods" id="pv-pods"></div></div>
+    <div class="pv-p"><div class="pv-t"><span>Key</span></div>
+      <div class="pv-key">
+        <span><i style="background:#f59e0b"></i>mail</span><span><i style="background:#38bdf8"></i>pane access</span>
+        <span><i style="background:#e5e7eb"></i>system mail</span><span><i class="dot" style="background:#ef4444"></i>edit &lt;60s</span>
+        <span><i style="background:#c2410c"></i>agent pane</span><span><i style="background:#1d4ed8"></i>shell pane</span>
+      </div></div>
+  </div>
+  <div class="pv-p pv-flow"><div class="pv-t"><span>Model token flow | in · out | 30 min</span><b id="pv-tokrate"></b></div><canvas id="pv-flow"></canvas></div>
+  <div class="pv-bottom">
+    <div class="pv-p"><div class="pv-t"><span>Agent ↔ agent mail | by sender</span><span id="pv-mail-n"></span></div><canvas id="pv-donut"></canvas></div>
+    <div class="pv-p"><div class="pv-t"><span>Edits by pane | lines + / −</span><span id="pv-bp-n"></span></div><canvas id="pv-bypane"></canvas></div>
+    <div class="pv-p"><div class="pv-t"><span>File types | pareto</span><span id="pv-pa-n"></span></div><canvas id="pv-pareto"></canvas></div>
+  </div>
+</section>
 
 <div class="svcbar" id="svcbar"><span class="empty">connecting to services…</span></div>
 
@@ -601,5 +691,467 @@ setInterval(async()=>{ try{ const r=await fetch("/api/dashboard/version"); const
 
 fetchNames(); setInterval(fetchNames,6000);
 refresh(); setInterval(refresh,2000);
+
+// ---------------------------------------------------------------------------
+// proto_viz tab — real stats only: panes (/api/status), file edits, tokens and
+// network (/api/telemetry/snapshot), mail + pane access (/api/dashboard/comms).
+// All user-controlled text goes in via textContent or canvas fillText.
+// ---------------------------------------------------------------------------
+const PV = {on:false, panes:[], names:{}, counts:{w:0,t:0}, win:null, pane:null, comms:null,
+  nodes:[], alias:new Map(), fibers:new Map(), rot:0, lastFrame:0, timer:null, raf:0};
+const PV_MONO = "ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace";
+const PV_AGENT_RX = /^(claude|claude-code|codex|grok|gemini|gemini-cli|aider|opencode|agy|antigravity|n8|nemesis8|ollama|docker)$/i;
+const PV_REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const PV_COLORS = ["#f59e0b","#38bdf8","#e5e7eb","#c2410c","#2563eb","#22c55e","#a78bfa","#64748b"];
+const PV_NO_COMMS = "comms: needs the next sidecar build";
+
+const pvK = (n) => { n = Number(n) || 0; const a = Math.abs(n);
+  return a >= 1e9 ? (n/1e9).toFixed(2)+"B" : a >= 1e6 ? (n/1e6).toFixed(1)+"M" : a >= 1e3 ? (n/1e3).toFixed(1)+"k" : String(Math.round(n)); };
+const pvAgo = (ts) => { if (!ts) return "—"; const s = Math.max(0, (Date.now()-ts)/1000);
+  return s < 60 ? Math.floor(s)+"s" : s < 3600 ? Math.floor(s/60)+"m" : s < 86400 ? Math.floor(s/3600)+"h" : Math.floor(s/86400)+"d"; };
+function pvEl(tag, cls, text){ const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; }
+function pvFit(c){
+  const dpr = window.devicePixelRatio || 1, w = Math.max(1, c.clientWidth), h = Math.max(1, c.clientHeight);
+  if (c.width !== Math.round(w*dpr) || c.height !== Math.round(h*dpr)) { c.width = Math.round(w*dpr); c.height = Math.round(h*dpr); }
+  const ctx = c.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+  return {ctx, w, h};
+}
+function pvHash(s){ let h = 2166136261; for (const ch of String(s)) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
+function pvRand(seed){ let x = (seed >>> 0) || 1; return () => { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; return (x % 100003) / 100003; }; }
+const pvPaneId = (id) => { const s = String(id || ""); return s.startsWith("pane:") ? s.slice(5) : s; };
+function pvNone(box, text){ box.replaceChildren(pvEl("div", "pv-none", text)); }
+function pvCanvasNote(ctx, w, h, text){
+  ctx.fillStyle = "#475569"; ctx.font = "10px "+PV_MONO; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(text.toUpperCase(), w/2, h/2); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+}
+function pvClip(ctx, text, max){
+  text = String(text); if (ctx.measureText(text).width <= max) return text;
+  while (text.length > 1 && ctx.measureText(text+"…").width > max) text = text.slice(0, -1);
+  return text+"…";
+}
+
+function pvIngestStatus(j){
+  const panes = [], names = {}; let w = 0, t = 0;
+  for (const win of j.windows || []) { w++;
+    for (const tab of win.tabs || []) { t++;
+      for (const p of tab.panes || []) {
+        const proc = String(p.process || (p.app && p.app.name) || "").toLowerCase();
+        const web = p.kind === "web" || p.shell === "web";
+        const cls = web ? "wb" : PV_AGENT_RX.test(proc) ? "ag" : (p.shell === "picker" || proc === "picker") ? "dm" : "sh";
+        const name = p.name || p.title || String(p.paneId || "").slice(0, 8);
+        panes.push({paneId: p.paneId, name, proc, cls, focused: !!p.focused, state: p.state || "", tab: tab.name || ""});
+        names[p.paneId] = name;
+      } } }
+  PV.panes = panes; PV.names = names; PV.counts = {w, t};
+}
+
+// Label for any id the comms graph uses: pane:<uuid>, a bare uuid, or an agent id.
+function pvLabel(id){
+  const raw = String(id || ""), pid = pvPaneId(raw);
+  if (PV.names[pid]) return PV.names[pid];
+  const node = PV.alias.get(raw) || PV.alias.get(pid);
+  if (node && node.label) return node.label;
+  return /^[0-9a-f-]{36}$/i.test(pid) ? pid.slice(0, 8)+" (closed)" : raw;
+}
+
+function pvBuildNodes(){
+  const nodes = new Map();
+  for (const p of PV.panes) {
+    nodes.set("pane:"+p.paneId, {id: "pane:"+p.paneId, label: p.name, pane: p.paneId,
+      kind: p.cls === "ag" ? "agent" : p.cls === "wb" ? "web" : "pane", sent: 0, received: 0, access: 0, alias: new Set()});
+  }
+  const cm = PV.comms;
+  if (cm) for (const n of cm.nodes || []) {
+    // An agent bound to a live pane shares that pane's slot on the ring.
+    const pid = n.pane || (String(n.id).startsWith("pane:") ? pvPaneId(n.id) : null);
+    const key = pid && nodes.has("pane:"+pid) ? "pane:"+pid : n.id;
+    const cur = nodes.get(key) || {id: key, label: n.label || n.id, pane: pid,
+      kind: n.kind === "system" ? "system" : n.kind === "pane" ? "pane" : "agent", sent: 0, received: 0, access: 0, alias: new Set()};
+    cur.sent += n.sent || 0; cur.received += n.received || 0; cur.access += n.access || 0;
+    if (n.kind === "agent" && cur.kind === "pane") cur.kind = "agent";
+    cur.alias.add(n.id);
+    nodes.set(key, cur);
+  }
+  const now = Date.now();
+  for (const e of (PV.win && PV.win.telemetry && PV.win.telemetry.file_events) || []) {
+    const n = nodes.get("pane:"+e.pane_uid); if (!n) continue;
+    n.edits = (n.edits || 0) + 1; n.added = (n.added || 0) + (e.lines_added || 0);
+    if (now - (e.ts || 0) < 60000) n.hot = (n.hot || 0) + 1;
+  }
+  for (const [uid, t] of Object.entries((PV.pane && PV.pane.telemetry) || {})) {
+    const n = nodes.get("pane:"+uid); if (!n) continue;
+    let b = 0; for (const ev of t.events || []) b += ev.bytes || 0; n.net = b;
+  }
+  const rank = {agent: 0, pane: 1, web: 2, system: 3};
+  const list = [...nodes.values()].sort((a, b) => (rank[a.kind] - rank[b.kind]) || String(a.label).localeCompare(String(b.label)));
+  const alias = new Map();
+  list.forEach((n, i) => {
+    n.theta = (i / Math.max(1, list.length)) * Math.PI * 2 - Math.PI/2;
+    alias.set(n.id, n); for (const a of n.alias) alias.set(a, n); if (n.pane) { alias.set(n.pane, n); alias.set("pane:"+n.pane, n); }
+  });
+  PV.nodes = list; PV.alias = alias;
+  // Fibers are stable per node; their count follows real activity.
+  const span = Math.PI * 2 / Math.max(6, list.length);
+  for (const n of list) {
+    const act = (n.edits || 0) * 3 + (n.sent || 0) + (n.received || 0) + (n.access || 0) + Math.log10(1 + (n.net || 0)) * 6;
+    const count = Math.round(Math.min(170, 16 + act)), key = n.id+"|"+count+"|"+list.length;
+    if ((PV.fibers.get(n.id) || {}).key === key) continue;
+    const r = pvRand(pvHash(n.id)), arr = [];
+    for (let i = 0; i < count; i++) arr.push({dt: (r()-.5) * span * .92, len: 8 + r()*r()*78, w: r() < .15 ? 1.3 : .6, tip: r() < .22});
+    PV.fibers.set(n.id, {key, arr});
+  }
+}
+
+function pvEdges(){
+  const cm = PV.comms; if (!cm) return [];
+  const kindOf = (id) => (PV.alias.get(id) || {}).kind;
+  const mail = (cm.mail_edges || []).map((e) => ({type: kindOf(e.from) === "system" ? "system" : "mail",
+    from: e.from, to: e.to, count: e.count || 0, last: e.last_ts || 0}));
+  const access = (cm.access_edges || []).map((e) => ({type: "access", from: e.from, to: "pane:"+pvPaneId(e.pane),
+    count: e.count || 0, last: e.last_ts || 0, actions: e.actions || {}}));
+  return [...mail, ...access].sort((a, b) => (b.count - a.count) || (b.last - a.last));
+}
+
+function pvDrawRing(){
+  const c = $("pv-ring"); if (!c || !PV.on) return;
+  const {ctx, w, h} = pvFit(c);
+  const cx = w*.5, cy = h*.5, R = Math.max(60, Math.min(w*.36, h*.37)), tilt = .9, rot = PV.rot;
+  const pos = (th, r) => ({x: cx + Math.cos(th+rot)*r, y: cy + Math.sin(th+rot)*r*tilt});
+  const halo = ctx.createRadialGradient(cx, cy, R*.25, cx, cy, R*1.08);
+  halo.addColorStop(0, "rgba(37,99,235,0)"); halo.addColorStop(.72, "rgba(37,99,235,.12)"); halo.addColorStop(1, "rgba(37,99,235,0)");
+  ctx.fillStyle = halo; ctx.beginPath(); ctx.ellipse(cx, cy, R*1.08, R*1.08*tilt, 0, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = "rgba(56,189,248,.16)"; ctx.lineWidth = 1;
+  for (const k of [1, .93]) { ctx.beginPath(); ctx.ellipse(cx, cy, R*k, R*k*tilt, 0, 0, Math.PI*2); ctx.stroke(); }
+  if (!PV.nodes.length) { pvCanvasNote(ctx, w, h, "no panes reported"); return; }
+
+  // Strands: mail (amber), system mail (white), pane access (cyan).
+  ctx.globalCompositeOperation = "lighter";
+  for (const e of pvEdges().slice(0, 80)) {
+    const a = PV.alias.get(e.from) || PV.alias.get(pvPaneId(e.from)), b = PV.alias.get(e.to) || PV.alias.get(pvPaneId(e.to));
+    if (!a || !b) continue;
+    const color = e.type === "access" ? "#38bdf8" : e.type === "system" ? "#e5e7eb" : "#f59e0b";
+    const n = Math.min(16, Math.max(1, Math.round(Math.log2(1 + e.count) * 3))), r = pvRand(pvHash(a.id+"→"+b.id+e.type));
+    ctx.strokeStyle = color;
+    for (let i = 0; i < n; i++) {
+      const p1 = pos(a.theta + (r()-.5)*.14, R*.97), p2 = pos(b.theta + (r()-.5)*.14, R*.97);
+      const pull = a === b ? 1.5 : .12 + r()*.6;
+      const mx = cx + ((p1.x+p2.x)/2 - cx)*pull + (r()-.5)*R*.3, my = cy + ((p1.y+p2.y)/2 - cy)*pull + (r()-.5)*R*.25;
+      ctx.globalAlpha = Math.min(.8, .14 + Math.log10(1 + e.count)*.22); ctx.lineWidth = .5 + r()*.9;
+      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.quadraticCurveTo(mx, my, p2.x, p2.y); ctx.stroke();
+    }
+  }
+  ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
+
+  // Fibers: each node's activity, combed outward from the ring.
+  for (const n of PV.nodes) {
+    const f = PV.fibers.get(n.id); if (!f) continue;
+    const col = n.kind === "agent" ? ["#f59e0b", "#c2410c"] : n.kind === "web" ? ["#e5e7eb", "#94a3b8"]
+      : n.kind === "system" ? ["#e5e7eb", "#64748b"] : ["#38bdf8", "#1d4ed8"];
+    for (const fb of f.arr) {
+      const th = n.theta + fb.dt, depth = (Math.sin(th + rot) + 1) / 2;
+      const p1 = pos(th, R+2), p2 = pos(th, R+2+fb.len*(.7+.3*depth));
+      ctx.globalAlpha = .3 + .6*depth; ctx.strokeStyle = fb.len > 48 ? col[1] : col[0]; ctx.lineWidth = fb.w;
+      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+      if (fb.tip) { ctx.fillStyle = "#f8fafc"; ctx.fillRect(p2.x-1, p2.y-1, 2, 2); }
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // Edits in the last minute: red dots just inside the node's arc.
+  ctx.fillStyle = "#ef4444"; ctx.shadowColor = "#ef4444"; ctx.shadowBlur = 9;
+  for (const n of PV.nodes) {
+    if (!n.hot) continue; const r = pvRand(pvHash(n.id+"hot"));
+    for (let i = 0; i < Math.min(8, n.hot); i++) { const p = pos(n.theta + (r()-.5)*.22, R*(.78 + r()*.14));
+      ctx.beginPath(); ctx.arc(p.x, p.y, 2.6, 0, Math.PI*2); ctx.fill(); }
+  }
+  ctx.shadowBlur = 0;
+
+  // Node labels inside the ring when there's room.
+  if (PV.nodes.length <= 28) {
+    ctx.font = "9px "+PV_MONO; ctx.textBaseline = "middle";
+    for (const n of PV.nodes) {
+      const p = pos(n.theta, R*.86), depth = (Math.sin(n.theta + rot) + 1) / 2;
+      ctx.globalAlpha = .35 + .5*depth; ctx.fillStyle = n.kind === "agent" ? "#fbbf24" : n.kind === "web" ? "#86efac" : "#7dd3fc";
+      ctx.textAlign = p.x < cx ? "left" : "right";
+      ctx.fillText(pvClip(ctx, n.label, R*.5), p.x, p.y);
+    }
+    ctx.globalAlpha = 1; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  }
+
+  // Callout on the busiest node.
+  const score = (n) => (n.sent || 0) + (n.received || 0) + (n.access || 0) + (n.edits || 0);
+  const top = PV.nodes.reduce((m, n) => (score(n) > score(m) ? n : m), PV.nodes[0]);
+  if (top && score(top) > 0) {
+    const p = pos(top.theta, R+2);
+    const l1 = "NODE "+top.label+" | SENT "+(top.sent || 0)+" | RECV "+(top.received || 0)+" | EDITS "+(top.edits || 0)+" | +"+pvK(top.added || 0);
+    const l2 = (top.kind || "").toUpperCase()+" | PANE ACCESS "+(top.access || 0)+" | NET "+fmtB(top.net || 0);
+    ctx.font = "10px "+PV_MONO;
+    const bw = Math.min(w - 28, Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 20), bh = 36;
+    // Box in the node's own corner so the leader line stays short.
+    const right = p.x > cx, low = p.y > cy;
+    const bx = right ? w - bw - 14 : 14, by = low ? h - bh - 14 : 30;
+    ctx.strokeStyle = "#f59e0b"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(right ? bx + bw*.3 : bx + bw*.7, low ? by : by + bh); ctx.lineTo(p.x, p.y); ctx.stroke();
+    ctx.fillStyle = "rgba(5,7,11,.92)"; ctx.fillRect(bx, by, bw, bh); ctx.strokeRect(bx+.5, by+.5, bw-1, bh-1);
+    ctx.fillStyle = "#fbbf24"; ctx.fillText(pvClip(ctx, l1, bw-20), bx+10, by+15);
+    ctx.fillStyle = "#cbd5e1"; ctx.fillText(pvClip(ctx, l2, bw-20), bx+10, by+29);
+    ctx.strokeStyle = "#f8fafc"; ctx.beginPath(); ctx.arc(p.x, p.y, 7, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI*2); ctx.fillStyle = "#f8fafc"; ctx.fill();
+  }
+  ctx.font = "9px "+PV_MONO; ctx.fillStyle = "#475569";
+  ctx.fillText(PV.nodes.length+" NODES · "+pvEdges().length+" LINKS", 14, 18);
+}
+
+function pvRenderHead(){
+  const t = (PV.win && PV.win.telemetry) || {}, sys = (PV.win && PV.win.system) || {};
+  const agents = PV.panes.filter((p) => p.cls === "ag").length;
+  const pairs = [["windows", PV.counts.w], ["tabs", PV.counts.t], ["panes", PV.panes.length], ["agents", agents],
+    ["tokens in", pvK(t.tokens_in)], ["out", pvK(t.tokens_out)], ["edits", pvK(t.file_edits)], ["v", sys.version || "?"]];
+  const box = $("pv-ctr"); box.replaceChildren();
+  for (const [k, v] of pairs) { const s = pvEl("span", null, k.toUpperCase()+" "); s.appendChild(pvEl("b", k === "agents" ? "am" : null, v)); box.appendChild(s); }
+  const box2 = $("pv-ctr2"); box2.replaceChildren();
+  const cm = PV.comms;
+  if (!cm) { box2.appendChild(pvEl("span", null, PV_NO_COMMS.toUpperCase())); return; }
+  const tt = cm.totals || {};
+  for (const [k, v] of [["mail", tt.mail], ["system", tt.mail_system], ["access", tt.access],
+    ["consent ✓", tt.consent_allow], ["✗", tt.consent_deny], ["pending", tt.consent_pending]]) {
+    const s = pvEl("span", null, k.toUpperCase()+" "); s.appendChild(pvEl("b", k === "mail" ? "am" : null, pvK(v || 0))); box2.appendChild(s);
+  }
+}
+
+function pvRenderChips(){
+  const box = $("pv-chips"); box.replaceChildren();
+  if (!PV.panes.length) { box.appendChild(pvEl("span", "pv-none", "no panes reported")); return; }
+  for (const p of PV.panes) {
+    const chip = pvEl("span", "pv-chip "+p.cls+(p.focused ? " focus" : ""), p.name);
+    chip.title = [p.name, p.proc || "—", p.state, p.tab].filter(Boolean).join(" · ");
+    box.appendChild(chip);
+  }
+}
+
+function pvRenderTop(){
+  const box = $("pv-top");
+  if (!PV.comms) { $("pv-top-n").textContent = ""; pvNone(box, PV_NO_COMMS); return; }
+  const edges = pvEdges();
+  $("pv-top-n").textContent = edges.length ? edges.length+" links" : "";
+  if (!edges.length) { pvNone(box, "no mail or pane access in this window"); return; }
+  const max = edges[0].count || 1; box.replaceChildren();
+  for (const e of edges.slice(0, 12)) {
+    const color = e.type === "access" ? "#38bdf8" : e.type === "system" ? "#e5e7eb" : "#f59e0b";
+    const row = pvEl("div", "pv-row"), nm = pvEl("span", "nm");
+    nm.appendChild(document.createTextNode(pvLabel(e.from)));
+    nm.appendChild(pvEl("i", null, e.type === "access" ? " ⇢ " : " → "));
+    nm.appendChild(document.createTextNode(pvLabel(e.to)));
+    nm.title = e.type+(e.type === "access" ? " · "+Object.entries(e.actions).map(([a, n]) => a+"×"+n).join(", ") : "");
+    const ct = pvEl("span", "ct", pvK(e.count)); ct.style.color = color;
+    const br = pvEl("span", "br"), bar = pvEl("i"); bar.style.width = Math.max(2, Math.round(100*e.count/max))+"%"; bar.style.background = color; br.appendChild(bar);
+    row.append(nm, ct, pvEl("span", "ag", pvAgo(e.last)), br); box.appendChild(row);
+  }
+}
+
+function pvRenderStream(){
+  const box = $("pv-stream");
+  if (!PV.comms) { $("pv-stream-n").textContent = ""; pvNone(box, PV_NO_COMMS); return; }
+  const evs = (PV.comms.stream || []).slice(0, 14);
+  $("pv-stream-n").textContent = (PV.comms.stream || []).length ? "newest first" : "";
+  if (!evs.length) { pvNone(box, "no comms yet"); return; }
+  box.replaceChildren();
+  for (const e of evs) {
+    const st = String(e.state || "").toLowerCase();
+    const color = e.type === "access" ? "#38bdf8" : e.type === "consent"
+      ? (/deny|denied/.test(st) ? "#ef4444" : /allow|grant|approved/.test(st) ? "#22c55e" : "#e5e7eb") : "#f59e0b";
+    const row = pvEl("div", "pv-ev"), mk = pvEl("span", "mk"); mk.style.background = color;
+    const tx = pvEl("span", "tx");
+    tx.appendChild(document.createTextNode(pvLabel(e.from)+" → "+pvLabel(e.to)+" "));
+    tx.appendChild(pvEl("i", null, [e.type, e.action !== e.type ? e.action : null, e.state].filter(Boolean).join(" · ")));
+    tx.title = tx.textContent;
+    row.append(mk, pvEl("span", "tm", pvAgo(e.ts)), tx); box.appendChild(row);
+  }
+}
+
+function pvRenderFiles(){
+  const t = (PV.win && PV.win.telemetry) || {}, fe = t.file_events || [];
+  $("pv-ed-n").textContent = pvK(t.file_edits || 0)+" edits";
+  const kv = $("pv-files"); kv.replaceChildren();
+  const pair = (k, v, cls) => { kv.appendChild(pvEl("span", null, k)); kv.appendChild(pvEl("b", cls || null, v)); };
+  pair("edits", pvK(t.file_edits)); pair("writes", pvK(t.file_writes));
+  pair("creates", pvK(t.file_creates)); pair("deletes", pvK(t.file_deletes));
+  pair("lines +", pvK(t.lines_added), "up"); pair("lines −", pvK(t.lines_removed), "dn");
+  pair("renames", pvK(t.file_renames)); pair("written", fmtB(t.file_bytes_written || 0));
+  const {ctx, w, h} = pvFit($("pv-hist"));
+  const now = Date.now(), bins = new Array(30).fill(0);
+  for (const e of fe) { const m = Math.floor((now - (e.ts || 0)) / 60000); if (m >= 0 && m < 30) bins[29 - m]++; }
+  const max = Math.max(...bins);
+  if (!max) { pvCanvasNote(ctx, w, h, "no edits in the last 30 min"); return; }
+  const bw = w / 30;
+  bins.forEach((v, i) => { if (!v) return; const bh = Math.max(2, (v/max)*(h-4));
+    ctx.fillStyle = i >= 28 ? "#ef4444" : "#f59e0b"; ctx.fillRect(i*bw + 1, h - bh, Math.max(1, bw - 2), bh); });
+}
+
+function pvRenderPods(){
+  const sys = (PV.win && PV.win.system) || {}, pr = sys.providers || {};
+  const tr = sys.transcription || {}, sf = sys.sailfish || {}, mx = sys.maximus || {};
+  const pods = [
+    ["ollama", (pr.ollama || {}).reachable ? "up" : "dn"],
+    ["ferricula", (sys.ferricula || {}).reachable ? "up" : "dn"],
+    ["kokoro", (sys.kokoro || {}).model_present ? "up" : "na"],
+    ["sailfish", sf.configured ? (sf.reachable ? "up" : "dn") : "na"],
+    ["whisper", tr.configured ? (tr.reachable ? "up" : "dn") : "na"],
+    ["maximus", mx.enabled ? "up" : "na"],
+    ["anthropic", (pr.anthropic || {}).has_token ? "up" : "na"],
+    ["openai", (pr.openai || {}).has_token ? "up" : "na"],
+    ["gemini", (pr.gemini || {}).has_token ? "up" : "na"],
+    ["comms api", PV.comms ? "up" : "dn"]];
+  if (sys.vram_gb) pods.push(["vram "+Math.round(100*(sys.vram_used_gb || 0)/sys.vram_gb)+"%", "up"]);
+  const box = $("pv-pods"); box.replaceChildren();
+  for (const [name, st] of pods) { const p = pvEl("div", "pv-pod "+st, name); p.title = name+": "+(st === "up" ? "up" : st === "dn" ? "down" : "off / not configured"); box.appendChild(p); }
+  $("pv-svc-n").textContent = pods.filter((p) => p[1] === "up").length+" / "+pods.length+" up";
+}
+
+function pvDrawFlow(){
+  const {ctx, w, h} = pvFit($("pv-flow"));
+  const cut = Date.now() - 1800000, s = hist.filter((x) => x.t >= cut), rIn = [], rOut = [];
+  for (let i = 1; i < s.length; i++) { const dt = (s[i].t - s[i-1].t) / 60000;
+    rIn.push(dt > 0 ? Math.max(0, (s[i].in - s[i-1].in) / dt) : 0); rOut.push(dt > 0 ? Math.max(0, (s[i].out - s[i-1].out) / dt) : 0); }
+  if (rIn.length < 2) { $("pv-tokrate").textContent = ""; pvCanvasNote(ctx, w, h, "collecting token samples…"); return; }
+  const last = (rIn[rIn.length-1] || 0) + (rOut[rOut.length-1] || 0);
+  $("pv-tokrate").textContent = pvK(last)+" tok / min";
+  const max = Math.max(1, ...rIn, ...rOut);
+  const line = (pts, color, scale) => {
+    ctx.beginPath();
+    pts.forEach((v, i) => { const x = (i/(pts.length-1))*w, y = h - 6 - (v/max)*scale*(h-14); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.strokeStyle = color; ctx.lineWidth = 1.3; ctx.stroke();
+  };
+  ctx.strokeStyle = "#0f1622"; ctx.beginPath(); ctx.moveTo(0, h-6); ctx.lineTo(w, h-6); ctx.stroke();
+  line(rIn, "#38bdf8", 1);
+  // Output is tiny next to input; draw it on its own scale so it's visible.
+  const maxOut = Math.max(1, ...rOut); line(rOut.map((v) => v*max/maxOut), "#f59e0b", .55);
+  ctx.font = "9px "+PV_MONO; ctx.fillStyle = "#38bdf8"; ctx.fillText("IN "+pvK(rIn[rIn.length-1])+"/min", 8, 12);
+  ctx.fillStyle = "#f59e0b"; ctx.fillText("OUT "+pvK(rOut[rOut.length-1])+"/min (own scale)", 120, 12);
+}
+
+function pvDrawDonut(){
+  const c = $("pv-donut"), {ctx, w, h} = pvFit(c);
+  if (!PV.comms) { $("pv-mail-n").textContent = ""; pvCanvasNote(ctx, w, h, PV_NO_COMMS); return; }
+  const kindOf = (id) => (PV.alias.get(id) || {}).kind;
+  const by = new Map(); let total = 0;
+  for (const e of PV.comms.mail_edges || []) {
+    if (kindOf(e.from) === "system" || kindOf(e.to) === "system") continue;
+    const k = pvLabel(e.from); by.set(k, (by.get(k) || 0) + (e.count || 0)); total += e.count || 0;
+  }
+  $("pv-mail-n").textContent = total ? pvK(total)+" msgs" : "";
+  if (!total) { pvCanvasNote(ctx, w, h, "no agent-to-agent mail yet"); return; }
+  const rows = [...by.entries()].sort((a, b) => b[1] - a[1]);
+  const shown = rows.slice(0, 7), rest = rows.slice(7).reduce((s, r) => s + r[1], 0);
+  if (rest) shown.push(["other", rest]);
+  const r = Math.min(h*.4, w*.22), cx = r + 18, cy = h/2;
+  let a = -Math.PI/2;
+  shown.forEach(([, v], i) => { const end = a + (v/total)*Math.PI*2;
+    ctx.beginPath(); ctx.arc(cx, cy, r, a, end); ctx.arc(cx, cy, r*.62, end, a, true); ctx.closePath();
+    ctx.fillStyle = PV_COLORS[i % PV_COLORS.length]; ctx.globalAlpha = .85; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = "#05070b"; ctx.lineWidth = 1.5; ctx.stroke(); a = end; });
+  ctx.strokeStyle = "#f59e0b"; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(cx, cy, r*.5, 0, Math.PI*2); ctx.stroke();
+  ctx.fillStyle = "#e5e7eb"; ctx.font = "600 15px "+PV_MONO; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(pvK(total), cx, cy - 4); ctx.font = "8.5px "+PV_MONO; ctx.fillStyle = "#64748b"; ctx.fillText("AGENT MAIL", cx, cy + 10);
+  ctx.textAlign = "left";
+  const lx = cx + r + 16, lw = w - lx - 8;
+  ctx.font = "10px "+PV_MONO;
+  shown.forEach(([name, v], i) => { const y = cy - (shown.length*15)/2 + i*15 + 7;
+    ctx.fillStyle = PV_COLORS[i % PV_COLORS.length]; ctx.fillRect(lx, y - 4, 8, 8);
+    ctx.fillStyle = "#cbd5e1"; ctx.fillText(pvClip(ctx, name, lw - 60), lx + 14, y);
+    ctx.fillStyle = "#64748b"; ctx.textAlign = "right"; ctx.fillText(Math.round(100*v/total)+"%", w - 8, y); ctx.textAlign = "left"; });
+  ctx.textBaseline = "alphabetic";
+}
+
+function pvDrawByPane(){
+  const {ctx, w, h} = pvFit($("pv-bypane"));
+  const fe = (PV.win && PV.win.telemetry && PV.win.telemetry.file_events) || [];
+  const by = new Map();
+  for (const e of fe) { const k = e.pane_uid || "?"; const r = by.get(k) || {n: 0, add: 0, del: 0};
+    r.n++; r.add += e.lines_added || 0; r.del += e.lines_removed || 0; by.set(k, r); }
+  const rows = [...by.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 8);
+  $("pv-bp-n").textContent = fe.length ? fe.length+" recent edits" : "";
+  if (!rows.length) { pvCanvasNote(ctx, w, h, "no file edits reported yet"); return; }
+  const max = Math.max(1, ...rows.map(([, r]) => Math.max(r.add, r.del)));
+  const lh = Math.min(22, (h - 10) / rows.length), lab = Math.min(150, w*.34), mid = lab + (w - lab - 70)/2;
+  ctx.font = "10px "+PV_MONO; ctx.textBaseline = "middle";
+  rows.forEach(([uid, r], i) => {
+    const y = 10 + i*lh + lh/2;
+    ctx.fillStyle = "#cbd5e1"; ctx.fillText(pvClip(ctx, PV.names[uid] || String(uid).slice(0, 8)+" (closed)", lab - 8), 8, y);
+    const half = (w - lab - 70)/2;
+    const ra = (r.add/max)*half, rd = (r.del/max)*half;
+    ctx.fillStyle = "#1e293b"; ctx.fillRect(lab, y - 1, w - lab - 70, 2);
+    ctx.fillStyle = "#22c55e"; ctx.fillRect(mid, y - 4, Math.max(r.add ? 2 : 0, ra), 8);
+    ctx.fillStyle = "#ef4444"; ctx.fillRect(mid - Math.max(r.del ? 2 : 0, rd), y - 4, Math.max(r.del ? 2 : 0, rd), 8);
+    ctx.fillStyle = "#f8fafc"; ctx.beginPath(); ctx.arc(mid, y, 2.5, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#64748b"; ctx.textAlign = "right"; ctx.fillText("+"+pvK(r.add)+" −"+pvK(r.del), w - 8, y); ctx.textAlign = "left";
+  });
+  ctx.textBaseline = "alphabetic";
+}
+
+function pvDrawPareto(){
+  const {ctx, w, h} = pvFit($("pv-pareto"));
+  const fe = (PV.win && PV.win.telemetry && PV.win.telemetry.file_events) || [];
+  const by = new Map();
+  for (const e of fe) { const base = String(e.path || "").split(/[\\/]/).pop(); const dot = base.lastIndexOf(".");
+    const ext = dot > 0 ? base.slice(dot) : "(none)"; by.set(ext, (by.get(ext) || 0) + 1); }
+  const rows = [...by.entries()].sort((a, b) => b[1] - a[1]); const total = fe.length;
+  $("pv-pa-n").textContent = rows.length ? rows.length+" types" : "";
+  if (!rows.length) { pvCanvasNote(ctx, w, h, "no file edits reported yet"); return; }
+  const shown = rows.slice(0, 9), max = shown[0][1], pad = 22, bw = (w - pad*2) / shown.length, base = h - 26;
+  let cum = 0; const pts = [];
+  ctx.font = "9px "+PV_MONO; ctx.textAlign = "center";
+  shown.forEach(([ext, n], i) => { const bh = (n/max)*(base - 18), x = pad + i*bw;
+    ctx.fillStyle = i === 0 ? "#c2410c" : "#1e40af"; ctx.globalAlpha = i === 0 ? .95 : .8; ctx.fillRect(x + 3, base - bh, bw - 6, bh); ctx.globalAlpha = 1;
+    ctx.fillStyle = "#94a3b8"; ctx.fillText(pvClip(ctx, ext, bw - 2), x + bw/2, base + 12);
+    cum += n; pts.push([x + bw/2, base - (cum/total)*(base - 18)]); });
+  ctx.strokeStyle = "#e5e7eb"; ctx.lineWidth = 1.2; ctx.beginPath();
+  pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke();
+  ctx.fillStyle = "#f8fafc"; pts.forEach(([x, y]) => { ctx.beginPath(); ctx.arc(x, y, 2.4, 0, Math.PI*2); ctx.fill(); });
+  ctx.strokeStyle = "#f59e0b"; ctx.beginPath(); ctx.arc(pts[0][0], pts[0][1], 6, 0, Math.PI*2); ctx.stroke();
+  ctx.textAlign = "right"; ctx.fillStyle = "#64748b"; ctx.fillText("100%", w - 4, 18); ctx.fillText(Math.round(100*shown.reduce((s, r) => s + r[1], 0)/total)+"% shown", w - 4, base + 22);
+  ctx.textAlign = "left";
+}
+
+function pvRenderAll(){
+  if (!PV.on) return;
+  pvRenderHead(); pvRenderChips(); pvRenderTop(); pvRenderStream(); pvRenderFiles(); pvRenderPods();
+  pvDrawFlow(); pvDrawDonut(); pvDrawByPane(); pvDrawPareto();
+  if (PV_REDUCE || !PV.raf) pvDrawRing();
+}
+
+async function pvPoll(){
+  if (!PV.on) return;
+  const get = (u) => fetch(u).then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); });
+  const [st, w, p, cm] = await Promise.allSettled([get("/api/status"), get("/api/telemetry/snapshot?level=window"),
+    get("/api/telemetry/snapshot?level=pane"), get("/api/dashboard/comms")]);
+  if (st.status === "fulfilled") pvIngestStatus(st.value);
+  if (w.status === "fulfilled") PV.win = w.value;
+  if (p.status === "fulfilled") PV.pane = p.value;
+  PV.comms = cm.status === "fulfilled" && cm.value && Array.isArray(cm.value.mail_edges) ? cm.value : null;
+  pvBuildNodes(); pvRenderAll();
+}
+
+function pvLoop(ts){
+  if (!PV.on) { PV.raf = 0; return; }
+  PV.raf = requestAnimationFrame(pvLoop);
+  if (ts - PV.lastFrame < 33) return;   // ~30 fps is plenty for a slow spin
+  const dt = PV.lastFrame ? Math.min(100, ts - PV.lastFrame) : 0; PV.lastFrame = ts;
+  PV.rot += dt * .00004; pvDrawRing();
+}
+
+function pvSetMode(){
+  const on = location.hash === "#proto_viz";
+  PV.on = on; document.body.classList.toggle("proto", on);
+  document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("on",
+    on ? a.getAttribute("href") === "#proto_viz" : a.getAttribute("href") === "/dashboard"));
+  clearInterval(PV.timer); PV.timer = null;
+  if (!on) return;
+  pvPoll(); PV.timer = setInterval(pvPoll, 3000);
+  if (!PV_REDUCE && !PV.raf) { PV.lastFrame = 0; PV.raf = requestAnimationFrame(pvLoop); }
+}
+window.addEventListener("hashchange", pvSetMode);
+window.addEventListener("resize", () => { if (PV.on) pvRenderAll(); });
+pvSetMode();
 </script>
 </body></html>
