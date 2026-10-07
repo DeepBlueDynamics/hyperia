@@ -48,6 +48,9 @@ pub struct ClassEvidence {
     /// Deepest foreground child. Empty when the shell has no child.
     pub foreground_name: String,
     pub foreground_cmdline: String,
+    /// Every process from the shell's child down to the foreground, as
+    /// basename tokens. pwsh -> n8 -> docker is ["n8", "docker"].
+    pub foreground_chain: Vec<String>,
     pub shell_has_integration: bool,
     /// Integration state string (`idle`, `running`, `busy`). Ignored when
     /// integration is absent.
@@ -70,6 +73,7 @@ impl ClassEvidence {
             shell_binary: String::new(),
             foreground_name: String::new(),
             foreground_cmdline: String::new(),
+            foreground_chain: Vec::new(),
             shell_has_integration: false,
             shell_state: String::new(),
             shell_app_name: String::new(),
@@ -178,6 +182,8 @@ pub struct ProcessObs {
     pub alive: bool,
     pub foreground_name: String,
     pub foreground_cmdline: String,
+    /// Shell's child down to the foreground (see ClassEvidence).
+    pub foreground_chain: Vec<String>,
     /// More than one child at some level. Name and cmdline are empty.
     pub ambiguous: bool,
 }
@@ -195,7 +201,9 @@ struct ProcNode {
 enum ForegroundWalk {
     NoChild,
     One(u32),
-    Ambiguous,
+    /// More than one child at some level; carries the last process above
+    /// the split (None = the shell itself has several children).
+    Ambiguous(Option<u32>),
 }
 
 pub fn observe_process(shell_pid: u32) -> ProcessObs {
@@ -226,6 +234,7 @@ fn process_obs_dead() -> ProcessObs {
         alive: false,
         foreground_name: String::new(),
         foreground_cmdline: String::new(),
+        foreground_chain: Vec::new(),
         ambiguous: false,
     }
 }
@@ -239,6 +248,7 @@ fn observe_nodes(root: u32, nodes: &[ProcNode]) -> ProcessObs {
             alive: true,
             foreground_name: String::new(),
             foreground_cmdline: String::new(),
+            foreground_chain: Vec::new(),
             ambiguous: false,
         },
         ForegroundWalk::One(pid) => {
@@ -247,22 +257,49 @@ fn observe_nodes(root: u32, nodes: &[ProcNode]) -> ProcessObs {
                 alive: true,
                 foreground_name: node.map(|node| basename_token(&node.name)).unwrap_or_default(),
                 foreground_cmdline: node.map(|node| node.cmdline.clone()).unwrap_or_default(),
+                foreground_chain: chain_to(root, pid, nodes),
                 ambiguous: false,
             }
         }
-        ForegroundWalk::Ambiguous => ProcessObs {
+        ForegroundWalk::Ambiguous(above) => ProcessObs {
             alive: true,
             foreground_name: String::new(),
             foreground_cmdline: String::new(),
+            // The unambiguous part: n8 with two children still shows n8.
+            foreground_chain: above.map(|pid| chain_to(root, pid, nodes)).unwrap_or_default(),
             ambiguous: true,
         },
     }
 }
 
+/// Names from just below `root` down to `leaf`, top first.
+fn chain_to(root: u32, leaf: u32, nodes: &[ProcNode]) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut cur = leaf;
+    // Bounded: a corrupt parent table must not loop forever.
+    for _ in 0..64 {
+        if cur == root {
+            break;
+        }
+        let Some(node) = nodes.iter().find(|node| node.pid == cur) else {
+            break;
+        };
+        chain.push(basename_token(&node.name));
+        match node.parent {
+            Some(parent) => cur = parent,
+            None => break,
+        }
+    }
+    chain.reverse();
+    chain
+}
+
 fn walk_foreground(pid: u32, nodes: &[ProcNode]) -> ForegroundWalk {
     let mut children: Vec<u32> = nodes
         .iter()
-        .filter(|node| node.parent == Some(pid))
+        // Windows' console host rides along with console programs; it is
+        // never the foreground and must not make a tree look ambiguous.
+        .filter(|node| node.parent == Some(pid) && basename_token(&node.name) != "conhost")
         .map(|node| node.pid)
         .collect();
     children.sort_unstable();
@@ -270,9 +307,10 @@ fn walk_foreground(pid: u32, nodes: &[ProcNode]) -> ForegroundWalk {
         0 => ForegroundWalk::NoChild,
         1 => match walk_foreground(children[0], nodes) {
             ForegroundWalk::NoChild => ForegroundWalk::One(children[0]),
+            ForegroundWalk::Ambiguous(None) => ForegroundWalk::Ambiguous(Some(children[0])),
             other => other,
         },
-        _ => ForegroundWalk::Ambiguous,
+        _ => ForegroundWalk::Ambiguous(None),
     }
 }
 
@@ -326,10 +364,18 @@ fn find_agent(evidence: &ClassEvidence) -> Option<&'static str> {
     }
     let recorded = launcher_executable(&evidence.shell_app_name, &evidence.shell_app_cmdline);
     let recorded_token = agent_token(&recorded);
-    if CONTAINER_RUNTIMES.iter().any(|runtime| *runtime == live)
-        && matches!(recorded_token, Some("n8" | "nemesis8"))
-    {
+    let live_is_runtime = CONTAINER_RUNTIMES.iter().any(|runtime| *runtime == live);
+    if live_is_runtime && matches!(recorded_token, Some("n8" | "nemesis8")) {
         return recorded_token;
+    }
+    // The process tree itself shows the agent, no shell integration needed
+    // (cmd.exe panes, stale records): pwsh -> n8 -> docker attach, or
+    // claude -> bash while it runs a tool. Anything else in front (vim, a long
+    // node command) is a real foreground program, not the agent's input.
+    if let Some(token) = chain_agent(evidence) {
+        if live_is_runtime || is_shell_token(&live) {
+            return Some(token);
+        }
     }
     if !evidence.shell_has_integration || integration_idle(evidence) {
         return None;
@@ -348,6 +394,11 @@ fn find_agent(evidence: &ClassEvidence) -> Option<&'static str> {
         return Some(token);
     }
     None
+}
+
+/// The outermost agent program in the foreground chain.
+fn chain_agent(evidence: &ClassEvidence) -> Option<&'static str> {
+    evidence.foreground_chain.iter().find_map(|name| agent_token(name))
 }
 
 /// App name/cmdline left behind after the command exited are not a live app.
@@ -437,6 +488,14 @@ pub fn classify(evidence: &ClassEvidence) -> Classification {
     }
 
     if evidence.process_ambiguous {
+        // n8 --danger runs a gateway beside its docker attach: two children,
+        // but the agent above the split is certain.
+        if let Some(token) = chain_agent(evidence) {
+            return Classification {
+                class: PaneClass::Agent { token: token.to_string() },
+                summary: format!("agent {token}: running in the process tree; its children are ambiguous"),
+            };
+        }
         return classify_ambiguous(evidence);
     }
 
@@ -579,6 +638,7 @@ fn idle_shell(shell: &str) -> ClassEvidence {
         shell_binary: shell.into(),
         foreground_name: String::new(),
         foreground_cmdline: String::new(),
+        foreground_chain: Vec::new(),
         shell_has_integration: true,
         shell_state: "idle".into(),
         shell_app_name: String::new(),
@@ -728,6 +788,117 @@ mod tests {
         evidence.foreground_cmdline = "docker run --rm hyperia-n8".into();
         let class = classify(&evidence);
         assert_eq!(class.agent_token(), Some("n8"));
+    }
+
+    #[test]
+    fn n8_above_docker_in_the_process_tree_is_the_agent_without_integration() {
+        // cmd.exe (no integration) or a record gone idle: pwsh -> n8 -> docker attach.
+        for (has_integration, state) in [(false, ""), (true, "idle")] {
+            let mut evidence = idle_shell("pwsh");
+            evidence.shell_has_integration = has_integration;
+            evidence.shell_state = state.into();
+            evidence.foreground_name = "docker".into();
+            evidence.foreground_cmdline = "docker attach --sig-proxy=false n8-spry-tapir".into();
+            evidence.foreground_chain = vec!["n8".into(), "docker".into()];
+            assert_eq!(
+                classify(&evidence).agent_token(),
+                Some("n8"),
+                "integration={has_integration} state={state}"
+            );
+        }
+    }
+
+    #[test]
+    fn docker_under_something_else_is_still_not_an_agent() {
+        let mut evidence = idle_shell("pwsh");
+        evidence.shell_has_integration = false;
+        evidence.foreground_name = "docker".into();
+        evidence.foreground_cmdline = "docker compose up".into();
+        evidence.foreground_chain = vec!["make".into(), "docker".into()];
+        assert!(classify(&evidence).agent_token().is_none());
+        // An agent name above a non-runtime foreground is not borrowed either.
+        let mut vim = idle_shell("pwsh");
+        vim.shell_has_integration = false;
+        vim.foreground_name = "vim".into();
+        vim.foreground_chain = vec!["n8".into(), "vim".into()];
+        assert!(classify(&vim).agent_token().is_none());
+    }
+
+    #[test]
+    fn an_agent_running_a_tool_shell_is_still_the_agent() {
+        let mut evidence = idle_shell("pwsh");
+        evidence.shell_has_integration = false;
+        evidence.foreground_name = "bash".into();
+        evidence.foreground_chain = vec!["claude".into(), "bash".into(), "bash".into()];
+        assert_eq!(classify(&evidence).agent_token(), Some("claude"));
+    }
+
+    #[test]
+    fn n8_with_a_gateway_beside_docker_is_n8_not_ambiguous() {
+        let node = |pid: u32, parent: u32, name: &str| ProcNode {
+            pid,
+            parent: Some(parent),
+            name: name.into(),
+            cmdline: String::new(),
+        };
+        // pwsh -> n8 --danger -> {n8 serve -> conhost, docker attach}
+        let nodes = vec![
+            node(10, 1, "pwsh.exe"),
+            node(20, 10, "n8.exe"),
+            node(21, 20, "n8.exe"),
+            node(22, 21, "conhost.exe"),
+            node(23, 20, "docker.exe"),
+        ];
+        let obs = observe_nodes(10, &nodes);
+        assert!(obs.ambiguous);
+        assert_eq!(obs.foreground_chain, vec!["n8".to_string()]);
+        let mut evidence = idle_shell("pwsh");
+        evidence.shell_has_integration = false;
+        evidence.process_ambiguous = true;
+        evidence.foreground_chain = obs.foreground_chain;
+        assert_eq!(classify(&evidence).agent_token(), Some("n8"));
+    }
+
+    #[test]
+    fn conhost_is_never_the_foreground_or_a_second_child() {
+        let node = |pid: u32, parent: u32, name: &str| ProcNode {
+            pid,
+            parent: Some(parent),
+            name: name.into(),
+            cmdline: String::new(),
+        };
+        let nodes = vec![node(10, 1, "pwsh.exe"), node(20, 10, "claude.exe"), node(21, 20, "conhost.exe")];
+        let obs = observe_nodes(10, &nodes);
+        assert!(!obs.ambiguous);
+        assert_eq!(obs.foreground_name, "claude");
+    }
+
+    #[test]
+    fn a_shell_with_two_children_stays_ambiguous() {
+        let node = |pid: u32, parent: u32, name: &str| ProcNode {
+            pid,
+            parent: Some(parent),
+            name: name.into(),
+            cmdline: String::new(),
+        };
+        let nodes = vec![node(10, 1, "pwsh.exe"), node(20, 10, "claude.exe"), node(21, 10, "python.exe")];
+        let obs = observe_nodes(10, &nodes);
+        assert!(obs.ambiguous);
+        assert!(obs.foreground_chain.is_empty(), "no agent is borrowed from one branch");
+    }
+
+    #[test]
+    fn chain_to_lists_shell_child_down_to_the_foreground() {
+        let node = |pid: u32, parent: u32, name: &str| ProcNode {
+            pid,
+            parent: Some(parent),
+            name: name.into(),
+            cmdline: String::new(),
+        };
+        let nodes = vec![node(10, 1, "pwsh.exe"), node(20, 10, "n8.exe"), node(30, 20, "docker.exe")];
+        let obs = observe_nodes(10, &nodes);
+        assert_eq!(obs.foreground_name, "docker");
+        assert_eq!(obs.foreground_chain, vec!["n8".to_string(), "docker".to_string()]);
     }
 
     #[test]
