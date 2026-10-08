@@ -732,6 +732,66 @@ const PV = {on:false, panes:[], names:{}, counts:{w:0,t:0}, win:null, pane:null,
   // Files in the centre: nodes keyed by path, stable spiral slots, threads to panes.
   files:[], fileSlots:new Map(), fileAnim:new Map(), fileSeen:new Set(), fileFlashes:[], selFile:null};
 const PV_FILE_MAX = 60;
+
+// ---- Sound: synthesized with WebAudio, no files. Rate-limited, silent while
+// the tab isn't visible, toggled with the ♪ button (remembered per browser).
+const PVS = {on: true, ctx: null, master: null, last: {}, recent: []};
+try { PVS.on = localStorage.getItem("pv.sound") !== "off"; } catch (_e) {}
+function pvAudio(){
+  if (!PVS.ctx) {
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
+    PVS.ctx = new AC();
+    PVS.master = PVS.ctx.createGain(); PVS.master.gain.value = .35; PVS.master.connect(PVS.ctx.destination);
+  }
+  if (PVS.ctx.state === "suspended") PVS.ctx.resume().catch(() => {});
+  return PVS.ctx;
+}
+// Browsers may hold audio until a gesture; any click in the tab unlocks it.
+window.addEventListener("pointerdown", () => { if (PVS.on && PV.on) pvAudio(); }, {passive: true});
+
+function pvTone(ac, t, {freq, to, dur, type = "sine", gain = .2, attack = .004}){
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (to) o.frequency.exponentialRampToValueAtTime(Math.max(20, to), t + dur);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + attack);
+  g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+  o.connect(g); g.connect(PVS.master); o.start(t); o.stop(t + dur + .02);
+}
+function pvNoise(ac, t, {dur, freq, q = 6, gain = .18}){
+  const n = Math.max(1, Math.floor(ac.sampleRate * dur)), buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);   // crackle that dies away
+  const src = ac.createBufferSource(), bp = ac.createBiquadFilter(), g = ac.createGain();
+  src.buffer = buf; bp.type = "bandpass"; bp.frequency.value = freq; bp.Q.value = q; g.gain.value = gain;
+  src.connect(bp); bp.connect(g); g.connect(PVS.master); src.start(t);
+}
+
+// kind: "zap" (comms; sub = mail|access|consent-allow|consent-deny|system),
+// "blip" (file change; sub = edit|write|create|delete|rename), "chime", "tick".
+function pvSound(kind, sub){
+  if (!PVS.on || !PV.on || document.visibilityState !== "visible") return;
+  const now = performance.now();
+  const gap = {zap: 90, blip: 70, chime: 400, tick: 40}[kind] || 80;
+  if (now - (PVS.last[kind] || 0) < gap) return;
+  PVS.recent = PVS.recent.filter((x) => now - x < 1000);
+  if (PVS.recent.length >= 14) return;            // whole-page cap: 14 sounds / s
+  PVS.last[kind] = now; PVS.recent.push(now);
+  const ac = pvAudio(); if (!ac || ac.state !== "running") return;
+  const t = ac.currentTime + .005, j = 1 + (Math.random() - .5) * .06;   // slight detune so repeats aren't robotic
+  if (kind === "zap") {
+    const p = {mail: 1500, access: 900, system: 1200, "consent-allow": 1300, "consent-deny": 260}[sub] || 1100;
+    pvNoise(ac, t, {dur: .12, freq: p * 1.6 * j, q: 4, gain: .22});
+    pvTone(ac, t, {freq: p * j, to: p * .22, dur: .16, type: sub === "consent-deny" ? "sawtooth" : "square", gain: .07});
+    pvTone(ac, t + .02, {freq: p * 2 * j, to: p * .5, dur: .09, gain: .05});
+  } else if (kind === "blip") {
+    const f = {create: 880, edit: 660, write: 587, rename: 494, delete: 330}[sub] || 600;
+    pvTone(ac, t, {freq: f * j, to: f * 1.12 * j, dur: .07, type: "triangle", gain: .12});
+  } else if (kind === "chime") {
+    pvTone(ac, t, {freq: 523.25, dur: .35, gain: .1});
+    pvTone(ac, t + .09, {freq: 783.99, dur: .45, gain: .08});
+  } else if (kind === "tick") {
+    pvTone(ac, t, {freq: 2200, to: 1600, dur: .03, type: "square", gain: .04});
+  }
+}
 const PV_ARRIVE_MS = 1900;
 // Zoom/pan per mode: screen = world * z + (x, y).
 const pvView = () => PV.views[PV.mode];
@@ -926,7 +986,7 @@ function pvDrawRing(){
   for (const n of PV.nodes) {
     present.add(n.id);
     let a = PV.anim.get(n.id);
-    if (!a) { a = {theta: n.theta, alpha: 0, fib: 0}; PV.anim.set(n.id, a); }
+    if (!a) { a = {theta: n.theta, alpha: 0, fib: 0}; PV.anim.set(n.id, a); if (PV.primed) pvSound("chime"); }
     a.node = n; a.theta += pvAngDiff(n.theta, a.theta) * k; a.alpha += (1 - a.alpha) * k;
   }
   for (const [id, a] of PV.anim) if (!present.has(id)) { a.alpha -= a.alpha * k; if (a.alpha < .02) { PV.anim.delete(id); PV.fibAnim.delete(id); } }
@@ -1080,6 +1140,10 @@ function pvNoteArrivals(){
     if (PV.seen.has(key)) continue;
     PV.seen.add(key);
     if (PV.primed && !PV_REDUCE && PV.arrivals.length < 24) PV.arrivals.push({from: e.from, to: e.to, type: e.type, state: String(e.state || ""), born: now});
+    if (PV.primed) {
+      const st = String(e.state || "").toLowerCase();
+      pvSound("zap", e.type === "consent" ? (/deny|denied/.test(st) ? "consent-deny" : "consent-allow") : e.type);
+    }
   }
   if (PV.seen.size > 4000) PV.seen = new Set([...PV.seen].slice(-2000));
   PV.primed = true;
@@ -1154,6 +1218,7 @@ function pvBuildFiles(){
     if (!PV.fileSeen.has(key)) {
       PV.fileSeen.add(key);
       if (PV.primed && !PV_REDUCE && node && PV.fileFlashes.length < 40) PV.fileFlashes.push({path: e.path, node: node.id, kind: e.kind, born: performance.now()});
+      if (PV.primed) pvSound("blip", e.kind);
     }
   }
   if (PV.fileSeen.size > 6000) PV.fileSeen = new Set([...PV.fileSeen].slice(-3000));
@@ -1273,11 +1338,13 @@ function pvFileCallout(ctx, vw, w, h){
 
 // Select a ring node (or clear): ring, callout, top comms and stream follow it.
 function pvSelect(id){
+  if (id || PV.sel) pvSound("tick");
   PV.sel = id && id !== PV.sel ? id : null;
   PV.selFile = null;
   pvRenderAll();
 }
 function pvSelectFile(path){
+  pvSound("tick");
   PV.selFile = path && path !== PV.selFile ? path : null;
   PV.sel = null;
   pvRenderAll();
@@ -1303,6 +1370,15 @@ function pvRenderMode(){
     try { localStorage.setItem("pv.range", String(v)); } catch (_e) {}
     pvPoll();
   }));
+  const snd = pvEl("span", "pv-seg"), sb = pvEl("button", PVS.on ? "on" : null, PVS.on ? "♪ on" : "♪ off");
+  sb.type = "button"; sb.title = "Sound effects";
+  sb.addEventListener("click", () => {
+    PVS.on = !PVS.on;
+    try { localStorage.setItem("pv.sound", PVS.on ? "on" : "off"); } catch (_e) {}
+    if (PVS.on) { pvAudio(); PVS.last = {}; pvSound("chime"); }
+    pvRenderMode();
+  });
+  snd.appendChild(sb); box.appendChild(snd);
   if (PV.sel) {
     const n = PV.alias.get(PV.sel), chip = pvEl("span", "pv-selbox", "● "+(n ? n.label : PV.sel)+"  ×");
     chip.title = "Clear selection (Esc)"; chip.addEventListener("click", () => pvSelect(null));
