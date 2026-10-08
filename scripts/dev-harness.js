@@ -164,6 +164,46 @@ async function sidecarPane(uid) {
   return null;
 }
 
+// Stand-in n8 gateway: records POST /telemetry/ingest bodies (127.0.0.1 only).
+const GATEWAY = {url: '', posts: [], seen: new Set()};
+function startGateway() {
+  const srv = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      if (req.method !== 'POST' || req.url !== '/telemetry/ingest') {
+        res.writeHead(404);
+        return res.end();
+      }
+      let j = null;
+      try {
+        j = JSON.parse(body);
+      } catch {
+        res.writeHead(400);
+        return res.end('{}');
+      }
+      let accepted = 0,
+        deduped = 0;
+      for (const e of j.events || []) {
+        if (e.id && GATEWAY.seen.has(e.id)) deduped++;
+        else {
+          if (e.id) GATEWAY.seen.add(e.id);
+          accepted++;
+        }
+      }
+      GATEWAY.posts.push({auth: !!req.headers.authorization, agent: j.agent_id, events: j.events || []});
+      res.writeHead(200, {'content-type': 'application/json'});
+      res.end(JSON.stringify({accepted, deduped}));
+    });
+  });
+  return new Promise((r) =>
+    srv.listen(0, '127.0.0.1', () => {
+      GATEWAY.url = 'http://127.0.0.1:' + srv.address().port;
+      r(srv);
+    })
+  );
+}
+
 // ---------- scenarios ----------
 // Each returns {pass, detail}. `ctx` carries the harness log file and a page server.
 const scenarios = [
@@ -572,8 +612,9 @@ const scenarios = [
         const {ipcRenderer} = require('electron');
         (window.store || window.rpc.store).dispatch({type: 'TERM_GROUP_ADD_WEB_TAB', url, name: 'harness'});
         await pause(3000);
+        // The newest web view: an earlier scenario's may sit in a background tab.
         const webView = () =>
-          win().contentView.children.find((v) => {
+          [...win().contentView.children].reverse().find((v) => {
             try {
               return !/toast-layer.html/.test(v.webContents.getURL());
             } catch {
@@ -642,7 +683,134 @@ const scenarios = [
 
 // ---------- main ----------
 // Scenarios that can end the window or crash main get their own fresh launch.
-const GROUPS = [['s1', 's3', 's4', 's5', 's6', 's9', 's7', 's10', 's11', 's12', 's13'], ['s2'], ['s8'], ['s14']];
+scenarios.push({
+  id: 's15',
+  name: 'Host agent telemetry: pane env, folder watcher, Claude OTel, forwarded to n8',
+  async run(ctx) {
+    await h();
+    const proj = path.join(ctx.sandbox, 'work', 'proj');
+    const src = path.join(proj, 'src');
+    fs.mkdirSync(src, {recursive: true});
+    fs.writeFileSync(path.join(src, 'a.txt'), 'start\n');
+    // A process named claude.exe makes the pane an agent pane.
+    const bin = path.join(ctx.sandbox, 'bin');
+    fs.mkdirSync(bin, {recursive: true});
+    const fake = path.join(bin, 'claude.exe');
+    fs.copyFileSync(process.execPath, fake);
+    const script = path.join(bin, 'fake-agent.js');
+    const envOut = path.join(bin, 'env.json');
+    fs.writeFileSync(
+      script,
+      `const fs = require('fs'), path = require('path');
+const keys = ['CLAUDE_CODE_ENABLE_TELEMETRY', 'OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_PROTOCOL', 'OTEL_LOGS_EXPORTER', 'OTEL_RESOURCE_ATTRIBUTES', 'OTEL_LOG_TOOL_DETAILS', 'HYPERIA_PANE'];
+fs.writeFileSync(${JSON.stringify(envOut)}, JSON.stringify(Object.fromEntries(keys.map((k) => [k, process.env[k] || null]))));
+const src = path.join(process.cwd(), 'src');
+let n = 0;
+const t = setInterval(() => {
+  fs.appendFileSync(path.join(src, 'a.txt'), 'line ' + n++ + '\\n');
+  if (n === 3) fs.writeFileSync(path.join(src, 'new.txt'), 'hello');
+}, 700);
+setTimeout(() => { clearInterval(t); process.exit(0); }, 26000);`
+    );
+    const {uid} = await run(async () => {
+      const {S, pause, newPickerTab, pressOnPicker} = window.__h;
+      const {root} = await newPickerTab();
+      await pressOnPicker('s');
+      await pause(4000);
+      return {uid: S().termGroups.activeSessions[root]};
+    });
+    const status = await (await fetch(`http://127.0.0.1:${SIDECAR_PORT}/api/status`)).json();
+    let shell = '';
+    for (const w of status.windows || [])
+      for (const t of w.tabs || []) for (const p of t.panes || []) if (p.paneId === uid) shell = p.shell || '';
+    // cd first: the pane's folder is only known at the next prompt.
+    const pw = /pwsh|powershell/i.test(shell);
+    const typeLine = (line) =>
+      run((id, data) => window.rpc.emit('data', {uid: id, data}), uid, line + String.fromCharCode(13));
+    await typeLine(pw ? `cd '${proj}'` : `cd /d "${proj}"`);
+    await wait(2500);
+    await typeLine(pw ? `& '${fake}' '${script}'` : `"${fake}" "${script}"`);
+    for (let i = 0; i < 20 && !fs.existsSync(envOut); i++) await wait(500);
+    const env = fs.existsSync(envOut) ? JSON.parse(fs.readFileSync(envOut, 'utf8')) : {};
+    // Watcher polls every 5s; let it start and see a few saves, then the sender (2s tick) flush.
+    await wait(14000);
+    const kv = (key, v) => ({key, value: typeof v === 'number' ? {intValue: String(v)} : {stringValue: v}});
+    const otlp = {
+      resourceLogs: [
+        {
+          resource: {attributes: [kv('hyperia.pane', uid), kv('service.name', 'claude-code')]},
+          scopeLogs: [
+            {
+              logRecords: [
+                {
+                  attributes: [
+                    kv('event.name', 'claude_code.api_request'),
+                    kv('input_tokens', 1200),
+                    kv('output_tokens', 340),
+                    kv('cache_read_tokens', 50),
+                    kv('cache_creation_tokens', 0),
+                    kv('model', 'claude-opus-5-5')
+                  ]
+                },
+                {
+                  attributes: [
+                    kv('event.name', 'claude_code.tool_result'),
+                    kv('tool_name', 'Edit'),
+                    kv('success', 'true'),
+                    kv('tool_parameters', JSON.stringify({file_path: path.join(src, 'a.txt')}))
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    };
+    const otlpRes = await fetch(`http://127.0.0.1:${SIDECAR_PORT}/otel/v1/logs`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify(otlp)
+    });
+    await wait(5000);
+    const snap = await (await fetch(`http://127.0.0.1:${SIDECAR_PORT}/api/telemetry/snapshot?level=window`)).json();
+    const fe = (snap.telemetry && snap.telemetry.file_events) || [];
+    const mine = fe.filter((e) => e.pane_uid === uid);
+    const localOps = mine.filter((e) => e.kind === 'FileOp' && String(e.path).includes('proj')).length;
+    const localEdit = mine.some((e) => e.kind === 'Edit' && /claude_code:Edit/.test(e.tool || ''));
+    const tokensIn = (snap.telemetry && snap.telemetry.tokens_in) || 0;
+    const posts = GATEWAY.posts.filter((p) => p.agent === 'hy-' + uid);
+    const sent = posts.flatMap((p) => p.events);
+    const fwdFs = sent.filter((e) => e.kind === 'fs' && String(e.path).includes('proj')).length;
+    const fwdEdit = sent.some((e) => e.kind === 'edit' && /claude_code:Edit/.test(e.tool || ''));
+    const authed = posts.length > 0 && posts.every((p) => p.auth);
+    const envOk =
+      env.CLAUDE_CODE_ENABLE_TELEMETRY === '1' &&
+      env.OTEL_EXPORTER_OTLP_ENDPOINT === `http://127.0.0.1:${SIDECAR_PORT}/otel` &&
+      String(env.OTEL_RESOURCE_ATTRIBUTES || '').includes('hyperia.pane=' + uid) &&
+      env.OTEL_EXPORTER_OTLP_PROTOCOL === 'http/json';
+    await run((id) => window.rpc.emit('data', {uid: id, data: String.fromCharCode(3)}), uid).catch(() => {});
+    return {
+      pass:
+        envOk &&
+        otlpRes.status === 200 &&
+        localOps > 0 &&
+        localEdit &&
+        tokensIn >= 1200 &&
+        fwdFs > 0 &&
+        fwdEdit &&
+        authed,
+      detail: `shell ${shell}; env ok ${envOk}; otlp ${otlpRes.status}; local fileops ${localOps}, claude edit ${localEdit}, tokens_in ${tokensIn}; forwarded to n8 as hy-${uid.slice(0, 8)}: ${posts.length} post(s), fs ${fwdFs}, edit ${fwdEdit}, bearer ${authed}`
+    };
+  }
+});
+
+const GROUPS = [
+  ['s1', 's3', 's4', 's5', 's6', 's9', 's7', 's10', 's11', 's12', 's13'],
+  ['s2'],
+  ['s8'],
+  ['s14'],
+  ['s15']
+];
 
 async function launch(pageUrl) {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'hyperia-harness-'));
@@ -659,7 +827,8 @@ async function launch(pageUrl) {
       HOME: sandbox,
       APPDATA: path.join(sandbox, 'AppData', 'Roaming'),
       LOCALAPPDATA: path.join(sandbox, 'AppData', 'Local'),
-      HYPERIA_PORT: String(SIDECAR_PORT)
+      HYPERIA_PORT: String(SIDECAR_PORT),
+      HYPERIA_N8_GATEWAY: GATEWAY.url
     },
     stdio: ['ignore', out, out]
   });
@@ -736,6 +905,7 @@ async function teardown(ctx) {
   const server = http.createServer((_q, s) => s.end('<html><body style="height:3000px">harness page</body></html>'));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const pageUrl = `http://127.0.0.1:${server.address().port}/`;
+  const gatewaySrv = await startGateway();
 
   const results = [];
   const health = [];
@@ -765,6 +935,7 @@ async function teardown(ctx) {
     }
   }
   server.close();
+  gatewaySrv.close();
 
   console.log('\n' + '='.repeat(100));
   for (const r of results)

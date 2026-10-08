@@ -24,6 +24,9 @@ use crate::telemetry::{FileOp, TelemetryEvent, TelemetryStore};
 const SCAN_EVERY: Duration = Duration::from_secs(5);
 /// A path's raw events within this window become one event.
 const SETTLE: Duration = Duration::from_millis(700);
+/// A path written continuously (a log, a long generation) never settles;
+/// report it at least this often anyway.
+const MAX_HOLD: Duration = Duration::from_secs(3);
 const FLUSH_EVERY: Duration = Duration::from_millis(250);
 /// Per pane, per CAP_WINDOW.
 const CAP_EVENTS: usize = 200;
@@ -109,6 +112,7 @@ pub(crate) struct Change {
 struct Pending {
     pane: String,
     saw_create: bool,
+    first: Instant,
     last: Instant,
 }
 
@@ -124,7 +128,7 @@ impl Coalescer {
     }
 
     pub fn push(&mut self, pane: &str, path: PathBuf, raw: Raw, now: Instant) {
-        let e = self.pending.entry(path).or_insert(Pending { pane: pane.to_string(), saw_create: false, last: now });
+        let e = self.pending.entry(path).or_insert(Pending { pane: pane.to_string(), saw_create: false, first: now, last: now });
         e.pane = pane.to_string();
         e.saw_create |= raw == Raw::Create;
         e.last = now;
@@ -134,7 +138,7 @@ impl Coalescer {
     /// from the file's state now; something created and gone again is dropped.
     pub fn flush(&mut self, now: Instant, exists: impl Fn(&Path) -> bool, known: impl Fn(&Path) -> bool) -> Vec<Change> {
         let ready: Vec<PathBuf> = self.pending.iter()
-            .filter(|(_, p)| now.duration_since(p.last) >= SETTLE)
+            .filter(|(_, p)| now.duration_since(p.last) >= SETTLE || now.duration_since(p.first) >= MAX_HOLD)
             .map(|(k, _)| k.clone())
             .collect();
         let mut out = Vec::new();
@@ -309,6 +313,22 @@ fn start_watch(folder: &Path, pane: &str, tx: mpsc::UnboundedSender<(String, Pat
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_file_written_steadily_still_reports_every_few_seconds() {
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        let p = PathBuf::from("/w/log.txt");
+        let mut reported = 0;
+        // A write every 500ms for 10s: never 700ms of quiet.
+        for i in 0..20u64 {
+            let now = t0 + Duration::from_millis(500 * i);
+            c.push("pane", p.clone(), Raw::Modify, now);
+            reported += c.flush(now, |_| true, |_| true).len();
+        }
+        // Debounce alone gave 0 here; with MAX_HOLD it reports at ~3s and ~6.5s.
+        assert!(reported >= 2, "expected a report about every 3s, got {reported}");
+    }
+
     use super::*;
     use std::collections::HashSet;
 
