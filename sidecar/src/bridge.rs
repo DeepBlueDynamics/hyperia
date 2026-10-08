@@ -67,7 +67,58 @@ pub struct ShellAppInfo {
     pub pid: u32,
 }
 
+/// Recent PTY output rate: bytes and newlines in one-second buckets, for the
+/// dashboard's activity meter.
+#[derive(Clone, Debug, Default)]
+pub struct OutMeter {
+    buckets: [(u64, u64, u64); OUT_METER_SECS], // (unix sec, bytes, lines)
+}
+
+const OUT_METER_SECS: usize = 8;
+
+impl OutMeter {
+    pub fn record(&mut self, bytes: &[u8]) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.record_at(now, bytes.len() as u64, bytes.iter().filter(|&&b| b == b'\n').count() as u64);
+    }
+
+    fn record_at(&mut self, sec: u64, bytes: u64, lines: u64) {
+        let b = &mut self.buckets[(sec as usize) % OUT_METER_SECS];
+        if b.0 != sec {
+            *b = (sec, 0, 0);
+        }
+        b.1 += bytes;
+        b.2 += lines;
+    }
+
+    /// (bytes/s, lines/s) averaged over the last `window` whole seconds.
+    pub fn rate(&self, window: u64) -> (f64, f64) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.rate_at(now, window)
+    }
+
+    fn rate_at(&self, now: u64, window: u64) -> (f64, f64) {
+        let window = window.clamp(1, OUT_METER_SECS as u64 - 1);
+        // Whole seconds before the current, still-filling one.
+        let (mut bytes, mut lines) = (0, 0);
+        for &(sec, b, l) in &self.buckets {
+            if sec < now && now - sec <= window {
+                bytes += b;
+                lines += l;
+            }
+        }
+        (bytes as f64 / window as f64, lines as f64 / window as f64)
+    }
+}
+
 pub struct SessionInfo {
+    pub out_meter: OutMeter,
     pub name: String,
     /// Friendly, layout-stable pane name (e.g. "Suspicious Marlin 🧄"),
     /// generated per-pane in the renderer and pushed via `SessionName`.
@@ -1943,6 +1994,7 @@ impl Bridge {
                         let user_active_secs_ago = info
                             .last_user_activity
                             .map(|t| t.elapsed().as_secs());
+                        let (out_bps, out_lps) = info.out_meter.rate(3);
                         // `name` = the friendly, layout-stable pane name
                         // (e.g. "Suspicious Marlin 🧄"). Fall back to `title`
                         // until the renderer's first `SessionName` arrives, so
@@ -1985,6 +2037,11 @@ impl Bridge {
                             "active": info.pane_active,
                             "focused": focused,
                             "userActiveSecsAgo": user_active_secs_ago,
+                            // Output activity: rate over the last 3 s, and seconds
+                            // since the last byte (null if never).
+                            "outBps": out_bps.round(),
+                            "outLps": (out_lps * 10.0).round() / 10.0,
+                            "outSecsAgo": info.last_output_at.map(|t| (t.elapsed().as_millis() as f64 / 100.0).round() / 10.0),
                             "cwd": info.cwd,
                             "title": info.title,
                             "state": state,
@@ -2082,6 +2139,7 @@ impl Bridge {
                 self.inner.sessions.lock().await.insert(
                     uid,
                     SessionInfo {
+                        out_meter: Default::default(),
                         name,
                         shell_name,
                         tab_name,
@@ -2271,6 +2329,7 @@ impl Bridge {
                             // means the view isn't parked. A streaming/thinking agent
                             // keeps this current; a silent prompt lets it go stale.
                             info.last_output_at = Some(std::time::Instant::now());
+                            info.out_meter.record(&bytes);
                         }
                         drop(sessions);
                         // Append ANSI-stripped text to the lume per-shell log
@@ -2539,6 +2598,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn out_meter_rates_whole_seconds_and_forgets_old_ones() {
+        let mut m = OutMeter::default();
+        m.record_at(100, 3000, 30);
+        m.record_at(101, 600, 6);
+        m.record_at(102, 900, 9); // still filling at now=102: not counted
+        assert_eq!(m.rate_at(102, 3), (1200.0, 12.0));
+        // Ten seconds on, every bucket is stale.
+        assert_eq!(m.rate_at(112, 3), (0.0, 0.0));
+        // A reused bucket starts from zero.
+        m.record_at(108, 50, 1);
+        assert_eq!(m.rate_at(109, 1), (50.0, 1.0));
+    }
+
+    #[test]
     fn link_watch_goes_stale_only_past_the_limit() {
         let t0 = std::time::Instant::now();
         let mut w = LinkWatch::new(t0);
@@ -2658,6 +2731,7 @@ mod tests {
     }
     fn session_info(window_id: u32, root_tab_uid: &str, split_label: &str, tab_active: bool, pane_active: bool) -> SessionInfo {
         SessionInfo {
+            out_meter: Default::default(),
             name: "shell".into(),
             shell_name: String::new(),
             tab_name: "tab".into(),

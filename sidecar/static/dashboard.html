@@ -839,7 +839,9 @@ function pvIngestStatus(j){
         const web = p.kind === "web" || p.shell === "web";
         const cls = web ? "wb" : PV_AGENT_RX.test(proc) ? "ag" : (p.shell === "picker" || proc === "picker") ? "dm" : "sh";
         const name = p.name || p.title || String(p.paneId || "").slice(0, 8);
-        panes.push({paneId: p.paneId, name, proc, cls, focused: !!p.focused, state: p.state || "", tab: tab.name || ""});
+        const lastOut = p.outSecsAgo == null ? 0 : Date.now() - p.outSecsAgo * 1000;
+        panes.push({paneId: p.paneId, name, proc, cls, focused: !!p.focused, state: p.state || "", tab: tab.name || "",
+          bps: Number(p.outBps) || 0, lps: Number(p.outLps) || 0, lastOut});
         names[p.paneId] = name;
       } } }
   PV.panes = panes; PV.names = names; PV.counts = {w, t};
@@ -1029,6 +1031,7 @@ function pvDrawRing(){
 
   pvDrawFiles(ctx, pos, R, cx, cy, tilt, k);
   pvDrawArrivals(ctx, pos, R, cx, cy);
+  pvDrawOutput(ctx, drawn, pos, R, k);
 
   // Edge bars: one per real event. New ones grow out, expired ones shrink away.
   const wall = Date.now();
@@ -1092,6 +1095,7 @@ function pvDrawRing(){
       ctx.fillStyle = on ? "#f8fafc" : n.kind === "agent" ? "#fbbf24" : n.kind === "web" ? "#86efac" : n.kind === "system" ? "#e5e7eb" : "#7dd3fc";
       ctx.textAlign = left ? "right" : "left";
       ctx.fillText(text, p.x, p.y);
+      if ((a.out || 0) > .05 && !PV_REDUCE) pvShimmer(ctx, text, p.x, p.y, tw, ctx.textAlign, a.out * a.alpha);
     }
     ctx.globalAlpha = 1; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
   }
@@ -1110,7 +1114,8 @@ function pvDrawRing(){
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const top = pick.node, p0 = pos(pick.theta, R+2), p = {x: p0.x*vw.z + vw.x, y: p0.y*vw.z + vw.y};
     const l1 = (sel ? "SELECTED " : "NODE ")+top.label+" | SENT "+(top.sent || 0)+" | RECV "+(top.received || 0)+" | EDITS "+(top.edits || 0)+" | OPS "+(top.ops || 0)+" | +"+pvK(top.added || 0);
-    const l2 = (top.kind || "").toUpperCase()+" | PANE ACCESS "+(top.access || 0)+" | NET "+fmtB(top.net || 0)+(sel ? " | ESC TO CLEAR" : " | CLICK A NODE");
+    const o = pvOut(top), outTxt = pvWorking(o) ? " | OUT "+fmtB(o.bps)+"/S "+o.lps+" LINES/S" : o && o.lastOut ? " | QUIET "+pvAgo(o.lastOut) : "";
+    const l2 = (top.kind || "").toUpperCase()+" | PANE ACCESS "+(top.access || 0)+" | NET "+fmtB(top.net || 0)+outTxt+(sel ? " | ESC TO CLEAR" : " | CLICK A NODE");
     ctx.font = "10px "+PV_MONO;
     const bw = Math.min(w - 28, Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 20), bh = 36;
     const right = p.x > cx, low = p.y > cy;
@@ -1195,6 +1200,48 @@ function pvDrawArrivals(ctx, pos, R, cx, cy){
     }
   }
   ctx.shadowBlur = 0; ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over"; ctx.lineCap = "butt";
+}
+
+// Output activity (live only). A pane is "working" while it printed in the
+// last PV_WORK_MS; its arc inside the ring scrolls at its lines/s and thickens
+// with bytes/s. The name shimmers while working.
+const PV_WORK_MS = 2500;
+function pvOut(n){
+  if (PV.mode !== "live" || !n || !n.pane) return null;
+  return PV.panes.find((p) => p.paneId === n.pane) || null;
+}
+const pvWorking = (o) => !!o && o.lastOut > 0 && Date.now() - o.lastOut < PV_WORK_MS;
+function pvDrawOutput(ctx, drawn, pos, R, k){
+  for (const a of drawn) {
+    const o = pvOut(a.node), on = pvWorking(o);
+    a.out = (a.out || 0) + ((on ? 1 : 0) - (a.out || 0)) * k;
+    a.lps = (a.lps || 0) + ((on ? o.lps : 0) - (a.lps || 0)) * k;
+    a.bps = (a.bps || 0) + ((on ? o.bps : 0) - (a.bps || 0)) * k;
+    if (a.out < .02) continue;
+    // Dash travel: ~1 px/frame per line/s, capped so a flood doesn't strobe.
+    a.dash = ((a.dash || 0) + Math.min(14, .6 + a.lps * .5)) % 1e6;
+    const half = PV.span * .38, steps = 18, r = R * .9;
+    ctx.save();
+    ctx.globalAlpha = a.out * a.alpha * (PV.sel && a.node.id !== PV.sel ? .3 : .85);
+    ctx.strokeStyle = a.node.kind === "agent" ? "#fbbf24" : "#7dd3fc";
+    ctx.lineWidth = 1 + Math.min(3, Math.log10(1 + a.bps) * .8);
+    ctx.setLineDash([5, 4]); ctx.lineDashOffset = PV_REDUCE ? 0 : -a.dash;
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i++) { const p = pos(a.theta - half + (2 * half * i) / steps, r); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); }
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+// Shimmer: a bright band sweeping across a label.
+function pvShimmer(ctx, text, x, y, tw, align, strength){
+  const x0 = align === "right" ? x - tw : x, u = ((performance.now() / 1100) % 1.6) - .3;
+  const g = ctx.createLinearGradient(x0, 0, x0 + tw, 0), c = (v) => Math.max(0, Math.min(1, v));
+  g.addColorStop(0, "rgba(255,255,255,0)");
+  g.addColorStop(c(u - .15), "rgba(255,255,255,0)");
+  g.addColorStop(c(u), "rgba(255,255,255,"+(.95 * strength).toFixed(3)+")");
+  g.addColorStop(c(u + .15), "rgba(255,255,255,0)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g; ctx.fillText(text, x, y);
 }
 
 // Files touched in the window, most recent first, each with the panes that

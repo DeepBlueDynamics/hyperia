@@ -33,6 +33,7 @@ impl Fixture {
 
 async fn add_pane(bridge: &Bridge, pane: &str) {
     bridge.sessions().await.insert(pane.into(), crate::bridge::SessionInfo {
+        out_meter: Default::default(),
         name: "shell".into(), shell_name: "Fixture pane".into(), tab_name: "test".into(),
         description: String::new(), rows: 24, cols: 80, pid: 1, root_tab_uid: "fixture-tab".into(),
         window_id: 1, split_label: "a".into(), tab_order: 0, tab_active: true, pane_active: true,

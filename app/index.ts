@@ -487,7 +487,9 @@ app.on('second-instance', () => {
     const diskPkg = JSON.parse(readFileSync(pathModule.join(app.getAppPath(), 'package.json'), 'utf8')) as {
       version?: string;
     };
-    if (diskPkg?.version && diskPkg.version !== app.getVersion()) {
+    // Installed builds only: a dev version is a git-describe string that never
+    // matches package.json, so electronmon restarts looped relaunch→exit.
+    if (app.isPackaged && diskPkg?.version && diskPkg.version !== app.getVersion()) {
       console.log(
         `[update] on-disk v${diskPkg.version} != running v${app.getVersion()} — handing over to the new binary`
       );
