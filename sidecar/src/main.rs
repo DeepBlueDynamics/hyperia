@@ -4724,7 +4724,9 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Ferricula client: {} (run ferricula separately, e.g. via docker compose)", ferricula_url);
 
     let bridge = Bridge::new();
-    let telem = telemetry::TelemetryStore::new();
+    let telem = telemetry::TelemetryStore::persistent(
+        fsnav::home_dir().join(".hyperia").join("telemetry").join("file-events.jsonl"),
+    );
     let dash_state = dashboard::DashboardState::new(telem.clone());
     let state = AppState { bridge, log_buffer, telemetry: telem, render: render::RenderStore::new() };
     // Host-pane telemetry → n8 gateway (server of record); buffers while it is down.
