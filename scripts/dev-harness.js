@@ -804,12 +804,78 @@ setTimeout(() => { clearInterval(t); process.exit(0); }, 26000);`
   }
 });
 
+// Opt-in (HARNESS_AGY=1): uses the real n8 + agy login and a real container.
+scenarios.push({
+  id: 's16',
+  name: 'agy via n8 in a real pane survives a window-drag resize (opt-in)',
+  async run(ctx) {
+    if (process.env.HARNESS_AGY !== '1') return {pass: true, detail: 'skipped (set HARNESS_AGY=1)'};
+    await h();
+    const cp = require('child_process');
+    const names = () => cp.execSync('docker ps --format "{{.Names}}"').toString().split(/\s+/).filter(Boolean);
+    const before = new Set(names());
+    const home = process.env.USERPROFILE;
+    const ws = path.join(ctx.sandbox, 'agyws');
+    fs.mkdirSync(ws, {recursive: true});
+    const n8 = path.join(home, '.local', 'bin', 'n8.exe');
+    const {uid} = await run(async () => {
+      const {S, pause, newPickerTab, pressOnPicker} = window.__h;
+      const {root} = await newPickerTab();
+      await pressOnPicker('s');
+      await pause(4000);
+      return {uid: S().termGroups.activeSessions[root]};
+    });
+    const type = (data) => run((id, d) => window.rpc.emit('data', {uid: id, data: d}), uid, data);
+    const enter = String.fromCharCode(13);
+    // n8 needs the real home (its config and agy login), not the sandbox's.
+    await type(
+      `$env:USERPROFILE='${home}'; $env:HOME='${home}'; & '${n8}' --provider antigravity --danger --workspace '${ws}' interactive` +
+        enter
+    );
+    const screen = async () => {
+      const r = await fetch(`http://127.0.0.1:${SIDECAR_PORT}/api/screen?pane=${uid}`);
+      const rows = (await r.text()).split(/\r?\n/).filter((l) => l.trim());
+      return rows;
+    };
+    await wait(45000);
+    await type(String.fromCharCode(27));
+    await wait(800);
+    await type('Print the numbers 1 to 80, one per line, nothing else.');
+    await wait(800);
+    await type(enter);
+    await wait(30000);
+    const beforeDrag = await screen();
+    // Drag the window edge: a burst of setSize calls ~40ms apart.
+    await run(async () => {
+      const w = window.__h.win(),
+        [w0, h0] = w.getSize();
+      for (let i = 0; i < 30; i++) {
+        const k = Math.sin((i / 29) * Math.PI);
+        w.setSize(Math.round(w0 - 500 * k), Math.round(h0 - 250 * k));
+        await window.__h.pause(40);
+      }
+      w.setSize(w0, h0);
+    });
+    await wait(6000);
+    const afterDrag = await screen();
+    const numbers = (rows) => rows.filter((l) => /^\s*\d+\s*$/.test(l)).length;
+    for (const c of names().filter((x) => !before.has(x) && x.startsWith('n8-')))
+      cp.execSync('docker rm -f ' + c, {stdio: 'ignore'});
+    const ok = numbers(afterDrag) >= 10;
+    return {
+      pass: ok,
+      detail: `before drag: ${beforeDrag.length} rows (${numbers(beforeDrag)} numbers); after drag: ${afterDrag.length} rows (${numbers(afterDrag)} numbers); last rows after: ${JSON.stringify(afterDrag.slice(-4).map((l) => l.trim().slice(0, 50)))}`
+    };
+  }
+});
+
 const GROUPS = [
   ['s1', 's3', 's4', 's5', 's6', 's9', 's7', 's10', 's11', 's12', 's13'],
   ['s2'],
   ['s8'],
   ['s14'],
-  ['s15']
+  ['s15'],
+  ['s16']
 ];
 
 async function launch(pageUrl) {
