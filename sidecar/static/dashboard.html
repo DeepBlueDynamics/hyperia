@@ -730,7 +730,8 @@ const PV = {on:false, panes:[], names:{}, counts:{w:0,t:0}, win:null, pane:null,
   // New comms crackle in: stream events seen so far, and arrivals in flight.
   seen:new Set(), primed:false, arrivals:[],
   // Files in the centre: nodes keyed by path, stable spiral slots, threads to panes.
-  files:[], fileSlots:new Map(), fileAnim:new Map(), fileSeen:new Set(), fileFlashes:[], selFile:null};
+  files:[], fileSlots:new Map(), fileAnim:new Map(), fileSeen:new Set(), fileFlashes:[], selFile:null,
+  dirs:[], dirSlots:new Map(), dirFileSlots:new Map(), dirAnim:new Map(), selDir:null};
 const PV_FILE_MAX = 60;
 
 // ---- Sound: synthesized with WebAudio, no files. Rate-limited, silent while
@@ -1104,7 +1105,7 @@ function pvDrawRing(){
   pvLabelFiles(ctx, vw, w, h);
   pvFileCallout(ctx, vw, w, h);
   ctx.setTransform(dpr*vw.z, 0, 0, dpr*vw.z, dpr*vw.x, dpr*vw.y);
-  if (pick && !PV.selFile && (sel || score(pick.node) > 0)) {
+  if (pick && !PV.selFile && !PV.selDir && (sel || score(pick.node) > 0)) {
     // The callout box stays in screen space; only its anchor follows the zoom.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const top = pick.node, p0 = pos(pick.theta, R+2), p = {x: p0.x*vw.z + vw.x, y: p0.y*vw.z + vw.y};
@@ -1233,40 +1234,137 @@ function pvBuildFiles(){
   }
   PV.files = list;
   if (PV.selFile && !keep.has(PV.selFile)) PV.selFile = null;
+  pvBuildDirs(list);
+}
+
+// Directory hubs: files group under their parent dir. Over PV_DIR_MAX dirs,
+// the deepest fold into their parent until they fit (then "other").
+const PV_DIR_MAX = 16;
+const pvSplit = (p) => String(p).split(/[\\/]/).filter(Boolean);
+function pvBuildDirs(list){
+  let groups = new Map();
+  const add = (segs, files) => {
+    const key = segs.join("/").toLowerCase();
+    let d = groups.get(key);
+    if (!d) { d = {key, segs, files: [], count: 0, last: 0}; groups.set(key, d); }
+    for (const f of files) { d.files.push(f); d.count += f.count; d.last = Math.max(d.last, f.last); }
+  };
+  for (const f of list) add(pvSplit(f.path).slice(0, -1), [f]);
+  while (groups.size > PV_DIR_MAX) {
+    const deep = [...groups.values()].filter((d) => d.segs.length > 1)
+      .sort((a, b) => b.segs.length - a.segs.length || a.files.length - b.files.length)[0];
+    if (!deep) break;
+    groups.delete(deep.key); add(deep.segs.slice(0, -1), deep.files);
+  }
+  let dirs = [...groups.values()].sort((a, b) => b.last - a.last);
+  if (dirs.length > PV_DIR_MAX) {
+    const other = {key: "\u0000other", segs: ["other"], files: [], count: 0, last: 0};
+    for (const d of dirs.slice(PV_DIR_MAX - 1)) { other.files.push(...d.files); other.count += d.count; other.last = Math.max(other.last, d.last); }
+    dirs = dirs.slice(0, PV_DIR_MAX - 1).concat(other);
+  }
+  for (const d of dirs) { d.path = d.segs.join("/") + "/"; d.label = d.segs.slice(-2).join("/") + "/"; }
+  // Stable slots: a dir keeps its place on the sphere, a file its place round its dir.
+  const keep = new Set(dirs.map((d) => d.key));
+  for (const k of [...PV.dirSlots.keys()]) if (!keep.has(k)) { PV.dirSlots.delete(k); PV.dirFileSlots.delete(k); }
+  const used = new Set(PV.dirSlots.values());
+  for (const d of dirs) {
+    if (!PV.dirSlots.has(d.key)) { let n = 0; while (used.has(n)) n++; PV.dirSlots.set(d.key, n); used.add(n); }
+    d.slot = PV.dirSlots.get(d.key);
+    const slots = PV.dirFileSlots.get(d.key) || new Map(), mine = new Set(d.files.map((f) => f.path));
+    for (const p of [...slots.keys()]) if (!mine.has(p)) slots.delete(p);
+    const fu = new Set(slots.values());
+    for (const f of d.files) {
+      if (!slots.has(f.path)) { let n = 0; while (fu.has(n)) n++; slots.set(f.path, n); fu.add(n); }
+      f.dir = d.key; f.dslot = slots.get(f.path);
+    }
+    PV.dirFileSlots.set(d.key, slots);
+  }
+  PV.dirs = dirs;
+  if (PV.selDir && !keep.has(PV.selDir)) PV.selDir = null;
 }
 
 const PV_FILE_COLOR = {edit: "#fb923c", write: "#c084fc", create: "#4ade80", delete: "#e11d48", rename: "#94a3b8"};
 const pvBase = (p) => String(p).split(/[\\/]/).pop();
 
-// Sunflower spiral inside the ring: slot 0 at the centre, outward from there.
-function pvFileSpot(slot, R, cx, cy, tilt){
-  const r = R * .62 * Math.sqrt((slot + .6) / (PV_FILE_MAX + .6)), a = slot * 2.39996;
-  return {x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r * tilt};
+// 3D: dir hubs sit on a slowly turning sphere; each dir's files orbit it on
+// the dir's own tilted axis. Positions ease in 3D, then project with perspective.
+function pvFib(i, n){
+  if (n <= 1) return [0, 0, 0];
+  const y = 1 - 2 * (i + .5) / n, r = Math.sqrt(Math.max(0, 1 - y*y)), a = i * 2.39996;
+  return [Math.cos(a) * r, y, Math.sin(a) * r];
 }
+const pvRotY = (v, a) => [v[0]*Math.cos(a) + v[2]*Math.sin(a), v[1], -v[0]*Math.sin(a) + v[2]*Math.cos(a)];
+const pvRotX = (v, a) => [v[0], v[1]*Math.cos(a) - v[2]*Math.sin(a), v[1]*Math.sin(a) + v[2]*Math.cos(a)];
+const pvRotZ = (v, a) => [v[0]*Math.cos(a) - v[1]*Math.sin(a), v[0]*Math.sin(a) + v[1]*Math.cos(a), v[2]];
+const pvLerp3 = (a, b, k) => [a[0] + (b[0]-a[0])*k, a[1] + (b[1]-a[1])*k, a[2] + (b[2]-a[2])*k];
+// 1 = nearest the viewer, 0 = far side.
+const pvDepth = (z) => Math.max(0, Math.min(1, .5 - z / (2.4 * Math.max(((PV.geom || {}).R || 100) * .42, 1))));
 
 function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
-  const now = Date.now(), t = performance.now();
+  const now = Date.now(), t = performance.now(), ts = PV_REDUCE ? 0 : t / 1000;
+  const nd = PV.dirs.length, slots = Math.max(1, ...PV.dirs.map((d) => d.slot + 1));
+  const Rd = nd <= 1 ? 0 : R * (nd <= 3 ? .32 : .5), F = R * 3;
+  const gy = ts * .09, gx = .38;
+  const project = (v) => {
+    const w = pvRotX(pvRotY(v, gy), gx), p = F / (F + w[2]);
+    return {x: cx + w[0]*p, y: cy + w[1]*p, z: w[2], p};
+  };
+  // Dirs.
+  const presentD = new Set();
+  for (const d of PV.dirs) {
+    presentD.add(d.key);
+    const tgt = pvFib(d.slot, slots).map((x) => x * Rd);
+    let a = PV.dirAnim.get(d.key);
+    if (!a) {
+      const r = pvRand(pvHash(d.key));
+      a = {c: tgt, alpha: 0, ax: (r()-.5)*1.6, az: (r()-.5)*1.6, sp: (.25 + r()*.45) * (r() < .5 ? -1 : 1), ph: r()*6.28};
+      PV.dirAnim.set(d.key, a);
+    }
+    a.d = d; a.c = pvLerp3(a.c, tgt, k); a.alpha += (1 - a.alpha) * k;
+    a.rf = R * (.06 + .02 * Math.sqrt(d.files.length));
+    const pr = project(a.c); a.x = pr.x; a.y = pr.y; a.z = pr.z; a.p = pr.p;
+  }
+  for (const [key, a] of PV.dirAnim) if (!presentD.has(key)) { a.alpha -= a.alpha * k; if (a.alpha < .02) PV.dirAnim.delete(key); }
+  // Files: orbit their dir in the dir's own space.
   const present = new Set();
   for (const f of PV.files) {
+    const da = PV.dirAnim.get(f.dir); if (!da) continue;
     present.add(f.path);
+    const off = pvFib(f.dslot, Math.max(da.d.files.length, 2)).map((x) => x * da.rf);
     let a = PV.fileAnim.get(f.path);
-    const spot = pvFileSpot(f.slot, R, cx, cy, tilt);
-    if (!a) { a = {x: spot.x, y: spot.y, alpha: 0}; PV.fileAnim.set(f.path, a); }
-    a.f = f; a.x += (spot.x - a.x) * k; a.y += (spot.y - a.y) * k; a.alpha += (1 - a.alpha) * k;
+    if (!a || !a.o) { a = {o: [0, 0, 0], alpha: 0}; PV.fileAnim.set(f.path, a); }
+    a.f = f; a.da = da; a.o = pvLerp3(a.o, off, k); a.alpha += (1 - a.alpha) * k;
+    const l = pvRotZ(pvRotX(pvRotY(a.o, da.ph + ts * da.sp), da.ax), da.az);
+    const pr = project([da.c[0] + l[0], da.c[1] + l[1], da.c[2] + l[2]]);
+    a.x = pr.x; a.y = pr.y; a.z = pr.z; a.p = pr.p;
   }
   for (const [p, a] of PV.fileAnim) if (!present.has(p)) { a.alpha -= a.alpha * k; if (a.alpha < .02) PV.fileAnim.delete(p); }
-  if (!PV.fileAnim.size) return;
-  const sel = PV.sel, selFile = PV.selFile;
-  const lit = (f, nodeId) => (selFile ? f.path === selFile : sel ? nodeId === sel : true);
+  if (!PV.fileAnim.size && !PV.dirAnim.size) return;
+  const sel = PV.sel, selFile = PV.selFile, selDir = PV.selDir;
+  const lit = (f, nodeId) => (selFile ? f.path === selFile : selDir ? f.dir === selDir : sel ? nodeId === sel : true);
+  const on = (f) => (selFile ? f.path === selFile : selDir ? f.dir === selDir : sel ? f.links.has(sel) : true);
+  const dirOn = (d) => (selDir ? d.key === selDir : selFile ? d.files.some((f) => f.path === selFile) : sel ? d.files.some((f) => f.links.has(sel)) : true);
+  // Each dir's own space: a faint shell, and spokes out to its files.
+  ctx.strokeStyle = "#7dd3fc"; ctx.lineWidth = 1;
+  for (const a of PV.dirAnim.values()) {
+    ctx.globalAlpha = a.alpha * (dirOn(a.d) ? .1 + .14 * pvDepth(a.z) : .03);
+    ctx.beginPath(); ctx.arc(a.x, a.y, a.rf * a.p * 1.05, 0, Math.PI*2); ctx.stroke();
+  }
+  ctx.lineWidth = .7;
+  for (const a of PV.fileAnim.values()) {
+    if (!a.da || !PV.dirAnim.has(a.f.dir)) continue;
+    ctx.globalAlpha = a.alpha * a.da.alpha * (on(a.f) ? .16 + .3 * pvDepth((a.z + a.da.z) / 2) : .04);
+    ctx.beginPath(); ctx.moveTo(a.da.x, a.da.y); ctx.lineTo(a.x, a.y); ctx.stroke();
+  }
   // Threads: file → each pane that touched it.
   ctx.globalCompositeOperation = "lighter";
   for (const a of PV.fileAnim.values()) {
-    const f = a.f;
+    const f = a.f, dep = pvDepth(a.z);
     for (const [nodeId, l] of f.links) {
       const n = PV.anim.get(nodeId); if (!n) continue;
-      const p = pos(n.theta, R*.97), on = lit(f, nodeId), fresh = now - l.last < 60000;
+      const p = pos(n.theta, R*.97), o = lit(f, nodeId), fresh = now - l.last < 60000;
       ctx.strokeStyle = PV_FILE_COLOR[l.kind] || "#94a3b8";
-      ctx.globalAlpha = a.alpha * n.alpha * (on ? (fresh ? .75 : .38) : .05);
+      ctx.globalAlpha = a.alpha * n.alpha * (o ? (fresh ? .75 : .38) * (.55 + .45 * dep) : .05);
       ctx.lineWidth = Math.min(3.2, .6 + Math.log2(1 + l.count) * .55);
       const mx = (a.x + p.x) / 2 + (cy - (a.y + p.y) / 2) * .12, my = (a.y + p.y) / 2 + ((a.x + p.x) / 2 - cx) * .12;
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.quadraticCurveTo(mx, my, p.x, p.y); ctx.stroke();
@@ -1285,11 +1383,21 @@ function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
     ctx.beginPath(); ctx.arc(x, y, 2.8, 0, Math.PI*2); ctx.fill();
   }
   ctx.shadowBlur = 0; ctx.globalCompositeOperation = "source-over";
-  // Nodes: size by changes, colour by the latest change, ring when fresh.
-  for (const a of PV.fileAnim.values()) {
-    const f = a.f, on = selFile ? f.path === selFile : sel ? f.links.has(sel) : true;
-    const r = 2.2 + Math.min(6, Math.log2(1 + f.count) * 1.4), col = PV_FILE_COLOR[f.kind] || "#94a3b8";
-    ctx.globalAlpha = a.alpha * (on ? 1 : .18);
+  // Nodes back to front: dir hubs and files, nearer = bigger and brighter.
+  const items = [...PV.dirAnim.values()].map((a) => ({a, dir: true})).concat([...PV.fileAnim.values()].map((a) => ({a, dir: false})));
+  items.sort((x, y) => y.a.z - x.a.z);
+  for (const {a, dir} of items) {
+    const shade = .45 + .55 * pvDepth(a.z);
+    if (dir) {
+      const d = a.d, isSel = d.key === selDir, r = (3 + Math.min(7, Math.sqrt(d.files.length) * 1.6)) * a.p;
+      ctx.globalAlpha = a.alpha * (dirOn(d) ? shade : .15);
+      ctx.fillStyle = "rgba(14,116,144,.55)"; ctx.strokeStyle = isSel ? "#f8fafc" : "#7dd3fc"; ctx.lineWidth = isSel ? 2 : 1.2;
+      ctx.beginPath(); ctx.arc(a.x, a.y, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = "#e0f2fe"; ctx.beginPath(); ctx.arc(a.x, a.y, Math.max(1.2, r * .28), 0, Math.PI*2); ctx.fill();
+      continue;
+    }
+    const f = a.f, r = (2.2 + Math.min(6, Math.log2(1 + f.count) * 1.4)) * a.p, col = PV_FILE_COLOR[f.kind] || "#94a3b8";
+    ctx.globalAlpha = a.alpha * (on(f) ? shade : .15);
     ctx.fillStyle = col; ctx.beginPath(); ctx.arc(a.x, a.y, r, 0, Math.PI*2); ctx.fill();
     if (now - f.last < 60000 || f.path === selFile) {
       ctx.strokeStyle = f.path === selFile ? "#f8fafc" : col; ctx.lineWidth = 1;
@@ -1301,10 +1409,25 @@ function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
 
 // Labels for the busiest files, in screen space, skipping overlaps.
 function pvLabelFiles(ctx, vw, w, h){
-  if (!PV.fileAnim.size) return;
-  const order = [...PV.fileAnim.values()].sort((x, y) => (y.f.path === PV.selFile) - (x.f.path === PV.selFile) || y.f.count - x.f.count);
+  if (!PV.fileAnim.size && !PV.dirAnim.size) return;
   const placed = [];
-  ctx.font = "9px "+PV_MONO; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  // Dir names first (nearest wins a clash), then the busiest files.
+  ctx.font = "bold 9px "+PV_MONO;
+  const dirs = [...PV.dirAnim.values()].sort((x, y) => (y.d.key === PV.selDir) - (x.d.key === PV.selDir) || x.z - y.z);
+  for (const a of dirs) {
+    const x = a.x*vw.z + vw.x + 10, y = a.y*vw.z + vw.y - 10;
+    if (x < 0 || x > w || y < 0 || y > h) continue;
+    const text = a.d.label, tw = ctx.measureText(text).width;
+    const box = {x0: x, x1: x + tw, y0: y - 6, y1: y + 6};
+    if (a.d.key !== PV.selDir && placed.some((b) => box.x0 < b.x1 + 3 && box.x1 > b.x0 - 3 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
+    placed.push(box);
+    ctx.globalAlpha = a.alpha * (!PV.selDir || a.d.key === PV.selDir ? .5 + .45 * pvDepth(a.z) : .2);
+    ctx.fillStyle = a.d.key === PV.selDir ? "#f8fafc" : "#7dd3fc";
+    ctx.fillText(text, x, y);
+  }
+  ctx.font = "9px "+PV_MONO;
+  const order = [...PV.fileAnim.values()].sort((x, y) => (y.f.path === PV.selFile) - (x.f.path === PV.selFile) || (y.f.dir === PV.selDir) - (x.f.dir === PV.selDir) || y.f.count - x.f.count);
   for (const a of order.slice(0, 24)) {
     const x = a.x*vw.z + vw.x + 8, y = a.y*vw.z + vw.y;
     if (x < 0 || x > w || y < 0 || y > h) continue;
@@ -1312,7 +1435,7 @@ function pvLabelFiles(ctx, vw, w, h){
     const box = {x0: x, x1: x + tw, y0: y - 6, y1: y + 6};
     if (a.f.path !== PV.selFile && placed.some((b) => box.x0 < b.x1 + 3 && box.x1 > b.x0 - 3 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
     placed.push(box);
-    const on = PV.selFile ? a.f.path === PV.selFile : PV.sel ? a.f.links.has(PV.sel) : true;
+    const on = PV.selFile ? a.f.path === PV.selFile : PV.selDir ? a.f.dir === PV.selDir : PV.sel ? a.f.links.has(PV.sel) : true;
     ctx.globalAlpha = a.alpha * (on ? .9 : .25);
     ctx.fillStyle = a.f.path === PV.selFile ? "#f8fafc" : "#cbd5e1";
     ctx.fillText(text, x, y);
@@ -1322,10 +1445,20 @@ function pvLabelFiles(ctx, vw, w, h){
 
 // Callout for the selected file.
 function pvFileCallout(ctx, vw, w, h){
-  const a = PV.selFile && PV.fileAnim.get(PV.selFile); if (!a) return;
-  const f = a.f, panes = [...f.links.keys()].map((id) => (PV.alias.get(id) || {}).label || id);
-  const l1 = "FILE "+f.path;
-  const l2 = f.count+" CHANGE"+(f.count === 1 ? "" : "S")+" | LAST "+f.kind.toUpperCase()+" "+pvAgo(f.last)+(f.add || f.del ? " | +"+pvK(f.add)+" −"+pvK(f.del) : "")+" | BY "+panes.join(", ");
+  let a, l1, l2;
+  const da = !PV.selFile && PV.selDir && PV.dirAnim.get(PV.selDir);
+  if (da) {
+    const d = da.d, ids = new Set();
+    for (const f of d.files) for (const id of f.links.keys()) ids.add(id);
+    const panes = [...ids].map((id) => (PV.alias.get(id) || {}).label || id);
+    a = da; l1 = "DIR "+d.path;
+    l2 = d.files.length+" FILE"+(d.files.length === 1 ? "" : "S")+" | "+d.count+" CHANGE"+(d.count === 1 ? "" : "S")+" | LAST "+pvAgo(d.last)+" | BY "+(panes.join(", ") || "—");
+  } else {
+    a = PV.selFile && PV.fileAnim.get(PV.selFile); if (!a) return;
+    const f = a.f, panes = [...f.links.keys()].map((id) => (PV.alias.get(id) || {}).label || id);
+    l1 = "FILE "+f.path;
+    l2 = f.count+" CHANGE"+(f.count === 1 ? "" : "S")+" | LAST "+f.kind.toUpperCase()+" "+pvAgo(f.last)+(f.add || f.del ? " | +"+pvK(f.add)+" −"+pvK(f.del) : "")+" | BY "+panes.join(", ");
+  }
   ctx.font = "10px "+PV_MONO;
   const bw = Math.min(w - 28, Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 20), bh = 36, bx = 14, by = 30;
   const px = a.x*vw.z + vw.x, py = a.y*vw.z + vw.y;
@@ -1340,13 +1473,19 @@ function pvFileCallout(ctx, vw, w, h){
 function pvSelect(id){
   if (id || PV.sel) pvSound("tick");
   PV.sel = id && id !== PV.sel ? id : null;
-  PV.selFile = null;
+  PV.selFile = null; PV.selDir = null;
   pvRenderAll();
 }
 function pvSelectFile(path){
   pvSound("tick");
   PV.selFile = path && path !== PV.selFile ? path : null;
-  PV.sel = null;
+  PV.sel = null; PV.selDir = null;
+  pvRenderAll();
+}
+function pvSelectDir(key){
+  pvSound("tick");
+  PV.selDir = key && key !== PV.selDir ? key : null;
+  PV.sel = null; PV.selFile = null;
   pvRenderAll();
 }
 
@@ -1679,8 +1818,10 @@ $("pv-ring").addEventListener("click", (ev) => {
   if (d < g.R*.7) {
     // Inside the ring: the nearest file node within reach, else clear.
     let best = null, bestD = Infinity;
-    for (const [p, a] of PV.fileAnim) { const dd = Math.hypot(ox - a.x, oy - a.y); if (dd < bestD) { bestD = dd; best = p; } }
-    if (best && bestD < 12 / v.z + 4) pvSelectFile(best); else { PV.selFile = null; pvSelect(null); }
+    for (const [p, a] of PV.fileAnim) { const dd = Math.hypot(ox - a.x, oy - a.y); if (dd < bestD) { bestD = dd; best = {file: p}; } }
+    for (const [key, a] of PV.dirAnim) { const dd = Math.hypot(ox - a.x, oy - a.y) - 3; if (dd < bestD) { bestD = dd; best = {dir: key}; } }
+    if (best && bestD < 12 / v.z + 4) { if (best.dir) pvSelectDir(best.dir); else pvSelectFile(best.file); }
+    else { PV.selFile = null; PV.selDir = null; pvSelect(null); }
     return;
   }
   if (d > g.R + 230) { pvSelect(null); return; }
