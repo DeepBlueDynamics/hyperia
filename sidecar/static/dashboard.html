@@ -1183,7 +1183,8 @@ function pvDrawRing(){
       ctx.font = (on ? "700 10px " : "9px ")+PV_MONO;
       const left = p.x < cx*vw.z + vw.x;
       const text = pvClip(ctx, n.label, Math.max(60, (left ? p.x : w - p.x) - 8)), tw = ctx.measureText(text).width;
-      const box = {x0: left ? p.x - tw : p.x, x1: left ? p.x : p.x + tw, y0: p.y - 7, y1: p.y + 7};
+      const pad = (a.out || 0) > .05 ? 12 : 0;
+      const box = {x0: (left ? p.x - tw : p.x) - pad, x1: (left ? p.x : p.x + tw) + pad, y0: p.y - 7 - pad / 3, y1: p.y + 7 + pad / 3};
       if (!on && placed.some((b) => box.x0 < b.x1 + 4 && box.x1 > b.x0 - 4 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
       placed.push(box);
       const depth = (Math.sin(a.theta + rot) + 1) / 2;
@@ -1191,7 +1192,10 @@ function pvDrawRing(){
       ctx.fillStyle = on ? "#f8fafc" : n.kind === "agent" ? "#fbbf24" : n.kind === "web" ? "#86efac" : n.kind === "system" ? "#e5e7eb" : "#7dd3fc";
       ctx.textAlign = left ? "right" : "left";
       ctx.fillText(text, p.x, p.y);
-      if ((a.out || 0) > .05 && !PV_REDUCE) pvShimmer(ctx, text, p.x, p.y, tw, ctx.textAlign, a.out * a.alpha);
+      if ((a.out || 0) > .05) {
+        pvHalo(ctx, a, left ? p.x - tw / 2 : p.x + tw / 2, p.y, tw, sel && !on ? .35 : 1);
+        if (!PV_REDUCE) pvShimmer(ctx, text, p.x, p.y, tw, ctx.textAlign, a.out * a.alpha);
+      }
     }
     ctx.globalAlpha = 1; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
   }
@@ -1781,8 +1785,8 @@ function edReplace(all){
 })();
 
 // Output activity (live only). A pane is "working" while it printed in the
-// last PV_WORK_MS; its arc inside the ring scrolls at its lines/s and thickens
-// with bytes/s. The name shimmers while working.
+// last PV_WORK_MS. Its name gets a halo: the glow pulses with output volume
+// and two bright arcs spin fast while it's printing (faster with more lines/s).
 const PV_WORK_MS = 2500;
 function pvOut(n){
   if (PV.mode !== "live" || !n || !n.pane) return null;
@@ -1795,20 +1799,30 @@ function pvDrawOutput(ctx, drawn, pos, R, k){
     a.out = (a.out || 0) + ((on ? 1 : 0) - (a.out || 0)) * k;
     a.lps = (a.lps || 0) + ((on ? o.lps : 0) - (a.lps || 0)) * k;
     a.bps = (a.bps || 0) + ((on ? o.bps : 0) - (a.bps || 0)) * k;
-    if (a.out < .02) continue;
-    // Dash travel: ~1 px/frame per line/s, capped so a flood doesn't strobe.
-    a.dash = ((a.dash || 0) + Math.min(14, .6 + a.lps * .5)) % 1e6;
-    const half = PV.span * .38, steps = 18, r = R * .9;
-    ctx.save();
-    ctx.globalAlpha = a.out * a.alpha * (PV.sel && a.node.id !== PV.sel ? .3 : .85);
-    ctx.strokeStyle = a.node.kind === "agent" ? "#fbbf24" : "#7dd3fc";
-    ctx.lineWidth = 1 + Math.min(3, Math.log10(1 + a.bps) * .8);
-    ctx.setLineDash([5, 4]); ctx.lineDashOffset = PV_REDUCE ? 0 : -a.dash;
-    ctx.beginPath();
-    for (let i = 0; i <= steps; i++) { const p = pos(a.theta - half + (2 * half * i) / steps, r); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); }
-    ctx.stroke();
-    ctx.restore();
+    if (a.out < .02 || PV_REDUCE) continue;
+    // Printing = bytes in the last few seconds: spin fast, faster with lines/s.
+    // Working but quiet: a slow drift.
+    const printing = a.bps > 1;
+    a.spin = ((a.spin || 0) + (printing ? .16 + Math.min(.34, a.lps * .02) : .015)) % (Math.PI * 2);
   }
+}
+// Halo round a name box: pulse = glow with output volume, spin = printing.
+function pvHalo(ctx, a, cx, cy, tw, dim){
+  const level = Math.min(1, Math.log10(1 + (a.bps || 0)) / 4), t = performance.now();
+  const beat = PV_REDUCE ? .6 : .5 + .5 * Math.sin(t / (700 - 380 * level));
+  const rx = tw / 2 + 12, ry = 10.5, col = a.node.kind === "agent" ? "#fbbf24" : "#7dd3fc";
+  const k = a.out * a.alpha * dim;
+  ctx.save();
+  ctx.strokeStyle = col; ctx.shadowColor = col;
+  // Pulse ring.
+  ctx.globalAlpha = k * (.18 + .4 * level * beat + .12 * beat);
+  ctx.shadowBlur = 4 + 14 * level * beat; ctx.lineWidth = 1 + 1.5 * level;
+  ctx.beginPath(); ctx.ellipse(cx, cy, rx + 2 * beat * level, ry + 1.5 * beat * level, 0, 0, Math.PI * 2); ctx.stroke();
+  // Spinning arcs (still while only working, fast while printing).
+  ctx.globalAlpha = k * (.55 + .45 * level); ctx.shadowBlur = 8; ctx.lineWidth = 1.8; ctx.lineCap = "round";
+  const sp = a.spin || 0, len = .55 + .35 * level;
+  for (const off of [0, Math.PI]) { ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, sp + off, sp + off + len); ctx.stroke(); }
+  ctx.restore();
 }
 // Shimmer: a bright band sweeping across a label.
 function pvShimmer(ctx, text, x, y, tw, align, strength){
