@@ -36,6 +36,7 @@ mod workspace;
 mod settings;
 mod snapshot_image;
 mod telemetry;
+mod radio_log;
 #[cfg(feature = "tts")]
 mod tts;
 
@@ -423,7 +424,16 @@ async fn post_tts(
         tts::radio_wrap(&recipient, &caller, &req.text)
     };
     let requester = (!caller_raw.is_empty()).then_some(caller_raw.as_str());
-    match tts::speak(&spoken, voice, req.speed, requester).await {
+    // Log the transmission as it goes on air (dashboard radio view + replay).
+    let meta = radio_log::Meta {
+        from: if caller_raw.is_empty() { caller.clone() } else { caller_raw.clone() },
+        from_pane: match &id { identity::CallerIdentity::Pane { pane, .. } => Some(pane.clone()), _ => None },
+        to: recipient.clone(),
+        text: req.text.trim().to_string(),
+        spoken: spoken.clone(),
+    };
+    let on_air: tts::OnAir = Box::new(move |audio, rate, voice, engine| radio_log::record(meta, audio, rate, voice, engine));
+    match tts::speak(&spoken, voice, req.speed, requester, Some(on_air)).await {
         // `spoken` echoes the EXACT transcript delivered to the user (frame
         // included) so callers can see the wrapper already carries the
         // callsigns + "Over and out" and don't add their own radio phrases.
@@ -4839,6 +4849,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/dashboard/version", axum::routing::get(dashboard::get_dashboard_version))
         // Metadata-only comms graph for the dashboard (no subjects/bodies/payloads).
         .route("/api/dashboard/comms", axum::routing::get(dashboard_comms::get_dashboard_comms))
+        .route("/api/radio/log", axum::routing::get(radio_log::get_log))
+        .route("/api/radio/audio/{id}", axum::routing::get(radio_log::get_audio))
         .route("/api/maximus/toggle", axum::routing::post(dashboard::post_maximus_toggle))
         .route("/api/telemetry/snapshot", axum::routing::get(dashboard::get_telemetry_snapshot))
         .route("/api/telemetry/toggle", axum::routing::post(dashboard::post_telemetry_toggle))
