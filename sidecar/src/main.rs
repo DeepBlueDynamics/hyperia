@@ -37,6 +37,7 @@ mod settings;
 mod snapshot_image;
 mod telemetry;
 mod radio_log;
+mod file_edit;
 #[cfg(feature = "tts")]
 mod tts;
 
@@ -4752,6 +4753,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/logs", axum::routing::get(get_logs))
         .route("/api/log", axum::routing::post(post_client_log))
         .route("/api/tts", axum::routing::post(post_tts))
+        .route("/api/files/open", axum::routing::post(file_edit::open))
+        .route("/api/files/stat", axum::routing::get(file_edit::stat))
+        .route("/api/files/save", axum::routing::post(file_edit::save))
         .route("/api/audio/play", axum::routing::post(post_audio_play))
         .route("/api/audio/probe", axum::routing::post(post_audio_probe))
         .route("/api/audio/mute", axum::routing::post(post_audio_mute))

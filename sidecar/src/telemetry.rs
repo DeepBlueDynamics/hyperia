@@ -190,7 +190,12 @@ pub struct WindowMetrics {
 #[derive(Clone)]
 pub struct TelemetryStore {
     inner: Arc<Mutex<WindowMetrics>>,
+    /// Path → last pane that touched it (any file event). Outlives the event
+    /// rings so the dashboard editor can open what agents worked on.
+    touched: Arc<Mutex<HashMap<String, String>>>,
 }
+
+const MAX_TOUCHED: usize = 5000;
 
 impl TelemetryStore {
     pub fn new() -> Self {
@@ -201,6 +206,7 @@ impl TelemetryStore {
                 recent: std::collections::VecDeque::new(),
                 recent_files: std::collections::VecDeque::new(),
             })),
+            touched: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -212,6 +218,13 @@ impl TelemetryStore {
         let mut store = self.inner.lock().unwrap();
         if !store.enabled {
             return;
+        }
+        if let TelemetryEvent::FileOp { path, .. } | TelemetryEvent::Edit { path, .. } = &event {
+            let mut t = self.touched.lock().unwrap();
+            if t.len() >= MAX_TOUCHED && !t.contains_key(path) {
+                t.clear();
+            }
+            t.insert(path.clone(), pane_uid.to_string());
         }
         // Feed the cross-pane live-stream ring (with time + pane context).
         let ts_ms = std::time::SystemTime::now()
@@ -248,6 +261,11 @@ impl TelemetryStore {
         let mut store = self.inner.lock().unwrap();
         store.enabled = enabled;
         enabled
+    }
+
+    /// The pane that last touched `path`, if any agent file event named it.
+    pub fn toucher(&self, path: &str) -> Option<String> {
+        self.touched.lock().unwrap().get(path).cloned()
     }
 
     pub fn is_enabled(&self) -> bool {

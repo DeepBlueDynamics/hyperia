@@ -172,7 +172,7 @@
   @media(max-width:1000px){.shell{grid-template-columns:1fr}aside{position:static}.row-flow{grid-template-columns:1fr}}
 
   /* ---- proto_viz tab (#proto_viz): ops-console view of real stats ---- */
-  body.proto > :not(.topbar):not(#proto):not(script){display:none !important}
+  body.proto > :not(.topbar):not(#proto):not(#pv-ed):not(script){display:none !important}
   body.proto .tb-right .ghost{display:none}
   body:not(.proto) #proto{display:none}
   #proto{flex:1;min-height:0;overflow:hidden;display:grid;grid-template-rows:auto auto 128px minmax(0,1fr) 150px;grid-template-columns:minmax(0,1fr) 370px;gap:8px;padding:8px 10px 10px;
@@ -253,11 +253,91 @@
   .pv-tx.open .sm{display:block;-webkit-line-clamp:unset;color:#e2e8f0;white-space:pre-wrap}
   .pv-tx canvas{display:block;width:100%;height:16px;margin-top:3px}
   .pv-tx.air{background:linear-gradient(90deg,rgba(34,211,238,.08),transparent)}
+  /* File editor modal */
+  #pv-ed{position:fixed;inset:0;z-index:60;background:rgba(2,4,8,.72);display:none;align-items:center;justify-content:center}
+  #pv-ed.on{display:flex}
+  .ed-box{width:min(1400px,94vw);height:88vh;display:flex;flex-direction:column;background:#070a10;border:1px solid #1e2a3c;
+    box-shadow:0 24px 80px rgba(0,0,0,.65);font-family:var(--mono);color:#cbd5e1}
+  .ed-top{display:flex;align-items:stretch;border-bottom:1px solid #1b2433;min-height:36px}
+  .ed-tabs{display:flex;flex:1;overflow-x:auto;scrollbar-width:thin}
+  .ed-tab{display:flex;align-items:center;gap:7px;padding:0 6px 0 12px;font-size:11px;color:#7c8aa0;border-right:1px solid #111a27;
+    cursor:pointer;white-space:nowrap;max-width:260px}
+  .ed-tab.on{color:#f8fafc;background:#0d1320;box-shadow:inset 0 2px 0 #f59e0b}
+  .ed-tab .nm{overflow:hidden;text-overflow:ellipsis}
+  .ed-tab .dot{color:#f59e0b;font-size:13px;line-height:1}
+  .ed-tab .x{border:0;background:none;color:inherit;font-size:14px;width:20px;height:20px;cursor:pointer;opacity:.55;padding:0;line-height:1}
+  .ed-tab .x:hover{opacity:1;background:#1b2433}
+  .ed-tab .x.armed{color:#ef4444;opacity:1}
+  .ed-close{border:0;border-left:1px solid #1b2433;background:none;color:#e2e8f0;font-size:22px;width:52px;cursor:pointer;line-height:1}
+  .ed-close:hover{background:#7f1d1d;color:#fff}
+  .ed-bar{display:flex;align-items:center;gap:8px;padding:5px 10px;border-bottom:1px solid #111a27;font-size:10.5px}
+  .ed-path{flex:1;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ed-btn{font:inherit;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#cbd5e1;background:#0d1320;border:1px solid #1e2a3c;padding:3px 9px;cursor:pointer}
+  .ed-btn:hover{border-color:#f59e0b}
+  .ed-btn.pri{background:#f59e0b;color:#05070b;border-color:#f59e0b;font-weight:700}
+  .ed-btn.on{border-color:#38bdf8;color:#38bdf8}
+  .ed-btn:disabled{opacity:.35;cursor:default}
+  .ed-find{display:none;gap:6px;align-items:center;padding:5px 10px;border-bottom:1px solid #111a27;font-size:10.5px}
+  .ed-find.on{display:flex}
+  .ed-find input{font:inherit;font-size:11px;background:#05070b;color:#e2e8f0;border:1px solid #1e2a3c;padding:3px 6px;width:230px;outline:none}
+  .ed-find input:focus{border-color:#38bdf8}
+  .ed-find .ct{color:#64748b;min-width:70px}
+  .ed-warn{display:none;gap:8px;align-items:center;padding:6px 10px;background:#2a1606;color:#fbbf24;font-size:10.5px;border-bottom:1px solid #b45309}
+  .ed-warn.on{display:flex}
+  .ed-warn span{flex:1}
+  .ed-body{flex:1;min-height:0;position:relative;background:#05070b}
+  .ed-main{position:absolute;inset:0;display:none}
+  .ed-main.on{display:flex}
+  .ed-gut{width:56px;flex:none;overflow:hidden;text-align:right;padding:8px 10px 8px 0;color:#334155;font-size:12px;line-height:18px;
+    user-select:none;border-right:1px solid #0f1622;white-space:pre;font-family:var(--mono)}
+  .ed-gut b{color:#94a3b8;font-weight:400}
+  .ed-wrap{flex:1;position:relative;min-width:0}
+  .ed-hl,.ed-ta{position:absolute;inset:0;margin:0;padding:8px 14px;font-family:var(--mono);font-size:12px;line-height:18px;tab-size:4;
+    white-space:pre;border:0;box-sizing:border-box;scrollbar-gutter:stable;letter-spacing:0}
+  .ed-hl{color:#cbd5e1;pointer-events:none;overflow:hidden}
+  .ed-ta{background:transparent;color:transparent;caret-color:#f8fafc;resize:none;outline:none;overflow:auto}
+  .ed-ta::selection{background:rgba(56,189,248,.32)}
+  .ed-wrap.plain .ed-ta{color:#cbd5e1}
+  .ed-wrap.plain .ed-hl{display:none}
+  .ed-main.wrap .ed-hl,.ed-main.wrap .ed-ta{white-space:pre-wrap;overflow-wrap:anywhere}
+  .ed-main.wrap .ed-gut{display:none}
+  .ed-hl .k{color:#c084fc}.ed-hl .s{color:#86efac}.ed-hl .c{color:#64748b;font-style:italic}.ed-hl .n{color:#fbbf24}
+  .ed-hl .h{color:#38bdf8;font-weight:700}.ed-hl .t{color:#7dd3fc}
+  .ed-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:11px;
+    text-transform:uppercase;letter-spacing:.1em;text-align:center;padding:30px}
+  .ed-msg.err{color:#f87171}
+  .ed-stat{display:flex;gap:16px;padding:5px 10px;border-top:1px solid #1b2433;font-size:9.5px;color:#64748b;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;overflow:hidden}
+  .ed-stat b{color:#cbd5e1;font-weight:500}
+  .ed-stat .ok{color:#22c55e}.ed-stat .dirty{color:#f59e0b}
   .pv-none{color:#475569;font-size:10px;padding:6px 0;text-transform:uppercase;letter-spacing:.08em}
   @media(max-width:1250px){#proto{grid-template-columns:minmax(0,1fr);grid-template-rows:none;overflow:auto}
     .pv-toprow,.pv-botrow{grid-template-columns:minmax(0,1fr)}.pv-toprow .pv-col,.pv-botrow .pv-col{height:150px}
     .pv-ring{min-height:460px}.pv-right{overflow:visible}}
 </style></head><body>
+<div id="pv-ed" role="dialog" aria-label="File editor">
+  <div class="ed-box">
+    <div class="ed-top"><div class="ed-tabs" id="ed-tabs"></div><button class="ed-close" id="ed-close" title="Close editor (Esc) — open files stay in their tabs">✕</button></div>
+    <div class="ed-bar">
+      <span class="ed-path" id="ed-path"></span>
+      <button class="ed-btn" id="ed-find-b" title="Find / replace (Ctrl+F, Ctrl+H)">Find</button>
+      <button class="ed-btn" id="ed-goto-b" title="Go to line (Ctrl+G)">Line</button>
+      <button class="ed-btn" id="ed-wrap-b" title="Wrap long lines">Wrap</button>
+      <button class="ed-btn" id="ed-reload-b" title="Reload from disk">Reload</button>
+      <button class="ed-btn pri" id="ed-save-b" title="Save (Ctrl+S)">Save</button>
+    </div>
+    <div class="ed-find" id="ed-find">
+      <input id="ed-q" placeholder="find" spellcheck="false"><input id="ed-r" placeholder="replace with" spellcheck="false">
+      <button class="ed-btn" id="ed-prev" title="Previous (Shift+Enter)">↑</button><button class="ed-btn" id="ed-next" title="Next (Enter)">↓</button>
+      <button class="ed-btn" id="ed-case" title="Match case">Aa</button>
+      <button class="ed-btn" id="ed-rep1">Replace</button><button class="ed-btn" id="ed-repall">All</button>
+      <span class="ct" id="ed-ct"></span>
+    </div>
+    <div class="ed-warn" id="ed-warn"><span id="ed-warn-t"></span><button class="ed-btn" id="ed-warn-a"></button><button class="ed-btn" id="ed-warn-b"></button></div>
+    <div class="ed-body" id="ed-body"><div class="ed-msg" id="ed-empty">no files open — double-click a file in the view</div></div>
+    <div class="ed-stat" id="ed-stat"></div>
+  </div>
+</div>
+
 
 <div class="topbar">
   <span class="brand">HYPERIA CONTROL DECK</span>
@@ -1125,7 +1205,7 @@ function pvDrawRing(){
   pvLabelFiles(ctx, vw, w, h);
   pvFileCallout(ctx, vw, w, h);
   ctx.setTransform(dpr*vw.z, 0, 0, dpr*vw.z, dpr*vw.x, dpr*vw.y);
-  if (pick && !PV.selFile && !PV.selDir && (sel || score(pick.node) > 0)) {
+  if (pick && !PV.selFile && PV.selDir == null && (sel || score(pick.node) > 0)) {
     // The callout box stays in screen space; only its anchor follows the zoom.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const top = pick.node, p0 = pos(pick.theta, R+2), p = {x: p0.x*vw.z + vw.x, y: p0.y*vw.z + vw.y};
@@ -1363,6 +1443,343 @@ function pvRadioBanner(ctx, w){
   ctx.textBaseline = "alphabetic";
 }
 
+// ---- File editor: double-click a file in the view. Tabs per file, each with
+// its own textarea (so undo survives tab switches) under a highlight overlay.
+// Saves are conflict-checked against the mtime it opened; outside changes
+// reload a clean tab and warn on a dirty one.
+const ED = {tabs: [], active: -1, poll: null, matchCase: false, findMode: "find"};
+const PV_ED_HL_MAX = 400 * 1024;
+const edPost = (url, body) => fetch(url, {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body)})
+  .then(async (r) => ({status: r.status, j: await r.json().catch(() => ({ok: false, error: "HTTP " + r.status}))}));
+function edLang(path){
+  const ext = (String(path).toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1] || "", base = pvBase(path).toLowerCase();
+  if (["rs","js","mjs","cjs","ts","tsx","jsx","go","java","c","h","cc","cpp","hpp","cs","swift","kt","css","scss","json","jsonc","proto","zig","dart"].includes(ext)) return "c";
+  if (["py","sh","bash","zsh","toml","yaml","yml","ps1","psm1","rb","conf","ini","cfg","env","r","pl","tf","nix"].includes(ext) || /^(dockerfile|makefile|\.env.*|\.gitignore)$/.test(base)) return "hash";
+  if (["md","markdown","mdx"].includes(ext)) return "md";
+  if (["html","htm","xml","svg","vue"].includes(ext)) return "ml";
+  return "plain";
+}
+const ED_KW = new Set(("fn let mut pub use mod struct enum impl trait match if else for while loop return async await const static type where self Self crate super dyn ref move unsafe extern " +
+  "function var class extends implements import export from default new this try catch finally throw typeof instanceof delete void yield interface package " +
+  "def lambda None True False null nil true false undefined in of as is not and or elif with pass break continue raise global nonlocal assert del " +
+  "func go defer select case switch chan map range struct goto fallthrough local then end do done fi esac elif echo export").split(" "));
+const edEsc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const ED_RX = {
+  c: /(\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|("(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n]){0,2}'|`(?:\\.|[^`\\])*`?)|(\b\d[\d_]*(?:\.\d+)?(?:e[+-]?\d+)?[a-z0-9]*\b|\b0x[\da-f_]+\b)|([A-Za-z_][\w]*)/gi,
+  hash: /(#[^\n]*)|("(?:\\.|[^"\\\n])*"?|'[^'\n]*'?)|(\b\d[\d_]*(?:\.\d+)?\b)|([A-Za-z_][\w-]*)|(^\s*\[[^\]\n]*\])/gim,
+  md: /(^#{1,6} [^\n]*)|(```[\s\S]*?(?:```|$)|`[^`\n]*`)|(\*\*[^*\n]+\*\*)|(\[[^\]\n]*\]\([^)\n]*\))/gm,
+  ml: /(<!--[\s\S]*?(?:-->|$))|("[^"\n]*"|'[^'\n]*')|(<\/?[A-Za-z][\w:-]*|\/?>)/g,
+};
+function edHighlight(text, lang){
+  const rx = ED_RX[lang]; if (!rx) return edEsc(text);
+  let out = "", last = 0, m; rx.lastIndex = 0;
+  while ((m = rx.exec(text))) {
+    if (m[0] === "") { rx.lastIndex++; continue; }
+    out += edEsc(text.slice(last, m.index));
+    const t = edEsc(m[0]);
+    let cls = null;
+    if (lang === "md") cls = m[1] ? "h" : m[2] ? "s" : m[3] ? "k" : "t";
+    else if (lang === "ml") cls = m[1] ? "c" : m[2] ? "s" : "t";
+    else cls = m[1] ? "c" : m[2] ? "s" : m[3] ? "n" : m[4] ? (ED_KW.has(m[4]) ? "k" : null) : m[5] ? "h" : null;
+    out += cls ? '<span class="' + cls + '">' + t + "</span>" : t;
+    last = m.index + m[0].length;
+  }
+  return out + edEsc(text.slice(last));
+}
+function edTab(){ return ED.tabs[ED.active] || null; }
+function edIndentUnit(text){
+  const lines = text.split("\n", 400);
+  if (lines.some((l) => l.startsWith("\t")) && !lines.some((l) => /^ {2}/.test(l))) return "\t";
+  return lines.some((l) => /^ {2}(?! )\S/.test(l)) ? "  " : "    ";
+}
+const ED_COMMENT = {c: "//", hash: "#"};
+
+function edBuildPane(t){
+  const main = pvEl("div", "ed-main"), gut = pvEl("div", "ed-gut"), wrap = pvEl("div", "ed-wrap"), hl = pvEl("pre", "ed-hl"), ta = document.createElement("textarea");
+  ta.className = "ed-ta"; ta.spellcheck = false; ta.wrap = "off"; ta.setAttribute("autocapitalize", "off"); ta.setAttribute("autocomplete", "off");
+  ta.value = t.saved; ta.readOnly = !!t.readonly;
+  if (t.saved.length > PV_ED_HL_MAX || t.lang === "plain") wrap.classList.add("plain");
+  wrap.append(hl, ta); main.append(gut, wrap);
+  t.main = main; t.ta = ta; t.hl = hl; t.gut = gut; t.wrapEl = wrap; t.indent = edIndentUnit(t.saved);
+  let raf = 0;
+  const paint = () => { raf = 0; edPaint(t); };
+  ta.addEventListener("input", () => { if (!raf) raf = requestAnimationFrame(paint); edRenderTabs(); edStatus(); });
+  ta.addEventListener("scroll", () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; gut.scrollTop = ta.scrollTop; });
+  ta.addEventListener("keydown", (ev) => edKey(ev, t));
+  ["keyup", "click", "select"].forEach((e) => ta.addEventListener(e, () => edStatus()));
+  $("ed-body").appendChild(main);
+  edPaint(t);
+}
+function edPaint(t){
+  const v = t.ta.value;
+  if (!t.wrapEl.classList.contains("plain")) t.hl.innerHTML = edHighlight(v, t.lang) + "\n ";
+  const n = v.split("\n").length;
+  if (n !== t.lines) { t.lines = n; let g = ""; for (let i = 1; i <= n; i++) g += i + "\n"; t.gut.textContent = g + " "; }
+  t.hl.scrollTop = t.ta.scrollTop; t.gut.scrollTop = t.ta.scrollTop;
+}
+// Replace [a,b) with text through the browser's editing stack (keeps undo).
+function edInsert(ta, a, b, text, selA, selB){
+  ta.focus(); ta.setSelectionRange(a, b);
+  if (!document.execCommand("insertText", false, text)) ta.setRangeText(text, a, b, "end");
+  if (selA != null) ta.setSelectionRange(selA, selB);
+  ta.dispatchEvent(new Event("input"));
+}
+function edLineRange(v, a, b){
+  const s0 = v.lastIndexOf("\n", a - 1) + 1;
+  let e = v.indexOf("\n", b > a && v[b - 1] === "\n" ? b - 1 : b); if (e < 0) e = v.length;
+  return [s0, e];
+}
+function edKey(ev, t){
+  const ta = t.ta, v = ta.value, a = ta.selectionStart, b = ta.selectionEnd, mod = ev.ctrlKey || ev.metaKey;
+  if (mod && ev.key.toLowerCase() === "s") { ev.preventDefault(); edSave(false); return; }
+  if (mod && ev.key.toLowerCase() === "f") { ev.preventDefault(); edFind("find"); return; }
+  if (mod && ev.key.toLowerCase() === "h") { ev.preventDefault(); edFind("replace"); return; }
+  if (mod && ev.key.toLowerCase() === "g") { ev.preventDefault(); edFind("line"); return; }
+  if (ta.readOnly) return;
+  if (mod && ev.key === "/") {
+    const mark = ED_COMMENT[t.lang]; if (!mark) return;
+    ev.preventDefault();
+    const [s0, e] = edLineRange(v, a, b), lines = v.slice(s0, e).split("\n");
+    const all = lines.filter((l) => l.trim()).every((l) => l.trimStart().startsWith(mark));
+    const out = lines.map((l) => !l.trim() ? l : all ? l.replace(new RegExp("^(\\s*)" + mark.replace(/[/]/g, "\\/") + " ?"), "$1") : l.replace(/^(\s*)/, "$1" + mark + " ")).join("\n");
+    edInsert(ta, s0, e, out, s0, s0 + out.length);
+    return;
+  }
+  if (ev.key === "Tab") {
+    ev.preventDefault();
+    const unit = t.indent;
+    if (a === b && !ev.shiftKey) { edInsert(ta, a, b, unit); return; }
+    const [s0, e] = edLineRange(v, a, b), lines = v.slice(s0, e).split("\n");
+    const out = lines.map((l) => ev.shiftKey ? l.replace(unit === "\t" ? /^\t/ : new RegExp("^ {1," + unit.length + "}"), "") : (l ? unit + l : l)).join("\n");
+    edInsert(ta, s0, e, out, s0, s0 + out.length);
+    return;
+  }
+  if (ev.key === "Enter" && !mod && !ev.altKey) {
+    ev.preventDefault();
+    const ls = v.lastIndexOf("\n", a - 1) + 1, line = v.slice(ls, a), ind = (line.match(/^[ \t]*/) || [""])[0];
+    const more = /[{([:]\s*$/.test(line) && t.lang !== "md" ? t.indent : "";
+    edInsert(ta, a, b, "\n" + ind + more);
+    return;
+  }
+}
+
+function edRenderTabs(){
+  const box = $("ed-tabs"); box.replaceChildren();
+  ED.tabs.forEach((t, i) => {
+    const el = pvEl("div", "ed-tab" + (i === ED.active ? " on" : "")), dirty = t.ta && t.ta.value !== t.saved;
+    el.title = t.path;
+    el.appendChild(pvEl("span", "nm", pvBase(t.path)));
+    if (dirty) el.appendChild(pvEl("span", "dot", "●"));
+    const x = pvEl("button", "x" + (t.armed ? " armed" : ""), "×");
+    x.type = "button"; x.title = dirty ? (t.armed ? "Click again to discard changes" : "Close (unsaved changes)") : "Close";
+    x.addEventListener("click", (ev) => { ev.stopPropagation(); edCloseTab(i); });
+    el.appendChild(x);
+    el.addEventListener("click", () => edActivate(i));
+    el.addEventListener("auxclick", (ev) => { if (ev.button === 1) edCloseTab(i); });
+    box.appendChild(el);
+  });
+  $("ed-empty").style.display = ED.tabs.length ? "none" : "";
+}
+function edActivate(i){
+  ED.active = i;
+  ED.tabs.forEach((t, j) => t.main && t.main.classList.toggle("on", j === i));
+  const t = edTab();
+  $("ed-path").textContent = t ? (t.host || t.path) : "";
+  $("ed-path").title = t ? t.path + (t.host && t.host !== t.path ? "  →  " + t.host : "") : "";
+  $("ed-save-b").disabled = !t || !t.ta || t.ta.readOnly;
+  $("ed-wrap-b").classList.toggle("on", !!(t && t.main && t.main.classList.contains("wrap")));
+  edWarn(t && t.warn);
+  edRenderTabs(); edStatus();
+  if (t && t.ta) setTimeout(() => t.ta.focus(), 0);
+}
+function edCloseTab(i){
+  const t = ED.tabs[i]; if (!t) return;
+  if (t.ta && t.ta.value !== t.saved && !t.armed) {
+    t.armed = true; edRenderTabs();
+    setTimeout(() => { t.armed = false; edRenderTabs(); }, 3000);
+    return;
+  }
+  if (t.main) t.main.remove();
+  ED.tabs.splice(i, 1);
+  edActivate(Math.min(ED.tabs.length - 1, i >= ED.active ? ED.active : ED.active - 1));
+}
+function edShow(){ $("pv-ed").classList.add("on"); if (!ED.poll) ED.poll = setInterval(edPoll, 2500); }
+function edHide(){ $("pv-ed").classList.remove("on"); clearInterval(ED.poll); ED.poll = null; }
+
+async function pvEdOpen(path){
+  edShow();
+  const have = ED.tabs.findIndex((t) => t.path === path);
+  if (have >= 0) { edActivate(have); return; }
+  const t = {path, lang: edLang(path), saved: "", loading: true};
+  ED.tabs.push(t); edActivate(ED.tabs.length - 1);
+  const msg = pvEl("div", "ed-msg", "opening " + pvBase(path) + "…"), holder = pvEl("div", "ed-main on");
+  holder.appendChild(msg); t.main = holder; $("ed-body").appendChild(holder); edActivate(ED.tabs.indexOf(t));
+  const {j} = await edPost("/api/files/open", {path}).catch((e) => ({j: {ok: false, error: String(e)}}));
+  holder.remove();
+  if (!j.ok) {
+    const m = pvEl("div", "ed-msg err", "can't open " + path + " — " + (j.error || "unknown error"));
+    const h = pvEl("div", "ed-main"); h.appendChild(m); t.main = h; $("ed-body").appendChild(h);
+    t.loading = false; edActivate(ED.tabs.indexOf(t)); return;
+  }
+  Object.assign(t, {loading: false, host: j.host_path, saved: j.text, eol: j.eol, bom: j.bom, mtime: j.mtime_ms, size: j.size, readonly: j.readonly, savedAt: 0});
+  edBuildPane(t);
+  edActivate(ED.tabs.indexOf(t));
+}
+async function edSave(force){
+  const t = edTab(); if (!t || !t.ta || t.ta.readOnly) return;
+  const text = t.ta.value;
+  const {status, j} = await edPost("/api/files/save", {path: t.path, text, base_mtime_ms: t.mtime, eol: t.eol, bom: t.bom, force: !!force})
+    .catch((e) => ({status: 0, j: {ok: false, error: String(e)}}));
+  if (j.ok) { t.saved = text; t.mtime = j.mtime_ms; t.size = j.size; t.savedAt = Date.now(); t.warn = null; edWarn(null); edRenderTabs(); edStatus(); return; }
+  if (status === 409) {
+    t.warn = {text: pvBase(t.path) + " changed on disk since you opened it (an agent may be editing it).",
+      a: ["Reload theirs", () => edReload(t)], b: ["Overwrite with mine", () => edSave(true)]};
+  } else t.warn = {text: "Save failed: " + (j.error || "unknown error"), a: ["Retry", () => edSave(false)], b: ["Dismiss", () => { t.warn = null; edWarn(null); }]};
+  edWarn(t.warn);
+}
+async function edReload(t){
+  const {j} = await edPost("/api/files/open", {path: t.path}).catch((e) => ({j: {ok: false, error: String(e)}}));
+  if (!j.ok) { t.warn = {text: "Reload failed: " + (j.error || ""), a: ["Retry", () => edReload(t)], b: ["Dismiss", () => { t.warn = null; edWarn(null); }]}; edWarn(t.warn); return; }
+  const ta = t.ta, pos = ta.selectionStart, st = ta.scrollTop;
+  Object.assign(t, {saved: j.text, eol: j.eol, bom: j.bom, mtime: j.mtime_ms, size: j.size, warn: null});
+  // Through the editing stack, so the reload itself can be undone.
+  edInsert(ta, 0, ta.value.length, j.text);
+  ta.setSelectionRange(Math.min(pos, j.text.length), Math.min(pos, j.text.length)); ta.scrollTop = st;
+  edPaint(t); edWarn(null); edRenderTabs(); edStatus();
+}
+async function edPoll(){
+  const t = edTab(); if (!t || !t.ta || document.visibilityState !== "visible") return;
+  const j = await fetch("/api/files/stat?path=" + encodeURIComponent(t.path)).then((r) => r.json()).catch(() => null);
+  if (!j || !j.ok || edTab() !== t) return;
+  if (j.missing) { if (!t.warn) { t.warn = {text: pvBase(t.path) + " was deleted on disk.", a: ["Save to recreate", () => edSave(true)], b: ["Dismiss", () => { t.warn = null; edWarn(null); }]}; edWarn(t.warn); } return; }
+  if (j.mtime_ms === t.mtime) return;
+  if (t.ta.value === t.saved) { await edReload(t); t.flash = Date.now(); edStatus(); return; }
+  if (!t.warn) {
+    t.warn = {text: pvBase(t.path) + " changed on disk while you have unsaved edits.", a: ["Reload theirs", () => edReload(t)],
+      b: ["Keep mine", () => { t.warn = null; edWarn(null); }]};
+    edWarn(t.warn);
+  }
+}
+function edWarn(w){
+  $("ed-warn").classList.toggle("on", !!w); if (!w) return;
+  $("ed-warn-t").textContent = w.text;
+  const set = (id, x) => { const b = $(id); b.textContent = x[0]; b.onclick = x[1]; };
+  set("ed-warn-a", w.a); set("ed-warn-b", w.b);
+}
+function edStatus(){
+  const t = edTab(), box = $("ed-stat"); box.replaceChildren();
+  if (!t || !t.ta) return;
+  const v = t.ta.value, a = t.ta.selectionStart, before = v.slice(0, a), ln = before.split("\n").length, col = a - before.lastIndexOf("\n");
+  const kv = (k, val, cls) => { const s0 = pvEl("span", null, k + " "); const b = pvEl("b", cls || null, val); s0.appendChild(b); box.appendChild(s0); };
+  const dirty = v !== t.saved;
+  kv("", dirty ? "● unsaved" : t.flash && Date.now() - t.flash < 4000 ? "reloaded — changed on disk" : t.savedAt ? "saved " + pvAgo(t.savedAt) + " ago" : "clean", dirty ? "dirty" : "ok");
+  kv("ln", ln + ":" + col);
+  if (t.ta.selectionEnd > a) kv("sel", String(t.ta.selectionEnd - a));
+  kv("lines", String(v.split("\n").length));
+  kv("", t.lang === "plain" ? "text" : t.lang === "hash" ? "script" : t.lang === "c" ? "code" : t.lang);
+  kv("", (t.eol || "lf").toUpperCase() + (t.bom ? " BOM" : ""));
+  kv("", fmtB(new Blob([v]).size));
+  if (t.readonly) kv("", "read-only");
+  const f = PV.files.find((x) => x.path === t.path);
+  if (f && f.links.size) kv("by", [...f.links.keys()].map((id) => (PV.alias.get(id) || {}).label || id).join(", "));
+}
+
+// Find / replace / go to line.
+function edFind(mode){
+  const t = edTab(); if (!t || !t.ta) return;
+  ED.findMode = mode;
+  const bar = $("ed-find"), q = $("ed-q"), r = $("ed-r");
+  bar.classList.add("on");
+  r.style.display = $("ed-rep1").style.display = $("ed-repall").style.display = mode === "replace" ? "" : "none";
+  $("ed-case").style.display = $("ed-prev").style.display = $("ed-next").style.display = mode === "line" ? "none" : "";
+  q.placeholder = mode === "line" ? "line number (or line:col)" : "find";
+  const sel = t.ta.value.slice(t.ta.selectionStart, t.ta.selectionEnd);
+  if (mode !== "line" && sel && !sel.includes("\n")) q.value = sel;
+  if (mode === "line") q.value = "";
+  q.focus(); q.select(); edCount();
+}
+function edFindClose(){ $("ed-find").classList.remove("on"); const t = edTab(); if (t && t.ta) t.ta.focus(); }
+function edMatches(v, q){
+  if (!q) return [];
+  const hay = ED.matchCase ? v : v.toLowerCase(), needle = ED.matchCase ? q : q.toLowerCase(), out = [];
+  for (let i = hay.indexOf(needle); i >= 0 && out.length < 20000; i = hay.indexOf(needle, i + Math.max(1, needle.length))) out.push(i);
+  return out;
+}
+function edReveal(ta, a, b){
+  ta.focus(); ta.setSelectionRange(a, b);
+  const line = ta.value.slice(0, a).split("\n").length - 1, lh = 18;
+  if (line * lh < ta.scrollTop || line * lh > ta.scrollTop + ta.clientHeight - lh * 2) ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 3);
+  ta.dispatchEvent(new Event("scroll")); edStatus();
+}
+function edGo(dir){
+  const t = edTab(); if (!t || !t.ta) return;
+  const q = $("ed-q").value;
+  if (ED.findMode === "line") {
+    const [l, c] = q.split(":").map((x) => parseInt(x, 10)); if (!l) return;
+    const lines = t.ta.value.split("\n"), li = Math.min(lines.length, Math.max(1, l)) - 1;
+    let off = 0; for (let i = 0; i < li; i++) off += lines[i].length + 1;
+    off += Math.min(lines[li].length, Math.max(0, (c || 1) - 1));
+    edReveal(t.ta, off, off); edFindClose(); return;
+  }
+  const ms = edMatches(t.ta.value, q); if (!ms.length) { edCount(); return; }
+  const from = dir < 0 ? t.ta.selectionStart - 1 : t.ta.selectionEnd;
+  let i = dir < 0 ? ms.findLastIndex((m) => m <= from) : ms.findIndex((m) => m >= from);
+  if (i < 0) i = dir < 0 ? ms.length - 1 : 0;
+  edReveal(t.ta, ms[i], ms[i] + q.length);
+  // Keep typing in the find box.
+  $("ed-q").focus(); edCount(i);
+}
+function edCount(i){
+  const t = edTab(), q = $("ed-q").value;
+  if (!t || !t.ta || ED.findMode === "line") { $("ed-ct").textContent = ""; return; }
+  const n = edMatches(t.ta.value, q).length;
+  $("ed-ct").textContent = !q ? "" : n ? (i != null ? (i + 1) + " / " : "") + n + " match" + (n === 1 ? "" : "es") : "no matches";
+}
+function edReplace(all){
+  const t = edTab(); if (!t || !t.ta || t.ta.readOnly) return;
+  const q = $("ed-q").value, r = $("ed-r").value; if (!q) return;
+  const ta = t.ta, v = ta.value;
+  if (all) {
+    const ms = edMatches(v, q); if (!ms.length) return;
+    let out = "", last = 0; for (const m of ms) { out += v.slice(last, m) + r; last = m + q.length; }
+    out += v.slice(last);
+    const st = ta.scrollTop; edInsert(ta, 0, v.length, out, 0, 0); ta.scrollTop = st; edCount(); return;
+  }
+  const a = ta.selectionStart, b = ta.selectionEnd, cur = v.slice(a, b);
+  if ((ED.matchCase ? cur : cur.toLowerCase()) === (ED.matchCase ? q : q.toLowerCase())) edInsert(ta, a, b, r, a + r.length, a + r.length);
+  edGo(1);
+}
+
+(function edWire(){
+  $("ed-close").addEventListener("click", edHide);
+  $("pv-ed").addEventListener("mousedown", (ev) => { if (ev.target === $("pv-ed")) edHide(); });
+  $("ed-save-b").addEventListener("click", () => edSave(false));
+  $("ed-reload-b").addEventListener("click", () => { const t = edTab(); if (t && t.ta) edReload(t); });
+  $("ed-find-b").addEventListener("click", () => edFind("replace"));
+  $("ed-goto-b").addEventListener("click", () => edFind("line"));
+  $("ed-wrap-b").addEventListener("click", () => {
+    const t = edTab(); if (!t || !t.main) return;
+    t.main.classList.toggle("wrap"); t.ta.wrap = t.main.classList.contains("wrap") ? "soft" : "off";
+    $("ed-wrap-b").classList.toggle("on", t.main.classList.contains("wrap")); edPaint(t);
+  });
+  $("ed-case").addEventListener("click", () => { ED.matchCase = !ED.matchCase; $("ed-case").classList.toggle("on", ED.matchCase); edCount(); });
+  $("ed-next").addEventListener("click", () => edGo(1));
+  $("ed-prev").addEventListener("click", () => edGo(-1));
+  $("ed-rep1").addEventListener("click", () => edReplace(false));
+  $("ed-repall").addEventListener("click", () => edReplace(true));
+  $("ed-q").addEventListener("input", () => edCount());
+  for (const id of ["ed-q", "ed-r"]) $(id).addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); if (id === "ed-r" && ev.ctrlKey) edReplace(true); else if (id === "ed-r") edReplace(false); else edGo(ev.shiftKey ? -1 : 1); }
+    else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); edFindClose(); }
+    else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") { ev.preventDefault(); edSave(false); }
+  });
+  window.addEventListener("keydown", (ev) => {
+    if (!$("pv-ed").classList.contains("on")) return;
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopImmediatePropagation(); if ($("ed-find").classList.contains("on")) edFindClose(); else edHide(); }
+  }, true);
+  window.addEventListener("beforeunload", (ev) => { if (ED.tabs.some((t) => t.ta && t.ta.value !== t.saved)) { ev.preventDefault(); ev.returnValue = ""; } });
+})();
+
 // Output activity (live only). A pane is "working" while it printed in the
 // last PV_WORK_MS; its arc inside the ring scrolls at its lines/s and thickens
 // with bytes/s. The name shimmers while working.
@@ -1450,42 +1867,73 @@ function pvBuildFiles(){
   pvBuildDirs(list);
 }
 
-// Directory hubs: files group under their parent dir. Over PV_DIR_MAX dirs,
-// the deepest fold into their parent until they fit (then "other").
-const PV_DIR_MAX = 16;
+// Directory tree: every dir on a file's path, with single-child chains merged
+// (C:/…/lume is one node) so shared parents like crates/ stay as junctions
+// linking their children. Past PV_DIR_MAX nodes the deepest leaves fold up.
+const PV_DIR_MAX = 24;
 const pvSplit = (p) => String(p).split(/[\\/]/).filter(Boolean);
+const pvInSub = (key, top) => top === "" || key === top || key.startsWith(top + "/");
 function pvBuildDirs(list){
-  let groups = new Map();
-  const add = (segs, files) => {
+  const nodes = new Map();
+  const get = (segs) => {
     const key = segs.join("/").toLowerCase();
-    let d = groups.get(key);
-    if (!d) { d = {key, segs, files: [], count: 0, last: 0}; groups.set(key, d); }
-    for (const f of files) { d.files.push(f); d.count += f.count; d.last = Math.max(d.last, f.last); }
+    let d = nodes.get(key);
+    if (!d) {
+      d = {key, segs, parent: null, kids: new Set(), files: []};
+      nodes.set(key, d);
+      if (segs.length) { const p = get(segs.slice(0, -1)); d.parent = p.key; p.kids.add(key); }
+    }
+    return d;
   };
-  for (const f of list) add(pvSplit(f.path).slice(0, -1), [f]);
-  while (groups.size > PV_DIR_MAX) {
-    const deep = [...groups.values()].filter((d) => d.segs.length > 1)
+  for (const f of list) get(pvSplit(f.path).slice(0, -1)).files.push(f);
+  // Splice a node out: its kids and files move to its parent.
+  const drop = (d) => {
+    const p = d.parent != null ? nodes.get(d.parent) : null;
+    for (const k of d.kids) { nodes.get(k).parent = d.parent; if (p) p.kids.add(k); }
+    if (p) { p.kids.delete(d.key); p.files.push(...d.files); }
+    nodes.delete(d.key);
+  };
+  const squash = () => { for (const d of [...nodes.values()]) if (nodes.has(d.key) && !d.files.length && d.kids.size === 1) drop(d); };
+  // The "" root joins unrelated roots (C:, /workspace); keep it only if files sit at it.
+  squash();
+  const top = nodes.get(""); if (top && !top.files.length) { drop(top); squash(); }
+  while (nodes.size > PV_DIR_MAX) {
+    const leaf = [...nodes.values()].filter((d) => !d.kids.size && d.parent != null)
       .sort((a, b) => b.segs.length - a.segs.length || a.files.length - b.files.length)[0];
-    if (!deep) break;
-    groups.delete(deep.key); add(deep.segs.slice(0, -1), deep.files);
+    if (!leaf) break;
+    drop(leaf); squash();
   }
-  let dirs = [...groups.values()].sort((a, b) => b.last - a.last);
-  if (dirs.length > PV_DIR_MAX) {
-    const other = {key: "\u0000other", segs: ["other"], files: [], count: 0, last: 0};
-    for (const d of dirs.slice(PV_DIR_MAX - 1)) { other.files.push(...d.files); other.count += d.count; other.last = Math.max(other.last, d.last); }
-    dirs = dirs.slice(0, PV_DIR_MAX - 1).concat(other);
+  const dirs = [...nodes.values()];
+  for (const d of dirs) {
+    let n = 0; for (let p = d.parent; p != null; p = nodes.get(p).parent) n++;
+    d.depth = n;
+    const rel = d.segs.slice(d.parent != null ? nodes.get(d.parent).segs.length : 0);
+    d.path = d.segs.join("/") + "/";
+    d.label = (d.parent != null ? (rel.length > 2 ? "…/" + rel.slice(-2).join("/") : rel.join("/")) : d.segs.slice(-2).join("/")) + "/";
+    d.count = d.files.reduce((t, f) => t + f.count, 0);
+    d.last = d.files.reduce((t, f) => Math.max(t, f.last), 0);
+    d.tFiles = 0; d.tCount = 0; d.tLast = 0;
   }
-  for (const d of dirs) { d.path = d.segs.join("/") + "/"; d.label = d.segs.slice(-2).join("/") + "/"; }
-  // Same tail from different roots: show one more segment.
-  const seen = new Map(); for (const d of dirs) seen.set(d.label, (seen.get(d.label) || 0) + 1);
-  for (const d of dirs) if (seen.get(d.label) > 1) d.label = d.segs.slice(-3).join("/") + "/";
-  // Stable slots: a dir keeps its place on the sphere, a file its place round its dir.
+  // Subtree totals: hub size, selection and the callout.
+  for (const d of dirs) for (let p = d; p; p = p.parent != null ? nodes.get(p.parent) : null) {
+    p.tFiles += d.files.length; p.tCount += d.count; p.tLast = Math.max(p.tLast, d.last);
+  }
+  // Stable slots among siblings: a dir keeps its branch, a file its place round its dir.
   const keep = new Set(dirs.map((d) => d.key));
   for (const k of [...PV.dirSlots.keys()]) if (!keep.has(k)) { PV.dirSlots.delete(k); PV.dirFileSlots.delete(k); }
-  const used = new Set(PV.dirSlots.values());
+  const sib = new Map(), par = (d) => d.parent == null ? "\u0000" : d.parent;
   for (const d of dirs) {
-    if (!PV.dirSlots.has(d.key)) { let n = 0; while (used.has(n)) n++; PV.dirSlots.set(d.key, n); used.add(n); }
-    d.slot = PV.dirSlots.get(d.key);
+    const sl = PV.dirSlots.get(d.key);
+    if (sl && sl.parent === par(d)) { if (!sib.has(sl.parent)) sib.set(sl.parent, new Set()); sib.get(sl.parent).add(sl.slot); }
+    else PV.dirSlots.delete(d.key);
+  }
+  for (const d of dirs.sort((a, b) => a.key < b.key ? -1 : 1)) {
+    let sl = PV.dirSlots.get(d.key);
+    if (!sl) {
+      const used = sib.get(par(d)) || new Set(); let n = 0; while (used.has(n)) n++;
+      used.add(n); sib.set(par(d), used); sl = {parent: par(d), slot: n}; PV.dirSlots.set(d.key, sl);
+    }
+    d.slot = sl.slot;
     const slots = PV.dirFileSlots.get(d.key) || new Map(), mine = new Set(d.files.map((f) => f.path));
     for (const p of [...slots.keys()]) if (!mine.has(p)) slots.delete(p);
     const fu = new Set(slots.values());
@@ -1495,15 +1943,18 @@ function pvBuildDirs(list){
     }
     PV.dirFileSlots.set(d.key, slots);
   }
+  for (const d of dirs) d.nsib = Math.max(...(sib.get(par(d)) || new Set([0]))) + 1;
   PV.dirs = dirs;
-  if (PV.selDir && !keep.has(PV.selDir)) PV.selDir = null;
+  PV.dirByKey = nodes;
+  if (PV.selDir != null && !keep.has(PV.selDir)) PV.selDir = null;
 }
 
 const PV_FILE_COLOR = {edit: "#fb923c", write: "#c084fc", create: "#4ade80", delete: "#e11d48", rename: "#94a3b8", read: "#64748b"};
 const pvBase = (p) => String(p).split(/[\\/]/).pop();
 
-// 3D: dir hubs sit on a slowly turning sphere; each dir's files orbit it on
-// the dir's own tilted axis. Positions ease in 3D, then project with perspective.
+// 3D tree: roots at the centre, each dir's children fan out on a cone around
+// the branch it grew from; each dir's files orbit it on its own tilted axis.
+// Positions ease in 3D, then project with perspective.
 function pvFib(i, n){
   if (n <= 1) return [0, 0, 0];
   const y = 1 - 2 * (i + .5) / n, r = Math.sqrt(Math.max(0, 1 - y*y)), a = i * 2.39996;
@@ -1512,14 +1963,45 @@ function pvFib(i, n){
 const pvRotY = (v, a) => [v[0]*Math.cos(a) + v[2]*Math.sin(a), v[1], -v[0]*Math.sin(a) + v[2]*Math.cos(a)];
 const pvRotX = (v, a) => [v[0], v[1]*Math.cos(a) - v[2]*Math.sin(a), v[1]*Math.sin(a) + v[2]*Math.cos(a)];
 const pvRotZ = (v, a) => [v[0]*Math.cos(a) - v[1]*Math.sin(a), v[0]*Math.sin(a) + v[1]*Math.cos(a), v[2]];
+const pvNorm3 = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0]/l, v[1]/l, v[2]/l]; };
+const pvCross3 = (a, b) => [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
+// Target position and branch direction of every dir, parents first.
+function pvTreeLayout(R){
+  const out = new Map(), L1 = 1, roots = PV.dirs.filter((d) => d.parent == null);
+  const one = roots.length === 1;
+  for (const d of [...PV.dirs].sort((a, b) => a.depth - b.depth)) {
+    let c, u;
+    if (d.parent == null) {
+      if (one) { c = [0, 0, 0]; u = [0, -1, 0]; }
+      else { u = pvNorm3(pvFib(d.slot, Math.max(2, d.nsib))); c = u.map((x) => x * L1 * .8); }
+    } else {
+      const P = out.get(d.parent); if (!P) continue;
+      if (one && d.depth === 1) u = pvNorm3(pvFib(d.slot, Math.max(2, d.nsib)));   // round the centre
+      else {
+        const a = Math.abs(P.u[1]) < .9 ? [0, 1, 0] : [1, 0, 0];
+        const v = pvNorm3(pvCross3(P.u, a)), w = pvCross3(P.u, v);
+        const half = d.nsib === 1 ? .32 : Math.min(1.15, .5 + .13 * d.nsib);
+        const phi = (2 * Math.PI * d.slot) / d.nsib + (pvHash(d.parent) % 628) / 100;
+        u = pvNorm3([0, 1, 2].map((i) => P.u[i] * Math.cos(half) + (v[i] * Math.cos(phi) + w[i] * Math.sin(phi)) * Math.sin(half)));
+      }
+      const len = L1 * Math.pow(.8, Math.max(0, d.depth - (one ? 1 : 0)));
+      c = [0, 1, 2].map((i) => P.c[i] + u[i] * len);
+    }
+    out.set(d.key, {c, u});
+  }
+  // Fit: the whole tree spans ~70% of the ring, a small one no more than its natural size.
+  let far = 0; for (const v of out.values()) far = Math.max(far, Math.hypot(...v.c));
+  const k = far ? Math.min(R * .72 / far, R * .36) : 0;
+  for (const v of out.values()) v.c = v.c.map((x) => x * k);
+  return out;
+}
 const pvLerp3 = (a, b, k) => [a[0] + (b[0]-a[0])*k, a[1] + (b[1]-a[1])*k, a[2] + (b[2]-a[2])*k];
 // 1 = nearest the viewer, 0 = far side.
 const pvDepth = (z) => Math.max(0, Math.min(1, .5 - z / (2.4 * Math.max(((PV.geom || {}).R || 100) * .42, 1))));
 
 function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
   const now = Date.now(), t = performance.now(), ts = PV_REDUCE ? 0 : t / 1000;
-  const nd = PV.dirs.length, slots = Math.max(1, ...PV.dirs.map((d) => d.slot + 1));
-  const Rd = nd <= 1 ? 0 : R * (nd <= 3 ? .32 : .5), F = R * 3;
+  const lay = pvTreeLayout(R), F = R * 3;
   const gy = ts * .09, gx = .38;
   const project = (v) => {
     const w = pvRotX(pvRotY(v, gy), gx), p = F / (F + w[2]);
@@ -1529,7 +2011,7 @@ function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
   const presentD = new Set();
   for (const d of PV.dirs) {
     presentD.add(d.key);
-    const tgt = pvFib(d.slot, slots).map((x) => x * Rd);
+    const tgt = (lay.get(d.key) || {c: [0, 0, 0]}).c;
     let a = PV.dirAnim.get(d.key);
     if (!a) {
       const r = pvRand(pvHash(d.key));
@@ -1537,7 +2019,7 @@ function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
       PV.dirAnim.set(d.key, a);
     }
     a.d = d; a.c = pvLerp3(a.c, tgt, k); a.alpha += (1 - a.alpha) * k;
-    a.rf = R * (.06 + .02 * Math.sqrt(d.files.length));
+    a.rf = R * (.035 + .016 * Math.sqrt(d.files.length));
     const pr = project(a.c); a.x = pr.x; a.y = pr.y; a.z = pr.z; a.p = pr.p;
   }
   for (const [key, a] of PV.dirAnim) if (!presentD.has(key)) { a.alpha -= a.alpha * k; if (a.alpha < .02) PV.dirAnim.delete(key); }
@@ -1557,9 +2039,18 @@ function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
   for (const [p, a] of PV.fileAnim) if (!present.has(p)) { a.alpha -= a.alpha * k; if (a.alpha < .02) PV.fileAnim.delete(p); }
   if (!PV.fileAnim.size && !PV.dirAnim.size) return;
   const sel = PV.sel, selFile = PV.selFile, selDir = PV.selDir;
-  const lit = (f, nodeId) => (selFile ? f.path === selFile : selDir ? f.dir === selDir : sel ? nodeId === sel : true);
-  const on = (f) => (selFile ? f.path === selFile : selDir ? f.dir === selDir : sel ? f.links.has(sel) : true);
-  const dirOn = (d) => (selDir ? d.key === selDir : selFile ? d.files.some((f) => f.path === selFile) : sel ? d.files.some((f) => f.links.has(sel)) : true);
+  const hasSel = selDir != null;
+  const lit = (f, nodeId) => (selFile ? f.path === selFile : hasSel ? pvInSub(f.dir, selDir) : sel ? nodeId === sel : true);
+  const on = (f) => (selFile ? f.path === selFile : hasSel ? pvInSub(f.dir, selDir) : sel ? f.links.has(sel) : true);
+  const dirOn = (d) => (hasSel ? pvInSub(d.key, selDir) : selFile ? PV.files.some((f) => f.path === selFile && pvInSub(f.dir, d.key))
+    : sel ? PV.files.some((f) => f.links.has(sel) && pvInSub(f.dir, d.key)) : true);
+  // Branches: each dir to its parent, thicker with more files below.
+  for (const a of PV.dirAnim.values()) {
+    const pa = a.d.parent != null && PV.dirAnim.get(a.d.parent); if (!pa) continue;
+    ctx.globalAlpha = Math.min(a.alpha, pa.alpha) * (dirOn(a.d) ? .22 + .4 * pvDepth((a.z + pa.z) / 2) : .05);
+    ctx.strokeStyle = "#38bdf8"; ctx.lineWidth = Math.min(3, .8 + Math.sqrt(a.d.tFiles) * .35);
+    ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(a.x, a.y); ctx.stroke();
+  }
   // Each dir's own space: a faint shell, and spokes out to its files.
   ctx.strokeStyle = "#7dd3fc"; ctx.lineWidth = 1;
   for (const a of PV.dirAnim.values()) {
@@ -1608,9 +2099,9 @@ function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
   for (const {a, dir} of items) {
     const shade = .45 + .55 * pvDepth(a.z);
     if (dir) {
-      const d = a.d, isSel = d.key === selDir, r = (3 + Math.min(7, Math.sqrt(d.files.length) * 1.6)) * a.p;
+      const d = a.d, isSel = hasSel && d.key === selDir, r = (3 + Math.min(8, Math.sqrt(d.tFiles) * 1.4)) * a.p;
       ctx.globalAlpha = a.alpha * (dirOn(d) ? shade : .15);
-      ctx.fillStyle = "rgba(14,116,144,.55)"; ctx.strokeStyle = isSel ? "#f8fafc" : "#7dd3fc"; ctx.lineWidth = isSel ? 2 : 1.2;
+      ctx.fillStyle = d.files.length ? "rgba(14,116,144,.55)" : "rgba(5,7,11,.9)"; ctx.strokeStyle = isSel ? "#f8fafc" : "#7dd3fc"; ctx.lineWidth = isSel ? 2 : 1.2;
       ctx.beginPath(); ctx.arc(a.x, a.y, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
       ctx.fillStyle = "#e0f2fe"; ctx.beginPath(); ctx.arc(a.x, a.y, Math.max(1.2, r * .28), 0, Math.PI*2); ctx.fill();
       continue;
@@ -1641,12 +2132,13 @@ function pvLabelFiles(ctx, vw, w, h){
     const box = {x0: x, x1: x + tw, y0: y - 6, y1: y + 6};
     if (a.d.key !== PV.selDir && placed.some((b) => box.x0 < b.x1 + 3 && box.x1 > b.x0 - 3 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
     placed.push(box);
-    ctx.globalAlpha = a.alpha * (!PV.selDir || a.d.key === PV.selDir ? .5 + .45 * pvDepth(a.z) : .2);
+    ctx.globalAlpha = a.alpha * (PV.selDir == null || pvInSub(a.d.key, PV.selDir) ? .5 + .45 * pvDepth(a.z) : .2);
     ctx.fillStyle = a.d.key === PV.selDir ? "#f8fafc" : "#7dd3fc";
     ctx.fillText(text, x, y);
   }
   ctx.font = "9px "+PV_MONO;
-  const order = [...PV.fileAnim.values()].sort((x, y) => (y.f.path === PV.selFile) - (x.f.path === PV.selFile) || (y.f.dir === PV.selDir) - (x.f.dir === PV.selDir) || y.f.count - x.f.count);
+  const inSel = (f) => PV.selDir != null && pvInSub(f.dir, PV.selDir);
+  const order = [...PV.fileAnim.values()].sort((x, y) => (y.f.path === PV.selFile) - (x.f.path === PV.selFile) || inSel(y.f) - inSel(x.f) || y.f.count - x.f.count);
   for (const a of order.slice(0, 24)) {
     const x = a.x*vw.z + vw.x + 8, y = a.y*vw.z + vw.y;
     if (x < 0 || x > w || y < 0 || y > h) continue;
@@ -1654,7 +2146,7 @@ function pvLabelFiles(ctx, vw, w, h){
     const box = {x0: x, x1: x + tw, y0: y - 6, y1: y + 6};
     if (a.f.path !== PV.selFile && placed.some((b) => box.x0 < b.x1 + 3 && box.x1 > b.x0 - 3 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
     placed.push(box);
-    const on = PV.selFile ? a.f.path === PV.selFile : PV.selDir ? a.f.dir === PV.selDir : PV.sel ? a.f.links.has(PV.sel) : true;
+    const on = PV.selFile ? a.f.path === PV.selFile : PV.selDir != null ? pvInSub(a.f.dir, PV.selDir) : PV.sel ? a.f.links.has(PV.sel) : true;
     ctx.globalAlpha = a.alpha * (on ? .9 : .25);
     ctx.fillStyle = a.f.path === PV.selFile ? "#f8fafc" : "#cbd5e1";
     ctx.fillText(text, x, y);
@@ -1665,17 +2157,17 @@ function pvLabelFiles(ctx, vw, w, h){
 // Callout for the selected file.
 function pvFileCallout(ctx, vw, w, h){
   let a, l1, l2;
-  const da = !PV.selFile && PV.selDir && PV.dirAnim.get(PV.selDir);
+  const da = !PV.selFile && PV.selDir != null && PV.dirAnim.get(PV.selDir);
   if (da) {
     const d = da.d, ids = new Set();
-    for (const f of d.files) for (const id of f.links.keys()) ids.add(id);
-    const panes = [...ids].map((id) => (PV.alias.get(id) || {}).label || id);
+    for (const f of PV.files) if (pvInSub(f.dir, d.key)) for (const id of f.links.keys()) ids.add(id);
+    const panes = [...ids].map((id) => (PV.alias.get(id) || {}).label || id), subs = d.kids.size;
     a = da; l1 = "DIR "+d.path;
-    l2 = d.files.length+" FILE"+(d.files.length === 1 ? "" : "S")+" | "+d.count+" CHANGE"+(d.count === 1 ? "" : "S")+" | LAST "+pvAgo(d.last)+" | BY "+(panes.join(", ") || "—");
+    l2 = d.tFiles+" FILE"+(d.tFiles === 1 ? "" : "S")+(subs ? " IN "+(subs + (d.files.length ? 1 : 0))+" BRANCHES" : "")+" | "+d.tCount+" CHANGE"+(d.tCount === 1 ? "" : "S")+" | LAST "+pvAgo(d.tLast)+" | BY "+(panes.join(", ") || "—");
   } else {
     a = PV.selFile && PV.fileAnim.get(PV.selFile); if (!a) return;
     const f = a.f, panes = [...f.links.keys()].map((id) => (PV.alias.get(id) || {}).label || id);
-    l1 = "FILE "+f.path;
+    l1 = "FILE "+f.path+"   ·   DOUBLE-CLICK TO EDIT";
     l2 = f.count+" CHANGE"+(f.count === 1 ? "" : "S")+(f.reads ? " | "+f.reads+" READ"+(f.reads === 1 ? "" : "S") : "")+" | LAST "+f.kind.toUpperCase()+" "+pvAgo(f.last)+(f.add || f.del ? " | +"+pvK(f.add)+" −"+pvK(f.del) : "")+" | BY "+panes.join(", ");
   }
   ctx.font = "10px "+PV_MONO;
@@ -1703,7 +2195,7 @@ function pvSelectFile(path){
 }
 function pvSelectDir(key){
   pvSound("tick");
-  PV.selDir = key && key !== PV.selDir ? key : null;
+  PV.selDir = key != null && key !== PV.selDir ? key : null;
   PV.sel = null; PV.selFile = null;
   pvRenderAll();
 }
@@ -2030,18 +2522,25 @@ function pvSetMode(){
 }
 window.addEventListener("hashchange", pvSetMode);
 // Click a node on the ring to select it; click empty space to clear.
+// The file node under the pointer, if any.
+function pvHitFile(ev){
+  const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z;
+  let best = null, bestD = Infinity;
+  for (const [p, a] of PV.fileAnim) { const dd = Math.hypot(ox - a.x, oy - a.y); if (dd < bestD) { bestD = dd; best = p; } }
+  return best && bestD < 12 / v.z + 4 ? best : null;
+}
 $("pv-ring").addEventListener("click", (ev) => {
   const g = PV.geom; if (!g) return;
   if (Date.now() - PV.dragged < 250) return;   // the end of a pan, not a click
   const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z;
   const dx = ox - g.cx, dy = (oy - g.cy) / g.tilt, d = Math.hypot(dx, dy);
   // The ring, its bars and the names outside it are all clickable.
-  if (d < g.R*.7) {
+  if (d < g.R*.85) {
     // Inside the ring: the nearest file node within reach, else clear.
     let best = null, bestD = Infinity;
     for (const [p, a] of PV.fileAnim) { const dd = Math.hypot(ox - a.x, oy - a.y); if (dd < bestD) { bestD = dd; best = {file: p}; } }
     for (const [key, a] of PV.dirAnim) { const dd = Math.hypot(ox - a.x, oy - a.y) - 3; if (dd < bestD) { bestD = dd; best = {dir: key}; } }
-    if (best && bestD < 12 / v.z + 4) { if (best.dir) pvSelectDir(best.dir); else pvSelectFile(best.file); }
+    if (best && bestD < 12 / v.z + 4) { if (best.dir != null) pvSelectDir(best.dir); else pvSelectFile(best.file); }
     else { PV.selFile = null; PV.selDir = null; pvSelect(null); }
     return;
   }
@@ -2054,7 +2553,7 @@ $("pv-ring").addEventListener("click", (ev) => {
   }
   pvSelect(best && bestD < Math.max(.12, PV.span*.6) ? best : null);
 });
-window.addEventListener("keydown", (ev) => { if (PV.on && ev.key === "Escape" && PV.sel) pvSelect(null); });
+window.addEventListener("keydown", (ev) => { if (PV.on && ev.key === "Escape" && PV.sel && !$("pv-ed").classList.contains("on")) pvSelect(null); });
 // Wheel zooms around the cursor, drag pans, double-click resets.
 (() => {
   const el = $("pv-ring"); let drag = null;
@@ -2078,7 +2577,11 @@ window.addEventListener("keydown", (ev) => { if (PV.on && ev.key === "Escape" &&
   });
   const end = () => { if (drag && drag.moved) PV.dragged = Date.now(); drag = null; el.style.cursor = ""; };
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
-  el.addEventListener("dblclick", () => { PV.views[PV.mode] = {z: 1, x: 0, y: 0}; redraw(); });
+  el.addEventListener("dblclick", (ev) => {
+    const hit = pvHitFile(ev);
+    if (hit) { PV.selFile = hit; PV.sel = null; PV.selDir = null; pvEdOpen(hit); return; }
+    PV.views[PV.mode] = {z: 1, x: 0, y: 0}; redraw();
+  });
 })();
 window.addEventListener("resize", () => { if (PV.on) pvRenderAll(); });
 pvSetMode();
