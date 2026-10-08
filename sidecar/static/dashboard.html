@@ -273,9 +273,9 @@
   </div>
   <div class="pv-p pv-chips" id="pv-chips"></div>
   <div class="pv-toprow">
-    <div class="pv-p pv-col"><div class="pv-t"><span>File edits | per min · 30 min</span><b id="pv-ed-n"></b></div>
+    <div class="pv-p pv-col"><div class="pv-t"><span>File activity | per min · 30 min</span><b id="pv-ed-n"></b></div>
       <div class="pv-fill" style="padding:0 10px"><canvas class="pv-hist" id="pv-hist"></canvas></div><div class="pv-kv" id="pv-files"></div></div>
-    <div class="pv-p pv-col"><div class="pv-t"><span>Edits by pane | lines + / −</span><span id="pv-bp-n"></span></div><canvas id="pv-bypane"></canvas></div>
+    <div class="pv-p pv-col"><div class="pv-t"><span>Activity by pane | lines ± · file ops</span><span id="pv-bp-n"></span></div><canvas id="pv-bypane"></canvas></div>
     <div class="pv-p pv-col"><div class="pv-t"><span>File types | pareto</span><span id="pv-pa-n"></span></div><canvas id="pv-pareto"></canvas></div>
   </div>
   <div class="pv-p pv-ring"><canvas id="pv-ring"></canvas></div>
@@ -287,7 +287,9 @@
       <div class="pv-key">
         <span><i style="background:#f59e0b"></i>mail</span><span><i style="background:#38bdf8"></i>pane access</span>
         <span><i style="background:#e5e7eb"></i>system mail</span><span><i class="dot" style="background:#ef4444"></i>edit &lt;60s</span>
-        <span><i style="background:#fb923c"></i>bar: file edit (length = lines)</span><span><i style="background:#fde68a"></i>bar: mail</span>
+        <span><i style="background:#fb923c"></i>bar: file edit (length = lines)</span><span><i style="background:#c084fc"></i>bar: file write (length = bytes)</span>
+        <span><i style="background:#4ade80"></i>bar: create</span><span><i style="background:#e11d48"></i>bar: delete</span><span><i style="background:#94a3b8"></i>bar: rename</span>
+        <span><i style="background:#fde68a"></i>bar: mail</span>
         <span><i style="background:#7dd3fc"></i>bar: pane access</span><span><i class="dot" style="background:#f8fafc"></i>tip: last minute</span>
       </div></div>
   </div>
@@ -780,6 +782,23 @@ function pvLabel(id){
   return /^[0-9a-f-]{36}$/i.test(pid) ? pid.slice(0, 8)+" (closed)" : raw;
 }
 
+// File activity Hyperia received: Edit events (agent edit tools) and FileOps
+// (writes/creates/deletes/renames). Reads are skipped. Live = last hour.
+const PV_OP_COLOR = {edit: "#fb923c", write: "#c084fc", create: "#4ade80", delete: "#e11d48", rename: "#94a3b8"};
+function pvFileEvents(){
+  const fe = (PV.win && PV.win.telemetry && PV.win.telemetry.file_events) || [];
+  const cut = PV.mode === "live" ? Date.now() - PV_LIVE_MS : 0, out = [];
+  for (const e of fe) {
+    if ((e.ts || 0) < cut) continue;
+    const kind = e.kind === "Edit" ? "edit" : e.kind === "FileOp" ? String(e.op || "").toLowerCase() : "";
+    if (!PV_OP_COLOR[kind]) continue;
+    out.push({kind, ts: e.ts || 0, pane: e.pane_uid || "", path: e.path || "",
+      bytes: e.kind === "Edit" ? (e.bytes_after || 0) : (e.bytes || 0),
+      add: e.lines_added || 0, del: e.lines_removed || 0});
+  }
+  return out;
+}
+
 function pvBuildNodes(){
   const nodes = new Map();
   for (const p of PV.panes) {
@@ -808,10 +827,12 @@ function pvBuildNodes(){
     if (pid && cur.label && !byName.has(cur.label)) byName.set(cur.label, key);
   }
   const now = Date.now();
-  for (const e of (PV.win && PV.win.telemetry && PV.win.telemetry.file_events) || []) {
-    const n = nodes.get("pane:"+e.pane_uid); if (!n) continue;
-    n.edits = (n.edits || 0) + 1; n.added = (n.added || 0) + (e.lines_added || 0);
-    if (now - (e.ts || 0) < 60000) n.hot = (n.hot || 0) + 1;
+  const fileEvents = pvFileEvents();
+  for (const e of fileEvents) {
+    const n = nodes.get("pane:"+e.pane); if (!n) continue;
+    if (e.kind === "edit") { n.edits = (n.edits || 0) + 1; n.added = (n.added || 0) + e.add; }
+    else n.ops = (n.ops || 0) + 1;
+    if (now - e.ts < 60000) n.hot = (n.hot || 0) + 1;
   }
   for (const [uid, t] of Object.entries((PV.pane && PV.pane.telemetry) || {})) {
     const n = nodes.get("pane:"+uid); if (!n) continue;
@@ -826,13 +847,14 @@ function pvBuildNodes(){
   });
   PV.nodes = list; PV.alias = alias;
   // Edge bars are real events: one per recent file edit (length = lines
-  // changed) and one per recent mail / pane access touching the node.
+  // changed), file op (write length = bytes), and mail / pane access.
   for (const n of list) n.fibs = [];
   const fib = (node, f) => { if (node && node.fibs.length < 170) node.fibs.push(f); };
-  for (const e of (PV.win && PV.win.telemetry && PV.win.telemetry.file_events) || []) {
-    const lines = (e.lines_added || 0) + (e.lines_removed || 0);
-    fib(alias.get("pane:"+e.pane_uid), {key: "f|"+(e.ts || 0)+"|"+(e.path || ""), kind: "edit", ts: e.ts || 0,
-      len: 14 + Math.min(80, Math.log2(1 + lines) * 11)});
+  for (const e of fileEvents) {
+    const len = e.kind === "edit" ? 14 + Math.min(80, Math.log2(1 + e.add + e.del) * 11)
+      : e.kind === "write" ? 12 + Math.min(70, Math.log2(1 + e.bytes) * 4)
+      : e.kind === "create" ? 34 : e.kind === "delete" ? 30 : 24;
+    fib(alias.get("pane:"+e.pane), {key: "f|"+e.ts+"|"+e.path+"|"+e.kind, kind: e.kind, ts: e.ts, len});
   }
   for (const e of (cm && cm.stream) || []) {
     const len = e.type === "mail" ? 42 : e.type === "access" ? 34 : 22, base = (e.ts || 0)+"|"+e.type+"|"+e.from+"|"+e.to;
@@ -930,7 +952,7 @@ function pvDrawRing(){
 
   // Edge bars: one per real event. New ones grow out, expired ones shrink away.
   const wall = Date.now();
-  const barColor = {edit: "#fb923c", mail: "#fde68a", system: "#e5e7eb", access: "#7dd3fc", consent: "#a7f3d0"};
+  const barColor = {...PV_OP_COLOR, mail: "#fde68a", system: "#e5e7eb", access: "#7dd3fc", consent: "#a7f3d0"};
   for (const a of drawn) {
     const n = a.node;
     let bars = PV.fibAnim.get(n.id); if (!bars) { bars = new Map(); PV.fibAnim.set(n.id, bars); }
@@ -949,7 +971,7 @@ function pvDrawRing(){
       const th = a.theta + b.u * PV.span * .92, depth = (Math.sin(th + rot) + 1) / 2;
       const p1 = pos(th, R+2), p2 = pos(th, R+2+b.len*(.7+.3*depth));
       ctx.globalAlpha = (.35 + .6*depth) * a.alpha * dimN;
-      ctx.strokeStyle = barColor[b.kind] || "#94a3b8"; ctx.lineWidth = b.kind === "edit" ? 1.4 : 1.1;
+      ctx.strokeStyle = barColor[b.kind] || "#94a3b8"; ctx.lineWidth = PV_OP_COLOR[b.kind] ? 1.4 : 1.1;
       ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
       if (wall - (b.ts || 0) < 60000) { ctx.fillStyle = "#f8fafc"; ctx.fillRect(p2.x-1.2, p2.y-1.2, 2.4, 2.4); }
     }
@@ -981,12 +1003,12 @@ function pvDrawRing(){
   }
 
   // Callout: the selected node, else the busiest.
-  const score = (n) => (n.sent || 0) + (n.received || 0) + (n.access || 0) + (n.edits || 0);
+  const score = (n) => (n.sent || 0) + (n.received || 0) + (n.access || 0) + (n.edits || 0) + (n.ops || 0);
   const pick = (sel && PV.anim.get(sel)) || drawn.filter((a) => present.has(a.node.id))
     .reduce((m, a) => (!m || score(a.node) > score(m.node) ? a : m), null);
   if (pick && (sel || score(pick.node) > 0)) {
     const top = pick.node, p = pos(pick.theta, R+2);
-    const l1 = (sel ? "SELECTED " : "NODE ")+top.label+" | SENT "+(top.sent || 0)+" | RECV "+(top.received || 0)+" | EDITS "+(top.edits || 0)+" | +"+pvK(top.added || 0);
+    const l1 = (sel ? "SELECTED " : "NODE ")+top.label+" | SENT "+(top.sent || 0)+" | RECV "+(top.received || 0)+" | EDITS "+(top.edits || 0)+" | OPS "+(top.ops || 0)+" | +"+pvK(top.added || 0);
     const l2 = (top.kind || "").toUpperCase()+" | PANE ACCESS "+(top.access || 0)+" | NET "+fmtB(top.net || 0)+(sel ? " | ESC TO CLEAR" : " | CLICK A NODE");
     ctx.font = "10px "+PV_MONO;
     const bw = Math.min(w - 28, Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 20), bh = 36;
@@ -1131,22 +1153,27 @@ function pvRenderStream(){
 }
 
 function pvRenderFiles(){
-  const t = (PV.win && PV.win.telemetry) || {}, fe = t.file_events || [];
-  $("pv-ed-n").textContent = pvK(t.file_edits || 0)+" edits";
+  const t = (PV.win && PV.win.telemetry) || {}, fe = pvFileEvents();
+  const edits = fe.filter((e) => e.kind === "edit").length, ops = fe.length - edits;
+  $("pv-ed-n").textContent = fe.length ? pvK(edits)+" edits · "+pvK(ops)+" ops" : "";
   const kv = $("pv-files"); kv.replaceChildren();
   const pair = (k, v, cls) => { kv.appendChild(pvEl("span", null, k)); kv.appendChild(pvEl("b", cls || null, v)); };
+  // Totals are since the sidecar started; the chart and ring follow the mode.
   pair("edits", pvK(t.file_edits)); pair("writes", pvK(t.file_writes));
   pair("creates", pvK(t.file_creates)); pair("deletes", pvK(t.file_deletes));
   pair("lines +", pvK(t.lines_added), "up"); pair("lines −", pvK(t.lines_removed), "dn");
   pair("renames", pvK(t.file_renames)); pair("written", fmtB(t.file_bytes_written || 0));
   const {ctx, w, h} = pvFit($("pv-hist"));
-  const now = Date.now(), bins = new Array(30).fill(0);
-  for (const e of fe) { const m = Math.floor((now - (e.ts || 0)) / 60000); if (m >= 0 && m < 30) bins[29 - m]++; }
-  const max = Math.max(...bins);
-  if (!max) { pvCanvasNote(ctx, w, h, "no edits in the last 30 min"); return; }
+  const now = Date.now(), ed = new Array(30).fill(0), op = new Array(30).fill(0);
+  for (const e of fe) { const m = Math.floor((now - e.ts) / 60000); if (m >= 0 && m < 30) (e.kind === "edit" ? ed : op)[29 - m]++; }
+  const max = Math.max(...ed.map((v, i) => v + op[i]));
+  if (!max) { pvCanvasNote(ctx, w, h, "no file activity in the last 30 min"); return; }
   const bw = w / 30;
-  bins.forEach((v, i) => { if (!v) return; const bh = Math.max(2, (v/max)*(h-4));
-    ctx.fillStyle = i >= 28 ? "#ef4444" : "#f59e0b"; ctx.fillRect(i*bw + 1, h - bh, Math.max(1, bw - 2), bh); });
+  for (let i = 0; i < 30; i++) {
+    const he = ed[i] ? Math.max(2, (ed[i]/max)*(h-4)) : 0, ho = op[i] ? Math.max(2, (op[i]/max)*(h-4)) : 0;
+    if (he) { ctx.fillStyle = i >= 28 ? "#ef4444" : "#f59e0b"; ctx.fillRect(i*bw + 1, h - he, Math.max(1, bw - 2), he); }
+    if (ho) { ctx.fillStyle = PV_OP_COLOR.write; ctx.fillRect(i*bw + 1, h - he - ho, Math.max(1, bw - 2), ho); }
+  }
 }
 
 function pvRenderPods(){
@@ -1226,39 +1253,44 @@ function pvDrawDonut(){
 
 function pvDrawByPane(){
   const {ctx, w, h} = pvFit($("pv-bypane"));
-  const fe = (PV.win && PV.win.telemetry && PV.win.telemetry.file_events) || [];
+  const fe = pvFileEvents();
   const by = new Map();
-  for (const e of fe) { const k = e.pane_uid || "?"; const r = by.get(k) || {n: 0, add: 0, del: 0};
-    r.n++; r.add += e.lines_added || 0; r.del += e.lines_removed || 0; by.set(k, r); }
-  const rows = [...by.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 8);
-  $("pv-bp-n").textContent = fe.length ? fe.length+" recent edits" : "";
-  if (!rows.length) { pvCanvasNote(ctx, w, h, "no file edits reported yet"); return; }
+  for (const e of fe) { const k = e.pane || "?"; const r = by.get(k) || {n: 0, ops: 0, add: 0, del: 0, bytes: 0};
+    if (e.kind === "edit") { r.n++; r.add += e.add; r.del += e.del; } else { r.ops++; r.bytes += e.bytes; }
+    by.set(k, r); }
+  const rows = [...by.entries()].sort((a, b) => (b[1].n + b[1].ops) - (a[1].n + a[1].ops)).slice(0, 8);
+  $("pv-bp-n").textContent = fe.length ? fe.length+" events" : "";
+  if (!rows.length) { pvCanvasNote(ctx, w, h, "no file activity reported yet"); return; }
   const max = Math.max(1, ...rows.map(([, r]) => Math.max(r.add, r.del)));
-  const lh = Math.min(22, (h - 10) / rows.length), lab = Math.min(150, w*.34), mid = lab + (w - lab - 70)/2;
+  const maxOps = Math.max(1, ...rows.map(([, r]) => r.ops));
+  const lh = Math.min(24, (h - 10) / rows.length), lab = Math.min(150, w*.3), right = 128;
+  const span = w - lab - right, mid = lab + span/2, half = span/2;
   ctx.font = "10px "+PV_MONO; ctx.textBaseline = "middle";
   rows.forEach(([uid, r], i) => {
     const y = 10 + i*lh + lh/2;
     ctx.fillStyle = "#cbd5e1"; ctx.fillText(pvClip(ctx, PV.names[uid] || String(uid).slice(0, 8)+" (closed)", lab - 8), 8, y);
-    const half = (w - lab - 70)/2;
     const ra = (r.add/max)*half, rd = (r.del/max)*half;
-    ctx.fillStyle = "#1e293b"; ctx.fillRect(lab, y - 1, w - lab - 70, 2);
-    ctx.fillStyle = "#22c55e"; ctx.fillRect(mid, y - 4, Math.max(r.add ? 2 : 0, ra), 8);
-    ctx.fillStyle = "#ef4444"; ctx.fillRect(mid - Math.max(r.del ? 2 : 0, rd), y - 4, Math.max(r.del ? 2 : 0, rd), 8);
-    ctx.fillStyle = "#f8fafc"; ctx.beginPath(); ctx.arc(mid, y, 2.5, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle = "#64748b"; ctx.textAlign = "right"; ctx.fillText("+"+pvK(r.add)+" −"+pvK(r.del), w - 8, y); ctx.textAlign = "left";
+    ctx.fillStyle = "#1e293b"; ctx.fillRect(lab, y - 1, span, 2);
+    ctx.fillStyle = "#22c55e"; ctx.fillRect(mid, y - 5, Math.max(r.add ? 2 : 0, ra), 6);
+    ctx.fillStyle = "#ef4444"; ctx.fillRect(mid - Math.max(r.del ? 2 : 0, rd), y - 5, Math.max(r.del ? 2 : 0, rd), 6);
+    // File ops: a thin violet bar under the lines bar, from the left edge.
+    if (r.ops) { ctx.fillStyle = PV_OP_COLOR.write; ctx.fillRect(lab, y + 3, Math.max(2, (r.ops/maxOps)*span), 3); }
+    ctx.fillStyle = "#f8fafc"; ctx.beginPath(); ctx.arc(mid, y - 2, 2.5, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#64748b"; ctx.textAlign = "right";
+    ctx.fillText("+"+pvK(r.add)+" −"+pvK(r.del)+" · "+pvK(r.ops)+" ops "+(r.bytes ? fmtB(r.bytes) : ""), w - 8, y); ctx.textAlign = "left";
   });
   ctx.textBaseline = "alphabetic";
 }
 
 function pvDrawPareto(){
   const {ctx, w, h} = pvFit($("pv-pareto"));
-  const fe = (PV.win && PV.win.telemetry && PV.win.telemetry.file_events) || [];
+  const fe = pvFileEvents();
   const by = new Map();
   for (const e of fe) { const base = String(e.path || "").split(/[\\/]/).pop(); const dot = base.lastIndexOf(".");
     const ext = dot > 0 ? base.slice(dot) : "(none)"; by.set(ext, (by.get(ext) || 0) + 1); }
   const rows = [...by.entries()].sort((a, b) => b[1] - a[1]); const total = fe.length;
   $("pv-pa-n").textContent = rows.length ? rows.length+" types" : "";
-  if (!rows.length) { pvCanvasNote(ctx, w, h, "no file edits reported yet"); return; }
+  if (!rows.length) { pvCanvasNote(ctx, w, h, "no file activity reported yet"); return; }
   const shown = rows.slice(0, 9), max = shown[0][1], pad = 22, bw = (w - pad*2) / shown.length, base = h - 26;
   let cum = 0; const pts = [];
   ctx.font = "9px "+PV_MONO; ctx.textAlign = "center";
