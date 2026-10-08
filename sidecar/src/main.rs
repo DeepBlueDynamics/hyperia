@@ -26,6 +26,7 @@ mod delivery;
 mod delivery_service;
 mod perms;
 mod process;
+mod host_telemetry;
 mod lume_store;
 mod screen;
 mod stream;
@@ -4715,6 +4716,8 @@ async fn main() -> anyhow::Result<()> {
     let telem = telemetry::TelemetryStore::new();
     let dash_state = dashboard::DashboardState::new(telem.clone());
     let state = AppState { bridge, log_buffer, telemetry: telem, render: render::RenderStore::new() };
+    // Host-pane telemetry → n8 gateway (server of record); buffers while it is down.
+    host_telemetry::forward::spawn_sender();
     // Grab lume handles before `state` is moved into the router below.
     let lume_for_flush = state.bridge.lume();
     let lume_for_shutdown = state.bridge.lume();
