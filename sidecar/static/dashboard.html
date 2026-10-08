@@ -723,7 +723,10 @@ const PV = {on:false, panes:[], names:{}, counts:{w:0,t:0}, win:null, pane:null,
   // live = open panes + comms in the last hour; history = closed panes too, over `range`.
   mode:"live", range:86400000, sel:null, geom:null,
   // Animation state, so new data morphs the ring instead of redrawing it.
-  anim:new Map(), edgeAnim:new Map(), fibAnim:new Map(), lastDraw:0, span:0};
+  anim:new Map(), edgeAnim:new Map(), fibAnim:new Map(), lastDraw:0, span:0,
+  // History view zoom/pan: screen = world * z + (x, y).
+  view:{z:1, x:0, y:0}, dragged:0};
+const pvView = () => (PV.mode === "history" ? PV.view : {z: 1, x: 0, y: 0});
 try { const m = localStorage.getItem("pv.mode"); if (m === "history") PV.mode = m;
   const r = Number(localStorage.getItem("pv.range")); if (r === 604800000) PV.range = r; } catch (_e) {}
 const PV_LIVE_MS = 3600000;
@@ -896,6 +899,8 @@ const pvTouches = (e) => !PV.sel || e.from === PV.sel || e.to === PV.sel;
 function pvDrawRing(){
   const c = $("pv-ring"); if (!c || !PV.on) return;
   const {ctx, w, h} = pvFit(c);
+  const vw = pvView(), dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(dpr*vw.z, 0, 0, dpr*vw.z, dpr*vw.x, dpr*vw.y);
   const now = performance.now(), dt = PV.lastDraw ? Math.min(250, now - PV.lastDraw) : 1000; PV.lastDraw = now;
   const k = pvEase(dt);
   // Leaves room outside the ring for the bars and the names.
@@ -1010,7 +1015,9 @@ function pvDrawRing(){
   const pick = (sel && PV.anim.get(sel)) || drawn.filter((a) => present.has(a.node.id))
     .reduce((m, a) => (!m || score(a.node) > score(m.node) ? a : m), null);
   if (pick && (sel || score(pick.node) > 0)) {
-    const top = pick.node, p = pos(pick.theta, R+2);
+    // The callout box stays in screen space; only its anchor follows the zoom.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const top = pick.node, p0 = pos(pick.theta, R+2), p = {x: p0.x*vw.z + vw.x, y: p0.y*vw.z + vw.y};
     const l1 = (sel ? "SELECTED " : "NODE ")+top.label+" | SENT "+(top.sent || 0)+" | RECV "+(top.received || 0)+" | EDITS "+(top.edits || 0)+" | OPS "+(top.ops || 0)+" | +"+pvK(top.added || 0);
     const l2 = (top.kind || "").toUpperCase()+" | PANE ACCESS "+(top.access || 0)+" | NET "+fmtB(top.net || 0)+(sel ? " | ESC TO CLEAR" : " | CLICK A NODE");
     ctx.font = "10px "+PV_MONO;
@@ -1027,7 +1034,9 @@ function pvDrawRing(){
     ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI*2); ctx.fillStyle = "#f8fafc"; ctx.fill();
     ctx.globalAlpha = 1;
   }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.font = "9px "+PV_MONO; ctx.fillStyle = "#475569";
+  if (PV.mode === "history") ctx.fillText("SCROLL TO ZOOM · DRAG TO PAN · DOUBLE-CLICK TO RESET"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
   ctx.fillText(PV.nodes.length+" NODES · "+PV.edgeAnim.size+" LINKS · "+(PV.mode === "live" ? "LIVE · LAST HOUR" : "HISTORY · "+(PV.range > 86400000 ? "7 DAYS" : "24 HOURS")), 14, 18);
 }
 
@@ -1350,7 +1359,9 @@ window.addEventListener("hashchange", pvSetMode);
 // Click a node on the ring to select it; click empty space to clear.
 $("pv-ring").addEventListener("click", (ev) => {
   const g = PV.geom; if (!g) return;
-  const dx = ev.offsetX - g.cx, dy = (ev.offsetY - g.cy) / g.tilt, d = Math.hypot(dx, dy);
+  if (Date.now() - PV.dragged < 250) return;   // the end of a pan, not a click
+  const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z;
+  const dx = ox - g.cx, dy = (oy - g.cy) / g.tilt, d = Math.hypot(dx, dy);
   // The ring, its bars and the names outside it are all clickable.
   if (d < g.R*.7 || d > g.R + 230) { pvSelect(null); return; }
   const th = Math.atan2(dy, dx) - g.rot;
@@ -1362,6 +1373,32 @@ $("pv-ring").addEventListener("click", (ev) => {
   pvSelect(best && bestD < Math.max(.12, PV.span*.6) ? best : null);
 });
 window.addEventListener("keydown", (ev) => { if (PV.on && ev.key === "Escape" && PV.sel) pvSelect(null); });
+// History: wheel zooms around the cursor, drag pans, double-click resets.
+(() => {
+  const el = $("pv-ring"); let drag = null;
+  const redraw = () => { if (PV_REDUCE || !PV.raf) pvDrawRing(); };
+  el.addEventListener("wheel", (ev) => {
+    if (PV.mode !== "history") return;
+    ev.preventDefault();
+    const v = PV.view, z = Math.min(8, Math.max(.5, v.z * Math.exp(-ev.deltaY * .0015)));
+    v.x = ev.offsetX - (ev.offsetX - v.x) * (z / v.z); v.y = ev.offsetY - (ev.offsetY - v.y) * (z / v.z); v.z = z;
+    redraw();
+  }, {passive: false});
+  el.addEventListener("pointerdown", (ev) => {
+    if (PV.mode !== "history" || ev.button !== 0) return;
+    drag = {x: ev.clientX, y: ev.clientY, vx: PV.view.x, vy: PV.view.y, moved: false};
+    el.setPointerCapture(ev.pointerId);
+  });
+  el.addEventListener("pointermove", (ev) => {
+    if (!drag) return;
+    const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+    if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 4) { drag.moved = true; el.style.cursor = "grabbing"; }
+    if (drag.moved) { PV.view.x = drag.vx + dx; PV.view.y = drag.vy + dy; redraw(); }
+  });
+  const end = () => { if (drag && drag.moved) PV.dragged = Date.now(); drag = null; el.style.cursor = ""; };
+  el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
+  el.addEventListener("dblclick", () => { if (PV.mode !== "history") return; PV.view = {z: 1, x: 0, y: 0}; redraw(); });
+})();
 window.addEventListener("resize", () => { if (PV.on) pvRenderAll(); });
 pvSetMode();
 </script>
