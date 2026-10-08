@@ -792,6 +792,9 @@ function pvFileEvents(){
     if ((e.ts || 0) < cut) continue;
     const kind = e.kind === "Edit" ? "edit" : e.kind === "FileOp" ? String(e.op || "").toLowerCase() : "";
     if (!PV_OP_COLOR[kind]) continue;
+    // nuts-files saves via a temp file it then renames over the target; the
+    // temp file's own write/rename is noise, not a second change.
+    if (/\.nutstmp\d*$/i.test(e.path || "")) continue;
     out.push({kind, ts: e.ts || 0, pane: e.pane_uid || "", path: e.path || "",
       bytes: e.kind === "Edit" ? (e.bytes_after || 0) : (e.bytes || 0),
       add: e.lines_added || 0, del: e.lines_removed || 0});
