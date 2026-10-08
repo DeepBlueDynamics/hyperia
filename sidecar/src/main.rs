@@ -4718,6 +4718,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState { bridge, log_buffer, telemetry: telem, render: render::RenderStore::new() };
     // Host-pane telemetry → n8 gateway (server of record); buffers while it is down.
     host_telemetry::forward::spawn_sender();
+    host_telemetry::watcher::spawn(state.bridge.clone(), state.telemetry.clone());
     // Grab lume handles before `state` is moved into the router below.
     let lume_for_flush = state.bridge.lume();
     let lume_for_shutdown = state.bridge.lume();
@@ -4843,6 +4844,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/telemetry/toggle", axum::routing::post(dashboard::post_telemetry_toggle))
         .route("/api/telemetry/reset", axum::routing::post(dashboard::post_telemetry_reset))
         .route("/api/telemetry/event", axum::routing::post(dashboard::post_telemetry_event))
+        // Claude Code OpenTelemetry (OTLP http/json) from agents in panes.
+        .route("/otel/v1/logs", axum::routing::post(host_telemetry::otlp::post_logs))
+        .route("/otel/v1/metrics", axum::routing::post(host_telemetry::otlp::post_metrics))
         .route("/api/dashboard/widgets", axum::routing::get(dashboard::get_widgets).post(dashboard::post_widgets))
         .with_state(dash_state);
 

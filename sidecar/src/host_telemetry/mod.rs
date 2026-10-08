@@ -7,3 +7,5 @@
 //! skipped: n8's own monitor already reports those.
 
 pub mod forward;
+pub mod watcher;
+pub mod otlp;

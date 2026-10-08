@@ -40,6 +40,8 @@ type rootConfigOptions = {
   updateChannel: 'stable' | 'canary';
   useConpty?: boolean;
   shellIntegration?: boolean;
+  /** point Claude Code's OpenTelemetry in each pane at Hyperia (tokens, file edits); default `true` */
+  agentTelemetry?: boolean;
 };
 
 export type PathTranslate = {

@@ -27,6 +27,8 @@ tts = ["dep:kokoro-tts", "dep:rodio", "dep:misaki-rs", "dep:ort", "dep:ndarray",
 # HTTP server + WebSocket bridge
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
+# Folder watcher for host agent panes (host_telemetry::watcher)
+notify = "7"
 futures = "0.3"
 # Local BM25 search engine (lib-only slice) — backs per-shell log search and
 # sticky-note search. Vendored crate under crates/; no network, no CLI.
