@@ -119,7 +119,10 @@ pub(crate) fn outcome(status: Option<u16>) -> Outcome {
 }
 
 async fn post(client: &reqwest::Client, token: Option<&str>, agent: &str, events: &[Value]) -> Option<u16> {
-    let url = format!("{}/telemetry/ingest", crate::n8::GATEWAY);
+    // HYPERIA_N8_GATEWAY points at another gateway (tests, a relocated gateway).
+    let base = std::env::var("HYPERIA_N8_GATEWAY").ok().filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| crate::n8::GATEWAY.to_string());
+    let url = format!("{}/telemetry/ingest", base.trim_end_matches('/'));
     let mut req = client.post(url).json(&json!({"agent_id": agent, "events": events}));
     if let Some(t) = token {
         req = req.bearer_auth(t);
