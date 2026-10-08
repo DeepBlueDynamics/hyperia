@@ -290,7 +290,8 @@
         <span><i style="background:#fb923c"></i>bar: file edit (length = lines)</span><span><i style="background:#c084fc"></i>bar: file write (length = bytes)</span>
         <span><i style="background:#4ade80"></i>bar: create</span><span><i style="background:#e11d48"></i>bar: delete</span><span><i style="background:#94a3b8"></i>bar: rename</span>
         <span><i style="background:#fde68a"></i>bar: mail</span>
-        <span><i style="background:#7dd3fc"></i>bar: pane access</span><span><i class="dot" style="background:#f8fafc"></i>tip: last minute</span>
+        <span><i style="background:#7dd3fc"></i>bar: pane access</span>
+        <span><i class="dot" style="background:#fb923c"></i>centre: files, threaded to the panes changing them</span><span><i class="dot" style="background:#f8fafc"></i>tip: last minute</span>
       </div></div>
   </div>
   <div class="pv-botrow">
@@ -727,7 +728,10 @@ const PV = {on:false, panes:[], names:{}, counts:{w:0,t:0}, win:null, pane:null,
   // History view zoom/pan: screen = world * z + (x, y).
   views:{live:{z:1, x:0, y:0}, history:{z:1, x:0, y:0}}, dragged:0,
   // New comms crackle in: stream events seen so far, and arrivals in flight.
-  seen:new Set(), primed:false, arrivals:[]};
+  seen:new Set(), primed:false, arrivals:[],
+  // Files in the centre: nodes keyed by path, stable spiral slots, threads to panes.
+  files:[], fileSlots:new Map(), fileAnim:new Map(), fileSeen:new Set(), fileFlashes:[], selFile:null};
+const PV_FILE_MAX = 60;
 const PV_ARRIVE_MS = 1900;
 // Zoom/pan per mode: screen = world * z + (x, y).
 const pvView = () => PV.views[PV.mode];
@@ -962,6 +966,7 @@ function pvDrawRing(){
   }
   ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
 
+  pvDrawFiles(ctx, pos, R, cx, cy, tilt, k);
   pvDrawArrivals(ctx, pos, R, cx, cy);
 
   // Edge bars: one per real event. New ones grow out, expired ones shrink away.
@@ -1035,7 +1040,11 @@ function pvDrawRing(){
   const score = (n) => (n.sent || 0) + (n.received || 0) + (n.access || 0) + (n.edits || 0) + (n.ops || 0);
   const pick = (sel && PV.anim.get(sel)) || drawn.filter((a) => present.has(a.node.id))
     .reduce((m, a) => (!m || score(a.node) > score(m.node) ? a : m), null);
-  if (pick && (sel || score(pick.node) > 0)) {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  pvLabelFiles(ctx, vw, w, h);
+  pvFileCallout(ctx, vw, w, h);
+  ctx.setTransform(dpr*vw.z, 0, 0, dpr*vw.z, dpr*vw.x, dpr*vw.y);
+  if (pick && !PV.selFile && (sel || score(pick.node) > 0)) {
     // The callout box stays in screen space; only its anchor follows the zoom.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const top = pick.node, p0 = pos(pick.theta, R+2), p = {x: p0.x*vw.z + vw.x, y: p0.y*vw.z + vw.y};
@@ -1123,9 +1132,154 @@ function pvDrawArrivals(ctx, pos, R, cx, cy){
   ctx.shadowBlur = 0; ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over"; ctx.lineCap = "butt";
 }
 
+// Files touched in the window, most recent first, each with the panes that
+// touched it. A file keeps the spiral slot it got when first seen, so it
+// doesn't jump; a file that drops out frees its slot for the next new one.
+function pvBuildFiles(){
+  const byPath = new Map();
+  for (const e of pvFileEvents()) {
+    if (!e.path) continue;
+    const node = PV.alias.get("pane:"+e.pane) || PV.alias.get(e.pane);
+    let f = byPath.get(e.path);
+    if (!f) { f = {path: e.path, count: 0, last: 0, kind: e.kind, add: 0, del: 0, links: new Map()}; byPath.set(e.path, f); }
+    f.count++; f.add += e.add || 0; f.del += e.del || 0;
+    if (e.ts >= f.last) { f.last = e.ts; f.kind = e.kind; }
+    if (node) {
+      const l = f.links.get(node.id) || {count: 0, last: 0, kind: e.kind};
+      l.count++; if (e.ts >= l.last) { l.last = e.ts; l.kind = e.kind; }
+      f.links.set(node.id, l);
+    }
+    // First sight of this event: spark along its thread.
+    const key = e.ts+"|"+e.path+"|"+e.kind+"|"+e.pane;
+    if (!PV.fileSeen.has(key)) {
+      PV.fileSeen.add(key);
+      if (PV.primed && !PV_REDUCE && node && PV.fileFlashes.length < 40) PV.fileFlashes.push({path: e.path, node: node.id, kind: e.kind, born: performance.now()});
+    }
+  }
+  if (PV.fileSeen.size > 6000) PV.fileSeen = new Set([...PV.fileSeen].slice(-3000));
+  const list = [...byPath.values()].sort((a, b) => b.last - a.last).slice(0, PV_FILE_MAX);
+  const keep = new Set(list.map((f) => f.path));
+  for (const p of [...PV.fileSlots.keys()]) if (!keep.has(p)) PV.fileSlots.delete(p);
+  const used = new Set(PV.fileSlots.values());
+  let next = 0;
+  for (const f of list) {
+    if (!PV.fileSlots.has(f.path)) { while (used.has(next)) next++; PV.fileSlots.set(f.path, next); used.add(next); }
+    f.slot = PV.fileSlots.get(f.path);
+  }
+  PV.files = list;
+  if (PV.selFile && !keep.has(PV.selFile)) PV.selFile = null;
+}
+
+const PV_FILE_COLOR = {edit: "#fb923c", write: "#c084fc", create: "#4ade80", delete: "#e11d48", rename: "#94a3b8"};
+const pvBase = (p) => String(p).split(/[\\/]/).pop();
+
+// Sunflower spiral inside the ring: slot 0 at the centre, outward from there.
+function pvFileSpot(slot, R, cx, cy, tilt){
+  const r = R * .62 * Math.sqrt((slot + .6) / (PV_FILE_MAX + .6)), a = slot * 2.39996;
+  return {x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r * tilt};
+}
+
+function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
+  const now = Date.now(), t = performance.now();
+  const present = new Set();
+  for (const f of PV.files) {
+    present.add(f.path);
+    let a = PV.fileAnim.get(f.path);
+    const spot = pvFileSpot(f.slot, R, cx, cy, tilt);
+    if (!a) { a = {x: spot.x, y: spot.y, alpha: 0}; PV.fileAnim.set(f.path, a); }
+    a.f = f; a.x += (spot.x - a.x) * k; a.y += (spot.y - a.y) * k; a.alpha += (1 - a.alpha) * k;
+  }
+  for (const [p, a] of PV.fileAnim) if (!present.has(p)) { a.alpha -= a.alpha * k; if (a.alpha < .02) PV.fileAnim.delete(p); }
+  if (!PV.fileAnim.size) return;
+  const sel = PV.sel, selFile = PV.selFile;
+  const lit = (f, nodeId) => (selFile ? f.path === selFile : sel ? nodeId === sel : true);
+  // Threads: file → each pane that touched it.
+  ctx.globalCompositeOperation = "lighter";
+  for (const a of PV.fileAnim.values()) {
+    const f = a.f;
+    for (const [nodeId, l] of f.links) {
+      const n = PV.anim.get(nodeId); if (!n) continue;
+      const p = pos(n.theta, R*.97), on = lit(f, nodeId), fresh = now - l.last < 60000;
+      ctx.strokeStyle = PV_FILE_COLOR[l.kind] || "#94a3b8";
+      ctx.globalAlpha = a.alpha * n.alpha * (on ? (fresh ? .75 : .38) : .05);
+      ctx.lineWidth = Math.min(3.2, .6 + Math.log2(1 + l.count) * .55);
+      const mx = (a.x + p.x) / 2 + (cy - (a.y + p.y) / 2) * .12, my = (a.y + p.y) / 2 + ((a.x + p.x) / 2 - cx) * .12;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.quadraticCurveTo(mx, my, p.x, p.y); ctx.stroke();
+    }
+  }
+  // New changes: a spark running pane → file along the thread.
+  PV.fileFlashes = PV.fileFlashes.filter((fl) => t - fl.born < 900);
+  for (const fl of PV.fileFlashes) {
+    const a = PV.fileAnim.get(fl.path), n = PV.anim.get(fl.node); if (!a || !n) continue;
+    const p = pos(n.theta, R*.97), u = Math.min(1, (t - fl.born) / 700);
+    const mx = (a.x + p.x) / 2 + (cy - (a.y + p.y) / 2) * .12, my = (a.y + p.y) / 2 + ((a.x + p.x) / 2 - cx) * .12;
+    const x = (1-u)*(1-u)*p.x + 2*(1-u)*u*mx + u*u*a.x, y = (1-u)*(1-u)*p.y + 2*(1-u)*u*my + u*u*a.y;
+    const col = PV_FILE_COLOR[fl.kind] || "#f8fafc";
+    ctx.globalAlpha = 1 - Math.max(0, (t - fl.born - 700) / 200);
+    ctx.shadowColor = col; ctx.shadowBlur = 14; ctx.fillStyle = "#f8fafc";
+    ctx.beginPath(); ctx.arc(x, y, 2.8, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.shadowBlur = 0; ctx.globalCompositeOperation = "source-over";
+  // Nodes: size by changes, colour by the latest change, ring when fresh.
+  for (const a of PV.fileAnim.values()) {
+    const f = a.f, on = selFile ? f.path === selFile : sel ? f.links.has(sel) : true;
+    const r = 2.2 + Math.min(6, Math.log2(1 + f.count) * 1.4), col = PV_FILE_COLOR[f.kind] || "#94a3b8";
+    ctx.globalAlpha = a.alpha * (on ? 1 : .18);
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(a.x, a.y, r, 0, Math.PI*2); ctx.fill();
+    if (now - f.last < 60000 || f.path === selFile) {
+      ctx.strokeStyle = f.path === selFile ? "#f8fafc" : col; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(a.x, a.y, r + 3 + (f.path === selFile ? 1.5 : 0), 0, Math.PI*2); ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Labels for the busiest files, in screen space, skipping overlaps.
+function pvLabelFiles(ctx, vw, w, h){
+  if (!PV.fileAnim.size) return;
+  const order = [...PV.fileAnim.values()].sort((x, y) => (y.f.path === PV.selFile) - (x.f.path === PV.selFile) || y.f.count - x.f.count);
+  const placed = [];
+  ctx.font = "9px "+PV_MONO; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  for (const a of order.slice(0, 24)) {
+    const x = a.x*vw.z + vw.x + 8, y = a.y*vw.z + vw.y;
+    if (x < 0 || x > w || y < 0 || y > h) continue;
+    const text = pvBase(a.f.path), tw = ctx.measureText(text).width;
+    const box = {x0: x, x1: x + tw, y0: y - 6, y1: y + 6};
+    if (a.f.path !== PV.selFile && placed.some((b) => box.x0 < b.x1 + 3 && box.x1 > b.x0 - 3 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
+    placed.push(box);
+    const on = PV.selFile ? a.f.path === PV.selFile : PV.sel ? a.f.links.has(PV.sel) : true;
+    ctx.globalAlpha = a.alpha * (on ? .9 : .25);
+    ctx.fillStyle = a.f.path === PV.selFile ? "#f8fafc" : "#cbd5e1";
+    ctx.fillText(text, x, y);
+  }
+  ctx.globalAlpha = 1; ctx.textBaseline = "alphabetic";
+}
+
+// Callout for the selected file.
+function pvFileCallout(ctx, vw, w, h){
+  const a = PV.selFile && PV.fileAnim.get(PV.selFile); if (!a) return;
+  const f = a.f, panes = [...f.links.keys()].map((id) => (PV.alias.get(id) || {}).label || id);
+  const l1 = "FILE "+f.path;
+  const l2 = f.count+" CHANGE"+(f.count === 1 ? "" : "S")+" | LAST "+f.kind.toUpperCase()+" "+pvAgo(f.last)+(f.add || f.del ? " | +"+pvK(f.add)+" −"+pvK(f.del) : "")+" | BY "+panes.join(", ");
+  ctx.font = "10px "+PV_MONO;
+  const bw = Math.min(w - 28, Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 20), bh = 36, bx = 14, by = 30;
+  const px = a.x*vw.z + vw.x, py = a.y*vw.z + vw.y;
+  ctx.strokeStyle = "#f8fafc"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(bx + bw*.5, by + bh); ctx.lineTo(px, py); ctx.stroke();
+  ctx.fillStyle = "rgba(5,7,11,.92)"; ctx.fillRect(bx, by, bw, bh); ctx.strokeRect(bx+.5, by+.5, bw-1, bh-1);
+  ctx.fillStyle = "#f8fafc"; ctx.fillText(pvClip(ctx, l1, bw-20), bx+10, by+15);
+  ctx.fillStyle = "#cbd5e1"; ctx.fillText(pvClip(ctx, l2, bw-20), bx+10, by+29);
+}
+
 // Select a ring node (or clear): ring, callout, top comms and stream follow it.
 function pvSelect(id){
   PV.sel = id && id !== PV.sel ? id : null;
+  PV.selFile = null;
+  pvRenderAll();
+}
+function pvSelectFile(path){
+  PV.selFile = path && path !== PV.selFile ? path : null;
+  PV.sel = null;
   pvRenderAll();
 }
 
@@ -1417,7 +1571,7 @@ async function pvPoll(){
   if (w.status === "fulfilled") PV.win = w.value;
   if (p.status === "fulfilled") PV.pane = p.value;
   PV.comms = cm.status === "fulfilled" && cm.value && Array.isArray(cm.value.mail_edges) ? cm.value : null;
-  pvBuildNodes(); pvNoteArrivals(); pvRenderAll();
+  pvBuildNodes(); pvBuildFiles(); pvNoteArrivals(); pvRenderAll();
 }
 
 function pvLoop(ts){
@@ -1446,7 +1600,14 @@ $("pv-ring").addEventListener("click", (ev) => {
   const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z;
   const dx = ox - g.cx, dy = (oy - g.cy) / g.tilt, d = Math.hypot(dx, dy);
   // The ring, its bars and the names outside it are all clickable.
-  if (d < g.R*.7 || d > g.R + 230) { pvSelect(null); return; }
+  if (d < g.R*.7) {
+    // Inside the ring: the nearest file node within reach, else clear.
+    let best = null, bestD = Infinity;
+    for (const [p, a] of PV.fileAnim) { const dd = Math.hypot(ox - a.x, oy - a.y); if (dd < bestD) { bestD = dd; best = p; } }
+    if (best && bestD < 12 / v.z + 4) pvSelectFile(best); else { PV.selFile = null; pvSelect(null); }
+    return;
+  }
+  if (d > g.R + 230) { pvSelect(null); return; }
   const th = Math.atan2(dy, dx) - g.rot;
   let best = null, bestD = Infinity;
   for (const [id, a] of PV.anim) {
