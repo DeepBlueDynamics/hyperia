@@ -4756,6 +4756,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/files/open", axum::routing::post(file_edit::open))
         .route("/api/files/stat", axum::routing::get(file_edit::stat))
         .route("/api/files/save", axum::routing::post(file_edit::save))
+        .route("/api/files/render", axum::routing::post(file_edit::render))
         .route("/api/audio/play", axum::routing::post(post_audio_play))
         .route("/api/audio/probe", axum::routing::post(post_audio_probe))
         .route("/api/audio/mute", axum::routing::post(post_audio_mute))

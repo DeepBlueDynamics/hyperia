@@ -203,9 +203,42 @@ pub async fn save(
     Json(json!({"ok": true, "mtime_ms": meta.as_ref().map(mtime_ms).unwrap_or(0), "size": out.len()})).into_response()
 }
 
+#[derive(Deserialize)]
+pub struct RenderReq {
+    text: String,
+}
+
+/// POST /api/files/render {text} → safe HTML for the editor's rendered view.
+/// Renders the buffer (unsaved edits included), so no path check — only the
+/// local, same-origin guards.
+pub async fn render(ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(req): Json<RenderReq>) -> Response {
+    if !peer.ip().is_loopback() {
+        return err(StatusCode::FORBIDDEN, "the editor is local-only");
+    }
+    if !same_origin(&headers) {
+        return err(StatusCode::FORBIDDEN, "cross-origin request refused");
+    }
+    if req.text.len() as u64 > MAX_BYTES {
+        return err(StatusCode::PAYLOAD_TOO_LARGE, "text is over 2 MB");
+    }
+    Json(json!({"ok": true, "html": crate::render::md_to_safe_html(&req.text)})).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rendered_markdown_is_inert() {
+        let h = crate::render::md_to_safe_html(
+            "# Hi\n\n<script>alert(1)</script>\n\n[x](javascript:alert(1)) <img src=x onerror=alert(1)> ![i](data:text/html,x) [ok](https://a.b)",
+        );
+        assert!(h.contains("<h1>Hi</h1>"));
+        assert!(!h.contains("<script") && !h.contains("<img src=x"));
+        assert!(h.contains("&lt;script&gt;"));
+        assert!(!h.contains("javascript:") && !h.contains("data:text"));
+        assert!(h.contains("href=\"https://a.b\""));
+    }
 
     #[test]
     fn workspace_paths_map_under_the_pane_cwd_only() {

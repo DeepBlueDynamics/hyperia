@@ -211,6 +211,39 @@ fn md_to_html(md: &str) -> String {
     out
 }
 
+/// Markdown → HTML for untrusted (agent-written) text: raw HTML is shown as
+/// text and script-capable URLs become "#". No `==highlight==` pass, since it
+/// works by emitting raw HTML.
+pub(crate) fn md_to_safe_html(md: &str) -> String {
+    use pulldown_cmark::{CowStr, Event, Tag};
+    fn safe(u: CowStr<'_>) -> CowStr<'_> {
+        let l = u.trim().to_ascii_lowercase();
+        if ["javascript:", "vbscript:", "data:", "file:"].iter().any(|p| l.starts_with(p)) {
+            CowStr::Borrowed("#")
+        } else {
+            u
+        }
+    }
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_TABLES);
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    opts.insert(Options::ENABLE_TASKLISTS);
+    opts.insert(Options::ENABLE_FOOTNOTES);
+    let parser = Parser::new_ext(md, opts).map(|ev| match ev {
+        Event::Html(s) | Event::InlineHtml(s) => Event::Text(s),
+        Event::Start(Tag::Link { link_type, dest_url, title, id }) => {
+            Event::Start(Tag::Link { link_type, dest_url: safe(dest_url), title, id })
+        }
+        Event::Start(Tag::Image { link_type, dest_url, title, id }) => {
+            Event::Start(Tag::Image { link_type, dest_url: safe(dest_url), title, id })
+        }
+        e => e,
+    });
+    let mut out = String::with_capacity(md.len() * 2);
+    html::push_html(&mut out, parser);
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------

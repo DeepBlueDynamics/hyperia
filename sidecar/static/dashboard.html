@@ -303,6 +303,9 @@
   .ed-main.wrap .ed-gut{display:none}
   .ed-hl .k{color:#c084fc}.ed-hl .s{color:#86efac}.ed-hl .c{color:#64748b;font-style:italic}.ed-hl .n{color:#fbbf24}
   .ed-hl .h{color:#38bdf8;font-weight:700}.ed-hl .t{color:#7dd3fc}
+  .ed-view{position:absolute;inset:0;width:100%;height:100%;border:0;background:#0b0f17;display:none}
+  .ed-main.render .ed-view{display:block}
+  .ed-main.render .ed-gut,.ed-main.render .ed-wrap{display:none}
   .ed-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:11px;
     text-transform:uppercase;letter-spacing:.1em;text-align:center;padding:30px}
   .ed-msg.err{color:#f87171}
@@ -319,6 +322,7 @@
     <div class="ed-top"><div class="ed-tabs" id="ed-tabs"></div><button class="ed-close" id="ed-close" title="Close editor (Esc) — open files stay in their tabs">✕</button></div>
     <div class="ed-bar">
       <span class="ed-path" id="ed-path"></span>
+      <button class="ed-btn" id="ed-view-b" title="Rendered view (Ctrl+Shift+V)" style="display:none">Rendered</button>
       <button class="ed-btn" id="ed-find-b" title="Find / replace (Ctrl+F, Ctrl+H)">Find</button>
       <button class="ed-btn" id="ed-goto-b" title="Go to line (Ctrl+G)">Line</button>
       <button class="ed-btn" id="ed-wrap-b" title="Wrap long lines">Wrap</button>
@@ -1498,6 +1502,54 @@ function edIndentUnit(text){
 }
 const ED_COMMENT = {c: "//", hash: "#"};
 
+// Rendered view for Markdown: .md files, and .txt files that read as Markdown.
+// HTML comes from the sidecar with raw HTML and script URLs neutralised, and
+// shows in a sandboxed frame (no scripts) under a strict CSP.
+function edLooksMd(text){
+  const marks = [/^#{1,6} \S/m, /^\s*[-*+] \S/m, /^\s*\d+\. \S/m, /```/, /\[[^\]\n]+\]\([^)\n]+\)/, /\*\*[^*\n]+\*\*/, /^\|.*\|\s*$/m, /^> \S/m];
+  return marks.filter((r) => r.test(text)).length >= 2;
+}
+function edCanRender(t){
+  if (!t || !t.ta) return false;
+  if (t.lang === "md") return true;
+  return /\.txt$/i.test(t.path) && edLooksMd(t.ta.value.slice(0, 20000));
+}
+const ED_MD_CSS = "body{margin:0;background:#0b0f17;color:#d6dde8;font:15px/1.65 system-ui,'Segoe UI',sans-serif}" +
+  "article{max-width:880px;margin:0 auto;padding:26px 38px 70px}h1,h2{border-bottom:1px solid #1e2a3c;padding-bottom:.3em}" +
+  "h1,h2,h3,h4{color:#f1f5f9;line-height:1.25;margin:1.4em 0 .6em}a{color:#7dd3fc}code{font-family:Consolas,'Cascadia Mono',monospace;" +
+  "background:#111827;padding:.1em .35em;border-radius:3px;font-size:.88em}pre{background:#0f1622;border:1px solid #1e2a3c;padding:12px 14px;" +
+  "overflow:auto;border-radius:4px;line-height:1.45}pre code{background:none;padding:0}table{border-collapse:collapse;margin:1em 0}" +
+  "th,td{border:1px solid #1e2a3c;padding:5px 10px}th{background:#111827}blockquote{border-left:3px solid #f59e0b;margin:1em 0;" +
+  "padding:.2em 1em;color:#94a3b8}img{max-width:100%}hr{border:0;border-top:1px solid #1e2a3c}li input{margin-right:.45em}";
+async function edRenderMd(t){
+  if (!t.view) {
+    const f = document.createElement("iframe");
+    f.className = "ed-view";
+    // No allow-scripts: nothing in the file can run. Same-origin only so we
+    // can keep the scroll position across re-renders.
+    f.setAttribute("sandbox", "allow-same-origin allow-popups allow-popups-to-escape-sandbox");
+    t.main.appendChild(f); t.view = f;
+  }
+  const {j} = await edPost("/api/files/render", {text: t.ta.value}).catch((e) => ({j: {ok: false, error: String(e)}}));
+  const body = j.ok ? j.html : '<p style="color:#f87171">Rendering failed: ' + edEsc(j.error || "unknown error") + "</p>";
+  let y = 0; try { y = t.view.contentDocument.scrollingElement.scrollTop; } catch (_e) {}
+  t.view.onload = () => { try { t.view.contentDocument.scrollingElement.scrollTop = y; } catch (_e) {} };
+  t.view.srcdoc = '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src https: http:; style-src \'unsafe-inline\'">' +
+    '<base target="_blank"><style>' + ED_MD_CSS + "</style><article>" + body + "</article>";
+}
+function edSetRender(t, on){
+  if (!t || !t.main || !edCanRender(t)) return;
+  t.main.classList.toggle("render", on);
+  ED.preferRender = on;
+  if (on) edRenderMd(t); else t.ta.focus();
+  edActivate(ED.tabs.indexOf(t));
+}
+// Re-render while showing (typing, or an agent rewriting the file).
+function edRenderSoon(t){
+  if (!t.main || !t.main.classList.contains("render")) return;
+  clearTimeout(t.renderTimer); t.renderTimer = setTimeout(() => edRenderMd(t), 250);
+}
+
 function edBuildPane(t){
   const main = pvEl("div", "ed-main"), gut = pvEl("div", "ed-gut"), wrap = pvEl("div", "ed-wrap"), hl = pvEl("pre", "ed-hl"), ta = document.createElement("textarea");
   ta.className = "ed-ta"; ta.spellcheck = false; ta.wrap = "off"; ta.setAttribute("autocapitalize", "off"); ta.setAttribute("autocomplete", "off");
@@ -1507,7 +1559,7 @@ function edBuildPane(t){
   t.main = main; t.ta = ta; t.hl = hl; t.gut = gut; t.wrapEl = wrap; t.indent = edIndentUnit(t.saved);
   let raf = 0;
   const paint = () => { raf = 0; edPaint(t); };
-  ta.addEventListener("input", () => { if (!raf) raf = requestAnimationFrame(paint); edRenderTabs(); edStatus(); });
+  ta.addEventListener("input", () => { if (!raf) raf = requestAnimationFrame(paint); edRenderTabs(); edStatus(); edRenderSoon(t); });
   ta.addEventListener("scroll", () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; gut.scrollTop = ta.scrollTop; });
   ta.addEventListener("keydown", (ev) => edKey(ev, t));
   ["keyup", "click", "select"].forEach((e) => ta.addEventListener(e, () => edStatus()));
@@ -1592,9 +1644,13 @@ function edActivate(i){
   $("ed-path").title = t ? t.path + (t.host && t.host !== t.path ? "  →  " + t.host : "") : "";
   $("ed-save-b").disabled = !t || !t.ta || t.ta.readOnly;
   $("ed-wrap-b").classList.toggle("on", !!(t && t.main && t.main.classList.contains("wrap")));
+  const can = edCanRender(t), rendered = !!(t && t.main && t.main.classList.contains("render"));
+  $("ed-view-b").style.display = can ? "" : "none";
+  $("ed-view-b").classList.toggle("on", rendered);
+  $("ed-view-b").textContent = rendered ? "Edit" : "Rendered";
   edWarn(t && t.warn);
   edRenderTabs(); edStatus();
-  if (t && t.ta) setTimeout(() => t.ta.focus(), 0);
+  if (t && t.ta && !rendered) setTimeout(() => t.ta.focus(), 0);
 }
 function edCloseTab(i){
   const t = ED.tabs[i]; if (!t) return;
@@ -1627,6 +1683,7 @@ async function pvEdOpen(path){
   }
   Object.assign(t, {loading: false, host: j.host_path, saved: j.text, eol: j.eol, bom: j.bom, mtime: j.mtime_ms, size: j.size, readonly: j.readonly, savedAt: 0});
   edBuildPane(t);
+  if (ED.preferRender && edCanRender(t)) { t.main.classList.add("render"); edRenderMd(t); }
   edActivate(ED.tabs.indexOf(t));
 }
 async function edSave(force){
@@ -1649,7 +1706,7 @@ async function edReload(t){
   // Through the editing stack, so the reload itself can be undone.
   edInsert(ta, 0, ta.value.length, j.text);
   ta.setSelectionRange(Math.min(pos, j.text.length), Math.min(pos, j.text.length)); ta.scrollTop = st;
-  edPaint(t); edWarn(null); edRenderTabs(); edStatus();
+  edPaint(t); edWarn(null); edRenderTabs(); edStatus(); edRenderSoon(t);
 }
 async function edPoll(){
   const t = edTab(); if (!t || !t.ta || document.visibilityState !== "visible") return;
@@ -1691,6 +1748,7 @@ function edStatus(){
 // Find / replace / go to line.
 function edFind(mode){
   const t = edTab(); if (!t || !t.ta) return;
+  if (t.main.classList.contains("render")) edSetRender(t, false);
   ED.findMode = mode;
   const bar = $("ed-find"), q = $("ed-q"), r = $("ed-r");
   bar.classList.add("on");
@@ -1759,6 +1817,7 @@ function edReplace(all){
   $("pv-ed").addEventListener("mousedown", (ev) => { if (ev.target === $("pv-ed")) edHide(); });
   $("ed-save-b").addEventListener("click", () => edSave(false));
   $("ed-reload-b").addEventListener("click", () => { const t = edTab(); if (t && t.ta) edReload(t); });
+  $("ed-view-b").addEventListener("click", () => { const t = edTab(); if (t && t.main) edSetRender(t, !t.main.classList.contains("render")); });
   $("ed-find-b").addEventListener("click", () => edFind("replace"));
   $("ed-goto-b").addEventListener("click", () => edFind("line"));
   $("ed-wrap-b").addEventListener("click", () => {
@@ -1780,6 +1839,8 @@ function edReplace(all){
   window.addEventListener("keydown", (ev) => {
     if (!$("pv-ed").classList.contains("on")) return;
     if (ev.key === "Escape") { ev.preventDefault(); ev.stopImmediatePropagation(); if ($("ed-find").classList.contains("on")) edFindClose(); else edHide(); }
+    else if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === "v") { const t = edTab(); if (t && edCanRender(t)) { ev.preventDefault(); edSetRender(t, !t.main.classList.contains("render")); } }
+    else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s" && ev.target === document.body) { ev.preventDefault(); edSave(false); }
   }, true);
   window.addEventListener("beforeunload", (ev) => { if (ED.tabs.some((t) => t.ta && t.ta.value !== t.saved)) { ev.preventDefault(); ev.returnValue = ""; } });
 })();
