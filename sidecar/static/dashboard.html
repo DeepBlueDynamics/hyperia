@@ -725,8 +725,9 @@ const PV = {on:false, panes:[], names:{}, counts:{w:0,t:0}, win:null, pane:null,
   // Animation state, so new data morphs the ring instead of redrawing it.
   anim:new Map(), edgeAnim:new Map(), fibAnim:new Map(), lastDraw:0, span:0,
   // History view zoom/pan: screen = world * z + (x, y).
-  view:{z:1, x:0, y:0}, dragged:0};
-const pvView = () => (PV.mode === "history" ? PV.view : {z: 1, x: 0, y: 0});
+  views:{live:{z:1, x:0, y:0}, history:{z:1, x:0, y:0}}, dragged:0};
+// Zoom/pan per mode: screen = world * z + (x, y).
+const pvView = () => PV.views[PV.mode];
 try { const m = localStorage.getItem("pv.mode"); if (m === "history") PV.mode = m;
   const r = Number(localStorage.getItem("pv.range")); if (r === 604800000) PV.range = r; } catch (_e) {}
 const PV_LIVE_MS = 3600000;
@@ -996,19 +997,34 @@ function pvDrawRing(){
   }
   ctx.shadowBlur = 0; ctx.globalAlpha = 1;
 
-  // Node names outside the ring, past the bars.
-  if (drawn.length <= 40) {
+  // Node names outside the ring, past the bars. Screen space at a fixed size;
+  // a name is skipped only if it would overlap a busier one or the selection,
+  // so zooming in reveals more.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  {
+    const act = (n) => (n.sent || 0) + (n.received || 0) + (n.access || 0) + (n.edits || 0) + (n.fibs ? n.fibs.length : 0);
+    const order = [...drawn].sort((x, y) => (y.node.id === sel) - (x.node.id === sel) || act(y.node) - act(x.node));
+    const placed = [];
     ctx.textBaseline = "middle";
-    for (const a of drawn) {
-      const n = a.node, p = pos(a.theta, R + 92), depth = (Math.sin(a.theta + rot) + 1) / 2, on = n.id === sel;
+    for (const a of order) {
+      const n = a.node, on = n.id === sel, p0 = pos(a.theta, R + 92);
+      const p = {x: p0.x*vw.z + vw.x, y: p0.y*vw.z + vw.y};
+      if (p.x < -200 || p.x > w + 200 || p.y < -20 || p.y > h + 20) continue;
       ctx.font = (on ? "700 10px " : "9px ")+PV_MONO;
-      ctx.globalAlpha = (on ? 1 : (.55 + .45*depth) * (sel ? .45 : 1)) * a.alpha;
-      ctx.fillStyle = on ? "#f8fafc" : n.kind === "agent" ? "#fbbf24" : n.kind === "web" ? "#86efac" : "#7dd3fc";
-      ctx.textAlign = p.x < cx ? "right" : "left";
-      ctx.fillText(pvClip(ctx, n.label, Math.max(60, (p.x < cx ? p.x : w - p.x) - 8)), p.x, p.y);
+      const left = p.x < cx*vw.z + vw.x;
+      const text = pvClip(ctx, n.label, Math.max(60, (left ? p.x : w - p.x) - 8)), tw = ctx.measureText(text).width;
+      const box = {x0: left ? p.x - tw : p.x, x1: left ? p.x : p.x + tw, y0: p.y - 7, y1: p.y + 7};
+      if (!on && placed.some((b) => box.x0 < b.x1 + 4 && box.x1 > b.x0 - 4 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
+      placed.push(box);
+      const depth = (Math.sin(a.theta + rot) + 1) / 2;
+      ctx.globalAlpha = (on ? 1 : (.6 + .4*depth) * (sel ? .5 : 1)) * a.alpha;
+      ctx.fillStyle = on ? "#f8fafc" : n.kind === "agent" ? "#fbbf24" : n.kind === "web" ? "#86efac" : n.kind === "system" ? "#e5e7eb" : "#7dd3fc";
+      ctx.textAlign = left ? "right" : "left";
+      ctx.fillText(text, p.x, p.y);
     }
     ctx.globalAlpha = 1; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
   }
+  ctx.setTransform(dpr*vw.z, 0, 0, dpr*vw.z, dpr*vw.x, dpr*vw.y);
 
   // Callout: the selected node, else the busiest.
   const score = (n) => (n.sent || 0) + (n.received || 0) + (n.access || 0) + (n.edits || 0) + (n.ops || 0);
@@ -1036,7 +1052,7 @@ function pvDrawRing(){
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.font = "9px "+PV_MONO; ctx.fillStyle = "#475569";
-  if (PV.mode === "history") ctx.fillText("SCROLL TO ZOOM · DRAG TO PAN · DOUBLE-CLICK TO RESET"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
+  ctx.fillText("SCROLL TO ZOOM · DRAG TO PAN · DOUBLE-CLICK TO RESET"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
   ctx.fillText(PV.nodes.length+" NODES · "+PV.edgeAnim.size+" LINKS · "+(PV.mode === "live" ? "LIVE · LAST HOUR" : "HISTORY · "+(PV.range > 86400000 ? "7 DAYS" : "24 HOURS")), 14, 18);
 }
 
@@ -1373,31 +1389,30 @@ $("pv-ring").addEventListener("click", (ev) => {
   pvSelect(best && bestD < Math.max(.12, PV.span*.6) ? best : null);
 });
 window.addEventListener("keydown", (ev) => { if (PV.on && ev.key === "Escape" && PV.sel) pvSelect(null); });
-// History: wheel zooms around the cursor, drag pans, double-click resets.
+// Wheel zooms around the cursor, drag pans, double-click resets.
 (() => {
   const el = $("pv-ring"); let drag = null;
   const redraw = () => { if (PV_REDUCE || !PV.raf) pvDrawRing(); };
   el.addEventListener("wheel", (ev) => {
-    if (PV.mode !== "history") return;
     ev.preventDefault();
-    const v = PV.view, z = Math.min(8, Math.max(.5, v.z * Math.exp(-ev.deltaY * .0015)));
+    const v = pvView(), z = Math.min(8, Math.max(.5, v.z * Math.exp(-ev.deltaY * .0015)));
     v.x = ev.offsetX - (ev.offsetX - v.x) * (z / v.z); v.y = ev.offsetY - (ev.offsetY - v.y) * (z / v.z); v.z = z;
     redraw();
   }, {passive: false});
   el.addEventListener("pointerdown", (ev) => {
-    if (PV.mode !== "history" || ev.button !== 0) return;
-    drag = {x: ev.clientX, y: ev.clientY, vx: PV.view.x, vy: PV.view.y, moved: false};
+    if (ev.button !== 0) return;
+    drag = {x: ev.clientX, y: ev.clientY, vx: pvView().x, vy: pvView().y, moved: false};
     el.setPointerCapture(ev.pointerId);
   });
   el.addEventListener("pointermove", (ev) => {
     if (!drag) return;
     const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
     if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 4) { drag.moved = true; el.style.cursor = "grabbing"; }
-    if (drag.moved) { PV.view.x = drag.vx + dx; PV.view.y = drag.vy + dy; redraw(); }
+    if (drag.moved) { const v = pvView(); v.x = drag.vx + dx; v.y = drag.vy + dy; redraw(); }
   });
   const end = () => { if (drag && drag.moved) PV.dragged = Date.now(); drag = null; el.style.cursor = ""; };
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
-  el.addEventListener("dblclick", () => { if (PV.mode !== "history") return; PV.view = {z: 1, x: 0, y: 0}; redraw(); });
+  el.addEventListener("dblclick", () => { PV.views[PV.mode] = {z: 1, x: 0, y: 0}; redraw(); });
 })();
 window.addEventListener("resize", () => { if (PV.on) pvRenderAll(); });
 pvSetMode();
