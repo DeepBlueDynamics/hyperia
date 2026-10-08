@@ -109,6 +109,8 @@ export default class Session extends EventEmitter {
   initTimestamp: number;
   profile!: string;
   cwd!: string;
+  /** True once the shell sent an integration mark; gates the reconnect replay. */
+  integrationSeen = false;
   shellState?: {
     state: 'idle' | 'running';
     lastExit?: number;
@@ -447,6 +449,7 @@ fi
             }
           }
         } else if (code === '133') {
+          this.integrationSeen = true;
           const parts = content.split(';');
           const action = parts[0].trim();
           if (action === 'A' || action === 'B' || action === 'C' || action === 'D') {
@@ -466,6 +469,7 @@ fi
             this.emit('shellstate', this.shellState);
           }
         } else if (code === '697') {
+          this.integrationSeen = true;
           const pairs = content.split(';');
           const data: Record<string, string> = {};
           for (const pair of pairs) {

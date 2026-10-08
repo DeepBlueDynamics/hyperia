@@ -51,6 +51,9 @@ pub struct ClassEvidence {
     /// Every process from the shell's child down to the foreground, as
     /// basename tokens. pwsh -> n8 -> docker is ["n8", "docker"].
     pub foreground_chain: Vec<String>,
+    /// Agent the pane's own heartbeat says is running here (fresh only;
+    /// empty when none). Survives sidecar reconnects; see find_agent.
+    pub presence_agent: String,
     pub shell_has_integration: bool,
     /// Integration state string (`idle`, `running`, `busy`). Ignored when
     /// integration is absent.
@@ -74,6 +77,7 @@ impl ClassEvidence {
             foreground_name: String::new(),
             foreground_cmdline: String::new(),
             foreground_chain: Vec::new(),
+            presence_agent: String::new(),
             shell_has_integration: false,
             shell_state: String::new(),
             shell_app_name: String::new(),
@@ -377,6 +381,14 @@ fn find_agent(evidence: &ClassEvidence) -> Option<&'static str> {
             return Some(token);
         }
     }
+    // The agent's own heartbeat. Only while something is running in front of
+    // the shell: right after the agent exits its last beat is still fresh, and
+    // a notice typed at a bare prompt would run as a command.
+    if let Some(token) = presence_agent(evidence) {
+        if live_is_runtime || is_shell_token(&live) {
+            return Some(token);
+        }
+    }
     if !evidence.shell_has_integration || integration_idle(evidence) {
         return None;
     }
@@ -394,6 +406,11 @@ fn find_agent(evidence: &ClassEvidence) -> Option<&'static str> {
         return Some(token);
     }
     None
+}
+
+/// The agent named by a fresh heartbeat, if it is a known agent.
+fn presence_agent(evidence: &ClassEvidence) -> Option<&'static str> {
+    agent_token(&basename_token(&evidence.presence_agent))
 }
 
 /// The outermost agent program in the foreground chain.
@@ -494,6 +511,13 @@ pub fn classify(evidence: &ClassEvidence) -> Classification {
             return Classification {
                 class: PaneClass::Agent { token: token.to_string() },
                 summary: format!("agent {token}: running in the process tree; its children are ambiguous"),
+            };
+        }
+        // Several children means something is running, so the heartbeat holds.
+        if let Some(token) = presence_agent(evidence) {
+            return Classification {
+                class: PaneClass::Agent { token: token.to_string() },
+                summary: format!("agent {token}: its heartbeat says it is here; the process tree is ambiguous"),
             };
         }
         return classify_ambiguous(evidence);
@@ -639,6 +663,7 @@ fn idle_shell(shell: &str) -> ClassEvidence {
         foreground_name: String::new(),
         foreground_cmdline: String::new(),
         foreground_chain: Vec::new(),
+        presence_agent: String::new(),
         shell_has_integration: true,
         shell_state: "idle".into(),
         shell_app_name: String::new(),
@@ -822,6 +847,45 @@ mod tests {
         vim.foreground_name = "vim".into();
         vim.foreground_chain = vec!["n8".into(), "vim".into()];
         assert!(classify(&vim).agent_token().is_none());
+    }
+
+    #[test]
+    fn heartbeat_presence_counts_while_something_runs_in_front() {
+        // Reconnect wiped integration; the tree shows only docker under pwsh.
+        let mut evidence = idle_shell("pwsh");
+        evidence.shell_has_integration = false;
+        evidence.foreground_name = "docker".into();
+        evidence.foreground_chain = vec!["docker".into()];
+        assert!(classify(&evidence).agent_token().is_none(), "no heartbeat: not an agent");
+        evidence.presence_agent = "n8".into();
+        assert_eq!(classify(&evidence).agent_token(), Some("n8"));
+
+        let mut ambiguous = idle_shell("pwsh");
+        ambiguous.shell_has_integration = false;
+        ambiguous.process_ambiguous = true;
+        ambiguous.presence_agent = "n8".into();
+        assert_eq!(classify(&ambiguous).agent_token(), Some("n8"));
+    }
+
+    #[test]
+    fn heartbeat_presence_never_counts_at_a_bare_prompt_or_in_front_of_another_program() {
+        // The agent just exited: no child, but its last beat is still fresh.
+        let mut bare = idle_shell("pwsh");
+        bare.presence_agent = "n8".into();
+        assert!(classify(&bare).agent_token().is_none());
+        // Something else took the foreground.
+        let mut vim = idle_shell("pwsh");
+        vim.shell_has_integration = false;
+        vim.foreground_name = "vim".into();
+        vim.foreground_chain = vec!["vim".into()];
+        vim.presence_agent = "n8".into();
+        assert!(classify(&vim).agent_token().is_none());
+        // Unknown agent names don't count.
+        let mut odd = idle_shell("pwsh");
+        odd.shell_has_integration = false;
+        odd.foreground_name = "docker".into();
+        odd.presence_agent = "totally-an-agent".into();
+        assert!(classify(&odd).agent_token().is_none());
     }
 
     #[test]
