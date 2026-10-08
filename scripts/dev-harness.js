@@ -17,7 +17,8 @@ const path = require('path');
 
 const REPO = path.resolve(__dirname, '..');
 const CDP_PORT = 9333;
-const SIDECAR_PORT = 9801;
+// Not 9801: that is the n8 gateway's port, and it outlives Hyperia.
+const SIDECAR_PORT = 9811;
 const args = process.argv.slice(2);
 const ONLY = (args.find((a) => a.startsWith('--only')) || '').split('=')[1] || args[args.indexOf('--only') + 1] || '';
 const only = ONLY && !ONLY.startsWith('--') ? new Set(ONLY.split(',')) : null;
