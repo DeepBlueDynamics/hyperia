@@ -383,11 +383,6 @@ fn find_agent(evidence: &ClassEvidence) -> Option<&'static str> {
     let Some(token) = recorded_token else {
         return None;
     };
-    if matches!(token, "n8" | "nemesis8")
-        && (live.is_empty() || CONTAINER_RUNTIMES.iter().any(|runtime| *runtime == live))
-    {
-        return Some(token);
-    }
     // No child visible yet: the running integration record is the launcher.
     // A different live executable (`echo codex`, `vim`) is not that agent.
     if live.is_empty() {

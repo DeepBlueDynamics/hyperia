@@ -28,6 +28,7 @@ import {
   getNote
 } from './sticky';
 import {SYSTEM_TOKEN} from './system-token';
+import {sessionReplayMessages} from './utils/session-replay';
 import {capturePaneJpeg} from './web-pane-manager';
 import {captureAllWindows, restoreWorkspace} from './workspace';
 
@@ -254,6 +255,9 @@ function sendSessionRegister(uid: string, tracked: TrackedSession) {
     // sidecar can resolve an in-pane agent's Authorization header → this pane.
     agentToken: tracked.session?.agentToken || ''
   });
+  // The sidecar starts a register from "idle, no app"; replay what we know so a
+  // reconnect doesn't make a long-running agent look like a bare shell.
+  for (const m of sessionReplayMessages(uid, tracked.session)) send(m);
 }
 
 // ---------------------------------------------------------------------------

@@ -128,6 +128,41 @@ const HELPERS = function () {
 };
 const h = async () => run(HELPERS);
 
+// The sandbox's own sidecar: listening on SIDECAR_PORT, named
+// hyperia-sidecar.exe, and descended from the Electron this harness launched.
+// Never matches the user's Hyperia.
+function sandboxSidecarPid(rootPid) {
+  const procs = JSON.parse(
+    execSync(
+      'powershell -NoProfile -Command "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress"',
+      {encoding: 'utf8', maxBuffer: 32 * 1024 * 1024}
+    )
+  );
+  const parent = new Map(procs.map((x) => [x.ProcessId, x.ParentProcessId]));
+  const listening = execSync('netstat -ano -p tcp', {encoding: 'utf8'})
+    .split(/\r?\n/)
+    .filter((l) => /LISTENING/.test(l) && new RegExp(`:${SIDECAR_PORT}\\s`).test(l))
+    .map((l) => Number(l.trim().split(/\s+/).pop()));
+  return procs
+    .filter((x) => listening.includes(x.ProcessId) && /^hyperia-sidecar\.exe$/i.test(x.Name))
+    .map((x) => x.ProcessId)
+    .find((pid) => {
+      for (let cur = pid, i = 0; cur && i < 12; cur = parent.get(cur), i++) if (cur === rootPid) return true;
+      return false;
+    });
+}
+async function sidecarPane(uid) {
+  const j = await (
+    await fetch(`http://127.0.0.1:${SIDECAR_PORT}/api/status`, {signal: AbortSignal.timeout(5000)})
+  ).json();
+  for (const w of j.windows || [])
+    for (const t of w.tabs || [])
+      for (const pn of t.panes || []) {
+        if (pn.paneId === uid) return {state: pn.state, app: pn.app?.name || '', cwd: pn.cwd || ''};
+      }
+  return null;
+}
+
 // ---------- scenarios ----------
 // Each returns {pass, detail}. `ctx` carries the harness log file and a page server.
 const scenarios = [
@@ -567,12 +602,46 @@ const scenarios = [
         detail: `visible: start ${r.start}, both held ${r.both}, after first release ${r.oneLeft}, after last ${r.end}`
       };
     }
+  },
+  {
+    id: 's14',
+    name: "A sidecar restart keeps a running command's shell state (reconnect replay)",
+    async run(ctx) {
+      await h();
+      const {uid} = await run(async () => {
+        const {S, pause, newPickerTab, pressOnPicker} = window.__h;
+        const {root} = await newPickerTab();
+        await pressOnPicker('s');
+        await pause(4000);
+        const id = S().termGroups.activeSessions[root];
+        window.rpc.emit('data', {uid: id, data: 'ping -t 127.0.0.1' + String.fromCharCode(13)});
+        await pause(4000);
+        return {uid: id};
+      });
+      const before = await sidecarPane(uid);
+      const pid = sandboxSidecarPid(ctx.child.pid);
+      if (!pid) return {pass: false, detail: 'sandbox sidecar not found; not killing anything'};
+      execSync(`taskkill /F /PID ${pid}`, {stdio: 'ignore'});
+      // Main restarts a crashed sidecar after 2s, then the bridge reconnects.
+      let after = null;
+      for (let i = 0; i < 20 && !after; i++) {
+        await wait(1000);
+        after = await sidecarPane(uid).catch(() => null);
+      }
+      await run((id) => window.rpc.emit('data', {uid: id, data: String.fromCharCode(3)}), uid).catch(() => {});
+      const pass =
+        !!before && before.state === 'running' && !!after && after.state === 'running' && after.app === before.app;
+      return {
+        pass,
+        detail: `before restart: ${JSON.stringify(before)}; after: ${JSON.stringify(after)} (killed sandbox sidecar pid ${pid})`
+      };
+    }
   }
 ];
 
 // ---------- main ----------
 // Scenarios that can end the window or crash main get their own fresh launch.
-const GROUPS = [['s1', 's3', 's4', 's5', 's6', 's9', 's7', 's10', 's11', 's12', 's13'], ['s2'], ['s8']];
+const GROUPS = [['s1', 's3', 's4', 's5', 's6', 's9', 's7', 's10', 's11', 's12', 's13'], ['s2'], ['s8'], ['s14']];
 
 async function launch(pageUrl) {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'hyperia-harness-'));
