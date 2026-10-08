@@ -6,7 +6,7 @@
 //   node scripts/dev-harness.js --only s1,s4
 //
 // Sandbox: temp USERPROFILE/HOME/APPDATA (your ~/.hyperia is never touched), sidecar on
-// :9801, CDP on :9333, 127.0.0.1 only. Refuses to run while an installed Hyperia or any
+// :9811, CDP on :9333, 127.0.0.1 only. Refuses to run while an installed Hyperia or any
 // hyperia-sidecar.exe is running (dev startup kills sidecars by image name).
 'use strict';
 const {spawn, execSync} = require('child_process');
