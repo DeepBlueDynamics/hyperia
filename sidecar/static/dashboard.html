@@ -760,17 +760,24 @@ function pvBuildNodes(){
     nodes.set("pane:"+p.paneId, {id: "pane:"+p.paneId, label: p.name, pane: p.paneId,
       kind: p.cls === "ag" ? "agent" : p.cls === "wb" ? "web" : "pane", sent: 0, received: 0, access: 0, alias: new Set()});
   }
+  // A restored tab reuses a pane's name with a new pane id: one node per name,
+  // with closed instances folded into the live one.
+  const byName = new Map();
+  for (const n of nodes.values()) if (n.label && !byName.has(n.label)) byName.set(n.label, n.id);
   const cm = PV.comms;
   if (cm) for (const n of cm.nodes || []) {
     // An agent bound to a live pane shares that pane's slot on the ring.
     const pid = n.pane || (String(n.id).startsWith("pane:") ? pvPaneId(n.id) : null);
-    const key = pid && nodes.has("pane:"+pid) ? "pane:"+pid : n.id;
+    const sameName = pid && n.kind !== "system" && n.label ? byName.get(n.label) : undefined;
+    const key = pid && nodes.has("pane:"+pid) ? "pane:"+pid : sameName || n.id;
     const cur = nodes.get(key) || {id: key, label: n.label || n.id, pane: pid,
       kind: n.kind === "system" ? "system" : n.kind === "pane" ? "pane" : "agent", sent: 0, received: 0, access: 0, alias: new Set()};
     cur.sent += n.sent || 0; cur.received += n.received || 0; cur.access += n.access || 0;
     if (n.kind === "agent" && cur.kind === "pane") cur.kind = "agent";
     cur.alias.add(n.id);
+    if (pid) { cur.alias.add(pid); cur.alias.add("pane:"+pid); }
     nodes.set(key, cur);
+    if (pid && cur.label && !byName.has(cur.label)) byName.set(cur.label, key);
   }
   const now = Date.now();
   for (const e of (PV.win && PV.win.telemetry && PV.win.telemetry.file_events) || []) {
@@ -809,7 +816,18 @@ function pvEdges(){
     from: e.from, to: e.to, count: e.count || 0, last: e.last_ts || 0}));
   const access = (cm.access_edges || []).map((e) => ({type: "access", from: e.from, to: "pane:"+pvPaneId(e.pane),
     count: e.count || 0, last: e.last_ts || 0, actions: e.actions || {}}));
-  return [...mail, ...access].sort((a, b) => (b.count - a.count) || (b.last - a.last));
+  // Edges to instances merged into one node (same pane name) become one edge.
+  const merged = new Map();
+  for (const e of [...mail, ...access]) {
+    const f = PV.alias.get(e.from), t = PV.alias.get(e.to);
+    const from = f ? f.id : e.from, to = t ? t.id : e.to;
+    if (from === to) continue;
+    const k = e.type+"|"+from+"|"+to, cur = merged.get(k);
+    if (!cur) { merged.set(k, {...e, from, to, actions: {...(e.actions || {})}}); continue; }
+    cur.count += e.count; cur.last = Math.max(cur.last, e.last);
+    for (const [a, c] of Object.entries(e.actions || {})) cur.actions[a] = (cur.actions[a] || 0) + c;
+  }
+  return [...merged.values()].sort((a, b) => (b.count - a.count) || (b.last - a.last));
 }
 
 function pvDrawRing(){
