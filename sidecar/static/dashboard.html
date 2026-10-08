@@ -857,15 +857,15 @@ function pvLabel(id){
 }
 
 // File activity Hyperia received: Edit events (agent edit tools) and FileOps
-// (writes/creates/deletes/renames). Reads are skipped. Live = last hour.
+// (writes/creates/deletes/renames). Reads only with withReads (the file view). Live = last hour.
 const PV_OP_COLOR = {edit: "#fb923c", write: "#c084fc", create: "#4ade80", delete: "#e11d48", rename: "#94a3b8"};
-function pvFileEvents(){
+function pvFileEvents(withReads){
   const fe = (PV.win && PV.win.telemetry && PV.win.telemetry.file_events) || [];
   const cut = PV.mode === "live" ? Date.now() - PV_LIVE_MS : 0, out = [];
   for (const e of fe) {
     if ((e.ts || 0) < cut) continue;
     const kind = e.kind === "Edit" ? "edit" : e.kind === "FileOp" ? String(e.op || "").toLowerCase() : "";
-    if (!PV_OP_COLOR[kind]) continue;
+    if (!PV_OP_COLOR[kind] && !(withReads && kind === "read")) continue;
     // nuts-files saves via a temp file it then renames over the target; the
     // temp file's own write/rename is noise, not a second change.
     if (/\.nutstmp\d*$/i.test(e.path || "")) continue;
@@ -1249,22 +1249,27 @@ function pvShimmer(ctx, text, x, y, tw, align, strength){
 // doesn't jump; a file that drops out frees its slot for the next new one.
 function pvBuildFiles(){
   const byPath = new Map();
-  for (const e of pvFileEvents()) {
+  for (const e of pvFileEvents(true)) {
     if (!e.path) continue;
+    const read = e.kind === "read";
     const node = PV.alias.get("pane:"+e.pane) || PV.alias.get(e.pane);
     let f = byPath.get(e.path);
-    if (!f) { f = {path: e.path, count: 0, last: 0, kind: e.kind, add: 0, del: 0, links: new Map()}; byPath.set(e.path, f); }
-    f.count++; f.add += e.add || 0; f.del += e.del || 0;
-    if (e.ts >= f.last) { f.last = e.ts; f.kind = e.kind; }
+    if (!f) { f = {path: e.path, count: 0, reads: 0, last: 0, kind: e.kind, add: 0, del: 0, links: new Map()}; byPath.set(e.path, f); }
+    if (read) f.reads++; else { f.count++; f.add += e.add || 0; f.del += e.del || 0; }
+    if (e.ts >= f.last) f.last = e.ts;
+    if (!read && (f.kind === "read" || e.ts >= (f.lastChange || 0))) { f.kind = e.kind; f.lastChange = e.ts; }
     if (node) {
-      const l = f.links.get(node.id) || {count: 0, last: 0, kind: e.kind};
-      l.count++; if (e.ts >= l.last) { l.last = e.ts; l.kind = e.kind; }
+      const l = f.links.get(node.id) || {count: 0, reads: 0, last: 0, kind: e.kind};
+      if (read) l.reads++; else l.count++;
+      if (e.ts >= l.last) l.last = e.ts;
+      if (!read && (l.kind === "read" || e.ts >= (l.lastChange || 0))) { l.kind = e.kind; l.lastChange = e.ts; }
       f.links.set(node.id, l);
     }
     // First sight of this event: spark along its thread.
     const key = e.ts+"|"+e.path+"|"+e.kind+"|"+e.pane;
     if (!PV.fileSeen.has(key)) {
       PV.fileSeen.add(key);
+      if (read) continue;
       if (PV.primed && !PV_REDUCE && node && PV.fileFlashes.length < 40) PV.fileFlashes.push({path: e.path, node: node.id, kind: e.kind, born: performance.now()});
       if (PV.primed) pvSound("blip", e.kind);
     }
@@ -1310,6 +1315,9 @@ function pvBuildDirs(list){
     dirs = dirs.slice(0, PV_DIR_MAX - 1).concat(other);
   }
   for (const d of dirs) { d.path = d.segs.join("/") + "/"; d.label = d.segs.slice(-2).join("/") + "/"; }
+  // Same tail from different roots: show one more segment.
+  const seen = new Map(); for (const d of dirs) seen.set(d.label, (seen.get(d.label) || 0) + 1);
+  for (const d of dirs) if (seen.get(d.label) > 1) d.label = d.segs.slice(-3).join("/") + "/";
   // Stable slots: a dir keeps its place on the sphere, a file its place round its dir.
   const keep = new Set(dirs.map((d) => d.key));
   for (const k of [...PV.dirSlots.keys()]) if (!keep.has(k)) { PV.dirSlots.delete(k); PV.dirFileSlots.delete(k); }
@@ -1330,7 +1338,7 @@ function pvBuildDirs(list){
   if (PV.selDir && !keep.has(PV.selDir)) PV.selDir = null;
 }
 
-const PV_FILE_COLOR = {edit: "#fb923c", write: "#c084fc", create: "#4ade80", delete: "#e11d48", rename: "#94a3b8"};
+const PV_FILE_COLOR = {edit: "#fb923c", write: "#c084fc", create: "#4ade80", delete: "#e11d48", rename: "#94a3b8", read: "#64748b"};
 const pvBase = (p) => String(p).split(/[\\/]/).pop();
 
 // 3D: dir hubs sit on a slowly turning sphere; each dir's files orbit it on
@@ -1410,13 +1418,16 @@ function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
     for (const [nodeId, l] of f.links) {
       const n = PV.anim.get(nodeId); if (!n) continue;
       const p = pos(n.theta, R*.97), o = lit(f, nodeId), fresh = now - l.last < 60000;
+      const onlyRead = !l.count;
       ctx.strokeStyle = PV_FILE_COLOR[l.kind] || "#94a3b8";
-      ctx.globalAlpha = a.alpha * n.alpha * (o ? (fresh ? .75 : .38) * (.55 + .45 * dep) : .05);
-      ctx.lineWidth = Math.min(3.2, .6 + Math.log2(1 + l.count) * .55);
+      ctx.globalAlpha = a.alpha * n.alpha * (o ? (fresh ? .75 : .38) * (.55 + .45 * dep) * (onlyRead ? .7 : 1) : .05);
+      ctx.lineWidth = onlyRead ? .8 : Math.min(3.2, .6 + Math.log2(1 + l.count) * .55);
+      ctx.setLineDash(onlyRead ? [1.5, 3] : []);
       const mx = (a.x + p.x) / 2 + (cy - (a.y + p.y) / 2) * .12, my = (a.y + p.y) / 2 + ((a.x + p.x) / 2 - cx) * .12;
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.quadraticCurveTo(mx, my, p.x, p.y); ctx.stroke();
     }
   }
+  ctx.setLineDash([]);
   // New changes: a spark running pane → file along the thread.
   PV.fileFlashes = PV.fileFlashes.filter((fl) => t - fl.born < 900);
   for (const fl of PV.fileFlashes) {
@@ -1443,10 +1454,10 @@ function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
       ctx.fillStyle = "#e0f2fe"; ctx.beginPath(); ctx.arc(a.x, a.y, Math.max(1.2, r * .28), 0, Math.PI*2); ctx.fill();
       continue;
     }
-    const f = a.f, r = (2.2 + Math.min(6, Math.log2(1 + f.count) * 1.4)) * a.p, col = PV_FILE_COLOR[f.kind] || "#94a3b8";
+    const f = a.f, r = (2.2 + Math.min(6, Math.log2(1 + f.count + f.reads * .25) * 1.4)) * a.p, col = PV_FILE_COLOR[f.kind] || "#94a3b8";
     ctx.globalAlpha = a.alpha * (on(f) ? shade : .15);
     ctx.fillStyle = col; ctx.beginPath(); ctx.arc(a.x, a.y, r, 0, Math.PI*2); ctx.fill();
-    if (now - f.last < 60000 || f.path === selFile) {
+    if ((f.count && now - (f.lastChange || 0) < 60000) || f.path === selFile) {
       ctx.strokeStyle = f.path === selFile ? "#f8fafc" : col; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.arc(a.x, a.y, r + 3 + (f.path === selFile ? 1.5 : 0), 0, Math.PI*2); ctx.stroke();
     }
@@ -1504,7 +1515,7 @@ function pvFileCallout(ctx, vw, w, h){
     a = PV.selFile && PV.fileAnim.get(PV.selFile); if (!a) return;
     const f = a.f, panes = [...f.links.keys()].map((id) => (PV.alias.get(id) || {}).label || id);
     l1 = "FILE "+f.path;
-    l2 = f.count+" CHANGE"+(f.count === 1 ? "" : "S")+" | LAST "+f.kind.toUpperCase()+" "+pvAgo(f.last)+(f.add || f.del ? " | +"+pvK(f.add)+" −"+pvK(f.del) : "")+" | BY "+panes.join(", ");
+    l2 = f.count+" CHANGE"+(f.count === 1 ? "" : "S")+(f.reads ? " | "+f.reads+" READ"+(f.reads === 1 ? "" : "S") : "")+" | LAST "+f.kind.toUpperCase()+" "+pvAgo(f.last)+(f.add || f.del ? " | +"+pvK(f.add)+" −"+pvK(f.del) : "")+" | BY "+panes.join(", ");
   }
   ctx.font = "10px "+PV_MONO;
   const bw = Math.min(w - 28, Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 20), bh = 36, bx = 14, by = 30;
