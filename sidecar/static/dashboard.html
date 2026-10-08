@@ -898,6 +898,8 @@ const pvView = () => PV.views[PV.mode];
 try { const m = localStorage.getItem("pv.mode"); if (m === "history") PV.mode = m;
   const r = Number(localStorage.getItem("pv.range")); if (r === 604800000) PV.range = r; } catch (_e) {}
 const PV_LIVE_MS = 3600000;
+// Live file nodes in the centre: only what was touched recently.
+const PV_FILE_LIVE_MS = 15 * 60000;
 const PV_MONO = "ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace";
 const PV_AGENT_RX = /^(claude|claude-code|codex|grok|gemini|gemini-cli|aider|opencode|agy|antigravity|n8|nemesis8|ollama|docker)$/i;
 const PV_REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -958,9 +960,9 @@ function pvLabel(id){
 // File activity Hyperia received: Edit events (agent edit tools) and FileOps
 // (writes/creates/deletes/renames). Reads only with withReads (the file view). Live = last hour.
 const PV_OP_COLOR = {edit: "#fb923c", write: "#c084fc", create: "#4ade80", delete: "#e11d48", rename: "#94a3b8"};
-function pvFileEvents(withReads){
+function pvFileEvents(withReads, liveMs){
   const fe = (PV.win && PV.win.telemetry && PV.win.telemetry.file_events) || [];
-  const cut = PV.mode === "live" ? Date.now() - PV_LIVE_MS : 0, out = [];
+  const cut = PV.mode === "live" ? Date.now() - (liveMs || PV_LIVE_MS) : 0, out = [];
   for (const e of fe) {
     if ((e.ts || 0) < cut) continue;
     const kind = e.kind === "Edit" ? "edit" : e.kind === "FileOp" ? String(e.op || "").toLowerCase() : "";
@@ -1902,7 +1904,7 @@ function pvShimmer(ctx, text, x, y, tw, align, strength){
 // doesn't jump; a file that drops out frees its slot for the next new one.
 function pvBuildFiles(){
   const byPath = new Map();
-  for (const e of pvFileEvents(true)) {
+  for (const e of pvFileEvents(true, PV_FILE_LIVE_MS)) {
     if (!e.path) continue;
     const read = e.kind === "read";
     const node = PV.alias.get("pane:"+e.pane) || PV.alias.get(e.pane);
