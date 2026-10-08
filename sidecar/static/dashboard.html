@@ -725,7 +725,10 @@ const PV = {on:false, panes:[], names:{}, counts:{w:0,t:0}, win:null, pane:null,
   // Animation state, so new data morphs the ring instead of redrawing it.
   anim:new Map(), edgeAnim:new Map(), fibAnim:new Map(), lastDraw:0, span:0,
   // History view zoom/pan: screen = world * z + (x, y).
-  views:{live:{z:1, x:0, y:0}, history:{z:1, x:0, y:0}}, dragged:0};
+  views:{live:{z:1, x:0, y:0}, history:{z:1, x:0, y:0}}, dragged:0,
+  // New comms crackle in: stream events seen so far, and arrivals in flight.
+  seen:new Set(), primed:false, arrivals:[]};
+const PV_ARRIVE_MS = 1900;
 // Zoom/pan per mode: screen = world * z + (x, y).
 const pvView = () => PV.views[PV.mode];
 try { const m = localStorage.getItem("pv.mode"); if (m === "history") PV.mode = m;
@@ -959,6 +962,8 @@ function pvDrawRing(){
   }
   ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
 
+  pvDrawArrivals(ctx, pos, R, cx, cy);
+
   // Edge bars: one per real event. New ones grow out, expired ones shrink away.
   const wall = Date.now();
   const barColor = {...PV_OP_COLOR, mail: "#fde68a", system: "#e5e7eb", access: "#7dd3fc", consent: "#a7f3d0"};
@@ -1054,6 +1059,68 @@ function pvDrawRing(){
   ctx.font = "9px "+PV_MONO; ctx.fillStyle = "#475569";
   ctx.fillText("SCROLL TO ZOOM · DRAG TO PAN · DOUBLE-CLICK TO RESET"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
   ctx.fillText(PV.nodes.length+" NODES · "+PV.edgeAnim.size+" LINKS · "+(PV.mode === "live" ? "LIVE · LAST HOUR" : "HISTORY · "+(PV.range > 86400000 ? "7 DAYS" : "24 HOURS")), 14, 18);
+}
+
+// A stream event we haven't seen becomes an arrival effect. The first load
+// only primes the seen-set, so opening the tab doesn't fire everything at once.
+function pvNoteArrivals(){
+  const cm = PV.comms; if (!cm) return;
+  const now = performance.now();
+  for (const e of cm.stream || []) {
+    const key = e.ts+"|"+e.type+"|"+e.from+"|"+e.to+"|"+(e.state || "");
+    if (PV.seen.has(key)) continue;
+    PV.seen.add(key);
+    if (PV.primed && !PV_REDUCE && PV.arrivals.length < 24) PV.arrivals.push({from: e.from, to: e.to, type: e.type, state: String(e.state || ""), born: now});
+  }
+  if (PV.seen.size > 4000) PV.seen = new Set([...PV.seen].slice(-2000));
+  PV.primed = true;
+}
+
+// Crackle: a jittery glowing bolt with a spark running from sender to
+// receiver, which then relaxes into a fading wave.
+function pvDrawArrivals(ctx, pos, R, cx, cy){
+  const now = performance.now();
+  PV.arrivals = PV.arrivals.filter((a) => now - a.born < PV_ARRIVE_MS);
+  if (!PV.arrivals.length) return;
+  const node = (id) => PV.alias.get(id) || PV.alias.get(pvPaneId(id));
+  ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round";
+  for (const a of PV.arrivals) {
+    const f = node(a.from), t = node(a.to); if (!f || !t || f === t) continue;
+    const A = PV.anim.get(f.id), B = PV.anim.get(t.id); if (!A || !B) continue;
+    const age = now - a.born, life = age / PV_ARRIVE_MS;          // 0 → 1
+    const st = a.state.toLowerCase();
+    const color = a.type === "access" ? "#38bdf8" : a.type === "consent" ? (/deny|denied/.test(st) ? "#ef4444" : "#4ade80")
+      : a.type === "system" ? "#e5e7eb" : "#fbbf24";
+    const p1 = pos(A.theta, R*.97), p2 = pos(B.theta, R*.97);
+    const mx = cx + ((p1.x+p2.x)/2 - cx)*.35, my = cy + ((p1.y+p2.y)/2 - cy)*.35;
+    const run = Math.min(1, age / 520);                             // spark travel
+    const crackle = Math.max(0, 1 - age / 700), wave = Math.sin(Math.min(1, life) * Math.PI);
+    const N = 42, pts = [];
+    for (let i = 0; i <= N; i++) {
+      const u = i / N; if (u > run) break;
+      const x = (1-u)*(1-u)*p1.x + 2*(1-u)*u*mx + u*u*p2.x, y = (1-u)*(1-u)*p1.y + 2*(1-u)*u*my + u*u*p2.y;
+      const dx = 2*(1-u)*(mx-p1.x) + 2*u*(p2.x-mx), dy = 2*(1-u)*(my-p1.y) + 2*u*(p2.y-my), l = Math.hypot(dx, dy) || 1;
+      const nx = -dy / l, ny = dx / l, env = Math.sin(u * Math.PI);
+      const off = ((Math.random() - .5) * 36 * crackle + Math.sin(u * 22 - age * .018) * 12 * wave) * env;
+      pts.push([x + nx*off, y + ny*off]);
+    }
+    if (pts.length < 2) continue;
+    const fade = 1 - Math.max(0, (life - .55) / .45);
+    for (const [width, alpha, blur, col] of [[8, .25, 22, color], [2.4, .95, 10, color], [1, .95, 0, "#f8fafc"]]) {
+      ctx.globalAlpha = alpha * fade; ctx.lineWidth = width; ctx.strokeStyle = col; ctx.shadowColor = color; ctx.shadowBlur = blur;
+      ctx.beginPath(); pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke();
+    }
+    // Spark at the head while it travels, a flash at both ends on contact.
+    const [hx, hy] = pts[pts.length - 1];
+    ctx.shadowBlur = 18; ctx.shadowColor = color; ctx.fillStyle = "#f8fafc";
+    ctx.globalAlpha = fade; ctx.beginPath(); ctx.arc(hx, hy, run < 1 ? 3.2 : 2.2, 0, Math.PI*2); ctx.fill();
+    if (run >= 1) {
+      const flash = Math.max(0, 1 - (age - 520) / 500);
+      ctx.globalAlpha = flash * .8; ctx.strokeStyle = color; ctx.lineWidth = 1.4;
+      for (const [x, y] of [[p1.x, p1.y], [p2.x, p2.y]]) { ctx.beginPath(); ctx.arc(x, y, 6 + (1 - flash) * 18, 0, Math.PI*2); ctx.stroke(); }
+    }
+  }
+  ctx.shadowBlur = 0; ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over"; ctx.lineCap = "butt";
 }
 
 // Select a ring node (or clear): ring, callout, top comms and stream follow it.
@@ -1350,7 +1417,7 @@ async function pvPoll(){
   if (w.status === "fulfilled") PV.win = w.value;
   if (p.status === "fulfilled") PV.pane = p.value;
   PV.comms = cm.status === "fulfilled" && cm.value && Array.isArray(cm.value.mail_edges) ? cm.value : null;
-  pvBuildNodes(); pvRenderAll();
+  pvBuildNodes(); pvNoteArrivals(); pvRenderAll();
 }
 
 function pvLoop(ts){
