@@ -2381,11 +2381,6 @@ async fn post_pane_liveness(
     let busy = parsed["state"].as_str().unwrap_or("busy") != "idle";
     let ttl = parsed["ttl_secs"].as_u64().unwrap_or(10);
     state.bridge.set_liveness(&pane, busy, ttl).await;
-    // Busy or idle, a named agent is present: lets the classifier recognize
-    // the pane even after a reconnect wiped its shell record.
-    if let Some(agent) = parsed["agent"].as_str().map(str::trim).filter(|a| !a.is_empty() && a.len() <= 64) {
-        state.bridge.set_presence(&pane, agent, ttl).await;
-    }
     (
         StatusCode::OK,
         serde_json::json!({

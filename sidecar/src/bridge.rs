@@ -381,12 +381,6 @@ struct BridgeInner {
     /// the agent (or its in-container monitor, e.g. nemesis8) says it's working —
     /// this OVERRIDES the screen heuristic and suppresses pokes. Lapses on TTL.
     liveness: Mutex<HashMap<String, std::time::Instant>>,
-    /// Self-reported agent presence: pane uid -> (agent name, fresh-until).
-    /// Kept while the agent is idle too, unlike `liveness`.
-    presence: Mutex<HashMap<String, (String, std::time::Instant)>>,
-    /// Shell records of panes dropped by an Electron disconnect, restored when
-    /// the same pane re-registers with the same pid (see RETAIN_SHELL_SECS).
-    retained_shell: Mutex<HashMap<String, RetainedShell>>,
     /// Recurring pane pulses (the watchdog): re-inject a prompt on an interval,
     /// idle-gated or fixed. Watched + fired by the idle-monitor task.
     pulses: Mutex<Vec<Pulse>>,
@@ -445,8 +439,6 @@ impl Bridge {
                 resolved_creates: Mutex::new(HashMap::new()),
                 idle_callbacks: Mutex::new(Vec::new()),
                 liveness: Mutex::new(HashMap::new()),
-                presence: Mutex::new(HashMap::new()),
-                retained_shell: Mutex::new(HashMap::new()),
                 pulses: Mutex::new(load_pulses()),
                 idle_fire_log: Mutex::new(HashMap::new()),
                 idle_blocked: Mutex::new(HashMap::new()),
@@ -856,24 +848,6 @@ impl Bridge {
         }
     }
 
-    /// Record that an agent says it is running in `pane`, for `ttl_secs`.
-    pub async fn set_presence(&self, pane: &str, agent: &str, ttl_secs: u64) {
-        let ttl = ttl_secs.clamp(1, 120);
-        self.inner.presence.lock().await.insert(
-            pane.to_string(),
-            (agent.to_string(), std::time::Instant::now() + std::time::Duration::from_secs(ttl)),
-        );
-    }
-
-    /// The agent a fresh heartbeat names for `pane`, if any.
-    pub async fn agent_presence(&self, pane: &str) -> Option<String> {
-        let presence = self.inner.presence.lock().await;
-        presence
-            .get(pane)
-            .filter(|(_, until)| *until > std::time::Instant::now())
-            .map(|(agent, _)| agent.clone())
-    }
-
     /// Whether the pane has a non-expired self-reported busy pulse.
     async fn pane_self_busy(&self, pane: &str) -> bool {
         let lv = self.inner.liveness.lock().await;
@@ -1076,7 +1050,6 @@ impl Bridge {
             foreground_name: obs.foreground_name,
             foreground_cmdline: obs.foreground_cmdline,
             foreground_chain: obs.foreground_chain,
-            presence_agent: self.agent_presence(uid).await.unwrap_or_default(),
             shell_has_integration,
             shell_state,
             shell_app_name,
@@ -2106,14 +2079,8 @@ impl Bridge {
                 if focused_window_id.is_none() {
                     *focused_window_id = Some(window_id);
                 }
-                let retained = take_retained_shell(
-                    &mut *self.inner.retained_shell.lock().await,
-                    &uid,
-                    pid,
-                    std::time::Instant::now(),
-                );
                 self.inner.sessions.lock().await.insert(
-                    uid.clone(),
+                    uid,
                     SessionInfo {
                         name,
                         shell_name,
@@ -2149,12 +2116,6 @@ impl Bridge {
                         shell_has_integration: false,
                     },
                 );
-                if let Some(r) = retained {
-                    if let Some(info) = self.inner.sessions.lock().await.get_mut(&uid) {
-                        tracing::info!("Session {uid} re-registered: restored shell record (state={}, app={:?})", r.shell_state, r.shell_app.as_ref().map(|a| &a.name));
-                        r.apply(info);
-                    }
-                }
             }
 
             "SessionTabName" => {
@@ -2449,11 +2410,7 @@ impl Bridge {
             current
         };
         if current {
-            // Keep each pane's shell record: the shell won't re-announce a
-            // long-running command until its next prompt, which for an agent
-            // can be hours away.
-            let drained: Vec<(String, SessionInfo)> = self.inner.sessions.lock().await.drain().collect();
-            retain_shell_records(&mut *self.inner.retained_shell.lock().await, drained, std::time::Instant::now());
+            self.inner.sessions.lock().await.clear();
             tracing::info!("Electron disconnected ({reason}); {failed} pending command(s) failed, sessions cleared");
         } else {
             // A newer socket already owns the bridge and re-registered its sessions.
@@ -2575,72 +2532,6 @@ where
             w.touch(std::time::Instant::now());
         }
     }
-}
-
-
-/// How long a disconnected pane's shell record waits for its re-register.
-const RETAIN_SHELL_SECS: u64 = 600;
-
-/// The shell-integration part of a session, kept across an Electron reconnect.
-#[derive(Clone, Debug)]
-struct RetainedShell {
-    pid: u32,
-    shell_state: String,
-    shell_app: Option<ShellAppInfo>,
-    shell_last_exit: Option<i32>,
-    shell_has_integration: bool,
-    cwd: String,
-    at: std::time::Instant,
-}
-
-impl RetainedShell {
-    fn apply(self, info: &mut SessionInfo) {
-        info.shell_state = self.shell_state;
-        info.shell_app = self.shell_app;
-        info.shell_last_exit = self.shell_last_exit;
-        info.shell_has_integration = self.shell_has_integration;
-        if info.cwd.is_empty() {
-            info.cwd = self.cwd;
-        }
-    }
-}
-
-/// Stash the shell records of sessions dropped by a disconnect; drop stale ones.
-fn retain_shell_records(
-    retained: &mut HashMap<String, RetainedShell>,
-    sessions: Vec<(String, SessionInfo)>,
-    now: std::time::Instant,
-) {
-    retained.retain(|_, r| now.duration_since(r.at).as_secs() < RETAIN_SHELL_SECS);
-    for (uid, info) in sessions {
-        if info.pid == 0 || (!info.shell_has_integration && info.cwd.is_empty()) {
-            continue;
-        }
-        retained.insert(
-            uid,
-            RetainedShell {
-                pid: info.pid,
-                shell_state: info.shell_state,
-                shell_app: info.shell_app,
-                shell_last_exit: info.shell_last_exit,
-                shell_has_integration: info.shell_has_integration,
-                cwd: info.cwd,
-                at: now,
-            },
-        );
-    }
-}
-
-/// The retained record for `uid`, only if it is fresh and the shell pid is the
-/// same (a different pid is a new shell, whose state starts over).
-fn take_retained_shell(
-    retained: &mut HashMap<String, RetainedShell>,
-    uid: &str,
-    pid: u32,
-    now: std::time::Instant,
-) -> Option<RetainedShell> {
-    let r = retained.remove(uid)?;
-    (pid != 0 && r.pid == pid && now.duration_since(r.at).as_secs() < RETAIN_SHELL_SECS).then_some(r)
 }
 
 #[cfg(test)]
@@ -2794,72 +2685,6 @@ mod tests {
             shell_last_exit: None,
             shell_has_integration: false,
         }
-    }
-
-    fn running_n8(pid: u32) -> SessionInfo {
-        let mut info = session_info(1, "tab", "", true, true);
-        info.pid = pid;
-        info.shell_has_integration = true;
-        info.shell_state = "running".into();
-        info.cwd = "/work".into();
-        info.shell_app = Some(ShellAppInfo {
-            name: "n8".into(),
-            path: "n8.exe".into(),
-            cmdline: "n8 --danger".into(),
-            pid,
-        });
-        info
-    }
-
-    #[test]
-    fn reconnect_restores_the_shell_record_for_the_same_shell() {
-        let now = std::time::Instant::now();
-        let mut retained = HashMap::new();
-        retain_shell_records(&mut retained, vec![("p1".into(), running_n8(42))], now);
-        let r = take_retained_shell(&mut retained, "p1", 42, now).expect("restored");
-        let mut fresh = session_info(1, "tab", "", true, true);
-        fresh.pid = 42;
-        r.apply(&mut fresh);
-        assert_eq!(fresh.shell_state, "running");
-        assert!(fresh.shell_has_integration);
-        assert_eq!(fresh.shell_app.as_ref().map(|a| a.name.as_str()), Some("n8"));
-        assert_eq!(fresh.cwd, "/work");
-        assert!(retained.is_empty(), "taken once");
-    }
-
-    #[test]
-    fn reconnect_does_not_restore_a_different_or_stale_shell() {
-        let then = std::time::Instant::now();
-        let mut retained = HashMap::new();
-        retain_shell_records(&mut retained, vec![("p1".into(), running_n8(42))], then);
-        assert!(take_retained_shell(&mut retained, "p1", 43, then).is_none(), "new pid = new shell");
-
-        retain_shell_records(&mut retained, vec![("p1".into(), running_n8(42))], then);
-        let later = then + std::time::Duration::from_secs(RETAIN_SHELL_SECS + 1);
-        assert!(take_retained_shell(&mut retained, "p1", 42, later).is_none(), "stale");
-
-        // A pane with nothing worth keeping isn't retained.
-        let mut plain = session_info(1, "tab", "", true, true);
-        plain.pid = 7;
-        retain_shell_records(&mut retained, vec![("p2".into(), plain)], then);
-        assert!(!retained.contains_key("p2"));
-    }
-
-    #[test]
-    fn presence_is_kept_while_idle_and_lapses() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let bridge = Bridge::new();
-            bridge.set_presence("p1", "n8", 15).await;
-            bridge.set_liveness("p1", false, 15).await; // idle beat
-            assert_eq!(bridge.agent_presence("p1").await.as_deref(), Some("n8"));
-            assert_eq!(bridge.agent_presence("other").await, None);
-            bridge.inner.presence.lock().await.insert(
-                "p1".into(),
-                ("n8".into(), std::time::Instant::now() - std::time::Duration::from_secs(1)),
-            );
-            assert_eq!(bridge.agent_presence("p1").await, None, "expired");
-        });
     }
 
     #[test]
