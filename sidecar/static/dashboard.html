@@ -2097,14 +2097,15 @@ function pvDrawBand(ctx, pos, R){
   ctx.globalAlpha = 1; ctx.lineCap = "butt"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
 }
 
-// ---- Pane screens: a little retro CRT at the rim of each terminal pane's slice,
+// ---- Pane screen: a retro CRT at the rim of the SELECTED terminal pane's slice,
 // showing its live screen text tinted in the pane's colour. Toggle: ▣ screens.
 const PVSC = {on: true, data: new Map(), timer: null, busy: false};
 try { PVSC.on = localStorage.getItem("pv.screens") !== "off"; } catch (_e) {}
 async function pvScreensPoll(){
   if (!PV.on || !PVSC.on || PV.mode !== "live" || PVSC.busy || document.visibilityState !== "visible") return;
   PVSC.busy = true;
-  const panes = PV.panes.filter((p) => p.cls !== "wb" && p.cls !== "dm").slice(0, 16);
+  const sel = PV.sel && PV.alias.get(PV.sel), selPane = sel && sel.pane;
+  const panes = PV.panes.filter((p) => p.paneId === selPane && p.cls !== "wb" && p.cls !== "dm");
   await Promise.all(panes.map(async (p) => {
     try {
       const r = await fetch("/api/screen?pane=" + encodeURIComponent(p.paneId)); if (!r.ok) return;
@@ -2161,6 +2162,7 @@ function pvDrawScreens(ctx, R){
   const r = R + PV_BAND_OUT + 34, sel = PV.sel;
   const items = [];
   for (const a of PV.anim.values()) {
+    if (a.node.id !== sel) continue;
     const d = a.node.pane && PVSC.data.get(a.node.pane); if (!d || !d.text) continue;
     const base = g.P3(Math.cos(a.theta) * r, 0, -Math.sin(a.theta) * r);
     items.push({a, d, base});
@@ -2169,9 +2171,9 @@ function pvDrawScreens(ctx, R){
   const arc = r * PV.span;
   for (const {a, d, base} of items) {
     const col = a.node.color || "#7dd3fc", p = base.p;
-    const W = Math.min(arc * .82, 210) * p, H = W * .6, stand = 10 * p, bez = 5 * p;
+    const W = Math.max(Math.min(arc * 1.6, 340), 240) * p, H = W * .6, stand = 12 * p, bez = 6 * p;
     const x = base.x - W / 2, y = base.y - stand - H;
-    const dim = (sel && a.node.id !== sel ? .35 : 1) * a.alpha * (.55 + .45 * pvDepth(base.z));
+    const dim = a.alpha;
     ctx.save(); ctx.globalAlpha = dim;
     // Stand: a trapezoid down to the band.
     ctx.fillStyle = "#0b1220"; ctx.strokeStyle = col; ctx.lineWidth = 1;
@@ -2745,6 +2747,7 @@ function pvSelect(id){
   if (id || PV.sel) pvSound("tick");
   PV.sel = id && id !== PV.sel ? id : null;
   PV.selFile = null; PV.selDir = null;
+  if (PV.sel && PVSC.on) pvScreensPoll();
   pvRenderAll();
 }
 function pvSelectFile(path){
