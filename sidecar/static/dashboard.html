@@ -172,7 +172,7 @@
   @media(max-width:1000px){.shell{grid-template-columns:1fr}aside{position:static}.row-flow{grid-template-columns:1fr}}
 
   /* ---- proto_viz tab (#proto_viz): ops-console view of real stats ---- */
-  body.proto > :not(.topbar):not(#proto):not(#pv-ed):not(script){display:none !important}
+  body.proto > :not(.topbar):not(#proto):not(#pv-ed):not(#pv-term):not(script){display:none !important}
   body.proto .tb-right .ghost{display:none}
   body:not(.proto) #proto{display:none}
   #proto{flex:1;min-height:0;overflow:hidden;display:grid;grid-template-rows:auto auto 128px minmax(0,1fr) 150px;grid-template-columns:minmax(0,1fr) 370px;gap:8px;padding:8px 10px 10px;
@@ -312,11 +312,31 @@
   .ed-stat{display:flex;gap:16px;padding:5px 10px;border-top:1px solid #1b2433;font-size:9.5px;color:#64748b;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;overflow:hidden}
   .ed-stat b{color:#cbd5e1;font-weight:500}
   .ed-stat .ok{color:#22c55e}.ed-stat .dirty{color:#f59e0b}
+  #pv-term{position:fixed;inset:0;z-index:61;background:rgba(2,4,8,.72);display:none;align-items:center;justify-content:center}
+  #pv-term.on{display:flex}
+  .tv-box{width:min(1300px,92vw);height:84vh;display:flex;flex-direction:column;background:#05080d;border:1px solid #1e2a3c;
+    box-shadow:0 24px 80px rgba(0,0,0,.65);font-family:var(--mono);color:#cbd5e1}
+  .tv-top{display:flex;align-items:center;gap:10px;border-bottom:1px solid #1b2433;min-height:36px;padding-left:12px}
+  .tv-name{font-size:12px;font-weight:700;letter-spacing:.06em}
+  .tv-live{font-size:9px;letter-spacing:.14em;color:#05070b;padding:1px 6px;font-weight:700}
+  .tv-top .sp{flex:1}
+  .tv-pre{flex:1;min-height:0;margin:0;padding:12px 16px;overflow:auto;white-space:pre;font-family:var(--mono);font-size:12.5px;line-height:1.35;
+    background:radial-gradient(ellipse at center, rgba(255,255,255,.025), rgba(0,0,0,0) 70%), #03060b}
+  .tv-stat{display:flex;gap:16px;padding:5px 10px;border-top:1px solid #1b2433;font-size:9.5px;color:#64748b;text-transform:uppercase;letter-spacing:.06em}
   .pv-none{color:#475569;font-size:10px;padding:6px 0;text-transform:uppercase;letter-spacing:.08em}
   @media(max-width:1250px){#proto{grid-template-columns:minmax(0,1fr);grid-template-rows:none;overflow:auto}
     .pv-toprow,.pv-botrow{grid-template-columns:minmax(0,1fr)}.pv-toprow .pv-col,.pv-botrow .pv-col{height:150px}
     .pv-ring{min-height:460px}.pv-right{overflow:visible}}
 </style></head><body>
+<div id="pv-term" role="dialog" aria-label="Terminal view">
+  <div class="tv-box">
+    <div class="tv-top"><span class="tv-name" id="tv-name"></span><span class="tv-live" id="tv-live">LIVE</span><span class="sp"></span>
+      <span class="pv-seg" id="tv-src"><button type="button" data-src="screen" class="on">Screen</button><button type="button" data-src="scroll">Scrollback</button></span>
+      <button class="ed-close" id="tv-close" title="Close (Esc)">✕</button></div>
+    <pre class="tv-pre" id="tv-pre"></pre>
+    <div class="tv-stat" id="tv-stat"></div>
+  </div>
+</div>
 <div id="pv-ed" role="dialog" aria-label="File editor">
   <div class="ed-box">
     <div class="ed-top"><div class="ed-tabs" id="ed-tabs"></div><button class="ed-close" id="ed-close" title="Close editor (Esc) — open files stay in their tabs">✕</button></div>
@@ -1322,7 +1342,7 @@ function pvDrawRing(){
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   pvRadioBanner(ctx, w);
   ctx.font = "9px "+PV_MONO; ctx.fillStyle = "#475569";
-  ctx.fillText("SCROLL TO ZOOM · DRAG TO MOVE"+(PV.dim === "3d" ? " · CTRL+DRAG TO TIP" : "")+" · DOUBLE-CLICK TO RESET"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
+  ctx.fillText("SCROLL TO ZOOM · DRAG TO MOVE"+(PV.dim === "3d" ? " · CTRL+DRAG TO TIP" : "")+" · DOUBLE-CLICK A SCREEN OR FILE TO OPEN IT"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
   ctx.fillText(PV.nodes.length+" NODES · "+PV.edgeAnim.size+" LINKS · "+(PV.mode === "live" ? "LIVE · LAST HOUR" : "HISTORY · "+(PV.range > 86400000 ? "7 DAYS" : "24 HOURS")), 14, 18);
 }
 
@@ -2101,6 +2121,12 @@ function pvDrawBand(ctx, pos, R){
 // showing its live screen text tinted in the pane's colour. Toggle: ▣ screens.
 const PVSC = {on: true, data: new Map(), timer: null, busy: false};
 try { PVSC.on = localStorage.getItem("pv.screens") !== "off"; } catch (_e) {}
+async function pvScrollback(pane, lines){
+  try {
+    const r = await fetch("/api/scrollback?pane=" + encodeURIComponent(pane) + "&lines=" + lines); if (!r.ok) return "";
+    return (await r.text()).replace(/^\[Scrollback:[^\]]*\]\n?/, "").replace(/^\[Scrollback: no history[^\]]*\]$/, "");
+  } catch (_e) { return ""; }
+}
 async function pvScreensPoll(){
   if (!PV.on || !PVSC.on || PV.mode !== "live" || PVSC.busy || document.visibilityState !== "visible") return;
   PVSC.busy = true;
@@ -2109,7 +2135,10 @@ async function pvScreensPoll(){
   await Promise.all(panes.map(async (p) => {
     try {
       const r = await fetch("/api/screen?pane=" + encodeURIComponent(p.paneId)); if (!r.ok) return;
-      const text = await r.text(), d = PVSC.data.get(p.paneId) || {};
+      let text = await r.text();
+      // A blank screen (idle since a sidecar restart): show recent scrollback.
+      if (!text.trim()) text = await pvScrollback(p.paneId, 40);
+      const d = PVSC.data.get(p.paneId) || {};
       if (d.text !== text || d.color !== p.color) { d.text = text; d.color = p.color; d.dirty = true; }
       d.at = Date.now(); PVSC.data.set(p.paneId, d);
     } catch (_e) {}
@@ -2160,6 +2189,7 @@ function pvDrawScreens(ctx, R){
   if (!PVSC.on || PV.mode !== "live") return;
   const g = PV.geom; if (!g || !g.P3) return;
   const r = R + PV_BAND_OUT + 34, sel = PV.sel;
+  PVSC.hit = null;
   const items = [];
   for (const a of PV.anim.values()) {
     if (a.node.id !== sel) continue;
@@ -2173,6 +2203,7 @@ function pvDrawScreens(ctx, R){
     const col = a.node.color || "#7dd3fc", p = base.p;
     const W = Math.max(Math.min(arc * 1.6, 340), 240) * p, H = W * .6, stand = 12 * p, bez = 6 * p;
     const x = base.x - W / 2, y = base.y - stand - H;
+    PVSC.hit = {x: x - bez, y: y - bez, w: W + bez * 2, h: H + bez * 2, pane: a.node.pane, name: a.node.label, color: col};
     const dim = a.alpha;
     ctx.save(); ctx.globalAlpha = dim;
     // Stand: a trapezoid down to the band.
@@ -2197,6 +2228,47 @@ function pvDrawScreens(ctx, R){
     ctx.restore();
   }
 }
+
+// ---- Terminal viewer: double-click a pane's screen to see it full size, read-only,
+// refreshed every second (live screen, or the last 500 lines of scrollback).
+const TV = {pane: null, src: "screen", timer: null, stick: true, color: null};
+async function pvTermOpen(pane, name, color){
+  TV.pane = pane; TV.color = color || "#7dd3fc"; TV.stick = true;
+  $("tv-name").textContent = name || pane; $("tv-name").style.color = TV.color;
+  $("tv-live").style.background = TV.color; $("tv-pre").style.color = TV.color;
+  $("tv-pre").style.boxShadow = "inset 3px 0 0 " + TV.color;
+  $("pv-term").classList.add("on");
+  clearInterval(TV.timer); await pvTermTick(); TV.timer = setInterval(pvTermTick, 1000);
+}
+function pvTermClose(){ $("pv-term").classList.remove("on"); clearInterval(TV.timer); TV.timer = null; TV.pane = null; }
+async function pvTermTick(){
+  if (!TV.pane) return;
+  let text = "", from = TV.src;
+  if (TV.src === "screen") {
+    try { const r = await fetch("/api/screen?pane=" + encodeURIComponent(TV.pane)); text = r.ok ? await r.text() : ""; } catch (_e) {}
+    if (!text.trim()) { text = await pvScrollback(TV.pane, 200); from = "scrollback (screen is blank)"; }
+  } else text = await pvScrollback(TV.pane, 500);
+  const pre = $("tv-pre");
+  if (pre.textContent !== text) {
+    const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
+    pre.textContent = text;
+    if (TV.stick || atEnd) pre.scrollTop = pre.scrollHeight;
+  }
+  $("tv-stat").textContent = "source: " + from + " · " + text.split("\n").length + " lines · updated " + new Date().toLocaleTimeString() + " · read-only";
+}
+(function tvWire(){
+  $("tv-close").addEventListener("click", pvTermClose);
+  $("pv-term").addEventListener("mousedown", (ev) => { if (ev.target === $("pv-term")) pvTermClose(); });
+  $("tv-pre").addEventListener("scroll", () => { const p = $("tv-pre"); TV.stick = p.scrollTop + p.clientHeight >= p.scrollHeight - 8; });
+  for (const b of document.querySelectorAll("#tv-src button")) b.addEventListener("click", () => {
+    TV.src = b.dataset.src; TV.stick = true;
+    for (const x of document.querySelectorAll("#tv-src button")) x.classList.toggle("on", x === b);
+    pvTermTick();
+  });
+  window.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && $("pv-term").classList.contains("on")) { ev.preventDefault(); ev.stopImmediatePropagation(); pvTermClose(); }
+  }, true);
+})();
 
 // ---- Container network (live). n8 pushes each container pane's received and
 // sent bytes/s. Traffic comes down an uplink from a NET hub into the
@@ -3118,6 +3190,7 @@ $("pv-ring").addEventListener("click", (ev) => {
   const g = PV.geom; if (!g) return;
   if (Date.now() - PV.dragged < 250) return;   // the end of a pan, not a click
   const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z, reach = 12 / v.z + 4;
+  const sh = PVSC.hit; if (sh && ox >= sh.x && ox <= sh.x + sh.w && oy >= sh.y && oy <= sh.y + sh.h) return;
   // Files and dirs float above the floor: nearest within reach wins.
   let best = null, bestD = Infinity;
   for (const [p, a] of PV.fileAnim) { const dd = Math.hypot(ox - a.x, oy - a.y); if (dd < bestD) { bestD = dd; best = {file: p}; } }
@@ -3134,7 +3207,7 @@ $("pv-ring").addEventListener("click", (ev) => {
   if (node && nodeD < 26 / v.z + 6) { pvSelect(node); return; }
   PV.selFile = null; PV.selDir = null; pvSelect(null);
 });
-window.addEventListener("keydown", (ev) => { if (PV.on && ev.key === "Escape" && PV.sel && !$("pv-ed").classList.contains("on")) pvSelect(null); });
+window.addEventListener("keydown", (ev) => { if (PV.on && ev.key === "Escape" && PV.sel && !$("pv-ed").classList.contains("on") && !$("pv-term").classList.contains("on")) pvSelect(null); });
 // Wheel zooms around the cursor, drag moves around the floor, Ctrl+drag tips
 // and orbits (3D), double-click resets.
 (() => {
@@ -3166,6 +3239,8 @@ window.addEventListener("keydown", (ev) => { if (PV.on && ev.key === "Escape" &&
   const end = () => { if (drag && drag.moved) PV.dragged = Date.now(); drag = null; el.style.cursor = ""; };
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
   el.addEventListener("dblclick", (ev) => {
+    const sh = PVSC.hit, vv = pvView(), sx = (ev.offsetX - vv.x) / vv.z, sy = (ev.offsetY - vv.y) / vv.z;
+    if (sh && sx >= sh.x && sx <= sh.x + sh.w && sy >= sh.y && sy <= sh.y + sh.h) { pvTermOpen(sh.pane, sh.name, sh.color); return; }
     const hit = pvHitFile(ev);
     if (hit) { PV.selFile = hit; PV.sel = null; PV.selDir = null; pvEdOpen(hit); return; }
     PV.views[PV.mode] = {z: 1, x: 0, y: 0};
