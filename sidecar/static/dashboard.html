@@ -2039,9 +2039,9 @@ function edReplace(all){
 })();
 
 // ---- Container network (live). n8 pushes each container pane's received and
-// sent bytes/s; every such pane is wired to a NET hub floating above the
-// floor, its link thickening with traffic, particles streaming down
-// (received, cyan) and up (sent, amber) at rates that follow it.
+// sent bytes/s. Traffic comes down an uplink from a NET hub into the
+// container runtime (a blue marble), then branches out to each container;
+// particles stream down (received, cyan) and up (sent, amber) with it.
 const PVN = {parts: new Map(), last: 0};
 function pvBuildNet(){
   const ev = (PV.win && PV.win.telemetry && PV.win.telemetry.events) || [], now = Date.now(), m = new Map();
@@ -2058,7 +2058,10 @@ const pvRate = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + "M" : b >= 1024
 function pvDrawNet(ctx, R){
   const g = PV.geom; if (!g || !g.P3 || PV.mode !== "live" || !PV.net || !PV.net.size) return;
   const P3 = g.P3, t = performance.now(), dt = Math.min(.1, (t - (PVN.last || t)) / 1000); PVN.last = t;
-  const hubW = [0, R * 1.3, 0];
+  // NET uplink up top; the container runtime is a blue marble just below it
+  // (a tenth of the floor's diameter); traffic drops down the uplink into the
+  // marble's centre, then branches out to each container (and back).
+  const hubW = [0, R * 1.3, 0], mW = [0, R * 1.02, 0], mr = R * .1, SPLIT = .72;
   const links = [];
   for (const a of PV.anim.values()) {
     const n = a.node, r = n.pane && PV.net.get(n.pane); if (!r) continue;
@@ -2068,48 +2071,94 @@ function pvDrawNet(ctx, R){
   }
   if (!links.length) return;
   let totRx = 0, totTx = 0;
-  ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round";
+  for (const a of links) { totRx += a.nrx; totTx += a.ntx; }
+  const totLvl = Math.min(1, Math.log10(1 + totRx + totTx) / 6.5);
+  // u: 0 = the container, SPLIT = the marble's centre, 1 = the uplink hub.
+  const pathFor = (a) => {
+    const base = [Math.cos(a.theta) * R, 0, -Math.sin(a.theta) * R], ctl = [base[0] * .55, R * .78, base[2] * .55];
+    return (u) => {
+      if (u >= SPLIT) { const k = (u - SPLIT) / (1 - SPLIT); return P3(0, mW[1] + (hubW[1] - mW[1]) * k, 0); }
+      const w = u / SPLIT, v = 1 - w;   // base → marble centre
+      return P3(v*v*base[0] + 2*v*w*ctl[0] + w*w*mW[0], v*v*base[1] + 2*v*w*ctl[1] + w*w*mW[1], v*v*base[2] + 2*v*w*ctl[2] + w*w*mW[2]);
+    };
+  };
+  ctx.save(); ctx.lineCap = "round";
+  // Branches: marble → each container, in the pane's colour, thicker with traffic.
+  ctx.globalCompositeOperation = "lighter";
+  const paths = new Map();
   for (const a of links) {
-    const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1;
-    totRx += a.nrx; totTx += a.ntx;
-    const base = [Math.cos(a.theta) * R, 0, -Math.sin(a.theta) * R], ctl = [base[0] * .5, R * 1.1, base[2] * .5];
-    const at = (u) => { const v = 1 - u; return P3(v*v*base[0] + 2*v*u*ctl[0] + u*u*hubW[0], v*v*base[1] + 2*v*u*ctl[1] + u*u*hubW[1], v*v*base[2] + 2*v*u*ctl[2] + u*u*hubW[2]); };
-    const lvl = Math.min(1, Math.log10(1 + a.nrx + a.ntx) / 6), col = n.color || "#38bdf8";
-    // The link.
-    ctx.globalAlpha = a.alpha * dim * (.1 + .35 * lvl); ctx.strokeStyle = col; ctx.lineWidth = .8 + 3.2 * lvl;
-    ctx.beginPath(); for (let i = 0; i <= 28; i++) { const p = at(i / 28); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); } ctx.stroke();
-    // Packets: spawn rate follows bytes/s (log), each rides the link.
-    if (!PV_REDUCE) {
+    const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1, at = pathFor(a); paths.set(a, at);
+    const lvl = Math.min(1, Math.log10(1 + a.nrx + a.ntx) / 6);
+    ctx.globalAlpha = a.alpha * dim * (.12 + .35 * lvl); ctx.strokeStyle = n.color || "#38bdf8"; ctx.lineWidth = .8 + 3 * lvl;
+    ctx.beginPath(); for (let i = 0; i <= 24; i++) { const p = at(SPLIT * i / 24); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); } ctx.stroke();
+  }
+  // Uplink: straight up from the marble to the hub.
+  const M = P3(...mW), hub = P3(...hubW), rs = mr * M.p, top = P3(0, mW[1] + mr, 0);
+  ctx.globalAlpha = .35 + .45 * totLvl; ctx.strokeStyle = "#7dd3fc"; ctx.lineWidth = 1.2 + 3.5 * totLvl;
+  ctx.beginPath(); ctx.moveTo(top.x, top.y); ctx.lineTo(hub.x, hub.y); ctx.stroke();
+  // The marble.
+  ctx.globalCompositeOperation = "source-over";
+  const pulse = PV_REDUCE ? .5 : .5 + .5 * Math.sin(t / 520);
+  const halo = ctx.createRadialGradient(M.x, M.y, rs * .9, M.x, M.y, rs * (1.9 + .5 * totLvl));
+  halo.addColorStop(0, "rgba(59,130,246," + (.28 + .25 * totLvl * pulse).toFixed(3) + ")"); halo.addColorStop(1, "rgba(59,130,246,0)");
+  ctx.globalAlpha = 1; ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(M.x, M.y, rs * (1.9 + .5 * totLvl), 0, Math.PI * 2); ctx.fill();
+  const body = ctx.createRadialGradient(M.x - rs * .38, M.y - rs * .42, rs * .08, M.x, M.y, rs);
+  body.addColorStop(0, "rgba(219,234,254,.95)"); body.addColorStop(.3, "rgba(96,165,250,.85)");
+  body.addColorStop(.75, "rgba(29,78,216,.82)"); body.addColorStop(1, "rgba(23,37,84,.92)");
+  ctx.fillStyle = body; ctx.beginPath(); ctx.arc(M.x, M.y, rs, 0, Math.PI * 2); ctx.fill();
+  // Turning meridians and an equator so it reads as a globe.
+  ctx.save(); ctx.beginPath(); ctx.arc(M.x, M.y, rs, 0, Math.PI * 2); ctx.clip();
+  ctx.strokeStyle = "rgba(191,219,254,.22)"; ctx.lineWidth = .8;
+  for (let k = 0; k < 3; k++) {
+    const ph = (PV_REDUCE ? 0 : t / 2600) + k * Math.PI / 3, w = Math.abs(Math.cos(ph)) * rs;
+    ctx.beginPath(); ctx.ellipse(M.x, M.y, Math.max(.5, w), rs, 0, 0, Math.PI * 2); ctx.stroke();
+  }
+  const eq = Math.max(.15, Math.abs(Math.cos(g.pitch || 1)));
+  ctx.beginPath(); ctx.ellipse(M.x, M.y, rs, rs * eq, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+  ctx.strokeStyle = "rgba(147,197,253,.55)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(M.x, M.y, rs, 0, Math.PI * 2); ctx.stroke();
+  // Packets: down the uplink, through the marble's centre, out to the container (and back up).
+  ctx.globalCompositeOperation = "lighter";
+  if (!PV_REDUCE) {
+    ctx.shadowBlur = 8;
+    for (const a of links) {
+      const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1, at = paths.get(a), lvl = Math.min(1, Math.log10(1 + a.nrx + a.ntx) / 6);
       let ps = PVN.parts.get(n.id); if (!ps) { ps = {list: [], rx: 0, tx: 0}; PVN.parts.set(n.id, ps); }
       const rate = (b) => (b < 32 ? 0 : Math.min(36, 1 + Math.log2(1 + b / 256) * 3));
       ps.rx += rate(a.nrx) * dt; ps.tx += rate(a.ntx) * dt;
       while (ps.rx >= 1) { ps.rx--; if (ps.list.length < 160) ps.list.push({u: 1, d: -1, j: Math.random()}); }
       while (ps.tx >= 1) { ps.tx--; if (ps.list.length < 160) ps.list.push({u: 0, d: 1, j: Math.random()}); }
-      ps.list = ps.list.filter((q) => { q.u += q.d * dt * (.45 + .3 * q.j); return q.u >= 0 && q.u <= 1; });
-      ctx.shadowBlur = 8;
+      ps.list = ps.list.filter((q) => { q.u += q.d * dt * (.4 + .25 * q.j); return q.u >= 0 && q.u <= 1; });
       for (const q of ps.list) {
         const p = at(q.u), c = q.d < 0 ? "#22d3ee" : "#f59e0b";
         ctx.globalAlpha = a.alpha * dim * .95; ctx.fillStyle = c; ctx.shadowColor = c;
-        ctx.beginPath(); ctx.arc(p.x, p.y, 1.5 + 1.3 * lvl, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(p.x, p.y, 1.4 + 1.2 * lvl, 0, Math.PI * 2); ctx.fill();
       }
-      ctx.shadowBlur = 0;
     }
-    // Rates at the foot of the link.
-    const tag = P3(base[0] * .9, R * .1, base[2] * .9);
-    ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = a.alpha * dim * .9;
-    ctx.font = "8.5px " + PV_MONO; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.shadowBlur = 0;
+  }
+  // Rates at the foot of each branch.
+  ctx.globalCompositeOperation = "source-over";
+  ctx.font = "8.5px " + PV_MONO; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (const a of links) {
+    const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1;
+    const tag = P3(Math.cos(a.theta) * R * .9, R * .1, -Math.sin(a.theta) * R * .9);
+    ctx.globalAlpha = a.alpha * dim * .9;
     ctx.fillStyle = "#67e8f9"; ctx.fillText("↓" + pvRate(a.nrx), tag.x - 20, tag.y);
     ctx.fillStyle = "#fbbf24"; ctx.fillText("↑" + pvRate(a.ntx), tag.x + 20, tag.y);
-    ctx.globalCompositeOperation = "lighter";
   }
-  // The hub.
-  const hub = P3(...hubW), lvl = Math.min(1, Math.log10(1 + totRx + totTx) / 6.5), pulse = PV_REDUCE ? .5 : .5 + .5 * Math.sin(t / 420);
-  const rg = ctx.createRadialGradient(hub.x, hub.y, 0, hub.x, hub.y, 26 + 18 * lvl);
-  rg.addColorStop(0, "rgba(125,211,252," + (.55 + .3 * pulse * lvl).toFixed(3) + ")"); rg.addColorStop(1, "rgba(125,211,252,0)");
-  ctx.globalAlpha = 1; ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(hub.x, hub.y, 26 + 18 * lvl, 0, Math.PI * 2); ctx.fill();
+  // Marble label: the runtime and how many containers.
+  const runtime = PV.panes.some((p) => /podman/i.test(p.proc)) ? "PODMAN" : "DOCKER";
+  ctx.globalAlpha = 1; ctx.font = "bold 8.5px " + PV_MONO; ctx.fillStyle = "#93c5fd"; ctx.textBaseline = "top";
+  ctx.fillText(runtime + " · " + links.length + " CONTAINER" + (links.length === 1 ? "" : "S"), M.x, M.y + rs + 6);
+  // The uplink hub.
+  ctx.globalCompositeOperation = "lighter";
+  const rg = ctx.createRadialGradient(hub.x, hub.y, 0, hub.x, hub.y, 24 + 16 * totLvl);
+  rg.addColorStop(0, "rgba(125,211,252," + (.55 + .3 * pulse * totLvl).toFixed(3) + ")"); rg.addColorStop(1, "rgba(125,211,252,0)");
+  ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(hub.x, hub.y, 24 + 16 * totLvl, 0, Math.PI * 2); ctx.fill();
   ctx.globalCompositeOperation = "source-over";
   ctx.fillStyle = "#e0f2fe"; ctx.beginPath(); ctx.arc(hub.x, hub.y, 4.5, 0, Math.PI * 2); ctx.fill();
-  ctx.font = "bold 9px " + PV_MONO; ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.fillStyle = "#bae6fd";
+  ctx.font = "bold 9px " + PV_MONO; ctx.textBaseline = "bottom"; ctx.fillStyle = "#bae6fd";
   ctx.fillText("NET  ↓" + pvRate(totRx) + "/s  ↑" + pvRate(totTx) + "/s", hub.x, hub.y - 12);
   ctx.restore();
   ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
