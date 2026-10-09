@@ -827,6 +827,7 @@ const PV = {on:false, panes:[], names:{}, counts:{w:0,t:0}, win:null, pane:null,
   views:{live:{z:1, x:0, y:0}, history:{z:1, x:0, y:0}}, dragged:0,
   // Camera over the agent floor: pitch 0 = edge-on, PI/2 = straight down.
   cam:{pitch:1.0, yaw:0, want:1.0}, dim:"3d",
+  ringSlots:new Map(), agentSeen:new Map(),
   // New comms crackle in: stream events seen so far, and arrivals in flight.
   seen:new Set(), primed:false, arrivals:[],
   // Files in the centre: nodes keyed by path, stable spiral slots, threads to panes.
@@ -981,9 +982,12 @@ function pvFileEvents(withReads, liveMs){
 
 function pvBuildNodes(){
   const nodes = new Map();
+  const nowMs = Date.now();
   for (const p of PV.panes) {
+    if (p.cls === "ag") PV.agentSeen.set(p.paneId, nowMs);
+    const wasAgent = nowMs - (PV.agentSeen.get(p.paneId) || 0) < 600000;
     nodes.set("pane:"+p.paneId, {id: "pane:"+p.paneId, label: p.name, pane: p.paneId,
-      kind: p.cls === "ag" ? "agent" : p.cls === "wb" ? "web" : "pane", sent: 0, received: 0, access: 0, alias: new Set()});
+      kind: p.cls === "wb" ? "web" : wasAgent ? "agent" : "pane", sent: 0, received: 0, access: 0, alias: new Set()});
   }
   // A restored tab reuses a pane's name with a new pane id: one node per name,
   // with closed instances folded into the live one.
@@ -1020,9 +1024,25 @@ function pvBuildNodes(){
   }
   const rank = {agent: 0, pane: 1, web: 2, system: 3};
   const list = [...nodes.values()].sort((a, b) => (rank[a.kind] - rank[b.kind]) || String(a.label).localeCompare(String(b.label)));
+  const slots = PV.ringSlots, live = new Set(list.map((n) => n.id));
+  for (const [id, sl] of slots) if (live.has(id)) sl.seen = nowMs; else if (nowMs - sl.seen > 600000) slots.delete(id);
+  // Compact when over a third of the ring is empty: keep everyone's order.
+  let total = Math.max(0, ...[...slots.values()].map((sl) => sl.i + 1));
+  if (total > 6 && slots.size < total * 2 / 3) {
+    [...slots.entries()].sort((a, b) => a[1].i - b[1].i).forEach(([, sl], j) => { sl.i = j; });
+    total = slots.size;
+  }
+  for (const n of list) {
+    if (slots.has(n.id)) continue;
+    const used = new Set([...slots.values()].map((sl) => sl.i));
+    let i = 0; while (used.has(i)) i++;
+    slots.set(n.id, {i, seen: nowMs});
+  }
+  total = Math.max(1, ...[...slots.values()].map((sl) => sl.i + 1));
+  PV.ringTotal = Math.max(6, total);
   const alias = new Map();
-  list.forEach((n, i) => {
-    n.theta = (i / Math.max(1, list.length)) * Math.PI * 2 - Math.PI/2;
+  list.forEach((n) => {
+    n.theta = (slots.get(n.id).i / Math.max(6, total)) * Math.PI * 2 - Math.PI/2;
     alias.set(n.id, n); for (const a of n.alias) alias.set(a, n); if (n.pane) { alias.set(n.pane, n); alias.set("pane:"+n.pane, n); }
   });
   PV.nodes = list; PV.alias = alias;
@@ -1120,7 +1140,7 @@ function pvDrawRing(){
   for (const a of PV.anim.values()) { const p = pos(a.theta, R); a.sx = p.x; a.sy = p.y; }
   const drawn = [...PV.anim.values()];
   if (!drawn.length) { pvCanvasNote(ctx, w, h, PV.mode === "live" ? "no open panes" : "no panes reported"); return; }
-  const spanT = Math.PI * 2 / Math.max(6, PV.nodes.length || 6);
+  const spanT = Math.PI * 2 / (PV.ringTotal || Math.max(6, PV.nodes.length || 6));
   PV.span = PV.span ? PV.span + (spanT - PV.span) * k : spanT;
   const sel = PV.sel;
 
