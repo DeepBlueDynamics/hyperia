@@ -1195,6 +1195,7 @@ function pvDrawRing(){
   ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
 
   pvDrawFiles(ctx, pos, R, cx, cy, tilt, k);
+  pvDrawNet(ctx, R);
   pvDrawArrivals(ctx, pos, R, cx, cy);
   pvDrawOutput(ctx, drawn, pos, R, k);
   pvDrawRadio(ctx, pos, R, cx, cy);
@@ -1998,6 +1999,83 @@ function edReplace(all){
   window.addEventListener("beforeunload", (ev) => { if (ED.tabs.some((t) => t.ta && t.ta.value !== t.saved)) { ev.preventDefault(); ev.returnValue = ""; } });
 })();
 
+// ---- Container network (live). n8 pushes each container pane's received and
+// sent bytes/s; every such pane is wired to a NET hub floating above the
+// floor, its link thickening with traffic, particles streaming down
+// (received, cyan) and up (sent, amber) at rates that follow it.
+const PVN = {parts: new Map(), last: 0};
+function pvBuildNet(){
+  const ev = (PV.win && PV.win.telemetry && PV.win.telemetry.events) || [], now = Date.now(), m = new Map();
+  for (const e of ev) {
+    if (e.kind !== "Network" || !e.pane_uid || now - (e.ts || 0) > 60000) continue;
+    const r = m.get(e.pane_uid) || {rx: 0, tx: 0, rxTs: 0, txTs: 0};
+    if (/^in/i.test(String(e.direction))) { if ((e.ts || 0) >= r.rxTs) { r.rx = e.bytes || 0; r.rxTs = e.ts || 0; } }
+    else if ((e.ts || 0) >= r.txTs) { r.tx = e.bytes || 0; r.txTs = e.ts || 0; }
+    m.set(e.pane_uid, r);
+  }
+  PV.net = m;
+}
+const pvRate = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + "M" : b >= 1024 ? (b / 1024).toFixed(b >= 10240 ? 0 : 1) + "k" : Math.round(b) + "") ;
+function pvDrawNet(ctx, R){
+  const g = PV.geom; if (!g || !g.P3 || PV.mode !== "live" || !PV.net || !PV.net.size) return;
+  const P3 = g.P3, t = performance.now(), dt = Math.min(.1, (t - (PVN.last || t)) / 1000); PVN.last = t;
+  const hubW = [0, R * 1.3, 0];
+  const links = [];
+  for (const a of PV.anim.values()) {
+    const n = a.node, r = n.pane && PV.net.get(n.pane); if (!r) continue;
+    const ease = Math.min(1, dt * 2.5);
+    a.nrx = (a.nrx || 0) + (r.rx - (a.nrx || 0)) * ease; a.ntx = (a.ntx || 0) + (r.tx - (a.ntx || 0)) * ease;
+    links.push(a);
+  }
+  if (!links.length) return;
+  let totRx = 0, totTx = 0;
+  ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round";
+  for (const a of links) {
+    const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1;
+    totRx += a.nrx; totTx += a.ntx;
+    const base = [Math.cos(a.theta) * R, 0, -Math.sin(a.theta) * R], ctl = [base[0] * .5, R * 1.1, base[2] * .5];
+    const at = (u) => { const v = 1 - u; return P3(v*v*base[0] + 2*v*u*ctl[0] + u*u*hubW[0], v*v*base[1] + 2*v*u*ctl[1] + u*u*hubW[1], v*v*base[2] + 2*v*u*ctl[2] + u*u*hubW[2]); };
+    const lvl = Math.min(1, Math.log10(1 + a.nrx + a.ntx) / 6), col = n.color || "#38bdf8";
+    // The link.
+    ctx.globalAlpha = a.alpha * dim * (.1 + .35 * lvl); ctx.strokeStyle = col; ctx.lineWidth = .8 + 3.2 * lvl;
+    ctx.beginPath(); for (let i = 0; i <= 28; i++) { const p = at(i / 28); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); } ctx.stroke();
+    // Packets: spawn rate follows bytes/s (log), each rides the link.
+    if (!PV_REDUCE) {
+      let ps = PVN.parts.get(n.id); if (!ps) { ps = {list: [], rx: 0, tx: 0}; PVN.parts.set(n.id, ps); }
+      const rate = (b) => (b < 32 ? 0 : Math.min(36, 1 + Math.log2(1 + b / 256) * 3));
+      ps.rx += rate(a.nrx) * dt; ps.tx += rate(a.ntx) * dt;
+      while (ps.rx >= 1) { ps.rx--; if (ps.list.length < 160) ps.list.push({u: 1, d: -1, j: Math.random()}); }
+      while (ps.tx >= 1) { ps.tx--; if (ps.list.length < 160) ps.list.push({u: 0, d: 1, j: Math.random()}); }
+      ps.list = ps.list.filter((q) => { q.u += q.d * dt * (.45 + .3 * q.j); return q.u >= 0 && q.u <= 1; });
+      ctx.shadowBlur = 8;
+      for (const q of ps.list) {
+        const p = at(q.u), c = q.d < 0 ? "#22d3ee" : "#f59e0b";
+        ctx.globalAlpha = a.alpha * dim * .95; ctx.fillStyle = c; ctx.shadowColor = c;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 1.5 + 1.3 * lvl, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+    }
+    // Rates at the foot of the link.
+    const tag = P3(base[0] * .9, R * .1, base[2] * .9);
+    ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = a.alpha * dim * .9;
+    ctx.font = "8.5px " + PV_MONO; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = "#67e8f9"; ctx.fillText("↓" + pvRate(a.nrx), tag.x - 20, tag.y);
+    ctx.fillStyle = "#fbbf24"; ctx.fillText("↑" + pvRate(a.ntx), tag.x + 20, tag.y);
+    ctx.globalCompositeOperation = "lighter";
+  }
+  // The hub.
+  const hub = P3(...hubW), lvl = Math.min(1, Math.log10(1 + totRx + totTx) / 6.5), pulse = PV_REDUCE ? .5 : .5 + .5 * Math.sin(t / 420);
+  const rg = ctx.createRadialGradient(hub.x, hub.y, 0, hub.x, hub.y, 26 + 18 * lvl);
+  rg.addColorStop(0, "rgba(125,211,252," + (.55 + .3 * pulse * lvl).toFixed(3) + ")"); rg.addColorStop(1, "rgba(125,211,252,0)");
+  ctx.globalAlpha = 1; ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(hub.x, hub.y, 26 + 18 * lvl, 0, Math.PI * 2); ctx.fill();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = "#e0f2fe"; ctx.beginPath(); ctx.arc(hub.x, hub.y, 4.5, 0, Math.PI * 2); ctx.fill();
+  ctx.font = "bold 9px " + PV_MONO; ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.fillStyle = "#bae6fd";
+  ctx.fillText("NET  ↓" + pvRate(totRx) + "/s  ↑" + pvRate(totTx) + "/s", hub.x, hub.y - 12);
+  ctx.restore();
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+}
+
 // Output activity (live only). A pane is "working" while it printed in the
 // last PV_WORK_MS. Its name gets a halo: the glow pulses with output volume
 // and two bright arcs spin fast while it's printing (faster with more lines/s).
@@ -2745,7 +2823,7 @@ async function pvPoll(){
   if (w.status === "fulfilled") PV.win = w.value;
   if (p.status === "fulfilled") PV.pane = p.value;
   PV.comms = cm.status === "fulfilled" && cm.value && Array.isArray(cm.value.mail_edges) ? cm.value : null;
-  pvBuildNodes(); pvBuildFiles(); pvNoteArrivals(); pvRenderAll();
+  pvBuildNodes(); pvBuildFiles(); pvBuildNet(); pvNoteArrivals(); pvRenderAll();
 }
 
 function pvLoop(ts){
