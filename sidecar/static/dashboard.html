@@ -1687,9 +1687,48 @@ async function edRenderMd(t){
   const {j} = await edPost("/api/files/render", {text: t.ta.value}).catch((e) => ({j: {ok: false, error: String(e)}}));
   const body = j.ok ? j.html : '<p style="color:#f87171">Rendering failed: ' + edEsc(j.error || "unknown error") + "</p>";
   let y = 0; try { y = t.view.contentDocument.scrollingElement.scrollTop; } catch (_e) {}
-  t.view.onload = () => { try { t.view.contentDocument.scrollingElement.scrollTop = y; } catch (_e) {} };
+  t.view.onload = () => {
+    try {
+      const doc = t.view.contentDocument;
+      edSlugHeadings(doc);
+      doc.addEventListener("click", (ev) => edPreviewClick(ev, t, doc));
+      doc.scrollingElement.scrollTop = y;
+    } catch (_e) {}
+  };
   t.view.srcdoc = '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src https: http:; style-src \'unsafe-inline\'">' +
-    '<base target="_blank"><style>' + ED_MD_CSS + "</style><article>" + body + "</article>";
+    "<style>" + ED_MD_CSS + "</style><article>" + body + "</article>";
+}
+// GitHub-style heading ids, so "#9-install-on-…" links land.
+function edSlugHeadings(doc){
+  const seen = new Map();
+  for (const h of doc.querySelectorAll("h1,h2,h3,h4,h5,h6")) {
+    let slug = h.textContent.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s/g, "-");
+    const n = seen.get(slug) || 0; seen.set(slug, n + 1);
+    if (n) slug += "-" + n;
+    h.id = slug;
+  }
+}
+// Links in the preview: #anchors scroll it, relative paths open that file in
+// the editor (next to this one), http(s) and mailto open outside.
+function edPreviewClick(ev, t, doc){
+  const a = ev.target.closest && ev.target.closest("a[href]"); if (!a) return;
+  ev.preventDefault();
+  const href = a.getAttribute("href") || "";
+  if (href.startsWith("#")) {
+    const el = doc.getElementById(decodeURIComponent(href.slice(1)));
+    if (el) el.scrollIntoView({behavior: "smooth", block: "start"});
+    return;
+  }
+  if (/^(https?:|mailto:)/i.test(href)) { window.open(href, "_blank", "noopener"); return; }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return;   // any other scheme: ignore
+  // Relative file link: resolve against this file's folder, keep its separator.
+  const [rel] = href.split("#"), sep = t.path.includes("\\") && !t.path.startsWith("/") ? "\\" : "/";
+  const parts = t.path.split(/[\\/]/); parts.pop();
+  for (const seg of decodeURIComponent(rel).split(/[\\/]/)) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") parts.pop(); else parts.push(seg);
+  }
+  pvEdOpen(parts.join(sep));
 }
 function edSetRender(t, on){
   if (!t || !t.main || !edCanRender(t)) return;

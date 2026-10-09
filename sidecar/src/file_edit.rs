@@ -231,11 +231,12 @@ mod tests {
     #[test]
     fn rendered_markdown_is_inert() {
         let h = crate::render::md_to_safe_html(
-            "# Hi\n\n<script>alert(1)</script>\n\n[x](javascript:alert(1)) <img src=x onerror=alert(1)> ![i](data:text/html,x) [ok](https://a.b)",
+            "<div align=\"center\">\n\n# Hi\n\n</div>\n\n<script>alert(1)</script>\n\n[x](javascript:alert(1)) <img src=\"https://i/x.png\" onerror=alert(1)> ![i](data:text/html,x) [ok](https://a.b) <a href=\"#\" onclick=\"x()\">c</a>",
         );
         assert!(h.contains("<h1>Hi</h1>"));
-        assert!(!h.contains("<script") && !h.contains("<img src=x"));
-        assert!(h.contains("&lt;script&gt;"));
+        assert!(h.contains("<div align=\"center\">"), "README centring kept: {h}");
+        assert!(!h.contains("<script") && !h.contains("onerror") && !h.contains("onclick"));
+        assert!(h.contains("src=\"https://i/x.png\""));
         assert!(!h.contains("javascript:") && !h.contains("data:text"));
         assert!(h.contains("href=\"https://a.b\""));
     }

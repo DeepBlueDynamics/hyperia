@@ -97,6 +97,7 @@ clap = { version = "4", features = ["derive", "env"] }
 # Process tree (foreground process detection)
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 pulldown-cmark = "0.13.4"
+ammonia = "4"
 
 # Ferricula memory: hyperia talks to ferricula over HTTP. Run ferricula
 # locally in Docker (`docker compose up ferricula`) or point at a remote URL.
