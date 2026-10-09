@@ -2049,6 +2049,8 @@ impl Bridge {
                             "lastExit": info.shell_last_exit,
                             // BSP bounding box in 0–100 % — lets tab_image
                             // draw the layout to scale.
+                            // Split letter (a, b, …): with tabId it gives the pane its colour.
+                            "splitLabel": info.split_label,
                             "bspX": info.bsp_x,
                             "bspY": info.bsp_y,
                             "bspW": info.bsp_w,
@@ -2124,7 +2126,12 @@ impl Bridge {
                 let tab_active = msg["tabActive"].as_bool().unwrap_or(false);
                 let pane_active = msg["paneActive"].as_bool().unwrap_or(false);
                 let title = msg["title"].as_str().unwrap_or("").to_string();
-                let shell_name = msg["shellName"].as_str().unwrap_or("").to_string();
+                let mut shell_name = msg["shellName"].as_str().unwrap_or("").to_string();
+                // The app re-registers panes after a sidecar restart without their
+                // names; use the one this pane last had.
+                if shell_name.is_empty() {
+                    shell_name = pane_names::get(&uid).unwrap_or_default();
+                }
                 tracing::info!("Session registered: {uid} ({tab_name}) {cols}x{rows} pid={pid} tab={root_tab_uid} win={window_id}");
                 // Register the pane's injected identity token so an in-pane
                 // agent's Authorization header resolves to this pane.
@@ -2251,6 +2258,7 @@ impl Bridge {
                     info.shell_name = name.clone();
                     tracing::info!("Session {uid} name updated: {name}");
                 }
+                pane_names::set(uid, &name);
             }
 
             "SessionLayout" => {
@@ -2589,6 +2597,50 @@ where
         }
         if let Ok(mut w) = watch.lock() {
             w.touch(std::time::Instant::now());
+        }
+    }
+}
+
+/// Pane names on disk (~/.hyperia/pane-names.json), so a sidecar restart
+/// keeps them; the app only re-sends a name when the layout changes.
+mod pane_names {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    static NAMES: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+    fn path() -> std::path::PathBuf {
+        crate::fsnav::home_dir().join(".hyperia").join("pane-names.json")
+    }
+
+    fn with<R>(f: impl FnOnce(&mut HashMap<String, String>) -> R) -> R {
+        let mut g = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+        let m = g.get_or_insert_with(|| {
+            std::fs::read_to_string(path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+        });
+        f(m)
+    }
+
+    pub fn get(uid: &str) -> Option<String> {
+        with(|m| m.get(uid).cloned()).filter(|n| !n.is_empty())
+    }
+
+    pub fn set(uid: &str, name: &str) {
+        if uid.is_empty() || name.is_empty() {
+            return;
+        }
+        let json = with(|m| {
+            if m.get(uid).map(String::as_str) == Some(name) {
+                return None;
+            }
+            if m.len() >= 2000 {
+                m.clear();
+            }
+            m.insert(uid.to_string(), name.to_string());
+            serde_json::to_string(m).ok()
+        });
+        if let Some(j) = json {
+            let _ = std::fs::write(path(), j);
         }
     }
 }
