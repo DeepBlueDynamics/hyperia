@@ -825,6 +825,8 @@ const PV = {on:false, panes:[], names:{}, counts:{w:0,t:0}, win:null, pane:null,
   anim:new Map(), edgeAnim:new Map(), fibAnim:new Map(), lastDraw:0, span:0,
   // History view zoom/pan: screen = world * z + (x, y).
   views:{live:{z:1, x:0, y:0}, history:{z:1, x:0, y:0}}, dragged:0,
+  // Camera over the agent floor: pitch 0 = edge-on, PI/2 = straight down.
+  cam:{pitch:1.0, yaw:0, want:1.0}, dim:"3d",
   // New comms crackle in: stream events seen so far, and arrivals in flight.
   seen:new Set(), primed:false, arrivals:[],
   // Files in the centre: nodes keyed by path, stable spiral slots, threads to panes.
@@ -1068,6 +1070,9 @@ const pvEase = (dt) => (PV_REDUCE ? 1 : 1 - Math.exp(-dt / 280));
 function pvAngDiff(a, b){ let d = (a - b) % (Math.PI*2); if (d > Math.PI) d -= Math.PI*2; if (d < -Math.PI) d += Math.PI*2; return d; }
 const pvTouches = (e) => !PV.sel || e.from === PV.sel || e.to === PV.sel;
 
+const PV_PITCH_3D = 1.0, PV_PITCH_2D = Math.PI / 2;
+try { if (localStorage.getItem("pv.dim") === "2d") { PV.dim = "2d"; PV.cam.pitch = PV.cam.want = PV_PITCH_2D; } } catch (_e) {}
+
 function pvDrawRing(){
   const c = $("pv-ring"); if (!c || !PV.on) return;
   const {ctx, w, h} = pvFit(c);
@@ -1075,15 +1080,33 @@ function pvDrawRing(){
   ctx.setTransform(dpr*vw.z, 0, 0, dpr*vw.z, dpr*vw.x, dpr*vw.y);
   const now = performance.now(), dt = PV.lastDraw ? Math.min(250, now - PV.lastDraw) : 1000; PV.lastDraw = now;
   const k = pvEase(dt);
-  // Leaves room outside the ring for the bars and the names.
-  const cx = w*.5, cy = h*.5, R = Math.max(50, Math.min(w*.3, h*.31)), tilt = .9, rot = PV.rot;
-  PV.geom = {cx, cy, R, tilt, rot};
-  const pos = (th, r) => ({x: cx + Math.cos(th+rot)*r, y: cy + Math.sin(th+rot)*r*tilt});
-  const halo = ctx.createRadialGradient(cx, cy, R*.25, cx, cy, R*1.08);
-  halo.addColorStop(0, "rgba(37,99,235,0)"); halo.addColorStop(.72, "rgba(37,99,235,.12)"); halo.addColorStop(1, "rgba(37,99,235,0)");
-  ctx.fillStyle = halo; ctx.beginPath(); ctx.ellipse(cx, cy, R*1.08, R*1.08*tilt, 0, 0, Math.PI*2); ctx.fill();
+  // The agents stand on a floor disk; files float above it. One camera
+  // (pitch = tip, yaw = slow spin + your orbit) projects all of it.
+  const cam = PV.cam;
+  cam.pitch += (cam.want - cam.pitch) * (PV_REDUCE ? 1 : Math.min(1, k * 1.5));
+  const R = Math.max(50, Math.min(w*.3, h*.31)), rot = PV.rot, pitch = cam.pitch, yaw = rot + cam.yaw;
+  const F = R * 3.4, cp = Math.cos(pitch), sp = Math.sin(pitch), cyw = Math.cos(yaw), syw = Math.sin(yaw);
+  // Lower the floor as it tips so the files above it stay in frame.
+  const vcx = w*.5, vcy = h*.5 + R*.38*cp;
+  const P3 = (x, y, z) => {
+    const x1 = x*cyw - z*syw, z1 = x*syw + z*cyw;
+    const y2 = y*cp + z1*sp, z2 = -y*sp + z1*cp, p = F / (F + z2);
+    return {x: vcx + x1*p, y: vcy - y2*p, z: z2, p};
+  };
+  // A point on the floor at angle th, radius r (same orientation as before).
+  const pos = (th, r) => P3(Math.cos(th)*r, 0, -Math.sin(th)*r);
+  const C0 = P3(0, 0, 0), cx = C0.x, cy = C0.y, tilt = sp;
+  const floor = (r, n = 72) => { const pts = []; for (let i = 0; i < n; i++) pts.push(pos(i / n * Math.PI * 2, r)); return pts; };
+  const poly = (pts) => { ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath(); };
+  const rim = floor(R * 1.08);
+  PV.geom = {cx, cy, R, tilt, rot, P3, pitch, rim};
+  // The floor: a faint disk with rings and spokes so its tilt reads.
+  poly(rim); ctx.fillStyle = "rgba(37,99,235,.07)"; ctx.fill();
   ctx.strokeStyle = "rgba(56,189,248,.16)"; ctx.lineWidth = 1;
-  for (const s of [1, .93]) { ctx.beginPath(); ctx.ellipse(cx, cy, R*s, R*s*tilt, 0, 0, Math.PI*2); ctx.stroke(); }
+  for (const s of [1, .93]) { poly(floor(R * s)); ctx.stroke(); }
+  ctx.strokeStyle = "rgba(56,189,248,.06)";
+  for (const s of [.33, .66]) { poly(floor(R * s, 48)); ctx.stroke(); }
+  for (let i = 0; i < 12; i++) { const a = pos(i / 12 * Math.PI * 2, R * .1), b = pos(i / 12 * Math.PI * 2, R * .93); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
 
   // Nodes ease to their slot; new ones fade in, gone ones fade out.
   const present = new Set();
@@ -1094,6 +1117,7 @@ function pvDrawRing(){
     a.node = n; a.theta += pvAngDiff(n.theta, a.theta) * k; a.alpha += (1 - a.alpha) * k;
   }
   for (const [id, a] of PV.anim) if (!present.has(id)) { a.alpha -= a.alpha * k; if (a.alpha < .02) { PV.anim.delete(id); PV.fibAnim.delete(id); } }
+  for (const a of PV.anim.values()) { const p = pos(a.theta, R); a.sx = p.x; a.sy = p.y; }
   const drawn = [...PV.anim.values()];
   if (!drawn.length) { pvCanvasNote(ctx, w, h, PV.mode === "live" ? "no open panes" : "no panes reported"); return; }
   const spanT = Math.PI * 2 / Math.max(6, PV.nodes.length || 6);
@@ -1193,6 +1217,7 @@ function pvDrawRing(){
       const box = {x0: (left ? p.x - tw : p.x) - pad, x1: (left ? p.x : p.x + tw) + pad, y0: p.y - 7 - pad / 3, y1: p.y + 7 + pad / 3};
       if (!on && placed.some((b) => box.x0 < b.x1 + 4 && box.x1 > b.x0 - 4 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
       placed.push(box);
+      a.lbox = {x0: (box.x0 - vw.x) / vw.z, x1: (box.x1 - vw.x) / vw.z, y0: (box.y0 - vw.y) / vw.z, y1: (box.y1 - vw.y) / vw.z};
       const depth = (Math.sin(a.theta + rot) + 1) / 2;
       ctx.globalAlpha = (on ? 1 : (.6 + .4*depth) * (sel ? .5 : 1)) * a.alpha;
       ctx.fillStyle = on ? "#f8fafc" : n.kind === "agent" ? "#fbbf24" : n.kind === "web" ? "#86efac" : n.kind === "system" ? "#e5e7eb" : "#7dd3fc";
@@ -1239,7 +1264,7 @@ function pvDrawRing(){
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   pvRadioBanner(ctx, w);
   ctx.font = "9px "+PV_MONO; ctx.fillStyle = "#475569";
-  ctx.fillText("SCROLL TO ZOOM · DRAG TO PAN · DOUBLE-CLICK TO RESET"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
+  ctx.fillText("SCROLL TO ZOOM · DRAG TO MOVE"+(PV.dim === "3d" ? " · CTRL+DRAG TO TIP" : "")+" · DOUBLE-CLICK TO RESET"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
   ctx.fillText(PV.nodes.length+" NODES · "+PV.edgeAnim.size+" LINKS · "+(PV.mode === "live" ? "LIVE · LAST HOUR" : "HISTORY · "+(PV.range > 86400000 ? "7 DAYS" : "24 HOURS")), 14, 18);
 }
 
@@ -2042,6 +2067,11 @@ const pvRotX = (v, a) => [v[0], v[1]*Math.cos(a) - v[2]*Math.sin(a), v[1]*Math.s
 const pvRotZ = (v, a) => [v[0]*Math.cos(a) - v[1]*Math.sin(a), v[0]*Math.sin(a) + v[1]*Math.cos(a), v[2]];
 const pvNorm3 = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0]/l, v[1]/l, v[2]/l]; };
 const pvCross3 = (a, b) => [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
+// Fibonacci points on the upper hemisphere (y from ~1 down to .2).
+function pvUpper(i, n){
+  const y = 1 - .8 * (i + .5) / n, r = Math.sqrt(Math.max(0, 1 - y*y)), a = i * 2.39996;
+  return [Math.cos(a) * r, y, Math.sin(a) * r];
+}
 // Target position and branch direction of every dir, parents first.
 function pvTreeLayout(R){
   const out = new Map(), L1 = 1, roots = PV.dirs.filter((d) => d.parent == null);
@@ -2049,11 +2079,12 @@ function pvTreeLayout(R){
   for (const d of [...PV.dirs].sort((a, b) => a.depth - b.depth)) {
     let c, u;
     if (d.parent == null) {
-      if (one) { c = [0, 0, 0]; u = [0, -1, 0]; }
-      else { u = pvNorm3(pvFib(d.slot, Math.max(2, d.nsib))); c = u.map((x) => x * L1 * .8); }
+      // Several roots stand round the centre, leaning up and out.
+      if (one) { c = [0, 0, 0]; u = [0, 1, 0]; }
+      else { const a = (2 * Math.PI * d.slot) / Math.max(2, d.nsib); u = pvNorm3([Math.cos(a), .55, Math.sin(a)]); c = u.map((x) => x * L1 * .8); }
     } else {
       const P = out.get(d.parent); if (!P) continue;
-      if (one && d.depth === 1) u = pvNorm3(pvFib(d.slot, Math.max(2, d.nsib)));   // round the centre
+      if (one && d.depth === 1) u = pvNorm3(pvUpper(d.slot, Math.max(2, d.nsib)));   // a dome over the root
       else {
         const a = Math.abs(P.u[1]) < .9 ? [0, 1, 0] : [1, 0, 0];
         const v = pvNorm3(pvCross3(P.u, a)), w = pvCross3(P.u, v);
@@ -2066,24 +2097,26 @@ function pvTreeLayout(R){
     }
     out.set(d.key, {c, u});
   }
-  // Fit: the whole tree spans ~70% of the ring, a small one no more than its natural size.
+  // Fit: the tree spans ~55% of the floor's radius, a small one its natural size.
   let far = 0; for (const v of out.values()) far = Math.max(far, Math.hypot(...v.c));
-  const k = far ? Math.min(R * .72 / far, R * .36) : 0;
+  const k = far ? Math.min(R * .55 / far, R * .3) : 0;
   for (const v of out.values()) v.c = v.c.map((x) => x * k);
+  // Then lift it so every node sits above the floor.
+  let low = Infinity; for (const v of out.values()) low = Math.min(low, v.c[1]);
+  const lift = (isFinite(low) ? -low : 0) + R * .2;
+  for (const v of out.values()) v.c[1] += lift;
   return out;
 }
 const pvLerp3 = (a, b, k) => [a[0] + (b[0]-a[0])*k, a[1] + (b[1]-a[1])*k, a[2] + (b[2]-a[2])*k];
 // 1 = nearest the viewer, 0 = far side.
-const pvDepth = (z) => Math.max(0, Math.min(1, .5 - z / (2.4 * Math.max(((PV.geom || {}).R || 100) * .42, 1))));
+const pvDepth = (z) => Math.max(0, Math.min(1, .5 - z / (2.2 * Math.max(((PV.geom || {}).R || 100), 1))));
 
 function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
   const now = Date.now(), t = performance.now(), ts = PV_REDUCE ? 0 : t / 1000;
-  const lay = pvTreeLayout(R), F = R * 3;
-  const gy = ts * .09, gx = .38;
-  const project = (v) => {
-    const w = pvRotX(pvRotY(v, gy), gx), p = F / (F + w[2]);
-    return {x: cx + w[0]*p, y: cy + w[1]*p, z: w[2], p};
-  };
+  const lay = pvTreeLayout(R), P3 = PV.geom.P3;
+  // The tree turns slowly on its own vertical axis, above the floor.
+  const gy = ts * .05;
+  const project = (v) => { const w = pvRotY(v, gy); return P3(w[0], w[1], w[2]); };
   // Dirs.
   const presentD = new Set();
   for (const d of PV.dirs) {
@@ -2096,7 +2129,7 @@ function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
       PV.dirAnim.set(d.key, a);
     }
     a.d = d; a.c = pvLerp3(a.c, tgt, k); a.alpha += (1 - a.alpha) * k;
-    a.rf = R * (.035 + .016 * Math.sqrt(d.files.length));
+    a.rf = R * (.03 + .014 * Math.sqrt(d.files.length));
     const pr = project(a.c); a.x = pr.x; a.y = pr.y; a.z = pr.z; a.p = pr.p;
   }
   for (const [key, a] of PV.dirAnim) if (!presentD.has(key)) { a.alpha -= a.alpha * k; if (a.alpha < .02) PV.dirAnim.delete(key); }
@@ -2297,6 +2330,17 @@ function pvRenderMode(){
     try { localStorage.setItem("pv.range", String(v)); } catch (_e) {}
     pvPoll();
   }));
+  const dim = pvEl("span", "pv-seg");
+  for (const [d, label, tip] of [["3d", "3D", "Tilted view — Ctrl+drag to tip and orbit"], ["2d", "2D", "Straight down on the floor"]]) {
+    const b = pvEl("button", PV.dim === d ? "on" : null, label); b.type = "button"; b.title = tip;
+    b.addEventListener("click", () => {
+      PV.dim = d; PV.cam.want = d === "2d" ? PV_PITCH_2D : PV_PITCH_3D; if (d === "2d") PV.cam.yaw = 0;
+      try { localStorage.setItem("pv.dim", d); } catch (_e) {}
+      pvRenderMode(); if (PV_REDUCE || !PV.raf) pvDrawRing();
+    });
+    dim.appendChild(b);
+  }
+  box.appendChild(dim);
   const snd = pvEl("span", "pv-seg"), sb = pvEl("button", PVS.on ? "on" : null, PVS.on ? "♪ on" : "♪ off");
   sb.type = "button"; sb.title = "Sound effects";
   sb.addEventListener("click", () => {
@@ -2609,29 +2653,26 @@ function pvHitFile(ev){
 $("pv-ring").addEventListener("click", (ev) => {
   const g = PV.geom; if (!g) return;
   if (Date.now() - PV.dragged < 250) return;   // the end of a pan, not a click
-  const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z;
-  const dx = ox - g.cx, dy = (oy - g.cy) / g.tilt, d = Math.hypot(dx, dy);
-  // The ring, its bars and the names outside it are all clickable.
-  if (d < g.R*.85) {
-    // Inside the ring: the nearest file node within reach, else clear.
-    let best = null, bestD = Infinity;
-    for (const [p, a] of PV.fileAnim) { const dd = Math.hypot(ox - a.x, oy - a.y); if (dd < bestD) { bestD = dd; best = {file: p}; } }
-    for (const [key, a] of PV.dirAnim) { const dd = Math.hypot(ox - a.x, oy - a.y) - 3; if (dd < bestD) { bestD = dd; best = {dir: key}; } }
-    if (best && bestD < 12 / v.z + 4) { if (best.dir != null) pvSelectDir(best.dir); else pvSelectFile(best.file); }
-    else { PV.selFile = null; PV.selDir = null; pvSelect(null); }
-    return;
-  }
-  if (d > g.R + 230) { pvSelect(null); return; }
-  const th = Math.atan2(dy, dx) - g.rot;
+  const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z, reach = 12 / v.z + 4;
+  // Files and dirs float above the floor: nearest within reach wins.
   let best = null, bestD = Infinity;
+  for (const [p, a] of PV.fileAnim) { const dd = Math.hypot(ox - a.x, oy - a.y); if (dd < bestD) { bestD = dd; best = {file: p}; } }
+  for (const [key, a] of PV.dirAnim) { const dd = Math.hypot(ox - a.x, oy - a.y) - 3; if (dd < bestD) { bestD = dd; best = {dir: key}; } }
+  if (best && bestD < reach) { if (best.dir != null) pvSelectDir(best.dir); else pvSelectFile(best.file); return; }
+  // Then the agents on the floor: their marker or their name.
+  let node = null, nodeD = Infinity;
   for (const [id, a] of PV.anim) {
     if (!PV.alias.has(id)) continue;
-    const dd = Math.abs(pvAngDiff(th, a.theta)); if (dd < bestD) { bestD = dd; best = id; }
+    const b = a.lbox, inLabel = b && ox >= b.x0 && ox <= b.x1 && oy >= b.y0 && oy <= b.y1;
+    const dd = inLabel ? 0 : Math.hypot(ox - (a.sx || 0), oy - (a.sy || 0));
+    if (dd < nodeD) { nodeD = dd; node = id; }
   }
-  pvSelect(best && bestD < Math.max(.12, PV.span*.6) ? best : null);
+  if (node && nodeD < 26 / v.z + 6) { pvSelect(node); return; }
+  PV.selFile = null; PV.selDir = null; pvSelect(null);
 });
 window.addEventListener("keydown", (ev) => { if (PV.on && ev.key === "Escape" && PV.sel && !$("pv-ed").classList.contains("on")) pvSelect(null); });
-// Wheel zooms around the cursor, drag pans, double-click resets.
+// Wheel zooms around the cursor, drag moves around the floor, Ctrl+drag tips
+// and orbits (3D), double-click resets.
 (() => {
   const el = $("pv-ring"); let drag = null;
   const redraw = () => { if (PV_REDUCE || !PV.raf) pvDrawRing(); };
@@ -2643,21 +2684,29 @@ window.addEventListener("keydown", (ev) => { if (PV.on && ev.key === "Escape" &&
   }, {passive: false});
   el.addEventListener("pointerdown", (ev) => {
     if (ev.button !== 0) return;
-    drag = {x: ev.clientX, y: ev.clientY, vx: pvView().x, vy: pvView().y, moved: false};
+    drag = {x: ev.clientX, y: ev.clientY, vx: pvView().x, vy: pvView().y, moved: false,
+      tip: (ev.ctrlKey || ev.metaKey) && PV.dim === "3d", pitch: PV.cam.want, yaw: PV.cam.yaw};
     el.setPointerCapture(ev.pointerId);
   });
   el.addEventListener("pointermove", (ev) => {
     if (!drag) return;
     const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
     if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 4) { drag.moved = true; el.style.cursor = "grabbing"; }
-    if (drag.moved) { const v = pvView(); v.x = drag.vx + dx; v.y = drag.vy + dy; redraw(); }
+    if (!drag.moved) return;
+    if (drag.tip) {
+      PV.cam.want = PV.cam.pitch = Math.max(.12, Math.min(PV_PITCH_2D, drag.pitch + dy * .006));
+      PV.cam.yaw = drag.yaw + dx * .008;
+    } else { const v = pvView(); v.x = drag.vx + dx; v.y = drag.vy + dy; }
+    redraw();
   });
   const end = () => { if (drag && drag.moved) PV.dragged = Date.now(); drag = null; el.style.cursor = ""; };
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
   el.addEventListener("dblclick", (ev) => {
     const hit = pvHitFile(ev);
     if (hit) { PV.selFile = hit; PV.sel = null; PV.selDir = null; pvEdOpen(hit); return; }
-    PV.views[PV.mode] = {z: 1, x: 0, y: 0}; redraw();
+    PV.views[PV.mode] = {z: 1, x: 0, y: 0};
+    PV.cam.yaw = 0; PV.cam.want = PV.dim === "2d" ? PV_PITCH_2D : PV_PITCH_3D;
+    redraw();
   });
 })();
 window.addEventListener("resize", () => { if (PV.on) pvRenderAll(); });
