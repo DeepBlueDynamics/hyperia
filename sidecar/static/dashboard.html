@@ -941,7 +941,11 @@ function pvIngestStatus(j){
       for (const p of tab.panes || []) {
         const proc = String(p.process || (p.app && p.app.name) || "").toLowerCase();
         const web = p.kind === "web" || p.shell === "web";
-        const cls = web ? "wb" : PV_AGENT_RX.test(proc) ? "ag" : (p.shell === "picker" || proc === "picker") ? "dm" : "sh";
+        // Agent by its foreground process, its app, or the command that launched it
+        // (a tool subprocess briefly replaces the foreground; the launch line doesn't).
+        const launch = String((p.app && p.app.cmdline) || "").trim().split(/\s+/)[0].replace(/^.*[\\/]/, "").replace(/\.exe$/i, "");
+        const agent = [proc, String((p.app && p.app.name) || ""), launch].some((x) => PV_AGENT_RX.test(x));
+        const cls = web ? "wb" : agent ? "ag" : (p.shell === "picker" || proc === "picker") ? "dm" : "sh";
         const name = p.name || p.title || String(p.paneId || "").slice(0, 8);
         const lastOut = p.outSecsAgo == null ? 0 : Date.now() - p.outSecsAgo * 1000;
         panes.push({paneId: p.paneId, name, proc, cls, focused: !!p.focused, state: p.state || "", tab: tab.name || "",
@@ -1039,10 +1043,14 @@ function pvBuildNodes(){
     slots.set(n.id, {i, seen: nowMs});
   }
   total = Math.max(1, ...[...slots.values()].map((sl) => sl.i + 1));
-  PV.ringTotal = Math.max(6, total);
   const alias = new Map();
+  // Stable order (by slot), evenly spaced over the live nodes: no gaps from
+  // departed ones, and a node only slides a little when another comes or goes.
+  const order = [...list].sort((a, b) => slots.get(a.id).i - slots.get(b.id).i);
+  const at = new Map(order.map((n, j) => [n.id, j]));
+  PV.ringTotal = Math.max(6, order.length);
   list.forEach((n) => {
-    n.theta = (slots.get(n.id).i / Math.max(6, total)) * Math.PI * 2 - Math.PI/2;
+    n.theta = (at.get(n.id) / PV.ringTotal) * Math.PI * 2 - Math.PI/2;
     alias.set(n.id, n); for (const a of n.alias) alias.set(a, n); if (n.pane) { alias.set(n.pane, n); alias.set("pane:"+n.pane, n); }
   });
   PV.nodes = list; PV.alias = alias;
