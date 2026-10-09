@@ -1054,6 +1054,19 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'RadioCallsigns': {
+      // Fire-and-forget push (no seq): every window's pane headers.
+      for (const win of (app as any).getWindows?.() || []) {
+        win.rpc?.emit('radio callsigns', {
+          running: msg.running,
+          visible: msg.visible,
+          signs: msg.signs,
+          rotated: msg.rotated
+        });
+      }
+      break;
+    }
+
     case 'AgentStatus': {
       // Resolve sessionUid: use explicit uid, or resolve from pane index, or fall back to first session
       let sessionUid = msg.sessionUid as string | undefined;

@@ -141,6 +141,12 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       const marker = paneId ? state.ui.bellMarkers[paneId] : undefined;
       return marker === true || marker === 'seen';
     });
+    // Radio call sign: only while the radio is running and was just used, and only
+    // on agent panes hertz may message (the sidecar assigns signs to no others).
+    const radio = useSelector((state: HyperState) => state.ui.radioCallsigns);
+    const radioSign = paneId && radio?.visible ? radio.signs?.[paneId] : undefined;
+    const radioRotatedAt = radio?.rotated?.pane === paneId ? radio?.rotated?.at : 0;
+    const radioFlash = !!radioRotatedAt && Date.now() - radioRotatedAt < 6000;
     const bellIndicator = hasBell ? (
       <span role="img" aria-label="Pane needs attention" title="Pane needs attention" style={{flexShrink: 0}}>
         🔔
@@ -612,6 +618,15 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           style={{display: 'flex', alignItems: 'center', gap: sq(10, 3), flexShrink: 0}}
           onClick={(e) => e.stopPropagation()}
         >
+          {radioSign && (
+            <span
+              key={radioFlash ? `flash-${radioRotatedAt}` : 'sign'}
+              className={`pane-band-radio${radioFlash ? ' pane-band-radio-new' : ''}`}
+              title="Radio call sign — say it on the radio to reach this pane. It changes each time it's used."
+            >
+              {radioSign}
+            </span>
+          )}
           {/* Pulse (re-poke watchdog) — clock toggle, mirrors the sticky timer icon.
               Pulses (animates) while a pulse is active so it's obvious it's running.
               Shell sessions only (per Kord): hidden on the picker until a shell is
@@ -1034,6 +1049,34 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
         )}
 
         <style jsx>{`
+          .pane-band-radio {
+            flex-shrink: 0;
+            font-size: 10.5px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #1a1204;
+            background: linear-gradient(180deg, #fcd34d, #f59e0b);
+            border: 1px solid #b45309;
+            border-radius: 4px;
+            padding: 1px 7px;
+            white-space: nowrap;
+            box-shadow: 0 0 8px rgba(245, 158, 11, 0.45);
+            cursor: default;
+          }
+          .pane-band-radio-new {
+            animation: hyRadioNew 1.2s ease-out 3;
+          }
+          @keyframes hyRadioNew {
+            0% {
+              box-shadow: 0 0 0 0 rgba(252, 211, 77, 0.9);
+              transform: scale(1.12);
+            }
+            100% {
+              box-shadow: 0 0 14px 6px rgba(252, 211, 77, 0);
+              transform: scale(1);
+            }
+          }
           .pane-band-container {
             display: flex;
             align-items: center;

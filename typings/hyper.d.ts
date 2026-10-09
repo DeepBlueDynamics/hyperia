@@ -122,6 +122,7 @@ export type uiState = Immutable<{
   defaultProfile: string;
   profiles: configOptions['profiles'];
   agentStatuses: Record<string, AgentStatus>;
+  radioCallsigns: import('./constants/ui').RadioCallsigns;
   styleTheme?: any;
   env?: Record<string, string>;
 }>;

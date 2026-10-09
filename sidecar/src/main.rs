@@ -38,6 +38,7 @@ mod snapshot_image;
 mod telemetry;
 mod radio_log;
 mod file_edit;
+mod radio;
 #[cfg(feature = "tts")]
 mod tts;
 
@@ -4732,6 +4733,7 @@ async fn main() -> anyhow::Result<()> {
     // Host-pane telemetry → n8 gateway (server of record); buffers while it is down.
     host_telemetry::forward::spawn_sender();
     host_telemetry::watcher::spawn(state.bridge.clone(), state.telemetry.clone());
+    radio::spawn(state.bridge.clone());
     // Grab lume handles before `state` is moved into the router below.
     let lume_for_flush = state.bridge.lume();
     let lume_for_shutdown = state.bridge.lume();
@@ -4759,6 +4761,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/files/stat", axum::routing::get(file_edit::stat))
         .route("/api/files/save", axum::routing::post(file_edit::save))
         .route("/api/files/render", axum::routing::post(file_edit::render))
+        .route("/api/radio/callsigns", axum::routing::get(radio::get_callsigns))
+        .route("/api/radio/deliver", axum::routing::post(radio::deliver))
         .route("/api/audio/play", axum::routing::post(post_audio_play))
         .route("/api/audio/probe", axum::routing::post(post_audio_probe))
         .route("/api/audio/mute", axum::routing::post(post_audio_mute))
