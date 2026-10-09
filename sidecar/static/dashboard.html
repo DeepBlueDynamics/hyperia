@@ -1320,8 +1320,8 @@ function pvDrawRing(){
     ctx.globalAlpha = 1;
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (PV.focus) { ctx.setTransform(dpr*vw.z, 0, 0, dpr*vw.z, dpr*vw.x, dpr*vw.y); pvDrawScreens(ctx, R, true); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
   pvRadioBanner(ctx, w);
-  pvDrawFocus(ctx, w, h);
   ctx.font = "9px "+PV_MONO; ctx.fillStyle = "#475569";
   ctx.fillText("SCROLL TO ZOOM · DRAG TO MOVE"+(PV.dim === "3d" ? " · CTRL+DRAG TO TIP" : "")+" · DOUBLE-CLICK A SCREEN OR FILE TO OPEN IT"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
   ctx.fillText(PV.nodes.length+" NODES · "+PV.edgeAnim.size+" LINKS · "+(PV.mode === "live" ? "LIVE · LAST HOUR" : "HISTORY · "+(PV.range > 86400000 ? "7 DAYS" : "24 HOURS")), 14, 18);
@@ -2176,11 +2176,11 @@ function pvCrtPath(ctx, x, y, w, h, r, bow){
   ctx.quadraticCurveTo(x, y, x + r, y);
   ctx.closePath();
 }
-function pvDrawScreens(ctx, R){
+function pvDrawScreens(ctx, R, focusPass){
   if (!PVSC.on || PV.mode !== "live") return;
   const g = PV.geom; if (!g || !g.P3) return;
   const r = R + PV_BAND_OUT + 34, sel = PV.sel;
-  PVSC.hit = null; PVSC.base = null;
+  if (!focusPass) { PVSC.hit = null; PVSC.base = null; }
   const items = [];
   for (const a of PV.anim.values()) {
     if (a.node.id !== sel) continue;
@@ -2196,7 +2196,8 @@ function pvDrawScreens(ctx, R){
     const x = base.x - W / 2, y = base.y - stand - H;
     PVSC.hit = {x: x - bez, y: y - bez, w: W + bez * 2, h: H + bez * 2, pane: a.node.pane, name: a.node.label, color: col};
     PVSC.base = {x: base.x, y: base.y};
-    if (PV.focus && !PV.focus.closing && PV.focus.pane === a.node.pane) continue;
+    const focused = !!(PV.focus && PV.focus.pane === a.node.pane);
+    if (focused !== !!focusPass) continue;
     const dim = a.alpha;
     ctx.save(); ctx.globalAlpha = dim;
     // Stand: a trapezoid down to the band.
@@ -2211,7 +2212,8 @@ function pvDrawScreens(ctx, R){
     ctx.strokeStyle = col; ctx.lineWidth = 1.4; ctx.globalAlpha = dim * .85; ctx.stroke(); ctx.globalAlpha = dim;
     // Glass.
     pvCrtPath(ctx, x, y, W, H, 7 * p, 3 * p); ctx.save(); ctx.clip();
-    ctx.drawImage(pvScreenCanvas(d, Math.min(720, W * (window.devicePixelRatio || 1) * pvView().z), Math.min(432, H * (window.devicePixelRatio || 1) * pvView().z)), x, y, W, H);
+    const px = (window.devicePixelRatio || 1) * pvView().z, cap = focused ? 2600 : 720;
+    ctx.drawImage(pvScreenCanvas(d, Math.min(cap, W * px), Math.min(cap * .6, H * px)), x, y, W, H);
     const shine = ctx.createLinearGradient(x, y, x + W * .6, y + H);
     shine.addColorStop(0, "rgba(255,255,255,.10)"); shine.addColorStop(.35, "rgba(255,255,255,0)");
     ctx.fillStyle = shine; ctx.fillRect(x, y, W, H);
@@ -2222,73 +2224,53 @@ function pvDrawScreens(ctx, R){
   }
 }
 
-// ---- Focused screen: double-click a pane's CRT and it squares up to the view,
-// grows and holds still up top (drawn sharp at that size) while the scene keeps
-// turning below; a tether runs down to its pane's slice. Esc or double-clicking
-// it sends it back to the rim.
-const PV_FOCUS_MS = 480;
+// ---- Focused screen: double-click a pane's CRT and the camera goes to it —
+// swings round so the monitor is in front, tips down to face it and zooms
+// until it's big and centred — then rides with the ring's rotation so the
+// monitor stays put. Esc or double-clicking it flies the camera back.
+const PV_FOCUS_MS = 900, PV_FOCUS_PITCH = .5;
 function pvFocusOpen(hit){
+  const n = PV.nodes.find((x) => x.pane === hit.pane); if (!n) return;
   const v = pvView();
-  PV.focus = {pane: hit.pane, name: hit.name, color: hit.color, t0: performance.now(), closing: false,
-    from: {x: hit.x * v.z + v.x, y: hit.y * v.z + v.y, w: hit.w * v.z, h: hit.h * v.z}};
+  PV.focus = {pane: hit.pane, node: n.id, t0: performance.now(), closing: false,
+    from: {yaw: PV.cam.yaw, pitch: PV.cam.want, view: {z: v.z, x: v.x, y: v.y}, eff: PV.rot + PV.cam.yaw}};
   clearInterval(PVSC.fast); PVSC.fast = setInterval(pvScreensPoll, 1000);
   pvSound("tick");
 }
 function pvFocusClose(){
   const f = PV.focus; if (!f || f.closing) return;
-  const h = PVSC.hit, v = pvView();
-  if (h) f.from = {x: h.x * v.z + v.x, y: h.y * v.z + v.y, w: h.w * v.z, h: h.h * v.z};
+  const v = pvView();
   f.closing = true; f.t0 = performance.now();
+  f.back = {eff: PV.rot + PV.cam.yaw, pitch: PV.cam.pitch, view: {z: v.z, x: v.x, y: v.y}};
   clearInterval(PVSC.fast); PVSC.fast = null;
 }
-function pvDrawFocus(ctx, w, h){
+// Called every frame before drawing: steer the camera (yaw, pitch, zoom/pan).
+function pvFocusStep(){
   const f = PV.focus; if (!f) return;
   const raw = Math.min(1, (performance.now() - f.t0) / (PV_REDUCE ? 1 : PV_FOCUS_MS));
-  const e0 = 1 - Math.pow(1 - raw, 3), e = f.closing ? 1 - e0 : e0;
-  if (f.closing && raw >= 1) { PV.focus = null; return; }
-  const d = PVSC.data.get(f.pane); if (!d || !d.text) return;
-  // Target: fixed up top, about half the view wide, square to the camera.
-  const tw = Math.min(w * .5, 640, (h * .5) / .64), th = tw * .64, tx = (w - tw) / 2, ty = Math.max(28, h * .05);
-  const fr = f.from, lerp = (a, b) => a + (b - a) * e;
-  const X = lerp(fr.x, tx), Y = lerp(fr.y, ty), W = lerp(fr.w, tw), H = lerp(fr.h, th);
-  ctx.save();
-  const col = f.color || "#7dd3fc", u = W / 100;
-  // Tether down to where its pane sits on the turning rim.
-  const hb = PVSC.base, v = pvView();
-  if (hb && e > .05) {
-    const bx = hb.x * v.z + v.x, by = hb.y * v.z + v.y;
-    ctx.globalAlpha = .55 * e; ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.setLineDash([3, 5]);
-    ctx.lineDashOffset = -performance.now() / 40;
-    ctx.beginPath(); ctx.moveTo(X + W / 2, Y + H); ctx.quadraticCurveTo(X + W / 2, (Y + H + by) / 2, bx, by); ctx.stroke();
-    ctx.setLineDash([]); ctx.globalAlpha = 1;
-    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(bx, by, 3, 0, Math.PI * 2); ctx.fill();
+  const e = raw < .5 ? 4 * raw * raw * raw : 1 - Math.pow(-2 * raw + 2, 3) / 2;   // ease in-out
+  const v = pvView(), c = $("pv-ring"), cw = c.clientWidth, ch = c.clientHeight;
+  const angLerp = (a, b, k) => a + pvAngDiff(b, a) * k;
+  if (f.closing) {
+    // Back to where you were: your orbit, tip and zoom.
+    PV.cam.yaw = angLerp(f.back.eff, f.from.eff, e) - PV.rot;
+    PV.cam.pitch = PV.cam.want = f.back.pitch + (f.from.pitch - f.back.pitch) * e;
+    v.z = f.back.view.z + (f.from.view.z - f.back.view.z) * e;
+    v.x = f.back.view.x + (f.from.view.x - f.back.view.x) * e;
+    v.y = f.back.view.y + (f.from.view.y - f.back.view.y) * e;
+    if (raw >= 1) { PV.cam.yaw = f.from.eff - PV.rot; PV.focus = null; }
+    return;
   }
-  // Casing with a coloured rim and soft glow.
-  ctx.shadowColor = col; ctx.shadowBlur = 30 * e;
-  pvCrtPath(ctx, X, Y, W, H, 3.2 * u, .9 * u); ctx.fillStyle = "#0a0f19"; ctx.fill();
-  ctx.shadowBlur = 0; ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.2, .35 * u); ctx.stroke();
-  // Glass, inset in the casing.
-  const bz = 2.6 * u, foot = 3.2 * u;
-  const gx = X + bz, gy = Y + bz, gw = W - bz * 2, gh = H - bz * 2 - foot;
-  pvCrtPath(ctx, gx, gy, gw, gh, 2.2 * u, 1.1 * u); ctx.save(); ctx.clip();
-  const dpr = window.devicePixelRatio || 1;
-  ctx.drawImage(pvScreenCanvas(d, Math.min(2400, gw * dpr), Math.min(1500, gh * dpr)), gx, gy, gw, gh);
-  const shine = ctx.createLinearGradient(gx, gy, gx + gw * .55, gy + gh);
-  shine.addColorStop(0, "rgba(255,255,255,.09)"); shine.addColorStop(.32, "rgba(255,255,255,0)");
-  ctx.fillStyle = shine; ctx.fillRect(gx, gy, gw, gh);
-  ctx.restore();
-  ctx.strokeStyle = "rgba(0,0,0,.6)"; ctx.lineWidth = Math.max(1, .25 * u); pvCrtPath(ctx, gx, gy, gw, gh, 2.2 * u, 1.1 * u); ctx.stroke();
-  // Name plate and power LED on the chin.
-  const cy = Y + H - foot * .55 - bz * .35;
-  ctx.font = "bold " + Math.max(8, 1.15 * u).toFixed(1) + "px " + PV_MONO; ctx.textAlign = "left"; ctx.textBaseline = "middle";
-  ctx.fillStyle = col; ctx.globalAlpha = .9; ctx.fillText(String(f.name || "").toUpperCase(), X + bz * 1.4, cy);
-  ctx.textAlign = "right"; ctx.fillStyle = "#64748b";
-  ctx.fillText("LIVE · DOUBLE-CLICK OR ESC TO SEND BACK", X + W - bz * 3.2, cy);
-  ctx.globalAlpha = 1; ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 8;
-  ctx.beginPath(); ctx.arc(X + W - bz * 1.6, cy, Math.max(2, .45 * u), 0, Math.PI * 2); ctx.fill();
-  ctx.restore();
-  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-  PVSC.focusRect = {x: X, y: Y, w: W, h: H};
+  const a = PV.anim.get(f.node); if (!a) { pvFocusClose(); return; }
+  // In front of the camera: effective yaw = theta - 90°. Ride the ring from there.
+  const want = a.theta - Math.PI / 2;
+  PV.cam.yaw = angLerp(f.from.eff, want, e) - PV.rot;
+  PV.cam.pitch = PV.cam.want = f.from.pitch + (PV_FOCUS_PITCH - f.from.pitch) * e;
+  // Zoom/pan so the monitor fills ~80% of the view, centred.
+  const h = PVSC.hit; if (!h || !cw) return;
+  const z = Math.min(8, (cw * .8) / h.w, (ch * .8) / h.h), tx = cw / 2 - (h.x + h.w / 2) * z, ty = ch / 2 - (h.y + h.h / 2) * z;
+  const k = raw >= 1 ? .35 : Math.max(.08, e);
+  v.z += (z - v.z) * k; v.x += (tx - v.x) * k; v.y += (ty - v.y) * k;
 }
 
 // ---- Container network (live). n8 pushes each container pane's received and
@@ -3183,7 +3165,7 @@ function pvLoop(ts){
   PV.raf = requestAnimationFrame(pvLoop);
   if (ts - PV.lastFrame < 33) return;   // ~30 fps is plenty for a slow spin
   const dt = PV.lastFrame ? Math.min(100, ts - PV.lastFrame) : 0; PV.lastFrame = ts;
-  PV.rot += dt * .00004; pvDrawRing(); pvRadioTick();
+  PV.rot += dt * .00004; pvFocusStep(); pvDrawRing(); pvRadioTick();
 }
 
 function pvSetMode(){
@@ -3212,7 +3194,7 @@ $("pv-ring").addEventListener("click", (ev) => {
   const g = PV.geom; if (!g) return;
   if (Date.now() - PV.dragged < 250) return;   // the end of a pan, not a click
   const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z, reach = 12 / v.z + 4;
-  if (PV.focus) { const r = PVSC.focusRect; if (r && ev.offsetX >= r.x && ev.offsetX <= r.x + r.w && ev.offsetY >= r.y && ev.offsetY <= r.y + r.h) return; }
+  if (PV.focus) return;   // the camera is on a screen; Esc or double-click to come back
   const sh = PVSC.hit; if (sh && ox >= sh.x && ox <= sh.x + sh.w && oy >= sh.y && oy <= sh.y + sh.h) return;
   // Files and dirs float above the floor: nearest within reach wins.
   let best = null, bestD = Infinity;
@@ -3242,12 +3224,13 @@ window.addEventListener("keydown", (ev) => {
   const redraw = () => { if (PV_REDUCE || !PV.raf) pvDrawRing(); };
   el.addEventListener("wheel", (ev) => {
     ev.preventDefault();
+    if (PV.focus) return;
     const v = pvView(), z = Math.min(8, Math.max(.5, v.z * Math.exp(-ev.deltaY * .0015)));
     v.x = ev.offsetX - (ev.offsetX - v.x) * (z / v.z); v.y = ev.offsetY - (ev.offsetY - v.y) * (z / v.z); v.z = z;
     redraw();
   }, {passive: false});
   el.addEventListener("pointerdown", (ev) => {
-    if (ev.button !== 0) return;
+    if (ev.button !== 0 || PV.focus) return;
     drag = {x: ev.clientX, y: ev.clientY, vx: pvView().x, vy: pvView().y, moved: false,
       tip: (ev.ctrlKey || ev.metaKey) && PV.dim === "3d", pitch: PV.cam.want, yaw: PV.cam.yaw};
     el.setPointerCapture(ev.pointerId);
@@ -3267,9 +3250,9 @@ window.addEventListener("keydown", (ev) => {
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
   el.addEventListener("dblclick", (ev) => {
     const sh = PVSC.hit, vv = pvView(), sx = (ev.offsetX - vv.x) / vv.z, sy = (ev.offsetY - vv.y) / vv.z;
-    const fr = PV.focus && PVSC.focusRect;
-    if (fr && ev.offsetX >= fr.x && ev.offsetX <= fr.x + fr.w && ev.offsetY >= fr.y && ev.offsetY <= fr.y + fr.h) { pvFocusClose(); return; }
-    if (sh && sx >= sh.x && sx <= sh.x + sh.w && sy >= sh.y && sy <= sh.y + sh.h) { pvFocusOpen(sh); return; }
+    const onScreen = sh && sx >= sh.x && sx <= sh.x + sh.w && sy >= sh.y && sy <= sh.y + sh.h;
+    if (PV.focus) { if (onScreen || !PVSC.hit) pvFocusClose(); return; }
+    if (onScreen) { pvFocusOpen(sh); return; }
     const hit = pvHitFile(ev);
     if (hit) { PV.selFile = hit; PV.sel = null; PV.selDir = null; pvEdOpen(hit); return; }
     PV.views[PV.mode] = {z: 1, x: 0, y: 0};
