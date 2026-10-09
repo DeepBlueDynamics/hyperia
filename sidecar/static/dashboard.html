@@ -1427,6 +1427,67 @@ function pvRadioTick(){
   const sig = PV.radio.map((e) => e.id + (pvRadioLive(e) ? "*" : "")).join(",") + "|" + PV.radioOpen + "|" + (PV.replay && PV.replay.id);
   if (sig !== PV.radioSig) { PV.radioSig = sig; pvRenderRadio(); }
 }
+// ---- Live spectrum of a sounding transmission: its saved audio is decoded
+// once, then an FFT at the playhead gives log-spaced band levels (0–1) and
+// loudness, smoothed so bars rise fast and fall slowly.
+const PV_FFT = 1024, PV_BANDS = 32;
+const PVR = {pcm: new Map(), loading: new Set(), spec: new Map()};
+async function pvRadioPcm(id){
+  if (PVR.pcm.has(id) || PVR.loading.has(id)) return PVR.pcm.get(id) || null;
+  PVR.loading.add(id);
+  try {
+    const buf = await (await fetch("/api/radio/audio/" + encodeURIComponent(id))).arrayBuffer();
+    const ac = new OfflineAudioContext(1, 1, 24000), audio = await ac.decodeAudioData(buf);
+    PVR.pcm.set(id, {data: audio.getChannelData(0), rate: audio.sampleRate});
+    while (PVR.pcm.size > 4) PVR.pcm.delete(PVR.pcm.keys().next().value);
+  } catch (_e) { PVR.pcm.set(id, null); }
+  PVR.loading.delete(id);
+  return PVR.pcm.get(id) || null;
+}
+const PV_HANN = Float32Array.from({length: PV_FFT}, (_, i) => .5 - .5 * Math.cos(2 * Math.PI * i / (PV_FFT - 1)));
+function pvFftMag(x){
+  const n = x.length, re = Float32Array.from(x), im = new Float32Array(n);
+  for (let i = 1, j = 0; i < n; i++) { let b = n >> 1; for (; j & b; b >>= 1) j ^= b; j ^= b; if (i < j) { [re[i], re[j]] = [re[j], re[i]]; } }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = a + len / 2, tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+        const nr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = nr;
+      }
+    }
+  }
+  const mag = new Float32Array(n / 2);
+  for (let i = 0; i < n / 2; i++) mag[i] = Math.hypot(re[i], im[i]) / n;
+  return mag;
+}
+// {bands: Float32Array(PV_BANDS) 0–1, level 0–1} at progress u, or null while loading.
+function pvRadioSpectrum(e, u){
+  const pcm = PVR.pcm.get(e.id);
+  if (pcm === undefined) { pvRadioPcm(e.id); return null; }
+  if (!pcm) return null;
+  const {data, rate} = pcm, at = Math.floor(u * data.length) - PV_FFT / 2;
+  const win = new Float32Array(PV_FFT); let rms = 0;
+  for (let i = 0; i < PV_FFT; i++) { const v = data[at + i] || 0; win[i] = v * PV_HANN[i]; rms += v * v; }
+  const mag = pvFftMag(win), nyq = rate / 2, lo = 80, hi = Math.min(8000, nyq * .95);
+  const raw = new Float32Array(PV_BANDS);
+  for (let b = 0; b < PV_BANDS; b++) {
+    const f0 = lo * Math.pow(hi / lo, b / PV_BANDS), f1 = lo * Math.pow(hi / lo, (b + 1) / PV_BANDS);
+    const i0 = Math.max(1, Math.floor(f0 / nyq * mag.length)), i1 = Math.max(i0 + 1, Math.ceil(f1 / nyq * mag.length));
+    let m = 0; for (let i = i0; i < i1 && i < mag.length; i++) m = Math.max(m, mag[i]);
+    const db = 20 * Math.log10(m + 1e-9);
+    raw[b] = Math.max(0, Math.min(1, (db + 72) / 56));
+  }
+  const prev = PVR.spec.get(e.id) || {bands: new Float32Array(PV_BANDS), level: 0};
+  for (let b = 0; b < PV_BANDS; b++) prev.bands[b] = raw[b] > prev.bands[b] ? raw[b] : prev.bands[b] * .82 + raw[b] * .18;
+  const lvl = Math.min(1, Math.sqrt(rms / PV_FFT) * 4);
+  prev.level = lvl > prev.level ? lvl : prev.level * .85 + lvl * .15;
+  PVR.spec.set(e.id, prev);
+  return prev;
+}
+
 // Ring: expanding rings from the sender plus a waveform halo round it.
 function pvDrawRadio(ctx, pos, R, cx, cy){
   const t = performance.now();
@@ -1435,20 +1496,32 @@ function pvDrawRadio(ctx, pos, R, cx, cy){
     const a = pvRadioNode(e), p = a ? pos(a.theta, R) : {x: cx, y: cy - R * 1.02};
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
-    // Waves: three rings, each expanding and fading over 1.8 s.
+    // The real audio at the playhead (falls back to the volume outline while it loads).
+    const sp = pvRadioSpectrum(e, prog), level = sp ? sp.level : ((e.peaks || [])[Math.floor(prog * (e.peaks || []).length)] || 0) / 255;
+    // Waves: three rings expanding over 1.8 s, brighter and wider when louder.
     for (let i = 0; i < 3; i++) {
       const u = PV_REDUCE ? .5 : ((t / 1800) + i / 3) % 1;
-      ctx.globalAlpha = (1 - u) * .7;
-      ctx.strokeStyle = "#22d3ee"; ctx.lineWidth = 1.6 * (1 - u) + .4;
-      ctx.beginPath(); ctx.arc(p.x, p.y, 8 + u * R * .38, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = (1 - u) * (.3 + .6 * level);
+      ctx.strokeStyle = "#22d3ee"; ctx.lineWidth = (1 + 2 * level) * (1 - u) + .4;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 8 + u * R * (.25 + .2 * level), 0, Math.PI * 2); ctx.stroke();
     }
-    // Waveform halo: spokes sized by the audio round the playhead.
-    const pk = e.peaks || [], n = pk.length, spokes = 40, at = Math.floor(prog * n);
-    if (n) for (let i = 0; i < spokes; i++) {
-      const v = (pk[Math.min(n - 1, Math.max(0, at - spokes / 2 + i))] || 0) / 255;
-      const th = (i / spokes) * Math.PI * 2 + (PV_REDUCE ? 0 : t / 2400), r0 = 9, r1 = r0 + 3 + v * 22;
-      ctx.globalAlpha = .9; ctx.strokeStyle = "#a5f3fc"; ctx.lineWidth = 1.4;
-      ctx.beginPath(); ctx.moveTo(p.x + Math.cos(th) * r0, p.y + Math.sin(th) * r0); ctx.lineTo(p.x + Math.cos(th) * r1, p.y + Math.sin(th) * r1); ctx.stroke();
+    // Spectrum halo: low to high frequencies round each half, mirrored.
+    if (sp) {
+      const n = PV_BANDS * 2;
+      for (let i = 0; i < n; i++) {
+        const b = i < PV_BANDS ? i : n - 1 - i, v = sp.bands[b];
+        const th = (i / n) * Math.PI * 2 - Math.PI / 2 + (PV_REDUCE ? 0 : t / 4000), r0 = 9, r1 = r0 + 2 + v * 26;
+        ctx.globalAlpha = .45 + .55 * v; ctx.strokeStyle = b < PV_BANDS / 3 ? "#67e8f9" : b < PV_BANDS * 2 / 3 ? "#a5f3fc" : "#f0abfc"; ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.moveTo(p.x + Math.cos(th) * r0, p.y + Math.sin(th) * r0); ctx.lineTo(p.x + Math.cos(th) * r1, p.y + Math.sin(th) * r1); ctx.stroke();
+      }
+    } else {
+      const pk = e.peaks || [], n = pk.length, spokes = 40, at = Math.floor(prog * n);
+      if (n) for (let i = 0; i < spokes; i++) {
+        const v = (pk[Math.min(n - 1, Math.max(0, at - spokes / 2 + i))] || 0) / 255;
+        const th = (i / spokes) * Math.PI * 2 + (PV_REDUCE ? 0 : t / 2400), r0 = 9, r1 = r0 + 3 + v * 22;
+        ctx.globalAlpha = .9; ctx.strokeStyle = "#a5f3fc"; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.moveTo(p.x + Math.cos(th) * r0, p.y + Math.sin(th) * r0); ctx.lineTo(p.x + Math.cos(th) * r1, p.y + Math.sin(th) * r1); ctx.stroke();
+      }
     }
     ctx.globalAlpha = 1; ctx.fillStyle = "#ecfeff";
     ctx.beginPath(); ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2); ctx.fill();
@@ -1459,7 +1532,7 @@ function pvDrawRadio(ctx, pos, R, cx, cy){
 function pvRadioBanner(ctx, w){
   const e = PV.radio.find((x) => pvRadioProgress(x) != null); if (!e) return;
   const prog = pvRadioProgress(e), replay = PV.replay && PV.replay.id === e.id;
-  const bw = Math.min(420, w - 40), bx = (w - bw) / 2, by = 26, bh = 40;
+  const bw = Math.min(420, w - 40), bx = (w - bw) / 2, by = 26, bh = 64;
   ctx.fillStyle = "rgba(4,20,26,.92)"; ctx.fillRect(bx, by, bw, bh);
   ctx.strokeStyle = "#22d3ee"; ctx.lineWidth = 1; ctx.strokeRect(bx + .5, by + .5, bw - 1, bh - 1);
   ctx.font = "bold 9.5px " + PV_MONO; ctx.textBaseline = "middle"; ctx.textAlign = "left";
@@ -1468,13 +1541,26 @@ function pvRadioBanner(ctx, w){
   const tw = ctx.measureText(tag).width;
   ctx.font = "9.5px " + PV_MONO; ctx.fillStyle = "#e2e8f0";
   ctx.fillText(pvClip(ctx, e.from + " → " + e.to + " · " + e.secs.toFixed(0) + "s", bw - 20 - tw), bx + 8 + tw, by + 11);
-  const pk = e.peaks || [], n = pk.length, sx = bx + 8, sw = bw - 16, sy = by + 28;
+  // Live spectrum (80 Hz – 8 kHz, log spaced).
+  const sp = pvRadioSpectrum(e, prog);
+  if (sp) {
+    const gx = bx + 8, gw = bw - 16, base = by + 42, gh = 22, bwid = gw / PV_BANDS;
+    for (let b = 0; b < PV_BANDS; b++) {
+      const v = sp.bands[b], hh = Math.max(1, v * gh);
+      ctx.fillStyle = b < PV_BANDS / 3 ? "#22d3ee" : b < PV_BANDS * 2 / 3 ? "#67e8f9" : "#e879f9";
+      ctx.globalAlpha = .35 + .65 * v;
+      ctx.fillRect(gx + b * bwid + .5, base - hh, Math.max(1, bwid - 1.5), hh);
+    }
+    ctx.globalAlpha = 1;
+  }
+  // Timeline: the whole transmission, played part lit.
+  const pk = e.peaks || [], n = pk.length, sx = bx + 8, sw = bw - 16, sy = by + 54;
   for (let i = 0; i < n; i++) {
-    const v = Math.max(.05, pk[i] / 255), hh = v * 9;
+    const v = Math.max(.05, pk[i] / 255), hh = v * 5;
     ctx.fillStyle = i / n <= prog ? "#22d3ee" : "#155e75";
     ctx.fillRect(sx + (i / n) * sw, sy - hh, Math.max(1, sw / n - .6), hh * 2);
   }
-  ctx.fillStyle = "#f8fafc"; ctx.fillRect(sx + prog * sw, sy - 10, 1, 20);
+  ctx.fillStyle = "#f8fafc"; ctx.fillRect(sx + prog * sw, sy - 6, 1, 12);
   ctx.textBaseline = "alphabetic";
 }
 
