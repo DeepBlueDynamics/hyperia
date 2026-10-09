@@ -6,6 +6,9 @@
 //! save is one event, capped per pane so a build or checkout can't flood, then
 //! recorded locally (proto_viz Live) and forwarded to n8 as `fs` events.
 //!
+//! A plain terminal an agent drives (terminal_run / pane_send) is watched too,
+//! for DRIVEN_FOR after the agent last drove it, so a build it runs shows up.
+//!
 //! Two panes in the same folder: the pane that claimed it first keeps it while
 //! it still qualifies. Changes can't be told apart by writer, so crediting one
 //! pane beats double-counting every save.
@@ -36,6 +39,24 @@ const MAX_SIZES: usize = 50_000;
 const EXCLUDED_DIRS: &[&str] = &[
     ".git", "target", "node_modules", "dist", "build", ".next", "__pycache__", ".venv", "venv",
 ];
+
+/// How long a terminal stays watched after an agent last drove it.
+const DRIVEN_FOR: Duration = Duration::from_secs(30 * 60);
+
+static DRIVEN: std::sync::Mutex<Option<HashMap<String, Instant>>> = std::sync::Mutex::new(None);
+
+/// An agent just sent input to `pane`: watch its folder for a while.
+pub fn note_driven(pane: &str) {
+    let mut g = DRIVEN.lock().unwrap_or_else(|e| e.into_inner());
+    let m = g.get_or_insert_with(HashMap::new);
+    m.retain(|_, t| t.elapsed() < DRIVEN_FOR);
+    m.insert(pane.to_string(), Instant::now());
+}
+
+pub(crate) fn recently_driven(pane: &str) -> bool {
+    let g = DRIVEN.lock().unwrap_or_else(|e| e.into_inner());
+    g.as_ref().and_then(|m| m.get(pane)).is_some_and(|t| t.elapsed() < DRIVEN_FOR)
+}
 
 /// Agents that run inside n8 containers; their files are n8's to report.
 fn is_n8_token(token: &str) -> bool {
@@ -232,7 +253,7 @@ async fn scan(bridge: &Bridge, owners: &HashMap<PathBuf, String>) -> HashMap<Pat
         }
         let token = bridge.classification_for(&uid).await
             .and_then(|c| c.classification.agent_token().map(str::to_string));
-        if should_watch(token.as_deref()) {
+        if should_watch(token.as_deref()) || (token.is_none() && recently_driven(&uid)) {
             claims.entry(folder).or_default().push(uid);
         }
     }
@@ -338,6 +359,13 @@ mod tests {
         assert_eq!(pick_owner(Some("b"), &mut c), "b", "current owner still qualifies");
         assert_eq!(pick_owner(Some("gone"), &mut c), "a", "owner left: lowest uid");
         assert_eq!(pick_owner(None, &mut c), "a");
+    }
+
+    #[test]
+    fn a_driven_terminal_is_watched_for_a_while() {
+        assert!(!recently_driven("pane-driven-test"));
+        note_driven("pane-driven-test");
+        assert!(recently_driven("pane-driven-test"));
     }
 
     #[test]
