@@ -960,6 +960,7 @@ function pvIngestStatus(j){
         const name = p.name || p.title || String(p.paneId || "").slice(0, 8);
         const lastOut = p.outSecsAgo == null ? 0 : Date.now() - p.outSecsAgo * 1000;
         panes.push({paneId: p.paneId, name, proc, cls, focused: !!p.focused, state: p.state || "", tab: tab.name || "",
+          tabIdx: t, tabId: tab.tabId || "", split: p.splitLabel || "",
           color: cls === "wb" ? null : pvPaneColor(tab.tabId, p.splitLabel),
           bps: Number(p.outBps) || 0, lps: Number(p.outLps) || 0, lastOut});
         names[p.paneId] = name;
@@ -1003,6 +1004,7 @@ function pvBuildNodes(){
     if (p.cls === "ag") PV.agentSeen.set(p.paneId, nowMs);
     const wasAgent = nowMs - (PV.agentSeen.get(p.paneId) || 0) < 600000;
     nodes.set("pane:"+p.paneId, {id: "pane:"+p.paneId, label: p.name, pane: p.paneId, color: p.color,
+      tabIdx: p.tabIdx, tabId: p.tabId, tabName: p.tab, split: p.split,
       kind: p.cls === "wb" ? "web" : wasAgent ? "agent" : "pane", sent: 0, received: 0, access: 0, alias: new Set()});
   }
   // A restored tab reuses a pane's name with a new pane id: one node per name,
@@ -1056,11 +1058,23 @@ function pvBuildNodes(){
   }
   total = Math.max(1, ...[...slots.values()].map((sl) => sl.i + 1));
   const alias = new Map();
-  // Stable order (by slot), evenly spaced over the live nodes: no gaps from
-  // departed ones, and a node only slides a little when another comes or goes.
-  const order = [...list].sort((a, b) => slots.get(a.id).i - slots.get(b.id).i);
-  const at = new Map(order.map((n, j) => [n.id, j]));
-  PV.ringTotal = Math.max(6, order.length);
+  // Ring order: panes grouped by tab (tab-bar order), then split letter;
+  // nodes without a pane after them, first-seen first. Tabs get a small gap.
+  const tabOf = (n) => (n.tabIdx != null ? n.tabIdx : 1e9);
+  const order = [...list].sort((a, b) => tabOf(a) - tabOf(b) || String(a.split || "").localeCompare(String(b.split || "")) || slots.get(a.id).i - slots.get(b.id).i);
+  const GAP = .7, at = new Map();
+  let u = 0;
+  order.forEach((n, j) => { if (j && tabOf(n) !== tabOf(order[j - 1])) u += GAP; at.set(n.id, u); u += 1; });
+  if (order.length > 1 && tabOf(order[0]) !== tabOf(order[order.length - 1])) u += GAP;
+  PV.ringTotal = Math.max(6, u);
+  // Tab groups for the perimeter rims.
+  PV.tabGroups = [];
+  for (const n of order) {
+    if (n.tabIdx == null) continue;
+    const g = PV.tabGroups[PV.tabGroups.length - 1];
+    if (g && g.tabIdx === n.tabIdx) g.ids.push(n.id);
+    else PV.tabGroups.push({tabIdx: n.tabIdx, name: n.tabName || "", ids: [n.id]});
+  }
   list.forEach((n) => {
     n.theta = (at.get(n.id) / PV.ringTotal) * Math.PI * 2 - Math.PI/2;
     alias.set(n.id, n); for (const a of n.alias) alias.set(a, n); if (n.pane) { alias.set(n.pane, n); alias.set("pane:"+n.pane, n); }
@@ -1124,7 +1138,7 @@ function pvDrawRing(){
   // (pitch = tip, yaw = slow spin + your orbit) projects all of it.
   const cam = PV.cam;
   cam.pitch += (cam.want - cam.pitch) * (PV_REDUCE ? 1 : Math.min(1, k * 1.5));
-  const R = Math.max(50, Math.min(w*.3, h*.31)), rot = PV.rot, pitch = cam.pitch, yaw = rot + cam.yaw;
+  const R = Math.max(50, Math.min(w*.34, h*.36)), rot = PV.rot, pitch = cam.pitch, yaw = rot + cam.yaw;
   const F = R * 3.4, cp = Math.cos(pitch), sp = Math.sin(pitch), cyw = Math.cos(yaw), syw = Math.sin(yaw);
   // Lower the floor as it tips so the files above it stay in frame.
   const vcx = w*.5, vcy = h*.5 + R*.38*cp;
@@ -1147,6 +1161,7 @@ function pvDrawRing(){
   ctx.strokeStyle = "rgba(56,189,248,.06)";
   for (const s of [.33, .66]) { poly(floor(R * s, 48)); ctx.stroke(); }
   for (let i = 0; i < 12; i++) { const a = pos(i / 12 * Math.PI * 2, R * .1), b = pos(i / 12 * Math.PI * 2, R * .93); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+  PV.geom.pos = pos;
 
   // Nodes ease to their slot; new ones fade in, gone ones fade out.
   const present = new Set();
@@ -1162,6 +1177,7 @@ function pvDrawRing(){
   if (!drawn.length) { pvCanvasNote(ctx, w, h, PV.mode === "live" ? "no open panes" : "no panes reported"); return; }
   const spanT = Math.PI * 2 / (PV.ringTotal || Math.max(6, PV.nodes.length || 6));
   PV.span = PV.span ? PV.span + (spanT - PV.span) * k : spanT;
+  pvDrawBand(ctx, pos, R);
   const sel = PV.sel;
 
   // Strands: mail (amber), system mail (white), pane access (cyan). Each
@@ -2037,6 +2053,48 @@ function edReplace(all){
   }, true);
   window.addEventListener("beforeunload", (ev) => { if (ED.tabs.some((t) => t.ta && t.ta.value !== t.saved)) { ev.preventDefault(); ev.returnValue = ""; } });
 })();
+
+// The band round the floor: each pane's slice in its own colour, out past the
+// names; each tab's panes sit together under a rim in their colours, with the
+// tab's name on it.
+const PV_BAND_OUT = 165;
+function pvBandArc(pos, th0, th1, r){
+  const pts = [], n = Math.max(3, Math.ceil(Math.abs(th1 - th0) / .04));
+  for (let i = 0; i <= n; i++) pts.push(pos(th0 + (th1 - th0) * i / n, r));
+  return pts;
+}
+function pvDrawBand(ctx, pos, R){
+  const half = PV.span * .5, inset = Math.min(.02, PV.span * .06), r0 = R * 1.035, r1 = R + PV_BAND_OUT;
+  const sel = PV.sel;
+  for (const a of PV.anim.values()) {
+    const col = a.node.color; if (!col) continue;
+    const dim = sel && a.node.id !== sel ? .45 : 1;
+    const inner = pvBandArc(pos, a.theta - half + inset, a.theta + half - inset, r0);
+    const outer = pvBandArc(pos, a.theta + half - inset, a.theta - half + inset, r1);
+    ctx.beginPath(); [...inner, ...outer].forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath();
+    ctx.globalAlpha = a.alpha * dim * .075; ctx.fillStyle = col; ctx.fill();
+    ctx.globalAlpha = a.alpha * dim * .3; ctx.strokeStyle = col; ctx.lineWidth = 1;
+    ctx.beginPath(); inner.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
+  }
+  // Tab rims and names.
+  ctx.lineCap = "round";
+  for (const g of PV.tabGroups || []) {
+    const as = g.ids.map((id) => PV.anim.get(id)).filter(Boolean); if (!as.length) continue;
+    for (const a of as) {
+      if (!a.node.color) continue;
+      const rim = pvBandArc(pos, a.theta - half + inset, a.theta + half - inset, r1 + 3);
+      ctx.globalAlpha = a.alpha * .85; ctx.strokeStyle = a.node.color; ctx.lineWidth = 3;
+      ctx.beginPath(); rim.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
+    }
+    if (g.name && !/^[0-9a-f-]{36}$/i.test(g.name)) {
+      const mid = as.reduce((t, a) => t + a.theta, 0) / as.length, p = pos(mid, r1 + 16);
+      ctx.globalAlpha = .75; ctx.fillStyle = as[0].node.color || "#94a3b8";
+      ctx.font = "bold 8.5px " + PV_MONO; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(pvClip(ctx, g.name.toUpperCase(), 180), p.x, p.y);
+    }
+  }
+  ctx.globalAlpha = 1; ctx.lineCap = "butt"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+}
 
 // ---- Container network (live). n8 pushes each container pane's received and
 // sent bytes/s. Traffic comes down an uplink from a NET hub into the
