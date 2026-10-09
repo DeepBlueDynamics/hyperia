@@ -1323,7 +1323,7 @@ function pvDrawRing(){
   if (PV.focus) { ctx.setTransform(dpr*vw.z, 0, 0, dpr*vw.z, dpr*vw.x, dpr*vw.y); pvDrawScreens(ctx, R, true); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
   pvRadioBanner(ctx, w);
   ctx.font = "9px "+PV_MONO; ctx.fillStyle = "#475569";
-  ctx.fillText("SCROLL TO ZOOM · DRAG TO MOVE"+(PV.dim === "3d" ? " · CTRL+DRAG TO TIP" : "")+" · DOUBLE-CLICK A SCREEN OR FILE TO OPEN IT"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
+  ctx.fillText("SCROLL TO ZOOM · DRAG TO MOVE"+(PV.dim === "3d" ? " · CTRL+DRAG TO TIP" : "")+" · HOVER A PANE FOR ITS SCREEN, CLICK IT TO ZOOM · DOUBLE-CLICK A FILE TO EDIT"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
   ctx.fillText(PV.nodes.length+" NODES · "+PV.edgeAnim.size+" LINKS · "+(PV.mode === "live" ? "LIVE · LAST HOUR" : "HISTORY · "+(PV.range > 86400000 ? "7 DAYS" : "24 HOURS")), 14, 18);
 }
 
@@ -2065,16 +2065,31 @@ function pvBandArc(pos, th0, th1, r){
   for (let i = 0; i <= n; i++) pts.push(pos(th0 + (th1 - th0) * i / n, r));
   return pts;
 }
+function pvInPoly(x, y, pts){
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i], b = pts[j];
+    if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+// The pane slice under a point (world coords, pre-view), if any.
+function pvSliceAt(x, y){
+  for (const b of PV.bandPolys || []) if (pvInPoly(x, y, b.pts)) return b.id;
+  return null;
+}
 function pvDrawBand(ctx, pos, R){
   const half = PV.span * .5, inset = Math.min(.02, PV.span * .06), r0 = R * 1.035, r1 = R + PV_BAND_OUT;
   const sel = PV.sel;
+  PV.bandPolys = [];
   for (const a of PV.anim.values()) {
     const col = a.node.color; if (!col) continue;
     const dim = sel && a.node.id !== sel ? .45 : 1;
     const inner = pvBandArc(pos, a.theta - half + inset, a.theta + half - inset, r0);
     const outer = pvBandArc(pos, a.theta + half - inset, a.theta - half + inset, r1);
+    PV.bandPolys.push({id: a.node.id, pts: [...inner, ...outer]});
     ctx.beginPath(); [...inner, ...outer].forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath();
-    ctx.globalAlpha = a.alpha * dim * .075; ctx.fillStyle = col; ctx.fill();
+    ctx.globalAlpha = a.alpha * dim * (a.node.id === PV.hover ? .16 : .075); ctx.fillStyle = col; ctx.fill();
     ctx.globalAlpha = a.alpha * dim * .3; ctx.strokeStyle = col; ctx.lineWidth = 1;
     ctx.beginPath(); inner.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
   }
@@ -2101,6 +2116,7 @@ function pvDrawBand(ctx, pos, R){
 // ---- Pane screen: a retro CRT at the rim of the SELECTED terminal pane's slice,
 // showing its live screen text tinted in the pane's colour. Toggle: ▣ screens.
 const PVSC = {on: true, data: new Map(), timer: null, busy: false};
+const pvShownId = () => (PV.focus ? PV.focus.node : PV.hover || PV.sel);
 try { PVSC.on = localStorage.getItem("pv.screens") !== "off"; } catch (_e) {}
 async function pvScrollback(pane, lines){
   try {
@@ -2111,7 +2127,7 @@ async function pvScrollback(pane, lines){
 async function pvScreensPoll(){
   if (!PV.on || !PVSC.on || PV.mode !== "live" || PVSC.busy || document.visibilityState !== "visible") return;
   PVSC.busy = true;
-  const sel = PV.sel && PV.alias.get(PV.sel), selPane = sel && sel.pane;
+  const sel = pvShownId() && PV.alias.get(pvShownId()), selPane = sel && sel.pane;
   const panes = PV.panes.filter((p) => p.paneId === selPane && p.cls !== "wb" && p.cls !== "dm");
   await Promise.all(panes.map(async (p) => {
     try {
@@ -2176,101 +2192,133 @@ function pvCrtPath(ctx, x, y, w, h, r, bow){
   ctx.quadraticCurveTo(x, y, x + r, y);
   ctx.closePath();
 }
-function pvDrawScreens(ctx, R, focusPass){
-  if (!PVSC.on || PV.mode !== "live") return;
-  const g = PV.geom; if (!g || !g.P3) return;
-  const r = R + PV_BAND_OUT + 34, sel = PV.sel;
-  if (!focusPass) { PVSC.hit = null; PVSC.base = null; }
-  const items = [];
-  for (const a of PV.anim.values()) {
-    if (a.node.id !== sel) continue;
-    const d = a.node.pane && PVSC.data.get(a.node.pane); if (!d || !d.text) continue;
-    const base = g.P3(Math.cos(a.theta) * r, 0, -Math.sin(a.theta) * r);
-    items.push({a, d, base});
-  }
-  items.sort((p, q) => q.base.z - p.base.z);   // far first
-  const arc = r * PV.span;
-  for (const {a, d, base} of items) {
-    const col = a.node.color || "#7dd3fc", p = base.p;
-    const W = Math.max(Math.min(arc * 1.6, 340), 240) * p, H = W * .6, stand = 12 * p, bez = 6 * p;
-    const x = base.x - W / 2, y = base.y - stand - H;
-    PVSC.hit = {x: x - bez, y: y - bez, w: W + bez * 2, h: H + bez * 2, pane: a.node.pane, name: a.node.label, color: col};
-    PVSC.base = {x: base.x, y: base.y};
-    const focused = !!(PV.focus && PV.focus.pane === a.node.pane);
-    if (focused !== !!focusPass) continue;
-    const dim = a.alpha;
-    ctx.save(); ctx.globalAlpha = dim;
-    // Stand: a trapezoid down to the band.
+// Where a pane's monitor stands for a given projection (world coords, pre-view).
+function pvMonitorRect(theta, P3, R){
+  const r = R + PV_BAND_OUT + 34, base = P3(Math.cos(theta) * r, 0, -Math.sin(theta) * r), p = base.p;
+  const W = Math.max(Math.min(r * PV.span * 1.6, 340), 240) * p, H = W * .6, stand = 12 * p, bez = 6 * p;
+  const x = base.x - W / 2, y = base.y - stand - H;
+  return {x, y, W, H, p, bez, base, hit: {x: x - bez, y: y - bez, w: W + bez * 2, h: H + bez * 2}};
+}
+function pvDrawMonitor(ctx, d, col, m, opts = {}){
+  const {x, y, W, H, p, bez, base} = m, dim = opts.alpha == null ? 1 : opts.alpha;
+  ctx.save(); ctx.globalAlpha = dim;
+  if (opts.stand !== false && base) {
     ctx.fillStyle = "#0b1220"; ctx.strokeStyle = col; ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(base.x - W * .12, y + H); ctx.lineTo(base.x + W * .12, y + H);
     ctx.lineTo(base.x + W * .22, base.y); ctx.lineTo(base.x - W * .22, base.y); ctx.closePath();
     ctx.fill(); ctx.globalAlpha = dim * .6; ctx.stroke(); ctx.globalAlpha = dim;
-    // Bezel.
-    pvCrtPath(ctx, x - bez, y - bez, W + bez * 2, H + bez * 2, 9 * p, 2 * p);
-    ctx.fillStyle = "#0a0f19"; ctx.fill();
-    ctx.strokeStyle = col; ctx.lineWidth = 1.4; ctx.globalAlpha = dim * .85; ctx.stroke(); ctx.globalAlpha = dim;
-    // Glass.
-    pvCrtPath(ctx, x, y, W, H, 7 * p, 3 * p); ctx.save(); ctx.clip();
-    const px = (window.devicePixelRatio || 1) * pvView().z, cap = focused ? 2600 : 720;
-    ctx.drawImage(pvScreenCanvas(d, Math.min(cap, W * px), Math.min(cap * .6, H * px)), x, y, W, H);
-    const shine = ctx.createLinearGradient(x, y, x + W * .6, y + H);
-    shine.addColorStop(0, "rgba(255,255,255,.10)"); shine.addColorStop(.35, "rgba(255,255,255,0)");
-    ctx.fillStyle = shine; ctx.fillRect(x, y, W, H);
-    ctx.restore();
-    // Power LED.
-    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x + W - 4 * p, y + H + bez * .55, 1.3 * p, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
+  }
+  if (opts.glow) { ctx.shadowColor = col; ctx.shadowBlur = 24 * opts.glow; }
+  pvCrtPath(ctx, x - bez, y - bez, W + bez * 2, H + bez * 2, 9 * p, 2 * p);
+  ctx.fillStyle = "#0a0f19"; ctx.fill(); ctx.shadowBlur = 0;
+  ctx.strokeStyle = col; ctx.lineWidth = 1.4; ctx.globalAlpha = dim * .85; ctx.stroke(); ctx.globalAlpha = dim;
+  pvCrtPath(ctx, x, y, W, H, 7 * p, 3 * p); ctx.save(); ctx.clip();
+  const px = (window.devicePixelRatio || 1) * pvView().z, cap = opts.sharp ? 2600 : 720;
+  ctx.drawImage(pvScreenCanvas(d, Math.min(cap, W * px), Math.min(cap * .6, H * px)), x, y, W, H);
+  const shine = ctx.createLinearGradient(x, y, x + W * .6, y + H);
+  shine.addColorStop(0, "rgba(255,255,255,.10)"); shine.addColorStop(.35, "rgba(255,255,255,0)");
+  ctx.fillStyle = shine; ctx.fillRect(x, y, W, H);
+  ctx.restore();
+  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x + W - 4 * p, y + H + bez * .55, 1.3 * p, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+// Rim pass: the selected pane's monitor at its slot (not while it's pinned up).
+// Focus pass: the focused monitor on top — at its slot while the camera flies
+// in, pinned while you watch, flying back to its slot on the way out.
+function pvDrawScreens(ctx, R, focusPass){
+  if (!PVSC.on || PV.mode !== "live") return;
+  const g = PV.geom; if (!g || !g.P3) return;
+  if (!focusPass) { PVSC.hit = null; PVSC.base = null; }
+  const f = PV.focus;
+  for (const a of PV.anim.values()) {
+    if (a.node.id !== pvShownId() && !(f && f.node === a.node.id)) continue;
+    const d = a.node.pane && PVSC.data.get(a.node.pane); if (!d || !d.text) continue;
+    const col = a.node.color || "#7dd3fc", m = pvMonitorRect(a.theta, g.P3, R);
+    const focused = !!(f && f.node === a.node.id);
+    if (!focusPass) {
+      PVSC.hit = {...m.hit, pane: a.node.pane, name: a.node.label, color: col};
+      PVSC.base = {x: m.base.x, y: m.base.y};
+      if (!focused) pvDrawMonitor(ctx, d, col, m, {alpha: a.alpha});
+      continue;
+    }
+    if (!focused) continue;
+    let mm = m, tether = 0;
+    if (f.phase === "pinned" || f.phase === "out") {
+      const pin = f.pin, k = f.phase === "out" ? f.e : 0, L = (u, v) => u + (v - u) * k;
+      mm = {x: L(pin.x, m.x), y: L(pin.y, m.y), W: L(pin.W, m.W), H: L(pin.H, m.H), p: L(pin.p, m.p), bez: L(pin.bez, m.bez), base: null};
+      tether = 1 - k;
+    }
+    if (tether > .02) {
+      // Tether from the pinned monitor down to its pane's turning slot.
+      ctx.save(); ctx.globalAlpha = .55 * tether; ctx.strokeStyle = col; ctx.lineWidth = 1.5 / Math.max(.5, pvView().z);
+      ctx.setLineDash([4 / pvView().z, 6 / pvView().z]); ctx.lineDashOffset = -performance.now() / 40;
+      const sx = mm.x + mm.W / 2, sy = mm.y + mm.H + mm.bez;
+      ctx.beginPath(); ctx.moveTo(sx, sy); ctx.quadraticCurveTo(sx, (sy + m.base.y) / 2, m.base.x, m.base.y); ctx.stroke();
+      ctx.restore();
+    }
+    pvDrawMonitor(ctx, d, col, mm, {sharp: true, stand: f.phase === "in", glow: f.phase === "pinned" ? 1 : f.phase === "out" ? 1 - f.e : f.e});
   }
 }
 
-// ---- Focused screen: double-click a pane's CRT and the camera goes to it —
-// swings round so the monitor is in front, tips down to face it and zooms
-// until it's big and centred — then rides with the ring's rotation so the
-// monitor stays put. Esc or double-clicking it flies the camera back.
-const PV_FOCUS_MS = 900, PV_FOCUS_PITCH = .5;
+// ---- Focused screen: double-click a pane's CRT and the camera flies to it —
+// from the live, turning view straight into a computed end shot (monitor in
+// front, faced square, ~80% of the view, centred). There the monitor is
+// pinned and the camera lets go, so everything keeps turning below it, with a
+// tether to the pane's slot. Esc or double-clicking it flies back.
+const PV_FOCUS_MS = 1000, PV_FOCUS_PITCH = .5;
+const pvEaseIO = (t) => (t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+// The projection pvDrawRing would use for this camera (see its P3).
+function pvProjector(pitch, eff, R, w, h){
+  const F = R * 3.4, cp = Math.cos(pitch), sp = Math.sin(pitch), cyw = Math.cos(eff), syw = Math.sin(eff);
+  const vcx = w * .5, vcy = h * .5 + R * .38 * cp;
+  return (x, y, z) => {
+    const x1 = x*cyw - z*syw, z1 = x*syw + z*cyw, y2 = y*cp + z1*sp, z2 = -y*sp + z1*cp, p = F / (F + z2);
+    return {x: vcx + x1*p, y: vcy - y2*p, z: z2, p};
+  };
+}
 function pvFocusOpen(hit){
-  const n = PV.nodes.find((x) => x.pane === hit.pane); if (!n) return;
-  const v = pvView();
-  PV.focus = {pane: hit.pane, node: n.id, t0: performance.now(), closing: false,
-    from: {yaw: PV.cam.yaw, pitch: PV.cam.want, view: {z: v.z, x: v.x, y: v.y}, eff: PV.rot + PV.cam.yaw}};
+  const n = PV.nodes.find((x) => x.pane === hit.pane), a = n && PV.anim.get(n.id); if (!a) return;
+  const c = $("pv-ring"), w = c.clientWidth, h = c.clientHeight, R = PV.geom.R, v = pvView();
+  // The end shot: monitor in front (effective yaw = theta - 90°), tipped to face it.
+  const want = a.theta - Math.PI / 2, m = pvMonitorRect(a.theta, pvProjector(PV_FOCUS_PITCH, want, R, w, h), R);
+  const z = Math.min(8, (w * .8) / m.hit.w, (h * .8) / m.hit.h);
+  const to = {z, x: w / 2 - (m.hit.x + m.hit.w / 2) * z, y: h / 2 - (m.hit.y + m.hit.h / 2) * z};
+  PV.focus = {pane: hit.pane, node: n.id, phase: "in", t0: performance.now(), e: 0, want, pin: m, to,
+    rot0: PV.rot, from: {eff: PV.rot + PV.cam.yaw, pitch: PV.cam.pitch, view: {z: v.z, x: v.x, y: v.y}}};
   clearInterval(PVSC.fast); PVSC.fast = setInterval(pvScreensPoll, 1000);
   pvSound("tick");
 }
 function pvFocusClose(){
-  const f = PV.focus; if (!f || f.closing) return;
+  const f = PV.focus; if (!f || f.phase === "out") return;
   const v = pvView();
-  f.closing = true; f.t0 = performance.now();
-  f.back = {eff: PV.rot + PV.cam.yaw, pitch: PV.cam.pitch, view: {z: v.z, x: v.x, y: v.y}};
+  f.back = {eff: PV.rot + PV.cam.yaw, pitch: PV.cam.pitch, view: {z: v.z, x: v.x, y: v.y}, rot: PV.rot};
+  f.phase = "out"; f.t0 = performance.now(); f.e = 0;
   clearInterval(PVSC.fast); PVSC.fast = null;
 }
-// Called every frame before drawing: steer the camera (yaw, pitch, zoom/pan).
+// Every frame before drawing: steer the camera.
 function pvFocusStep(){
   const f = PV.focus; if (!f) return;
-  const raw = Math.min(1, (performance.now() - f.t0) / (PV_REDUCE ? 1 : PV_FOCUS_MS));
-  const e = raw < .5 ? 4 * raw * raw * raw : 1 - Math.pow(-2 * raw + 2, 3) / 2;   // ease in-out
-  const v = pvView(), c = $("pv-ring"), cw = c.clientWidth, ch = c.clientHeight;
-  const angLerp = (a, b, k) => a + pvAngDiff(b, a) * k;
-  if (f.closing) {
-    // Back to where you were: your orbit, tip and zoom.
-    PV.cam.yaw = angLerp(f.back.eff, f.from.eff, e) - PV.rot;
-    PV.cam.pitch = PV.cam.want = f.back.pitch + (f.from.pitch - f.back.pitch) * e;
-    v.z = f.back.view.z + (f.from.view.z - f.back.view.z) * e;
-    v.x = f.back.view.x + (f.from.view.x - f.back.view.x) * e;
-    v.y = f.back.view.y + (f.from.view.y - f.back.view.y) * e;
-    if (raw >= 1) { PV.cam.yaw = f.from.eff - PV.rot; PV.focus = null; }
+  const raw = Math.min(1, (performance.now() - f.t0) / (PV_REDUCE ? 1 : PV_FOCUS_MS)), e = pvEaseIO(raw);
+  f.e = e;
+  const v = pvView(), angLerp = (a, b, k) => a + pvAngDiff(b, a) * k;
+  const zLerp = (a, b, k) => Math.exp(Math.log(a) + (Math.log(b) - Math.log(a)) * k);
+  if (f.phase === "in") {
+    // Start from where the turning view would be now, blend into the end shot.
+    const live = f.from.eff + (PV.rot - f.rot0);
+    PV.cam.yaw = angLerp(live, f.want, e) - PV.rot;
+    PV.cam.pitch = PV.cam.want = f.from.pitch + (PV_FOCUS_PITCH - f.from.pitch) * e;
+    v.z = zLerp(f.from.view.z, f.to.z, e); v.x = f.from.view.x + (f.to.x - f.from.view.x) * e; v.y = f.from.view.y + (f.to.y - f.from.view.y) * e;
+    if (raw >= 1) { f.phase = "pinned"; PV.cam.yaw = f.want - PV.rot; }
     return;
   }
-  const a = PV.anim.get(f.node); if (!a) { pvFocusClose(); return; }
-  // In front of the camera: effective yaw = theta - 90°. Ride the ring from there.
-  const want = a.theta - Math.PI / 2;
-  PV.cam.yaw = angLerp(f.from.eff, want, e) - PV.rot;
-  PV.cam.pitch = PV.cam.want = f.from.pitch + (PV_FOCUS_PITCH - f.from.pitch) * e;
-  // Zoom/pan so the monitor fills ~80% of the view, centred.
-  const h = PVSC.hit; if (!h || !cw) return;
-  const z = Math.min(8, (cw * .8) / h.w, (ch * .8) / h.h), tx = cw / 2 - (h.x + h.w / 2) * z, ty = ch / 2 - (h.y + h.h / 2) * z;
-  const k = raw >= 1 ? .35 : Math.max(.08, e);
-  v.z += (z - v.z) * k; v.x += (tx - v.x) * k; v.y += (ty - v.y) * k;
+  if (f.phase === "pinned") { v.z = f.to.z; v.x = f.to.x; v.y = f.to.y; return; }   // the ring turns on its own
+  // Out: back to your tip and zoom, with the rotation carrying on.
+  const target = f.from.eff + (PV.rot - f.rot0), live = f.back.eff + (PV.rot - f.back.rot);
+  PV.cam.yaw = angLerp(live, target, e) - PV.rot;
+  PV.cam.pitch = PV.cam.want = f.back.pitch + (f.from.pitch - f.back.pitch) * e;
+  v.z = zLerp(f.back.view.z, f.from.view.z, e); v.x = f.back.view.x + (f.from.view.x - f.back.view.x) * e; v.y = f.back.view.y + (f.from.view.y - f.back.view.y) * e;
+  if (raw >= 1) { PV.cam.yaw = target - PV.rot; PV.focus = null; }
 }
 
 // ---- Container network (live). n8 pushes each container pane's received and
@@ -3194,8 +3242,8 @@ $("pv-ring").addEventListener("click", (ev) => {
   const g = PV.geom; if (!g) return;
   if (Date.now() - PV.dragged < 250) return;   // the end of a pan, not a click
   const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z, reach = 12 / v.z + 4;
-  if (PV.focus) return;   // the camera is on a screen; Esc or double-click to come back
-  const sh = PVSC.hit; if (sh && ox >= sh.x && ox <= sh.x + sh.w && oy >= sh.y && oy <= sh.y + sh.h) return;
+  if (PV.focus) { pvFocusClose(); return; }   // click again to leave
+  const sh = PVSC.hit; if (sh && ox >= sh.x && ox <= sh.x + sh.w && oy >= sh.y && oy <= sh.y + sh.h) { pvFocusOpen(sh); return; }
   // Files and dirs float above the floor: nearest within reach wins.
   let best = null, bestD = Infinity;
   for (const [p, a] of PV.fileAnim) { const dd = Math.hypot(ox - a.x, oy - a.y); if (dd < bestD) { bestD = dd; best = {file: p}; } }
@@ -3210,6 +3258,8 @@ $("pv-ring").addEventListener("click", (ev) => {
     if (dd < nodeD) { nodeD = dd; node = id; }
   }
   if (node && nodeD < 26 / v.z + 6) { pvSelect(node); return; }
+  // Anywhere in a pane's slice, out to its name.
+  const slice = pvSliceAt(ox, oy); if (slice) { if (slice !== PV.sel) pvSelect(slice); return; }
   PV.selFile = null; PV.selDir = null; pvSelect(null);
 });
 window.addEventListener("keydown", (ev) => {
@@ -3217,6 +3267,21 @@ window.addEventListener("keydown", (ev) => {
   if (PV.focus) { pvFocusClose(); return; }
   if (PV.sel) pvSelect(null);
 });
+function pvHoverAt(ev){
+  if (PV.focus) { $("pv-ring").style.cursor = "zoom-out"; return; }
+  const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z, sh = PVSC.hit;
+  const onMon = sh && ox >= sh.x && ox <= sh.x + sh.w && oy >= sh.y && oy <= sh.y + sh.h;
+  const slice = onMon ? null : pvSliceAt(ox, oy);
+  $("pv-ring").style.cursor = onMon ? "zoom-in" : slice ? "pointer" : "";
+  clearTimeout(PV.hoverOff);
+  if (onMon) return;
+  if (slice) {
+    if (slice !== PV.hover) { PV.hover = slice; if (PVSC.on) pvScreensPoll(); }
+    return;
+  }
+  // Off everything: let it go after a moment (time to reach the monitor).
+  if (PV.hover) PV.hoverOff = setTimeout(() => { PV.hover = null; }, 450);
+}
 // Wheel zooms around the cursor, drag moves around the floor, Ctrl+drag tips
 // and orbits (3D), double-click resets.
 (() => {
@@ -3236,7 +3301,7 @@ window.addEventListener("keydown", (ev) => {
     el.setPointerCapture(ev.pointerId);
   });
   el.addEventListener("pointermove", (ev) => {
-    if (!drag) return;
+    if (!drag) { pvHoverAt(ev); return; }
     const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
     if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 4) { drag.moved = true; el.style.cursor = "grabbing"; }
     if (!drag.moved) return;
@@ -3247,12 +3312,11 @@ window.addEventListener("keydown", (ev) => {
     redraw();
   });
   const end = () => { if (drag && drag.moved) PV.dragged = Date.now(); drag = null; el.style.cursor = ""; };
+  el.addEventListener("pointerleave", () => { clearTimeout(PV.hoverOff); PV.hoverOff = setTimeout(() => { PV.hover = null; }, 450); });
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
   el.addEventListener("dblclick", (ev) => {
     const sh = PVSC.hit, vv = pvView(), sx = (ev.offsetX - vv.x) / vv.z, sy = (ev.offsetY - vv.y) / vv.z;
-    const onScreen = sh && sx >= sh.x && sx <= sh.x + sh.w && sy >= sh.y && sy <= sh.y + sh.h;
-    if (PV.focus) { if (onScreen || !PVSC.hit) pvFocusClose(); return; }
-    if (onScreen) { pvFocusOpen(sh); return; }
+    if (PV.focus || (sh && sx >= sh.x && sx <= sh.x + sh.w && sy >= sh.y && sy <= sh.y + sh.h)) return;
     const hit = pvHitFile(ev);
     if (hit) { PV.selFile = hit; PV.sel = null; PV.selDir = null; pvEdOpen(hit); return; }
     PV.views[PV.mode] = {z: 1, x: 0, y: 0};
