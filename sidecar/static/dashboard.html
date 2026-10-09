@@ -172,7 +172,7 @@
   @media(max-width:1000px){.shell{grid-template-columns:1fr}aside{position:static}.row-flow{grid-template-columns:1fr}}
 
   /* ---- proto_viz tab (#proto_viz): ops-console view of real stats ---- */
-  body.proto > :not(.topbar):not(#proto):not(#pv-ed):not(#pv-term):not(script){display:none !important}
+  body.proto > :not(.topbar):not(#proto):not(#pv-ed):not(script){display:none !important}
   body.proto .tb-right .ghost{display:none}
   body:not(.proto) #proto{display:none}
   #proto{flex:1;min-height:0;overflow:hidden;display:grid;grid-template-rows:auto auto 128px minmax(0,1fr) 150px;grid-template-columns:minmax(0,1fr) 370px;gap:8px;padding:8px 10px 10px;
@@ -312,31 +312,11 @@
   .ed-stat{display:flex;gap:16px;padding:5px 10px;border-top:1px solid #1b2433;font-size:9.5px;color:#64748b;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;overflow:hidden}
   .ed-stat b{color:#cbd5e1;font-weight:500}
   .ed-stat .ok{color:#22c55e}.ed-stat .dirty{color:#f59e0b}
-  #pv-term{position:fixed;inset:0;z-index:61;background:rgba(2,4,8,.72);display:none;align-items:center;justify-content:center}
-  #pv-term.on{display:flex}
-  .tv-box{width:min(1300px,92vw);height:84vh;display:flex;flex-direction:column;background:#05080d;border:1px solid #1e2a3c;
-    box-shadow:0 24px 80px rgba(0,0,0,.65);font-family:var(--mono);color:#cbd5e1}
-  .tv-top{display:flex;align-items:center;gap:10px;border-bottom:1px solid #1b2433;min-height:36px;padding-left:12px}
-  .tv-name{font-size:12px;font-weight:700;letter-spacing:.06em}
-  .tv-live{font-size:9px;letter-spacing:.14em;color:#05070b;padding:1px 6px;font-weight:700}
-  .tv-top .sp{flex:1}
-  .tv-pre{flex:1;min-height:0;margin:0;padding:12px 16px;overflow:auto;white-space:pre;font-family:var(--mono);font-size:12.5px;line-height:1.35;
-    background:radial-gradient(ellipse at center, rgba(255,255,255,.025), rgba(0,0,0,0) 70%), #03060b}
-  .tv-stat{display:flex;gap:16px;padding:5px 10px;border-top:1px solid #1b2433;font-size:9.5px;color:#64748b;text-transform:uppercase;letter-spacing:.06em}
   .pv-none{color:#475569;font-size:10px;padding:6px 0;text-transform:uppercase;letter-spacing:.08em}
   @media(max-width:1250px){#proto{grid-template-columns:minmax(0,1fr);grid-template-rows:none;overflow:auto}
     .pv-toprow,.pv-botrow{grid-template-columns:minmax(0,1fr)}.pv-toprow .pv-col,.pv-botrow .pv-col{height:150px}
     .pv-ring{min-height:460px}.pv-right{overflow:visible}}
 </style></head><body>
-<div id="pv-term" role="dialog" aria-label="Terminal view">
-  <div class="tv-box">
-    <div class="tv-top"><span class="tv-name" id="tv-name"></span><span class="tv-live" id="tv-live">LIVE</span><span class="sp"></span>
-      <span class="pv-seg" id="tv-src"><button type="button" data-src="screen" class="on">Screen</button><button type="button" data-src="scroll">Scrollback</button></span>
-      <button class="ed-close" id="tv-close" title="Close (Esc)">✕</button></div>
-    <pre class="tv-pre" id="tv-pre"></pre>
-    <div class="tv-stat" id="tv-stat"></div>
-  </div>
-</div>
 <div id="pv-ed" role="dialog" aria-label="File editor">
   <div class="ed-box">
     <div class="ed-top"><div class="ed-tabs" id="ed-tabs"></div><button class="ed-close" id="ed-close" title="Close editor (Esc) — open files stay in their tabs">✕</button></div>
@@ -1341,6 +1321,7 @@ function pvDrawRing(){
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   pvRadioBanner(ctx, w);
+  pvDrawFocus(ctx, w, h);
   ctx.font = "9px "+PV_MONO; ctx.fillStyle = "#475569";
   ctx.fillText("SCROLL TO ZOOM · DRAG TO MOVE"+(PV.dim === "3d" ? " · CTRL+DRAG TO TIP" : "")+" · DOUBLE-CLICK A SCREEN OR FILE TO OPEN IT"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
   ctx.fillText(PV.nodes.length+" NODES · "+PV.edgeAnim.size+" LINKS · "+(PV.mode === "live" ? "LIVE · LAST HOUR" : "HISTORY · "+(PV.range > 86400000 ? "7 DAYS" : "24 HOURS")), 14, 18);
@@ -2148,10 +2129,13 @@ async function pvScreensPoll(){
   PVSC.busy = false;
 }
 // Render a pane's text into its own small canvas (only when it changed).
-function pvScreenCanvas(d){
-  if (d.canvas && !d.dirty) return d.canvas;
-  const W = 360, H = 216, c = d.canvas || document.createElement("canvas");
-  c.width = W; c.height = H;
+function pvScreenCanvas(d, W = 360, H = 216){
+  W = Math.round(W); H = Math.round(H);
+  const key = W + "x" + H;
+  if (d.dirty) { d.canvases = {}; d.dirty = false; }
+  d.canvases = d.canvases || {};
+  if (d.canvases[key]) return d.canvases[key];
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
   const x = c.getContext("2d"), col = d.color || "#7dd3fc";
   x.fillStyle = "#03060b"; x.fillRect(0, 0, W, H);
   const glow = x.createRadialGradient(W / 2, H / 2, 10, W / 2, H / 2, W * .65);
@@ -2159,16 +2143,23 @@ function pvScreenCanvas(d){
   x.fillStyle = glow; x.fillRect(0, 0, W, H);
   let lines = String(d.text || "").replace(/\r/g, "").split("\n");
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-  const LH = 9, rows = Math.floor((H - 8) / LH); lines = lines.slice(-rows);
-  x.font = "7.5px Consolas, 'Cascadia Mono', monospace"; x.textBaseline = "top";
-  x.fillStyle = col; x.shadowColor = col; x.shadowBlur = 3;
-  lines.forEach((l, i) => x.fillText(l.slice(0, 92), 6, 5 + i * LH));
+  lines = lines.slice(-80);
+  // Fit the whole screen: rows to the height, the longest line to the width.
+  const cols = Math.min(170, Math.max(40, ...lines.map((l) => l.length))), rows = Math.max(12, lines.length);
+  const pad = Math.max(6, W * .025);
+  const fs = Math.max(3.5, Math.min(22, (H - pad * 2) / rows / 1.2, (W - pad * 2) / (cols * .6)));
+  const LH = fs * 1.2;
+  x.font = fs.toFixed(2) + "px Consolas, 'Cascadia Mono', monospace"; x.textBaseline = "top";
+  x.fillStyle = col; x.shadowColor = col; x.shadowBlur = Math.max(2, fs * .35);
+  lines.forEach((l, i) => x.fillText(l.slice(0, cols), pad, pad + i * LH));
   x.shadowBlur = 0;
-  x.fillStyle = "rgba(0,0,0,.28)"; for (let yy = 0; yy < H; yy += 3) x.fillRect(0, yy, W, 1);
+  const gap = Math.max(3, Math.round(fs * .4));
+  x.fillStyle = "rgba(0,0,0,.24)"; for (let yy = 0; yy < H; yy += gap) x.fillRect(0, yy, W, Math.max(1, gap / 3));
   const vig = x.createRadialGradient(W / 2, H / 2, H * .35, W / 2, H / 2, W * .62);
   vig.addColorStop(0, "rgba(0,0,0,0)"); vig.addColorStop(1, "rgba(0,0,0,.55)");
   x.fillStyle = vig; x.fillRect(0, 0, W, H);
-  d.canvas = c; d.dirty = false;
+  const keys = Object.keys(d.canvases); if (keys.length > 3) delete d.canvases[keys[0]];
+  d.canvases[key] = c;
   return c;
 }
 // Rounded rect with slightly bowed edges, like CRT glass.
@@ -2189,7 +2180,7 @@ function pvDrawScreens(ctx, R){
   if (!PVSC.on || PV.mode !== "live") return;
   const g = PV.geom; if (!g || !g.P3) return;
   const r = R + PV_BAND_OUT + 34, sel = PV.sel;
-  PVSC.hit = null;
+  PVSC.hit = null; PVSC.base = null;
   const items = [];
   for (const a of PV.anim.values()) {
     if (a.node.id !== sel) continue;
@@ -2204,6 +2195,8 @@ function pvDrawScreens(ctx, R){
     const W = Math.max(Math.min(arc * 1.6, 340), 240) * p, H = W * .6, stand = 12 * p, bez = 6 * p;
     const x = base.x - W / 2, y = base.y - stand - H;
     PVSC.hit = {x: x - bez, y: y - bez, w: W + bez * 2, h: H + bez * 2, pane: a.node.pane, name: a.node.label, color: col};
+    PVSC.base = {x: base.x, y: base.y};
+    if (PV.focus && !PV.focus.closing && PV.focus.pane === a.node.pane) continue;
     const dim = a.alpha;
     ctx.save(); ctx.globalAlpha = dim;
     // Stand: a trapezoid down to the band.
@@ -2218,7 +2211,7 @@ function pvDrawScreens(ctx, R){
     ctx.strokeStyle = col; ctx.lineWidth = 1.4; ctx.globalAlpha = dim * .85; ctx.stroke(); ctx.globalAlpha = dim;
     // Glass.
     pvCrtPath(ctx, x, y, W, H, 7 * p, 3 * p); ctx.save(); ctx.clip();
-    ctx.drawImage(pvScreenCanvas(d), x, y, W, H);
+    ctx.drawImage(pvScreenCanvas(d, Math.min(720, W * (window.devicePixelRatio || 1) * pvView().z), Math.min(432, H * (window.devicePixelRatio || 1) * pvView().z)), x, y, W, H);
     const shine = ctx.createLinearGradient(x, y, x + W * .6, y + H);
     shine.addColorStop(0, "rgba(255,255,255,.10)"); shine.addColorStop(.35, "rgba(255,255,255,0)");
     ctx.fillStyle = shine; ctx.fillRect(x, y, W, H);
@@ -2229,46 +2222,74 @@ function pvDrawScreens(ctx, R){
   }
 }
 
-// ---- Terminal viewer: double-click a pane's screen to see it full size, read-only,
-// refreshed every second (live screen, or the last 500 lines of scrollback).
-const TV = {pane: null, src: "screen", timer: null, stick: true, color: null};
-async function pvTermOpen(pane, name, color){
-  TV.pane = pane; TV.color = color || "#7dd3fc"; TV.stick = true;
-  $("tv-name").textContent = name || pane; $("tv-name").style.color = TV.color;
-  $("tv-live").style.background = TV.color; $("tv-pre").style.color = TV.color;
-  $("tv-pre").style.boxShadow = "inset 3px 0 0 " + TV.color;
-  $("pv-term").classList.add("on");
-  clearInterval(TV.timer); await pvTermTick(); TV.timer = setInterval(pvTermTick, 1000);
+// ---- Focused screen: double-click a pane's CRT and it squares up to the view,
+// grows and holds still up top (drawn sharp at that size) while the scene keeps
+// turning below; a tether runs down to its pane's slice. Esc or double-clicking
+// it sends it back to the rim.
+const PV_FOCUS_MS = 480;
+function pvFocusOpen(hit){
+  const v = pvView();
+  PV.focus = {pane: hit.pane, name: hit.name, color: hit.color, t0: performance.now(), closing: false,
+    from: {x: hit.x * v.z + v.x, y: hit.y * v.z + v.y, w: hit.w * v.z, h: hit.h * v.z}};
+  clearInterval(PVSC.fast); PVSC.fast = setInterval(pvScreensPoll, 1000);
+  pvSound("tick");
 }
-function pvTermClose(){ $("pv-term").classList.remove("on"); clearInterval(TV.timer); TV.timer = null; TV.pane = null; }
-async function pvTermTick(){
-  if (!TV.pane) return;
-  let text = "", from = TV.src;
-  if (TV.src === "screen") {
-    try { const r = await fetch("/api/screen?pane=" + encodeURIComponent(TV.pane)); text = r.ok ? await r.text() : ""; } catch (_e) {}
-    if (!text.trim()) { text = await pvScrollback(TV.pane, 200); from = "scrollback (screen is blank)"; }
-  } else text = await pvScrollback(TV.pane, 500);
-  const pre = $("tv-pre");
-  if (pre.textContent !== text) {
-    const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
-    pre.textContent = text;
-    if (TV.stick || atEnd) pre.scrollTop = pre.scrollHeight;
+function pvFocusClose(){
+  const f = PV.focus; if (!f || f.closing) return;
+  const h = PVSC.hit, v = pvView();
+  if (h) f.from = {x: h.x * v.z + v.x, y: h.y * v.z + v.y, w: h.w * v.z, h: h.h * v.z};
+  f.closing = true; f.t0 = performance.now();
+  clearInterval(PVSC.fast); PVSC.fast = null;
+}
+function pvDrawFocus(ctx, w, h){
+  const f = PV.focus; if (!f) return;
+  const raw = Math.min(1, (performance.now() - f.t0) / (PV_REDUCE ? 1 : PV_FOCUS_MS));
+  const e0 = 1 - Math.pow(1 - raw, 3), e = f.closing ? 1 - e0 : e0;
+  if (f.closing && raw >= 1) { PV.focus = null; return; }
+  const d = PVSC.data.get(f.pane); if (!d || !d.text) return;
+  // Target: fixed up top, about half the view wide, square to the camera.
+  const tw = Math.min(w * .5, 640, (h * .5) / .64), th = tw * .64, tx = (w - tw) / 2, ty = Math.max(28, h * .05);
+  const fr = f.from, lerp = (a, b) => a + (b - a) * e;
+  const X = lerp(fr.x, tx), Y = lerp(fr.y, ty), W = lerp(fr.w, tw), H = lerp(fr.h, th);
+  ctx.save();
+  const col = f.color || "#7dd3fc", u = W / 100;
+  // Tether down to where its pane sits on the turning rim.
+  const hb = PVSC.base, v = pvView();
+  if (hb && e > .05) {
+    const bx = hb.x * v.z + v.x, by = hb.y * v.z + v.y;
+    ctx.globalAlpha = .55 * e; ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.setLineDash([3, 5]);
+    ctx.lineDashOffset = -performance.now() / 40;
+    ctx.beginPath(); ctx.moveTo(X + W / 2, Y + H); ctx.quadraticCurveTo(X + W / 2, (Y + H + by) / 2, bx, by); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(bx, by, 3, 0, Math.PI * 2); ctx.fill();
   }
-  $("tv-stat").textContent = "source: " + from + " · " + text.split("\n").length + " lines · updated " + new Date().toLocaleTimeString() + " · read-only";
+  // Casing with a coloured rim and soft glow.
+  ctx.shadowColor = col; ctx.shadowBlur = 30 * e;
+  pvCrtPath(ctx, X, Y, W, H, 3.2 * u, .9 * u); ctx.fillStyle = "#0a0f19"; ctx.fill();
+  ctx.shadowBlur = 0; ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.2, .35 * u); ctx.stroke();
+  // Glass, inset in the casing.
+  const bz = 2.6 * u, foot = 3.2 * u;
+  const gx = X + bz, gy = Y + bz, gw = W - bz * 2, gh = H - bz * 2 - foot;
+  pvCrtPath(ctx, gx, gy, gw, gh, 2.2 * u, 1.1 * u); ctx.save(); ctx.clip();
+  const dpr = window.devicePixelRatio || 1;
+  ctx.drawImage(pvScreenCanvas(d, Math.min(2400, gw * dpr), Math.min(1500, gh * dpr)), gx, gy, gw, gh);
+  const shine = ctx.createLinearGradient(gx, gy, gx + gw * .55, gy + gh);
+  shine.addColorStop(0, "rgba(255,255,255,.09)"); shine.addColorStop(.32, "rgba(255,255,255,0)");
+  ctx.fillStyle = shine; ctx.fillRect(gx, gy, gw, gh);
+  ctx.restore();
+  ctx.strokeStyle = "rgba(0,0,0,.6)"; ctx.lineWidth = Math.max(1, .25 * u); pvCrtPath(ctx, gx, gy, gw, gh, 2.2 * u, 1.1 * u); ctx.stroke();
+  // Name plate and power LED on the chin.
+  const cy = Y + H - foot * .55 - bz * .35;
+  ctx.font = "bold " + Math.max(8, 1.15 * u).toFixed(1) + "px " + PV_MONO; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.fillStyle = col; ctx.globalAlpha = .9; ctx.fillText(String(f.name || "").toUpperCase(), X + bz * 1.4, cy);
+  ctx.textAlign = "right"; ctx.fillStyle = "#64748b";
+  ctx.fillText("LIVE · DOUBLE-CLICK OR ESC TO SEND BACK", X + W - bz * 3.2, cy);
+  ctx.globalAlpha = 1; ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 8;
+  ctx.beginPath(); ctx.arc(X + W - bz * 1.6, cy, Math.max(2, .45 * u), 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  PVSC.focusRect = {x: X, y: Y, w: W, h: H};
 }
-(function tvWire(){
-  $("tv-close").addEventListener("click", pvTermClose);
-  $("pv-term").addEventListener("mousedown", (ev) => { if (ev.target === $("pv-term")) pvTermClose(); });
-  $("tv-pre").addEventListener("scroll", () => { const p = $("tv-pre"); TV.stick = p.scrollTop + p.clientHeight >= p.scrollHeight - 8; });
-  for (const b of document.querySelectorAll("#tv-src button")) b.addEventListener("click", () => {
-    TV.src = b.dataset.src; TV.stick = true;
-    for (const x of document.querySelectorAll("#tv-src button")) x.classList.toggle("on", x === b);
-    pvTermTick();
-  });
-  window.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && $("pv-term").classList.contains("on")) { ev.preventDefault(); ev.stopImmediatePropagation(); pvTermClose(); }
-  }, true);
-})();
 
 // ---- Container network (live). n8 pushes each container pane's received and
 // sent bytes/s. Traffic comes down an uplink from a NET hub into the
@@ -2820,6 +2841,7 @@ function pvSelect(id){
   PV.sel = id && id !== PV.sel ? id : null;
   PV.selFile = null; PV.selDir = null;
   if (PV.sel && PVSC.on) pvScreensPoll();
+  if (PV.focus && (!PV.sel || (PV.alias.get(PV.sel) || {}).pane !== PV.focus.pane)) pvFocusClose();
   pvRenderAll();
 }
 function pvSelectFile(path){
@@ -3190,6 +3212,7 @@ $("pv-ring").addEventListener("click", (ev) => {
   const g = PV.geom; if (!g) return;
   if (Date.now() - PV.dragged < 250) return;   // the end of a pan, not a click
   const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z, reach = 12 / v.z + 4;
+  if (PV.focus) { const r = PVSC.focusRect; if (r && ev.offsetX >= r.x && ev.offsetX <= r.x + r.w && ev.offsetY >= r.y && ev.offsetY <= r.y + r.h) return; }
   const sh = PVSC.hit; if (sh && ox >= sh.x && ox <= sh.x + sh.w && oy >= sh.y && oy <= sh.y + sh.h) return;
   // Files and dirs float above the floor: nearest within reach wins.
   let best = null, bestD = Infinity;
@@ -3207,7 +3230,11 @@ $("pv-ring").addEventListener("click", (ev) => {
   if (node && nodeD < 26 / v.z + 6) { pvSelect(node); return; }
   PV.selFile = null; PV.selDir = null; pvSelect(null);
 });
-window.addEventListener("keydown", (ev) => { if (PV.on && ev.key === "Escape" && PV.sel && !$("pv-ed").classList.contains("on") && !$("pv-term").classList.contains("on")) pvSelect(null); });
+window.addEventListener("keydown", (ev) => {
+  if (!PV.on || ev.key !== "Escape" || $("pv-ed").classList.contains("on")) return;
+  if (PV.focus) { pvFocusClose(); return; }
+  if (PV.sel) pvSelect(null);
+});
 // Wheel zooms around the cursor, drag moves around the floor, Ctrl+drag tips
 // and orbits (3D), double-click resets.
 (() => {
@@ -3240,7 +3267,9 @@ window.addEventListener("keydown", (ev) => { if (PV.on && ev.key === "Escape" &&
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
   el.addEventListener("dblclick", (ev) => {
     const sh = PVSC.hit, vv = pvView(), sx = (ev.offsetX - vv.x) / vv.z, sy = (ev.offsetY - vv.y) / vv.z;
-    if (sh && sx >= sh.x && sx <= sh.x + sh.w && sy >= sh.y && sy <= sh.y + sh.h) { pvTermOpen(sh.pane, sh.name, sh.color); return; }
+    const fr = PV.focus && PVSC.focusRect;
+    if (fr && ev.offsetX >= fr.x && ev.offsetX <= fr.x + fr.w && ev.offsetY >= fr.y && ev.offsetY <= fr.y + fr.h) { pvFocusClose(); return; }
+    if (sh && sx >= sh.x && sx <= sh.x + sh.w && sy >= sh.y && sy <= sh.y + sh.h) { pvFocusOpen(sh); return; }
     const hit = pvHitFile(ev);
     if (hit) { PV.selFile = hit; PV.sel = null; PV.selDir = null; pvEdOpen(hit); return; }
     PV.views[PV.mode] = {z: 1, x: 0, y: 0};
