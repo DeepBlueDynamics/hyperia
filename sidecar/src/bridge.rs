@@ -409,6 +409,10 @@ struct BridgeInner {
     /// Whether a Hyperia window is the OS-foreground app (false → the human is in
     /// another app, e.g. Chrome). Set from the renderer's AppFocus messages.
     app_foreground: Mutex<bool>,
+    /// Last AppFocus heartbeat (apps that send one every few seconds). Once seen,
+    /// a missing heartbeat means Hyperia is NOT in front: a stale "in front" must
+    /// never hold an agent's mail because a blur event was missed.
+    app_focus_heartbeat: Mutex<Option<std::time::Instant>>,
     /// Serializes complete body/Enter transactions across legacy and retained transports.
     input_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// CREATE commands (Split/NewTab/OpenWebPane) held while the human decides on
@@ -484,7 +488,10 @@ impl Bridge {
                 seq: AtomicU64::new(1),
                 sessions: Mutex::new(HashMap::new()),
                 focused_window_id: Mutex::new(None),
-                app_foreground: Mutex::new(true),
+                // Unknown until the app says so: assume the human is elsewhere, so a
+                // sidecar restart can't leave mail held behind a phantom focus.
+                app_foreground: Mutex::new(false),
+                app_focus_heartbeat: Mutex::new(None),
                 input_locks: Mutex::new(HashMap::new()),
                 held_creates: Mutex::new(HashMap::new()),
                 resolved_creates: Mutex::new(HashMap::new()),
@@ -737,12 +744,20 @@ impl Bridge {
         *self.inner.app_foreground.lock().await = foreground;
     }
 
+    /// Hyperia is the OS-foreground app: the last report said so and, if the app
+    /// sends heartbeats, one arrived recently.
+    pub async fn hyperia_foreground(&self) -> bool {
+        let fg = *self.inner.app_foreground.lock().await;
+        let hb = *self.inner.app_focus_heartbeat.lock().await;
+        fg && hb.is_none_or(|t| t.elapsed() < std::time::Duration::from_secs(8))
+    }
+
     /// Where the human's keyboard is right now — the active pane of the focused
     /// window, how long since they touched it, and whether Hyperia is the
     /// foreground app. Lets a focus caller see if forcing would steal the view.
     pub async fn human_focus_report(&self) -> serde_json::Value {
         let focused_win = *self.inner.focused_window_id.lock().await;
-        let app_foreground = *self.inner.app_foreground.lock().await;
+        let app_foreground = self.hyperia_foreground().await;
         let sessions = self.inner.sessions.lock().await;
         let here = sessions
             .iter()
@@ -1110,7 +1125,7 @@ impl Bridge {
         };
         let classification = pane_class::classify(&evidence);
         let focused_window = *self.inner.focused_window_id.lock().await;
-        let hyperia_foreground = *self.inner.app_foreground.lock().await;
+        let hyperia_foreground = self.hyperia_foreground().await;
         let actively_typed = last_user_activity
             .map(|t| t.elapsed().as_secs() < 15)
             .unwrap_or(false);
@@ -2321,6 +2336,9 @@ impl Bridge {
                 // human is in another application, e.g. Chrome).
                 let fg = msg["foreground"].as_bool().unwrap_or(true);
                 *self.inner.app_foreground.lock().await = fg;
+                if msg["heartbeat"].as_bool() == Some(true) {
+                    *self.inner.app_focus_heartbeat.lock().await = Some(std::time::Instant::now());
+                }
             }
 
             "SessionData" => {
@@ -2648,6 +2666,22 @@ mod pane_names {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_stale_focus_report_means_the_human_is_elsewhere() {
+        let bridge = Bridge::new();
+        // Nothing heard yet: not in front.
+        assert!(!bridge.hyperia_foreground().await);
+        // An event-only app says "in front": believed.
+        bridge.set_app_foreground(true).await;
+        assert!(bridge.hyperia_foreground().await);
+        // A heartbeat app whose last beat is 10 s old: not in front any more.
+        *bridge.inner.app_focus_heartbeat.lock().await =
+            std::time::Instant::now().checked_sub(std::time::Duration::from_secs(10));
+        assert!(!bridge.hyperia_foreground().await);
+        *bridge.inner.app_focus_heartbeat.lock().await = Some(std::time::Instant::now());
+        assert!(bridge.hyperia_foreground().await);
+    }
 
     #[test]
     fn out_meter_rates_whole_seconds_and_forgets_old_ones() {
