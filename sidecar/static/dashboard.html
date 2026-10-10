@@ -2339,6 +2339,10 @@ function pvBuildNet(){
   }
   PV.net = m;
 }
+// Honest scale: idle chatter (a few KB/s) is a faint link and a slow trickle;
+// the link is full at ~1 MB/s, packets climb from ~4 KB/s.
+const pvNetLvl = (bps) => Math.max(0, Math.min(1, Math.log10(Math.max(1, bps) / 1024) / 3));
+const pvNetRate = (b) => (b < 256 ? 0 : b < 4096 ? .5 : Math.min(36, 1 + Math.log2(b / 4096) * 4));
 const pvRate = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + "M" : b >= 1024 ? (b / 1024).toFixed(b >= 10240 ? 0 : 1) + "k" : Math.round(b) + "") ;
 function pvDrawNet(ctx, R){
   const g = PV.geom; if (!g || !g.P3 || PV.mode !== "live" || !PV.net || !PV.net.size) return;
@@ -2357,7 +2361,7 @@ function pvDrawNet(ctx, R){
   if (!links.length) return;
   let totRx = 0, totTx = 0;
   for (const a of links) { totRx += a.nrx; totTx += a.ntx; }
-  const totLvl = Math.min(1, Math.log10(1 + totRx + totTx) / 6.5);
+  const totLvl = pvNetLvl(totRx + totTx);
   // u: 0 = the container, SPLIT = the marble's centre, 1 = the uplink hub.
   const pathFor = (a) => {
     const base = [Math.cos(a.theta) * R, 0, -Math.sin(a.theta) * R], ctl = [base[0] * .55, R * .78, base[2] * .55];
@@ -2373,7 +2377,7 @@ function pvDrawNet(ctx, R){
   const paths = new Map();
   for (const a of links) {
     const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1, at = pathFor(a); paths.set(a, at);
-    const lvl = Math.min(1, Math.log10(1 + a.nrx + a.ntx) / 6);
+    const lvl = pvNetLvl(a.nrx + a.ntx);
     ctx.globalAlpha = a.alpha * dim * (.12 + .35 * lvl); ctx.strokeStyle = n.color || "#38bdf8"; ctx.lineWidth = .8 + 3 * lvl;
     ctx.beginPath(); for (let i = 0; i <= 24; i++) { const p = at(SPLIT * i / 24); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); } ctx.stroke();
   }
@@ -2407,9 +2411,9 @@ function pvDrawNet(ctx, R){
   if (!PV_REDUCE) {
     ctx.shadowBlur = 8;
     for (const a of links) {
-      const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1, at = paths.get(a), lvl = Math.min(1, Math.log10(1 + a.nrx + a.ntx) / 6);
+      const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1, at = paths.get(a), lvl = pvNetLvl(a.nrx + a.ntx);
       let ps = PVN.parts.get(n.id); if (!ps) { ps = {list: [], rx: 0, tx: 0}; PVN.parts.set(n.id, ps); }
-      const rate = (b) => (b < 32 ? 0 : Math.min(36, 1 + Math.log2(1 + b / 256) * 3));
+      const rate = pvNetRate;
       ps.rx += rate(a.nrx) * dt; ps.tx += rate(a.ntx) * dt;
       while (ps.rx >= 1) { ps.rx--; if (ps.list.length < 160) ps.list.push({u: 1, d: -1, j: Math.random()}); }
       while (ps.tx >= 1) { ps.tx--; if (ps.list.length < 160) ps.list.push({u: 0, d: 1, j: Math.random()}); }
