@@ -1045,6 +1045,16 @@ pub struct SpokenSummaryRequest {
     pub frame: Option<bool>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct RadioDeliverRequest {
+    /// The two-word call sign heard on the radio, e.g. "Bravo Tango".
+    pub callsign: String,
+    /// Mail subject.
+    pub subject: Option<String>,
+    /// Mail body (the transcript).
+    pub body: String,
+}
+
 // -- MCP Server --
 
 #[derive(Clone)]
@@ -2253,6 +2263,34 @@ impl HyperiaMcp {
         } else {
             let err = v["error"].as_str().unwrap_or("unknown error");
             Err(ErrorData::internal_error(format!("TTS failed: {err}"), None))
+        }
+    }
+
+    #[tool(description = "Radio agent only (hertz-radio). List the live two-word call signs of the agent panes you may message, and whether the radio is seen as running. Route a transcript by matching its call sign against this list — never by pane name. Signs are single-use: each one rotates the moment radio_deliver uses it.")]
+    async fn radio_callsigns(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let auth = forwarded_auth(&ctx);
+        let body = self.get_as("/api/radio/callsigns", auth.as_deref()).await?;
+        Ok(CallToolResult::success(vec![Content::text(body)]))
+    }
+
+    #[tool(description = "Radio agent only (hertz-radio). Deliver a radio call as mail to the pane holding `callsign` (normal consent rules apply), then rotate that pane's sign so the heard one never works again. Errors when no pane holds the sign (it may already have rotated).")]
+    async fn radio_deliver(
+        &self,
+        Parameters(req): Parameters<RadioDeliverRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"callsign": req.callsign, "subject": req.subject.unwrap_or_default(), "body": req.body});
+        let mut rb = self.client.post(format!("{}/api/radio/deliver", self.base_url)).json(&body);
+        if let Some(a) = forwarded_auth(&ctx) {
+            rb = rb.header(reqwest::header::AUTHORIZATION, a);
+        }
+        let resp = rb.send().await.map_err(|e| ErrorData::internal_error(format!("radio_deliver failed: {e}"), None))?;
+        let ok = resp.status().is_success();
+        let text = resp.text().await.unwrap_or_default();
+        if ok {
+            Ok(CallToolResult::success(vec![Content::text(text)]))
+        } else {
+            Err(ErrorData::invalid_params(format!("radio_deliver refused: {text}"), None))
         }
     }
 

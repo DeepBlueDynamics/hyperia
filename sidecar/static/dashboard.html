@@ -172,7 +172,7 @@
   @media(max-width:1000px){.shell{grid-template-columns:1fr}aside{position:static}.row-flow{grid-template-columns:1fr}}
 
   /* ---- proto_viz tab (#proto_viz): ops-console view of real stats ---- */
-  body.proto > :not(.topbar):not(#proto):not(script){display:none !important}
+  body.proto > :not(.topbar):not(#proto):not(#pv-ed):not(script){display:none !important}
   body.proto .tb-right .ghost{display:none}
   body:not(.proto) #proto{display:none}
   #proto{flex:1;min-height:0;overflow:hidden;display:grid;grid-template-rows:auto auto 128px minmax(0,1fr) 150px;grid-template-columns:minmax(0,1fr) 370px;gap:8px;padding:8px 10px 10px;
@@ -240,11 +240,108 @@
   .pv-fill{flex:1;min-height:0;display:flex}
   canvas.pv-hist{width:100%;height:100%;min-height:20px;display:block}
   .pv-grow{flex:1;min-height:0;overflow:hidden}
+  .pv-tx{padding:4px 0 5px;border-top:1px solid #0f1622;cursor:pointer}
+  .pv-tx:first-child{border-top:0}
+  .pv-tx .hd{display:grid;grid-template-columns:minmax(0,1fr) auto auto 22px;gap:8px;align-items:center;font-size:10.5px}
+  .pv-tx .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cbd5e1}
+  .pv-tx .nm i{font-style:normal;color:#475569}
+  .pv-tx .tm{color:#64748b;font-size:9.5px;text-align:right}
+  .pv-tx .air{font-size:8.5px;letter-spacing:.12em;color:#05070b;background:#22d3ee;padding:0 5px;font-weight:700}
+  .pv-tx .pl{font:inherit;font-size:10px;width:22px;height:18px;border:1px solid #155e75;background:#04141a;color:#67e8f9;cursor:pointer;padding:0}
+  .pv-tx .pl:disabled{opacity:.35;cursor:default}
+  .pv-tx .sm{color:#94a3b8;font-size:10px;line-height:1.35;margin-top:2px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .pv-tx.open .sm{display:block;-webkit-line-clamp:unset;color:#e2e8f0;white-space:pre-wrap}
+  .pv-tx canvas{display:block;width:100%;height:16px;margin-top:3px}
+  .pv-tx.air{background:linear-gradient(90deg,rgba(34,211,238,.08),transparent)}
+  /* File editor modal */
+  #pv-ed{position:fixed;inset:0;z-index:60;background:rgba(2,4,8,.72);display:none;align-items:center;justify-content:center}
+  #pv-ed.on{display:flex}
+  .ed-box{width:min(1400px,94vw);height:88vh;display:flex;flex-direction:column;background:#070a10;border:1px solid #1e2a3c;
+    box-shadow:0 24px 80px rgba(0,0,0,.65);font-family:var(--mono);color:#cbd5e1}
+  .ed-top{display:flex;align-items:stretch;border-bottom:1px solid #1b2433;min-height:36px}
+  .ed-tabs{display:flex;flex:1;overflow-x:auto;scrollbar-width:thin}
+  .ed-tab{display:flex;align-items:center;gap:7px;padding:0 6px 0 12px;font-size:11px;color:#7c8aa0;border-right:1px solid #111a27;
+    cursor:pointer;white-space:nowrap;max-width:260px}
+  .ed-tab.on{color:#f8fafc;background:#0d1320;box-shadow:inset 0 2px 0 #f59e0b}
+  .ed-tab .nm{overflow:hidden;text-overflow:ellipsis}
+  .ed-tab .dot{color:#f59e0b;font-size:13px;line-height:1}
+  .ed-tab .x{border:0;background:none;color:inherit;font-size:14px;width:20px;height:20px;cursor:pointer;opacity:.55;padding:0;line-height:1}
+  .ed-tab .x:hover{opacity:1;background:#1b2433}
+  .ed-tab .x.armed{color:#ef4444;opacity:1}
+  .ed-close{border:0;border-left:1px solid #1b2433;background:none;color:#e2e8f0;font-size:22px;width:52px;cursor:pointer;line-height:1}
+  .ed-close:hover{background:#7f1d1d;color:#fff}
+  .ed-bar{display:flex;align-items:center;gap:8px;padding:5px 10px;border-bottom:1px solid #111a27;font-size:10.5px}
+  .ed-path{flex:1;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ed-btn{font:inherit;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#cbd5e1;background:#0d1320;border:1px solid #1e2a3c;padding:3px 9px;cursor:pointer}
+  .ed-btn:hover{border-color:#f59e0b}
+  .ed-btn.pri{background:#f59e0b;color:#05070b;border-color:#f59e0b;font-weight:700}
+  .ed-btn.on{border-color:#38bdf8;color:#38bdf8}
+  .ed-btn:disabled{opacity:.35;cursor:default}
+  .ed-find{display:none;gap:6px;align-items:center;padding:5px 10px;border-bottom:1px solid #111a27;font-size:10.5px}
+  .ed-find.on{display:flex}
+  .ed-find input{font:inherit;font-size:11px;background:#05070b;color:#e2e8f0;border:1px solid #1e2a3c;padding:3px 6px;width:230px;outline:none}
+  .ed-find input:focus{border-color:#38bdf8}
+  .ed-find .ct{color:#64748b;min-width:70px}
+  .ed-warn{display:none;gap:8px;align-items:center;padding:6px 10px;background:#2a1606;color:#fbbf24;font-size:10.5px;border-bottom:1px solid #b45309}
+  .ed-warn.on{display:flex}
+  .ed-warn span{flex:1}
+  .ed-body{flex:1;min-height:0;position:relative;background:#05070b}
+  .ed-main{position:absolute;inset:0;display:none}
+  .ed-main.on{display:flex}
+  .ed-gut{width:56px;flex:none;overflow:hidden;text-align:right;padding:8px 10px 8px 0;color:#334155;font-size:12px;line-height:18px;
+    user-select:none;border-right:1px solid #0f1622;white-space:pre;font-family:var(--mono)}
+  .ed-gut b{color:#94a3b8;font-weight:400}
+  .ed-wrap{flex:1;position:relative;min-width:0}
+  .ed-hl,.ed-ta{position:absolute;inset:0;margin:0;padding:8px 14px;font-family:var(--mono);font-size:12px;line-height:18px;tab-size:4;
+    white-space:pre;border:0;box-sizing:border-box;scrollbar-gutter:stable;letter-spacing:0}
+  .ed-hl{color:#cbd5e1;pointer-events:none;overflow:hidden}
+  .ed-ta{background:transparent;color:transparent;caret-color:#f8fafc;resize:none;outline:none;overflow:auto}
+  .ed-ta::selection{background:rgba(56,189,248,.32)}
+  .ed-wrap.plain .ed-ta{color:#cbd5e1}
+  .ed-wrap.plain .ed-hl{display:none}
+  .ed-main.wrap .ed-hl,.ed-main.wrap .ed-ta{white-space:pre-wrap;overflow-wrap:anywhere}
+  .ed-main.wrap .ed-gut{display:none}
+  .ed-hl .k{color:#c084fc}.ed-hl .s{color:#86efac}.ed-hl .c{color:#64748b;font-style:italic}.ed-hl .n{color:#fbbf24}
+  .ed-hl .h{color:#38bdf8;font-weight:700}.ed-hl .t{color:#7dd3fc}
+  .ed-view{position:absolute;inset:0;width:100%;height:100%;border:0;background:#0b0f17;display:none}
+  .ed-main.render .ed-view{display:block}
+  .ed-main.render .ed-gut,.ed-main.render .ed-wrap{display:none}
+  .ed-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:11px;
+    text-transform:uppercase;letter-spacing:.1em;text-align:center;padding:30px}
+  .ed-msg.err{color:#f87171}
+  .ed-stat{display:flex;gap:16px;padding:5px 10px;border-top:1px solid #1b2433;font-size:9.5px;color:#64748b;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;overflow:hidden}
+  .ed-stat b{color:#cbd5e1;font-weight:500}
+  .ed-stat .ok{color:#22c55e}.ed-stat .dirty{color:#f59e0b}
   .pv-none{color:#475569;font-size:10px;padding:6px 0;text-transform:uppercase;letter-spacing:.08em}
   @media(max-width:1250px){#proto{grid-template-columns:minmax(0,1fr);grid-template-rows:none;overflow:auto}
     .pv-toprow,.pv-botrow{grid-template-columns:minmax(0,1fr)}.pv-toprow .pv-col,.pv-botrow .pv-col{height:150px}
     .pv-ring{min-height:460px}.pv-right{overflow:visible}}
 </style></head><body>
+<div id="pv-ed" role="dialog" aria-label="File editor">
+  <div class="ed-box">
+    <div class="ed-top"><div class="ed-tabs" id="ed-tabs"></div><button class="ed-close" id="ed-close" title="Close editor (Esc) — open files stay in their tabs">✕</button></div>
+    <div class="ed-bar">
+      <span class="ed-path" id="ed-path"></span>
+      <button class="ed-btn" id="ed-view-b" title="Rendered view (Ctrl+Shift+V)" style="display:none">Rendered</button>
+      <button class="ed-btn" id="ed-find-b" title="Find / replace (Ctrl+F, Ctrl+H)">Find</button>
+      <button class="ed-btn" id="ed-goto-b" title="Go to line (Ctrl+G)">Line</button>
+      <button class="ed-btn" id="ed-wrap-b" title="Wrap long lines">Wrap</button>
+      <button class="ed-btn" id="ed-reload-b" title="Reload from disk">Reload</button>
+      <button class="ed-btn pri" id="ed-save-b" title="Save (Ctrl+S)">Save</button>
+    </div>
+    <div class="ed-find" id="ed-find">
+      <input id="ed-q" placeholder="find" spellcheck="false"><input id="ed-r" placeholder="replace with" spellcheck="false">
+      <button class="ed-btn" id="ed-prev" title="Previous (Shift+Enter)">↑</button><button class="ed-btn" id="ed-next" title="Next (Enter)">↓</button>
+      <button class="ed-btn" id="ed-case" title="Match case">Aa</button>
+      <button class="ed-btn" id="ed-rep1">Replace</button><button class="ed-btn" id="ed-repall">All</button>
+      <span class="ct" id="ed-ct"></span>
+    </div>
+    <div class="ed-warn" id="ed-warn"><span id="ed-warn-t"></span><button class="ed-btn" id="ed-warn-a"></button><button class="ed-btn" id="ed-warn-b"></button></div>
+    <div class="ed-body" id="ed-body"><div class="ed-msg" id="ed-empty">no files open — double-click a file in the view</div></div>
+    <div class="ed-stat" id="ed-stat"></div>
+  </div>
+</div>
+
 
 <div class="topbar">
   <span class="brand">HYPERIA CONTROL DECK</span>
@@ -281,6 +378,7 @@
   <div class="pv-p pv-ring"><canvas id="pv-ring"></canvas></div>
   <div class="pv-right">
     <div class="pv-p pv-grow"><div class="pv-t"><span>Top comms | sorted</span><b id="pv-top-n"></b></div><div class="pv-rows" id="pv-top"></div></div>
+    <div class="pv-p pv-grow"><div class="pv-t"><span>Radio | transmissions</span><span id="pv-radio-n"></span></div><div class="pv-rows" id="pv-radio" style="overflow:auto;max-height:100%"></div></div>
     <div class="pv-p pv-grow"><div class="pv-t"><span>Live stream | comms</span><span id="pv-stream-n"></span></div><div class="pv-rows" id="pv-stream"></div></div>
     <div class="pv-p"><div class="pv-t"><span>Services</span><span id="pv-svc-n"></span></div><div class="pv-pods" id="pv-pods"></div></div>
     <div class="pv-p"><div class="pv-t"><span>Key | edge bars are real events</span></div>
@@ -290,7 +388,8 @@
         <span><i style="background:#fb923c"></i>bar: file edit (length = lines)</span><span><i style="background:#c084fc"></i>bar: file write (length = bytes)</span>
         <span><i style="background:#4ade80"></i>bar: create</span><span><i style="background:#e11d48"></i>bar: delete</span><span><i style="background:#94a3b8"></i>bar: rename</span>
         <span><i style="background:#fde68a"></i>bar: mail</span>
-        <span><i style="background:#7dd3fc"></i>bar: pane access</span><span><i class="dot" style="background:#f8fafc"></i>tip: last minute</span>
+        <span><i style="background:#7dd3fc"></i>bar: pane access</span>
+        <span><i class="dot" style="background:#fb923c"></i>centre: files, threaded to the panes changing them</span><span><i class="dot" style="background:#f8fafc"></i>tip: last minute</span>
       </div></div>
   </div>
   <div class="pv-botrow">
@@ -726,14 +825,84 @@ const PV = {on:false, panes:[], names:{}, counts:{w:0,t:0}, win:null, pane:null,
   anim:new Map(), edgeAnim:new Map(), fibAnim:new Map(), lastDraw:0, span:0,
   // History view zoom/pan: screen = world * z + (x, y).
   views:{live:{z:1, x:0, y:0}, history:{z:1, x:0, y:0}}, dragged:0,
+  // Camera over the agent floor: pitch 0 = edge-on, PI/2 = straight down.
+  cam:{pitch:1.0, yaw:0, want:1.0}, dim:"3d",
+  ringSlots:new Map(), agentSeen:new Map(),
   // New comms crackle in: stream events seen so far, and arrivals in flight.
-  seen:new Set(), primed:false, arrivals:[]};
+  seen:new Set(), primed:false, arrivals:[],
+  // Files in the centre: nodes keyed by path, stable spiral slots, threads to panes.
+  files:[], fileSlots:new Map(), fileAnim:new Map(), fileSeen:new Set(), fileFlashes:[], selFile:null,
+  radio:[], radioSig:"", radioOpen:null, radioTimer:null, replay:null, radioWaves:new Map(),
+  dirs:[], dirSlots:new Map(), dirFileSlots:new Map(), dirAnim:new Map(), selDir:null};
+const PV_FILE_MAX = 60;
+
+// ---- Sound: synthesized with WebAudio, no files. Rate-limited, silent while
+// the tab isn't visible, toggled with the ♪ button (remembered per browser).
+const PVS = {on: true, ctx: null, master: null, last: {}, recent: []};
+try { PVS.on = localStorage.getItem("pv.sound") !== "off"; } catch (_e) {}
+function pvAudio(){
+  if (!PVS.ctx) {
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
+    PVS.ctx = new AC();
+    PVS.master = PVS.ctx.createGain(); PVS.master.gain.value = .35; PVS.master.connect(PVS.ctx.destination);
+  }
+  if (PVS.ctx.state === "suspended") PVS.ctx.resume().catch(() => {});
+  return PVS.ctx;
+}
+// Browsers may hold audio until a gesture; any click in the tab unlocks it.
+window.addEventListener("pointerdown", () => { if (PVS.on && PV.on) pvAudio(); }, {passive: true});
+
+function pvTone(ac, t, {freq, to, dur, type = "sine", gain = .2, attack = .004}){
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (to) o.frequency.exponentialRampToValueAtTime(Math.max(20, to), t + dur);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + attack);
+  g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+  o.connect(g); g.connect(PVS.master); o.start(t); o.stop(t + dur + .02);
+}
+function pvNoise(ac, t, {dur, freq, q = 6, gain = .18}){
+  const n = Math.max(1, Math.floor(ac.sampleRate * dur)), buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);   // crackle that dies away
+  const src = ac.createBufferSource(), bp = ac.createBiquadFilter(), g = ac.createGain();
+  src.buffer = buf; bp.type = "bandpass"; bp.frequency.value = freq; bp.Q.value = q; g.gain.value = gain;
+  src.connect(bp); bp.connect(g); g.connect(PVS.master); src.start(t);
+}
+
+// kind: "zap" (comms; sub = mail|access|consent-allow|consent-deny|system),
+// "blip" (file change; sub = edit|write|create|delete|rename), "chime", "tick".
+function pvSound(kind, sub){
+  if (!PVS.on || !PV.on || document.visibilityState !== "visible") return;
+  const now = performance.now();
+  const gap = {zap: 90, blip: 70, chime: 400, tick: 40}[kind] || 80;
+  if (now - (PVS.last[kind] || 0) < gap) return;
+  PVS.recent = PVS.recent.filter((x) => now - x < 1000);
+  if (PVS.recent.length >= 14) return;            // whole-page cap: 14 sounds / s
+  PVS.last[kind] = now; PVS.recent.push(now);
+  const ac = pvAudio(); if (!ac || ac.state !== "running") return;
+  const t = ac.currentTime + .005, j = 1 + (Math.random() - .5) * .06;   // slight detune so repeats aren't robotic
+  if (kind === "zap") {
+    const p = {mail: 1500, access: 900, system: 1200, "consent-allow": 1300, "consent-deny": 260}[sub] || 1100;
+    pvNoise(ac, t, {dur: .12, freq: p * 1.6 * j, q: 4, gain: .22});
+    pvTone(ac, t, {freq: p * j, to: p * .22, dur: .16, type: sub === "consent-deny" ? "sawtooth" : "square", gain: .07});
+    pvTone(ac, t + .02, {freq: p * 2 * j, to: p * .5, dur: .09, gain: .05});
+  } else if (kind === "blip") {
+    const f = {create: 880, edit: 660, write: 587, rename: 494, delete: 330}[sub] || 600;
+    pvTone(ac, t, {freq: f * j, to: f * 1.12 * j, dur: .07, type: "triangle", gain: .12});
+  } else if (kind === "chime") {
+    pvTone(ac, t, {freq: 523.25, dur: .35, gain: .1});
+    pvTone(ac, t + .09, {freq: 783.99, dur: .45, gain: .08});
+  } else if (kind === "tick") {
+    pvTone(ac, t, {freq: 2200, to: 1600, dur: .03, type: "square", gain: .04});
+  }
+}
 const PV_ARRIVE_MS = 1900;
 // Zoom/pan per mode: screen = world * z + (x, y).
 const pvView = () => PV.views[PV.mode];
 try { const m = localStorage.getItem("pv.mode"); if (m === "history") PV.mode = m;
   const r = Number(localStorage.getItem("pv.range")); if (r === 604800000) PV.range = r; } catch (_e) {}
 const PV_LIVE_MS = 3600000;
+// Live file nodes in the centre: only what was touched recently.
+const PV_FILE_LIVE_MS = 15 * 60000;
 const PV_MONO = "ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace";
 const PV_AGENT_RX = /^(claude|claude-code|codex|grok|gemini|gemini-cli|aider|opencode|agy|antigravity|n8|nemesis8|ollama|docker)$/i;
 const PV_REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -765,6 +934,17 @@ function pvClip(ctx, text, max){
   return text+"…";
 }
 
+// A pane's colour in Hyperia (its tab strip and header tint), worked out the
+// same way term.tsx does: the tab's root uid picks a start, the split letter
+// steps through the four theme tints (dark theme values).
+const PV_TINT = ["#34d399", "#60a5fa", "#fbbf24", "#f87171"];
+function pvHashCode(str){ let h = 0; for (let i = 0; i < str.length; i++) h = str.charCodeAt(i) + ((h << 5) - h); return Math.abs(h); }
+function pvPaneColor(tabId, split){
+  if (!tabId) return null;
+  const idx = split ? split.charCodeAt(0) - 97 : 0;
+  return PV_TINT[(pvHashCode(String(tabId)) % 9 + Math.max(0, idx)) % PV_TINT.length];
+}
+
 function pvIngestStatus(j){
   const panes = [], names = {}; let w = 0, t = 0;
   for (const win of j.windows || []) { w++;
@@ -772,9 +952,17 @@ function pvIngestStatus(j){
       for (const p of tab.panes || []) {
         const proc = String(p.process || (p.app && p.app.name) || "").toLowerCase();
         const web = p.kind === "web" || p.shell === "web";
-        const cls = web ? "wb" : PV_AGENT_RX.test(proc) ? "ag" : (p.shell === "picker" || proc === "picker") ? "dm" : "sh";
+        // Agent by its foreground process, its app, or the command that launched it
+        // (a tool subprocess briefly replaces the foreground; the launch line doesn't).
+        const launch = String((p.app && p.app.cmdline) || "").trim().split(/\s+/)[0].replace(/^.*[\\/]/, "").replace(/\.exe$/i, "");
+        const agent = [proc, String((p.app && p.app.name) || ""), launch].some((x) => PV_AGENT_RX.test(x));
+        const cls = web ? "wb" : agent ? "ag" : (p.shell === "picker" || proc === "picker") ? "dm" : "sh";
         const name = p.name || p.title || String(p.paneId || "").slice(0, 8);
-        panes.push({paneId: p.paneId, name, proc, cls, focused: !!p.focused, state: p.state || "", tab: tab.name || ""});
+        const lastOut = p.outSecsAgo == null ? 0 : Date.now() - p.outSecsAgo * 1000;
+        panes.push({paneId: p.paneId, name, proc, cls, focused: !!p.focused, state: p.state || "", tab: tab.name || "",
+          tabIdx: t, tabId: tab.tabId || "", split: p.splitLabel || "",
+          color: cls === "wb" ? null : pvPaneColor(tab.tabId, p.splitLabel),
+          bps: Number(p.outBps) || 0, lps: Number(p.outLps) || 0, lastOut});
         names[p.paneId] = name;
       } } }
   PV.panes = panes; PV.names = names; PV.counts = {w, t};
@@ -790,15 +978,15 @@ function pvLabel(id){
 }
 
 // File activity Hyperia received: Edit events (agent edit tools) and FileOps
-// (writes/creates/deletes/renames). Reads are skipped. Live = last hour.
+// (writes/creates/deletes/renames). Reads only with withReads (the file view). Live = last hour.
 const PV_OP_COLOR = {edit: "#fb923c", write: "#c084fc", create: "#4ade80", delete: "#e11d48", rename: "#94a3b8"};
-function pvFileEvents(){
+function pvFileEvents(withReads, liveMs){
   const fe = (PV.win && PV.win.telemetry && PV.win.telemetry.file_events) || [];
-  const cut = PV.mode === "live" ? Date.now() - PV_LIVE_MS : 0, out = [];
+  const cut = PV.mode === "live" ? Date.now() - (liveMs || PV_LIVE_MS) : 0, out = [];
   for (const e of fe) {
     if ((e.ts || 0) < cut) continue;
     const kind = e.kind === "Edit" ? "edit" : e.kind === "FileOp" ? String(e.op || "").toLowerCase() : "";
-    if (!PV_OP_COLOR[kind]) continue;
+    if (!PV_OP_COLOR[kind] && !(withReads && kind === "read")) continue;
     // nuts-files saves via a temp file it then renames over the target; the
     // temp file's own write/rename is noise, not a second change.
     if (/\.nutstmp\d*$/i.test(e.path || "")) continue;
@@ -811,9 +999,13 @@ function pvFileEvents(){
 
 function pvBuildNodes(){
   const nodes = new Map();
+  const nowMs = Date.now();
   for (const p of PV.panes) {
-    nodes.set("pane:"+p.paneId, {id: "pane:"+p.paneId, label: p.name, pane: p.paneId,
-      kind: p.cls === "ag" ? "agent" : p.cls === "wb" ? "web" : "pane", sent: 0, received: 0, access: 0, alias: new Set()});
+    if (p.cls === "ag") PV.agentSeen.set(p.paneId, nowMs);
+    const wasAgent = nowMs - (PV.agentSeen.get(p.paneId) || 0) < 600000;
+    nodes.set("pane:"+p.paneId, {id: "pane:"+p.paneId, label: p.name, pane: p.paneId, color: p.color,
+      tabIdx: p.tabIdx, tabId: p.tabId, tabName: p.tab, split: p.split,
+      kind: p.cls === "wb" ? "web" : wasAgent ? "agent" : "pane", sent: 0, received: 0, access: 0, alias: new Set()});
   }
   // A restored tab reuses a pane's name with a new pane id: one node per name,
   // with closed instances folded into the live one.
@@ -850,9 +1042,41 @@ function pvBuildNodes(){
   }
   const rank = {agent: 0, pane: 1, web: 2, system: 3};
   const list = [...nodes.values()].sort((a, b) => (rank[a.kind] - rank[b.kind]) || String(a.label).localeCompare(String(b.label)));
+  const slots = PV.ringSlots, live = new Set(list.map((n) => n.id));
+  for (const [id, sl] of slots) if (live.has(id)) sl.seen = nowMs; else if (nowMs - sl.seen > 600000) slots.delete(id);
+  // Compact when over a third of the ring is empty: keep everyone's order.
+  let total = Math.max(0, ...[...slots.values()].map((sl) => sl.i + 1));
+  if (total > 6 && slots.size < total * 2 / 3) {
+    [...slots.entries()].sort((a, b) => a[1].i - b[1].i).forEach(([, sl], j) => { sl.i = j; });
+    total = slots.size;
+  }
+  for (const n of list) {
+    if (slots.has(n.id)) continue;
+    const used = new Set([...slots.values()].map((sl) => sl.i));
+    let i = 0; while (used.has(i)) i++;
+    slots.set(n.id, {i, seen: nowMs});
+  }
+  total = Math.max(1, ...[...slots.values()].map((sl) => sl.i + 1));
   const alias = new Map();
-  list.forEach((n, i) => {
-    n.theta = (i / Math.max(1, list.length)) * Math.PI * 2 - Math.PI/2;
+  // Ring order: panes grouped by tab (tab-bar order), then split letter;
+  // nodes without a pane after them, first-seen first. Tabs get a small gap.
+  const tabOf = (n) => (n.tabIdx != null ? n.tabIdx : 1e9);
+  const order = [...list].sort((a, b) => tabOf(a) - tabOf(b) || String(a.split || "").localeCompare(String(b.split || "")) || slots.get(a.id).i - slots.get(b.id).i);
+  const GAP = .7, at = new Map();
+  let u = 0;
+  order.forEach((n, j) => { if (j && tabOf(n) !== tabOf(order[j - 1])) u += GAP; at.set(n.id, u); u += 1; });
+  if (order.length > 1 && tabOf(order[0]) !== tabOf(order[order.length - 1])) u += GAP;
+  PV.ringTotal = Math.max(6, u);
+  // Tab groups for the perimeter rims.
+  PV.tabGroups = [];
+  for (const n of order) {
+    if (n.tabIdx == null) continue;
+    const g = PV.tabGroups[PV.tabGroups.length - 1];
+    if (g && g.tabIdx === n.tabIdx) g.ids.push(n.id);
+    else PV.tabGroups.push({tabIdx: n.tabIdx, name: n.tabName || "", ids: [n.id]});
+  }
+  list.forEach((n) => {
+    n.theta = (at.get(n.id) / PV.ringTotal) * Math.PI * 2 - Math.PI/2;
     alias.set(n.id, n); for (const a of n.alias) alias.set(a, n); if (n.pane) { alias.set(n.pane, n); alias.set("pane:"+n.pane, n); }
   });
   PV.nodes = list; PV.alias = alias;
@@ -900,6 +1124,9 @@ const pvEase = (dt) => (PV_REDUCE ? 1 : 1 - Math.exp(-dt / 280));
 function pvAngDiff(a, b){ let d = (a - b) % (Math.PI*2); if (d > Math.PI) d -= Math.PI*2; if (d < -Math.PI) d += Math.PI*2; return d; }
 const pvTouches = (e) => !PV.sel || e.from === PV.sel || e.to === PV.sel;
 
+const PV_PITCH_3D = 1.0, PV_PITCH_2D = Math.PI / 2;
+try { if (localStorage.getItem("pv.dim") === "2d") { PV.dim = "2d"; PV.cam.pitch = PV.cam.want = PV_PITCH_2D; } } catch (_e) {}
+
 function pvDrawRing(){
   const c = $("pv-ring"); if (!c || !PV.on) return;
   const {ctx, w, h} = pvFit(c);
@@ -907,29 +1134,51 @@ function pvDrawRing(){
   ctx.setTransform(dpr*vw.z, 0, 0, dpr*vw.z, dpr*vw.x, dpr*vw.y);
   const now = performance.now(), dt = PV.lastDraw ? Math.min(250, now - PV.lastDraw) : 1000; PV.lastDraw = now;
   const k = pvEase(dt);
-  // Leaves room outside the ring for the bars and the names.
-  const cx = w*.5, cy = h*.5, R = Math.max(50, Math.min(w*.3, h*.31)), tilt = .9, rot = PV.rot;
-  PV.geom = {cx, cy, R, tilt, rot};
-  const pos = (th, r) => ({x: cx + Math.cos(th+rot)*r, y: cy + Math.sin(th+rot)*r*tilt});
-  const halo = ctx.createRadialGradient(cx, cy, R*.25, cx, cy, R*1.08);
-  halo.addColorStop(0, "rgba(37,99,235,0)"); halo.addColorStop(.72, "rgba(37,99,235,.12)"); halo.addColorStop(1, "rgba(37,99,235,0)");
-  ctx.fillStyle = halo; ctx.beginPath(); ctx.ellipse(cx, cy, R*1.08, R*1.08*tilt, 0, 0, Math.PI*2); ctx.fill();
+  // The agents stand on a floor disk; files float above it. One camera
+  // (pitch = tip, yaw = slow spin + your orbit) projects all of it.
+  const cam = PV.cam;
+  cam.pitch += (cam.want - cam.pitch) * (PV_REDUCE ? 1 : Math.min(1, k * 1.5));
+  const R = Math.max(50, Math.min(w*.34, h*.36)), rot = PV.rot, pitch = cam.pitch, yaw = rot + cam.yaw;
+  const F = R * 3.4, cp = Math.cos(pitch), sp = Math.sin(pitch), cyw = Math.cos(yaw), syw = Math.sin(yaw);
+  // Lower the floor as it tips so the files above it stay in frame.
+  const vcx = w*.5, vcy = h*.5 + R*.38*cp;
+  const P3 = (x, y, z) => {
+    const x1 = x*cyw - z*syw, z1 = x*syw + z*cyw;
+    const y2 = y*cp + z1*sp, z2 = -y*sp + z1*cp, p = F / (F + z2);
+    return {x: vcx + x1*p, y: vcy - y2*p, z: z2, p};
+  };
+  // A point on the floor at angle th, radius r (same orientation as before).
+  const pos = (th, r) => P3(Math.cos(th)*r, 0, -Math.sin(th)*r);
+  const C0 = P3(0, 0, 0), cx = C0.x, cy = C0.y, tilt = sp;
+  const floor = (r, n = 72) => { const pts = []; for (let i = 0; i < n; i++) pts.push(pos(i / n * Math.PI * 2, r)); return pts; };
+  const poly = (pts) => { ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath(); };
+  const rim = floor(R * 1.08);
+  PV.geom = {cx, cy, R, tilt, rot, P3, pitch, rim};
+  // The floor: a faint disk with rings and spokes so its tilt reads.
+  poly(rim); ctx.fillStyle = "rgba(37,99,235,.07)"; ctx.fill();
   ctx.strokeStyle = "rgba(56,189,248,.16)"; ctx.lineWidth = 1;
-  for (const s of [1, .93]) { ctx.beginPath(); ctx.ellipse(cx, cy, R*s, R*s*tilt, 0, 0, Math.PI*2); ctx.stroke(); }
+  for (const s of [1, .93]) { poly(floor(R * s)); ctx.stroke(); }
+  ctx.strokeStyle = "rgba(56,189,248,.06)";
+  for (const s of [.33, .66]) { poly(floor(R * s, 48)); ctx.stroke(); }
+  for (let i = 0; i < 12; i++) { const a = pos(i / 12 * Math.PI * 2, R * .1), b = pos(i / 12 * Math.PI * 2, R * .93); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+  PV.geom.pos = pos;
 
   // Nodes ease to their slot; new ones fade in, gone ones fade out.
   const present = new Set();
   for (const n of PV.nodes) {
     present.add(n.id);
     let a = PV.anim.get(n.id);
-    if (!a) { a = {theta: n.theta, alpha: 0, fib: 0}; PV.anim.set(n.id, a); }
+    if (!a) { a = {theta: n.theta, alpha: 0, fib: 0}; PV.anim.set(n.id, a); if (PV.primed) pvSound("chime"); }
     a.node = n; a.theta += pvAngDiff(n.theta, a.theta) * k; a.alpha += (1 - a.alpha) * k;
   }
   for (const [id, a] of PV.anim) if (!present.has(id)) { a.alpha -= a.alpha * k; if (a.alpha < .02) { PV.anim.delete(id); PV.fibAnim.delete(id); } }
+  for (const a of PV.anim.values()) { const p = pos(a.theta, R); a.sx = p.x; a.sy = p.y; }
   const drawn = [...PV.anim.values()];
   if (!drawn.length) { pvCanvasNote(ctx, w, h, PV.mode === "live" ? "no open panes" : "no panes reported"); return; }
-  const spanT = Math.PI * 2 / Math.max(6, PV.nodes.length || 6);
+  const spanT = Math.PI * 2 / (PV.ringTotal || Math.max(6, PV.nodes.length || 6));
   PV.span = PV.span ? PV.span + (spanT - PV.span) * k : spanT;
+  pvDrawBand(ctx, pos, R);
+  pvDrawScreens(ctx, R);
   const sel = PV.sel;
 
   // Strands: mail (amber), system mail (white), pane access (cyan). Each
@@ -962,7 +1211,11 @@ function pvDrawRing(){
   }
   ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
 
+  pvDrawFiles(ctx, pos, R, cx, cy, tilt, k);
+  pvDrawNet(ctx, R);
   pvDrawArrivals(ctx, pos, R, cx, cy);
+  pvDrawOutput(ctx, drawn, pos, R, k);
+  pvDrawRadio(ctx, pos, R, cx, cy);
 
   // Edge bars: one per real event. New ones grow out, expired ones shrink away.
   const wall = Date.now();
@@ -1018,14 +1271,20 @@ function pvDrawRing(){
       ctx.font = (on ? "700 10px " : "9px ")+PV_MONO;
       const left = p.x < cx*vw.z + vw.x;
       const text = pvClip(ctx, n.label, Math.max(60, (left ? p.x : w - p.x) - 8)), tw = ctx.measureText(text).width;
-      const box = {x0: left ? p.x - tw : p.x, x1: left ? p.x : p.x + tw, y0: p.y - 7, y1: p.y + 7};
+      const pad = (a.out || 0) > .05 ? 12 : 0;
+      const box = {x0: (left ? p.x - tw : p.x) - pad, x1: (left ? p.x : p.x + tw) + pad, y0: p.y - 7 - pad / 3, y1: p.y + 7 + pad / 3};
       if (!on && placed.some((b) => box.x0 < b.x1 + 4 && box.x1 > b.x0 - 4 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
       placed.push(box);
+      a.lbox = {x0: (box.x0 - vw.x) / vw.z, x1: (box.x1 - vw.x) / vw.z, y0: (box.y0 - vw.y) / vw.z, y1: (box.y1 - vw.y) / vw.z};
       const depth = (Math.sin(a.theta + rot) + 1) / 2;
       ctx.globalAlpha = (on ? 1 : (.6 + .4*depth) * (sel ? .5 : 1)) * a.alpha;
-      ctx.fillStyle = on ? "#f8fafc" : n.kind === "agent" ? "#fbbf24" : n.kind === "web" ? "#86efac" : n.kind === "system" ? "#e5e7eb" : "#7dd3fc";
+      ctx.fillStyle = on ? "#f8fafc" : n.color || (n.kind === "agent" ? "#fbbf24" : n.kind === "web" ? "#86efac" : n.kind === "system" ? "#e5e7eb" : "#7dd3fc");
       ctx.textAlign = left ? "right" : "left";
       ctx.fillText(text, p.x, p.y);
+      if ((a.out || 0) > .05) {
+        pvHalo(ctx, a, left ? p.x - tw / 2 : p.x + tw / 2, p.y, tw, sel && !on ? .35 : 1);
+        if (!PV_REDUCE) pvShimmer(ctx, text, p.x, p.y, tw, ctx.textAlign, a.out * a.alpha);
+      }
     }
     ctx.globalAlpha = 1; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
   }
@@ -1035,12 +1294,17 @@ function pvDrawRing(){
   const score = (n) => (n.sent || 0) + (n.received || 0) + (n.access || 0) + (n.edits || 0) + (n.ops || 0);
   const pick = (sel && PV.anim.get(sel)) || drawn.filter((a) => present.has(a.node.id))
     .reduce((m, a) => (!m || score(a.node) > score(m.node) ? a : m), null);
-  if (pick && (sel || score(pick.node) > 0)) {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  pvLabelFiles(ctx, vw, w, h);
+  pvFileCallout(ctx, vw, w, h);
+  ctx.setTransform(dpr*vw.z, 0, 0, dpr*vw.z, dpr*vw.x, dpr*vw.y);
+  if (pick && !PV.selFile && PV.selDir == null && (sel || score(pick.node) > 0)) {
     // The callout box stays in screen space; only its anchor follows the zoom.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const top = pick.node, p0 = pos(pick.theta, R+2), p = {x: p0.x*vw.z + vw.x, y: p0.y*vw.z + vw.y};
     const l1 = (sel ? "SELECTED " : "NODE ")+top.label+" | SENT "+(top.sent || 0)+" | RECV "+(top.received || 0)+" | EDITS "+(top.edits || 0)+" | OPS "+(top.ops || 0)+" | +"+pvK(top.added || 0);
-    const l2 = (top.kind || "").toUpperCase()+" | PANE ACCESS "+(top.access || 0)+" | NET "+fmtB(top.net || 0)+(sel ? " | ESC TO CLEAR" : " | CLICK A NODE");
+    const o = pvOut(top), outTxt = pvWorking(o) ? " | OUT "+fmtB(o.bps)+"/S "+o.lps+" LINES/S" : o && o.lastOut ? " | QUIET "+pvAgo(o.lastOut) : "";
+    const l2 = (top.kind || "").toUpperCase()+" | PANE ACCESS "+(top.access || 0)+" | NET "+fmtB(top.net || 0)+outTxt+(sel ? " | ESC TO CLEAR" : " | CLICK A NODE");
     ctx.font = "10px "+PV_MONO;
     const bw = Math.min(w - 28, Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 20), bh = 36;
     const right = p.x > cx, low = p.y > cy;
@@ -1056,8 +1320,10 @@ function pvDrawRing(){
     ctx.globalAlpha = 1;
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (PV.focus) { ctx.setTransform(dpr*vw.z, 0, 0, dpr*vw.z, dpr*vw.x, dpr*vw.y); pvDrawScreens(ctx, R, true); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
+  pvRadioBanner(ctx, w);
   ctx.font = "9px "+PV_MONO; ctx.fillStyle = "#475569";
-  ctx.fillText("SCROLL TO ZOOM · DRAG TO PAN · DOUBLE-CLICK TO RESET"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
+  ctx.fillText("SCROLL TO ZOOM · DRAG TO MOVE"+(PV.dim === "3d" ? " · CTRL+DRAG TO TIP" : "")+" · HOVER A PANE FOR ITS SCREEN, CLICK IT TO ZOOM · DOUBLE-CLICK A FILE TO EDIT"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
   ctx.fillText(PV.nodes.length+" NODES · "+PV.edgeAnim.size+" LINKS · "+(PV.mode === "live" ? "LIVE · LAST HOUR" : "HISTORY · "+(PV.range > 86400000 ? "7 DAYS" : "24 HOURS")), 14, 18);
 }
 
@@ -1071,6 +1337,10 @@ function pvNoteArrivals(){
     if (PV.seen.has(key)) continue;
     PV.seen.add(key);
     if (PV.primed && !PV_REDUCE && PV.arrivals.length < 24) PV.arrivals.push({from: e.from, to: e.to, type: e.type, state: String(e.state || ""), born: now});
+    if (PV.primed) {
+      const st = String(e.state || "").toLowerCase();
+      pvSound("zap", e.type === "consent" ? (/deny|denied/.test(st) ? "consent-deny" : "consent-allow") : e.type);
+    }
   }
   if (PV.seen.size > 4000) PV.seen = new Set([...PV.seen].slice(-2000));
   PV.primed = true;
@@ -1123,9 +1393,1503 @@ function pvDrawArrivals(ctx, pos, R, cx, cy){
   ctx.shadowBlur = 0; ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over"; ctx.lineCap = "butt";
 }
 
+// ---- Radio: spoken transmissions (who → whom, what, audio). A transmission
+// on air (or being replayed here) radiates from its sender on the ring and
+// shows its waveform; the panel lists them with the summary and a replay.
+async function pvRadioPoll(){
+  if (!PV.on) return;
+  try {
+    const r = await fetch("/api/radio/log?limit=60"); if (!r.ok) throw new Error(String(r.status));
+    const j = await r.json(), skew = Date.now() - (j.now || Date.now());
+    PV.radio = (j.entries || []).map((e) => ({...e, start: e.ts + skew})); PV.radioErr = false;
+  } catch (_e) { PV.radio = []; PV.radioErr = true; }
+  const sig = PV.radio.map((e) => e.id + (pvRadioLive(e) ? "*" : "")).join(",") + "|" + PV.radioOpen + "|" + (PV.replay && PV.replay.id);
+  if (sig !== PV.radioSig) { PV.radioSig = sig; pvRenderRadio(); }
+}
+const pvRadioLive = (e) => Date.now() < e.start + e.secs * 1000;
+// Progress 0–1 of a transmission that's sounding now (on air or replaying), else null.
+function pvRadioProgress(e){
+  const rp = PV.replay;
+  if (rp && rp.id === e.id && rp.audio && !rp.audio.paused) return rp.audio.duration ? rp.audio.currentTime / rp.audio.duration : 0;
+  return pvRadioLive(e) ? Math.max(0, Math.min(1, (Date.now() - e.start) / (e.secs * 1000))) : null;
+}
+function pvRadioNode(e){
+  const n = (e.from_pane && (PV.alias.get("pane:"+e.from_pane) || PV.alias.get(e.from_pane)))
+    || PV.nodes.find((x) => x.label === e.from);
+  return n ? PV.anim.get(n.id) : null;
+}
+function pvRadioReplay(e){
+  const cur = PV.replay;
+  if (cur) { cur.audio.pause(); PV.replay = null; if (cur.id === e.id) { pvRadioPoll(); return; } }
+  const audio = new Audio("/api/radio/audio/" + encodeURIComponent(e.id));
+  PV.replay = {id: e.id, audio};
+  audio.addEventListener("ended", () => { if (PV.replay && PV.replay.audio === audio) PV.replay = null; pvRadioPoll(); });
+  audio.play().catch(() => { PV.replay = null; pvRadioPoll(); });
+  pvRadioPoll();
+}
+function pvRenderRadio(){
+  const box = $("pv-radio"); if (!box) return;
+  const list = PV.radio;
+  $("pv-radio-n").textContent = list.length ? list.length + " logged" : "";
+  if (!list.length) { pvNone(box, PV.radioErr ? "radio log: needs the next sidecar build" : "no transmissions yet"); return; }
+  box.replaceChildren();
+  for (const e of list.slice(0, 40)) {
+    const live = pvRadioLive(e), row = pvEl("div", "pv-tx" + (live ? " air" : "") + (PV.radioOpen === e.id ? " open" : ""));
+    row.dataset.id = e.id;
+    const hd = pvEl("div", "hd"), nm = pvEl("span", "nm");
+    nm.appendChild(document.createTextNode(e.from)); nm.appendChild(pvEl("i", null, " → ")); nm.appendChild(document.createTextNode(e.to));
+    nm.title = e.from + " → " + e.to + " · " + e.secs.toFixed(1) + "s · " + e.engine + (e.voice ? " · " + e.voice : "");
+    const tag = live ? pvEl("span", "air", "ON AIR") : pvEl("span", "tm", e.secs.toFixed(0) + "s");
+    const pl = pvEl("button", "pl", PV.replay && PV.replay.id === e.id ? "■" : "▶");
+    pl.type = "button"; pl.title = e.has_audio ? "Replay this transmission" : "Audio not kept"; pl.disabled = !e.has_audio;
+    pl.addEventListener("click", (ev) => { ev.stopPropagation(); pvRadioReplay(e); });
+    hd.append(nm, tag, pvEl("span", "tm", pvAgo(e.start)), pl);
+    const sm = pvEl("div", "sm", e.text || e.spoken);
+    sm.title = PV.radioOpen === e.id ? "" : e.text;
+    const cv = document.createElement("canvas");
+    row.append(hd, sm, cv);
+    row.addEventListener("click", () => {
+      PV.radioOpen = PV.radioOpen === e.id ? null : e.id;
+      const a = pvRadioNode(e); if (a && PV.radioOpen) { PV.sel = a.node.id; PV.selFile = null; PV.selDir = null; }
+      PV.radioSig = ""; pvRadioPoll(); pvRenderAll();
+    });
+    box.appendChild(row);
+    pvRadioWave(cv, e);
+  }
+}
+// Waveform strip with played portion lit.
+function pvRadioWave(cv, e){
+  const dpr = window.devicePixelRatio || 1, w = Math.max(1, cv.clientWidth), h = Math.max(1, cv.clientHeight);
+  if (cv.width !== Math.round(w*dpr)) { cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr); }
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+  const pk = e.peaks || [], n = pk.length, prog = pvRadioProgress(e);
+  if (!n) return;
+  const bw = w / n;
+  for (let i = 0; i < n; i++) {
+    const v = Math.max(.06, pk[i] / 255), bh = v * (h - 2), played = prog != null && i / n <= prog;
+    ctx.fillStyle = played ? "#22d3ee" : prog != null ? "#155e75" : "#1e3a4a";
+    ctx.fillRect(i * bw, (h - bh) / 2, Math.max(1, bw - .6), bh);
+  }
+  if (prog != null) { ctx.fillStyle = "#f8fafc"; ctx.fillRect(Math.min(w - 1, prog * w), 0, 1, h); }
+}
+// Animate the strips of anything sounding (called every frame).
+function pvRadioTick(){
+  const box = $("pv-radio"); if (!box) return;
+  for (const e of PV.radio) {
+    if (pvRadioProgress(e) == null && !(PV.radioWaves.get(e.id))) continue;
+    const cv = box.querySelector('.pv-tx[data-id="' + e.id + '"] canvas');
+    const on = pvRadioProgress(e) != null;
+    if (cv) pvRadioWave(cv, e);
+    if (on) PV.radioWaves.set(e.id, 1); else PV.radioWaves.delete(e.id);
+  }
+  // Drop the ON AIR tag once a transmission ends.
+  const sig = PV.radio.map((e) => e.id + (pvRadioLive(e) ? "*" : "")).join(",") + "|" + PV.radioOpen + "|" + (PV.replay && PV.replay.id);
+  if (sig !== PV.radioSig) { PV.radioSig = sig; pvRenderRadio(); }
+}
+// ---- Live spectrum of a sounding transmission: its saved audio is decoded
+// once, then an FFT at the playhead gives log-spaced band levels (0–1) and
+// loudness, smoothed so bars rise fast and fall slowly.
+const PV_FFT = 1024, PV_BANDS = 32;
+const PVR = {pcm: new Map(), loading: new Set(), spec: new Map()};
+async function pvRadioPcm(id){
+  if (PVR.pcm.has(id) || PVR.loading.has(id)) return PVR.pcm.get(id) || null;
+  PVR.loading.add(id);
+  try {
+    const buf = await (await fetch("/api/radio/audio/" + encodeURIComponent(id))).arrayBuffer();
+    const ac = new OfflineAudioContext(1, 1, 24000), audio = await ac.decodeAudioData(buf);
+    PVR.pcm.set(id, {data: audio.getChannelData(0), rate: audio.sampleRate});
+    while (PVR.pcm.size > 4) PVR.pcm.delete(PVR.pcm.keys().next().value);
+  } catch (_e) { PVR.pcm.set(id, null); }
+  PVR.loading.delete(id);
+  return PVR.pcm.get(id) || null;
+}
+const PV_HANN = Float32Array.from({length: PV_FFT}, (_, i) => .5 - .5 * Math.cos(2 * Math.PI * i / (PV_FFT - 1)));
+function pvFftMag(x){
+  const n = x.length, re = Float32Array.from(x), im = new Float32Array(n);
+  for (let i = 1, j = 0; i < n; i++) { let b = n >> 1; for (; j & b; b >>= 1) j ^= b; j ^= b; if (i < j) { [re[i], re[j]] = [re[j], re[i]]; } }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = a + len / 2, tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+        const nr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = nr;
+      }
+    }
+  }
+  const mag = new Float32Array(n / 2);
+  for (let i = 0; i < n / 2; i++) mag[i] = Math.hypot(re[i], im[i]) / n;
+  return mag;
+}
+// {bands: Float32Array(PV_BANDS) 0–1, level 0–1} at progress u, or null while loading.
+function pvRadioSpectrum(e, u){
+  const pcm = PVR.pcm.get(e.id);
+  if (pcm === undefined) { pvRadioPcm(e.id); return null; }
+  if (!pcm) return null;
+  const {data, rate} = pcm, at = Math.floor(u * data.length) - PV_FFT / 2;
+  const win = new Float32Array(PV_FFT); let rms = 0;
+  for (let i = 0; i < PV_FFT; i++) { const v = data[at + i] || 0; win[i] = v * PV_HANN[i]; rms += v * v; }
+  const mag = pvFftMag(win), nyq = rate / 2, lo = 80, hi = Math.min(8000, nyq * .95);
+  const raw = new Float32Array(PV_BANDS);
+  for (let b = 0; b < PV_BANDS; b++) {
+    const f0 = lo * Math.pow(hi / lo, b / PV_BANDS), f1 = lo * Math.pow(hi / lo, (b + 1) / PV_BANDS);
+    const i0 = Math.max(1, Math.floor(f0 / nyq * mag.length)), i1 = Math.max(i0 + 1, Math.ceil(f1 / nyq * mag.length));
+    let m = 0; for (let i = i0; i < i1 && i < mag.length; i++) m = Math.max(m, mag[i]);
+    const db = 20 * Math.log10(m + 1e-9);
+    raw[b] = Math.max(0, Math.min(1, (db + 72) / 56));
+  }
+  const prev = PVR.spec.get(e.id) || {bands: new Float32Array(PV_BANDS), level: 0};
+  for (let b = 0; b < PV_BANDS; b++) prev.bands[b] = raw[b] > prev.bands[b] ? raw[b] : prev.bands[b] * .82 + raw[b] * .18;
+  const lvl = Math.min(1, Math.sqrt(rms / PV_FFT) * 4);
+  prev.level = lvl > prev.level ? lvl : prev.level * .85 + lvl * .15;
+  PVR.spec.set(e.id, prev);
+  return prev;
+}
+
+// Ring: expanding rings from the sender plus a waveform halo round it.
+function pvDrawRadio(ctx, pos, R, cx, cy){
+  const t = performance.now();
+  for (const e of PV.radio) {
+    const prog = pvRadioProgress(e); if (prog == null) continue;
+    const a = pvRadioNode(e), p = a ? pos(a.theta, R) : {x: cx, y: cy - R * 1.02};
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    // The real audio at the playhead (falls back to the volume outline while it loads).
+    const sp = pvRadioSpectrum(e, prog), level = sp ? sp.level : ((e.peaks || [])[Math.floor(prog * (e.peaks || []).length)] || 0) / 255;
+    // Waves: three rings expanding over 1.8 s, brighter and wider when louder.
+    for (let i = 0; i < 3; i++) {
+      const u = PV_REDUCE ? .5 : ((t / 1800) + i / 3) % 1;
+      ctx.globalAlpha = (1 - u) * (.3 + .6 * level);
+      ctx.strokeStyle = "#22d3ee"; ctx.lineWidth = (1 + 2 * level) * (1 - u) + .4;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 8 + u * R * (.25 + .2 * level), 0, Math.PI * 2); ctx.stroke();
+    }
+    // Spectrum halo: low to high frequencies round each half, mirrored.
+    if (sp) {
+      const n = PV_BANDS * 2;
+      for (let i = 0; i < n; i++) {
+        const b = i < PV_BANDS ? i : n - 1 - i, v = sp.bands[b];
+        const th = (i / n) * Math.PI * 2 - Math.PI / 2 + (PV_REDUCE ? 0 : t / 4000), r0 = 9, r1 = r0 + 2 + v * 26;
+        ctx.globalAlpha = .45 + .55 * v; ctx.strokeStyle = b < PV_BANDS / 3 ? "#67e8f9" : b < PV_BANDS * 2 / 3 ? "#a5f3fc" : "#f0abfc"; ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.moveTo(p.x + Math.cos(th) * r0, p.y + Math.sin(th) * r0); ctx.lineTo(p.x + Math.cos(th) * r1, p.y + Math.sin(th) * r1); ctx.stroke();
+      }
+    } else {
+      const pk = e.peaks || [], n = pk.length, spokes = 40, at = Math.floor(prog * n);
+      if (n) for (let i = 0; i < spokes; i++) {
+        const v = (pk[Math.min(n - 1, Math.max(0, at - spokes / 2 + i))] || 0) / 255;
+        const th = (i / spokes) * Math.PI * 2 + (PV_REDUCE ? 0 : t / 2400), r0 = 9, r1 = r0 + 3 + v * 22;
+        ctx.globalAlpha = .9; ctx.strokeStyle = "#a5f3fc"; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.moveTo(p.x + Math.cos(th) * r0, p.y + Math.sin(th) * r0); ctx.lineTo(p.x + Math.cos(th) * r1, p.y + Math.sin(th) * r1); ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1; ctx.fillStyle = "#ecfeff";
+    ctx.beginPath(); ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+}
+// Screen-space banner while something is sounding: who → whom and the waveform.
+function pvRadioBanner(ctx, w){
+  const e = PV.radio.find((x) => pvRadioProgress(x) != null); if (!e) return;
+  const prog = pvRadioProgress(e), replay = PV.replay && PV.replay.id === e.id;
+  const bw = Math.min(420, w - 40), bx = (w - bw) / 2, by = 26, bh = 64;
+  ctx.fillStyle = "rgba(4,20,26,.92)"; ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = "#22d3ee"; ctx.lineWidth = 1; ctx.strokeRect(bx + .5, by + .5, bw - 1, bh - 1);
+  ctx.font = "bold 9.5px " + PV_MONO; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  ctx.fillStyle = "#22d3ee"; const tag = replay ? "REPLAY " : "ON AIR ";
+  ctx.fillText(tag, bx + 8, by + 11);
+  const tw = ctx.measureText(tag).width;
+  ctx.font = "9.5px " + PV_MONO; ctx.fillStyle = "#e2e8f0";
+  ctx.fillText(pvClip(ctx, e.from + " → " + e.to + " · " + e.secs.toFixed(0) + "s", bw - 20 - tw), bx + 8 + tw, by + 11);
+  // Live spectrum (80 Hz – 8 kHz, log spaced).
+  const sp = pvRadioSpectrum(e, prog);
+  if (sp) {
+    const gx = bx + 8, gw = bw - 16, base = by + 42, gh = 22, bwid = gw / PV_BANDS;
+    for (let b = 0; b < PV_BANDS; b++) {
+      const v = sp.bands[b], hh = Math.max(1, v * gh);
+      ctx.fillStyle = b < PV_BANDS / 3 ? "#22d3ee" : b < PV_BANDS * 2 / 3 ? "#67e8f9" : "#e879f9";
+      ctx.globalAlpha = .35 + .65 * v;
+      ctx.fillRect(gx + b * bwid + .5, base - hh, Math.max(1, bwid - 1.5), hh);
+    }
+    ctx.globalAlpha = 1;
+  }
+  // Timeline: the whole transmission, played part lit.
+  const pk = e.peaks || [], n = pk.length, sx = bx + 8, sw = bw - 16, sy = by + 54;
+  for (let i = 0; i < n; i++) {
+    const v = Math.max(.05, pk[i] / 255), hh = v * 5;
+    ctx.fillStyle = i / n <= prog ? "#22d3ee" : "#155e75";
+    ctx.fillRect(sx + (i / n) * sw, sy - hh, Math.max(1, sw / n - .6), hh * 2);
+  }
+  ctx.fillStyle = "#f8fafc"; ctx.fillRect(sx + prog * sw, sy - 6, 1, 12);
+  ctx.textBaseline = "alphabetic";
+}
+
+// ---- File editor: double-click a file in the view. Tabs per file, each with
+// its own textarea (so undo survives tab switches) under a highlight overlay.
+// Saves are conflict-checked against the mtime it opened; outside changes
+// reload a clean tab and warn on a dirty one.
+const ED = {tabs: [], active: -1, poll: null, matchCase: false, findMode: "find"};
+const PV_ED_HL_MAX = 400 * 1024;
+const edPost = (url, body) => fetch(url, {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body)})
+  .then(async (r) => ({status: r.status, j: await r.json().catch(() => ({ok: false, error: "HTTP " + r.status}))}));
+function edLang(path){
+  const ext = (String(path).toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1] || "", base = pvBase(path).toLowerCase();
+  if (["rs","js","mjs","cjs","ts","tsx","jsx","go","java","c","h","cc","cpp","hpp","cs","swift","kt","css","scss","json","jsonc","proto","zig","dart"].includes(ext)) return "c";
+  if (["py","sh","bash","zsh","toml","yaml","yml","ps1","psm1","rb","conf","ini","cfg","env","r","pl","tf","nix"].includes(ext) || /^(dockerfile|makefile|\.env.*|\.gitignore)$/.test(base)) return "hash";
+  if (["md","markdown","mdx"].includes(ext)) return "md";
+  if (["html","htm","xml","svg","vue"].includes(ext)) return "ml";
+  return "plain";
+}
+const ED_KW = new Set(("fn let mut pub use mod struct enum impl trait match if else for while loop return async await const static type where self Self crate super dyn ref move unsafe extern " +
+  "function var class extends implements import export from default new this try catch finally throw typeof instanceof delete void yield interface package " +
+  "def lambda None True False null nil true false undefined in of as is not and or elif with pass break continue raise global nonlocal assert del " +
+  "func go defer select case switch chan map range struct goto fallthrough local then end do done fi esac elif echo export").split(" "));
+const edEsc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const ED_RX = {
+  c: /(\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|("(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n]){0,2}'|`(?:\\.|[^`\\])*`?)|(\b\d[\d_]*(?:\.\d+)?(?:e[+-]?\d+)?[a-z0-9]*\b|\b0x[\da-f_]+\b)|([A-Za-z_][\w]*)/gi,
+  hash: /(#[^\n]*)|("(?:\\.|[^"\\\n])*"?|'[^'\n]*'?)|(\b\d[\d_]*(?:\.\d+)?\b)|([A-Za-z_][\w-]*)|(^\s*\[[^\]\n]*\])/gim,
+  md: /(^#{1,6} [^\n]*)|(```[\s\S]*?(?:```|$)|`[^`\n]*`)|(\*\*[^*\n]+\*\*)|(\[[^\]\n]*\]\([^)\n]*\))/gm,
+  ml: /(<!--[\s\S]*?(?:-->|$))|("[^"\n]*"|'[^'\n]*')|(<\/?[A-Za-z][\w:-]*|\/?>)/g,
+};
+function edHighlight(text, lang){
+  const rx = ED_RX[lang]; if (!rx) return edEsc(text);
+  let out = "", last = 0, m; rx.lastIndex = 0;
+  while ((m = rx.exec(text))) {
+    if (m[0] === "") { rx.lastIndex++; continue; }
+    out += edEsc(text.slice(last, m.index));
+    const t = edEsc(m[0]);
+    let cls = null;
+    if (lang === "md") cls = m[1] ? "h" : m[2] ? "s" : m[3] ? "k" : "t";
+    else if (lang === "ml") cls = m[1] ? "c" : m[2] ? "s" : "t";
+    else cls = m[1] ? "c" : m[2] ? "s" : m[3] ? "n" : m[4] ? (ED_KW.has(m[4]) ? "k" : null) : m[5] ? "h" : null;
+    out += cls ? '<span class="' + cls + '">' + t + "</span>" : t;
+    last = m.index + m[0].length;
+  }
+  return out + edEsc(text.slice(last));
+}
+function edTab(){ return ED.tabs[ED.active] || null; }
+function edIndentUnit(text){
+  const lines = text.split("\n", 400);
+  if (lines.some((l) => l.startsWith("\t")) && !lines.some((l) => /^ {2}/.test(l))) return "\t";
+  return lines.some((l) => /^ {2}(?! )\S/.test(l)) ? "  " : "    ";
+}
+const ED_COMMENT = {c: "//", hash: "#"};
+
+// Rendered view for Markdown: .md files, and .txt files that read as Markdown.
+// HTML comes from the sidecar with raw HTML and script URLs neutralised, and
+// shows in a sandboxed frame (no scripts) under a strict CSP.
+function edLooksMd(text){
+  const marks = [/^#{1,6} \S/m, /^\s*[-*+] \S/m, /^\s*\d+\. \S/m, /```/, /\[[^\]\n]+\]\([^)\n]+\)/, /\*\*[^*\n]+\*\*/, /^\|.*\|\s*$/m, /^> \S/m];
+  return marks.filter((r) => r.test(text)).length >= 2;
+}
+function edCanRender(t){
+  if (!t || !t.ta) return false;
+  if (t.lang === "md") return true;
+  return /\.txt$/i.test(t.path) && edLooksMd(t.ta.value.slice(0, 20000));
+}
+const ED_MD_CSS = "body{margin:0;background:#0b0f17;color:#d6dde8;font:15px/1.65 system-ui,'Segoe UI',sans-serif}" +
+  "article{max-width:880px;margin:0 auto;padding:26px 38px 70px}h1,h2{border-bottom:1px solid #1e2a3c;padding-bottom:.3em}" +
+  "h1,h2,h3,h4{color:#f1f5f9;line-height:1.25;margin:1.4em 0 .6em}a{color:#7dd3fc}code{font-family:Consolas,'Cascadia Mono',monospace;" +
+  "background:#111827;padding:.1em .35em;border-radius:3px;font-size:.88em}pre{background:#0f1622;border:1px solid #1e2a3c;padding:12px 14px;" +
+  "overflow:auto;border-radius:4px;line-height:1.45}pre code{background:none;padding:0}table{border-collapse:collapse;margin:1em 0}" +
+  "th,td{border:1px solid #1e2a3c;padding:5px 10px}th{background:#111827}blockquote{border-left:3px solid #f59e0b;margin:1em 0;" +
+  "padding:.2em 1em;color:#94a3b8}img{max-width:100%}hr{border:0;border-top:1px solid #1e2a3c}li input{margin-right:.45em}";
+async function edRenderMd(t){
+  if (!t.view) {
+    const f = document.createElement("iframe");
+    f.className = "ed-view";
+    // No allow-scripts: nothing in the file can run. Same-origin only so we
+    // can keep the scroll position across re-renders.
+    f.setAttribute("sandbox", "allow-same-origin allow-popups allow-popups-to-escape-sandbox");
+    t.main.appendChild(f); t.view = f;
+  }
+  const {j} = await edPost("/api/files/render", {text: t.ta.value}).catch((e) => ({j: {ok: false, error: String(e)}}));
+  const body = j.ok ? j.html : '<p style="color:#f87171">Rendering failed: ' + edEsc(j.error || "unknown error") + "</p>";
+  let y = 0; try { y = t.view.contentDocument.scrollingElement.scrollTop; } catch (_e) {}
+  t.view.onload = () => {
+    try {
+      const doc = t.view.contentDocument;
+      edSlugHeadings(doc);
+      doc.addEventListener("click", (ev) => edPreviewClick(ev, t, doc));
+      doc.scrollingElement.scrollTop = y;
+    } catch (_e) {}
+  };
+  t.view.srcdoc = '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src https: http:; style-src \'unsafe-inline\'">' +
+    "<style>" + ED_MD_CSS + "</style><article>" + body + "</article>";
+}
+// GitHub-style heading ids, so "#9-install-on-…" links land.
+function edSlugHeadings(doc){
+  const seen = new Map();
+  for (const h of doc.querySelectorAll("h1,h2,h3,h4,h5,h6")) {
+    let slug = h.textContent.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s/g, "-");
+    const n = seen.get(slug) || 0; seen.set(slug, n + 1);
+    if (n) slug += "-" + n;
+    h.id = slug;
+  }
+}
+// Links in the preview: #anchors scroll it, relative paths open that file in
+// the editor (next to this one), http(s) and mailto open outside.
+function edPreviewClick(ev, t, doc){
+  const a = ev.target.closest && ev.target.closest("a[href]"); if (!a) return;
+  ev.preventDefault();
+  const href = a.getAttribute("href") || "";
+  if (href.startsWith("#")) {
+    const el = doc.getElementById(decodeURIComponent(href.slice(1)));
+    if (el) el.scrollIntoView({behavior: "smooth", block: "start"});
+    return;
+  }
+  if (/^(https?:|mailto:)/i.test(href)) { window.open(href, "_blank", "noopener"); return; }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return;   // any other scheme: ignore
+  // Relative file link: resolve against this file's folder, keep its separator.
+  const [rel] = href.split("#"), sep = t.path.includes("\\") && !t.path.startsWith("/") ? "\\" : "/";
+  const parts = t.path.split(/[\\/]/); parts.pop();
+  for (const seg of decodeURIComponent(rel).split(/[\\/]/)) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") parts.pop(); else parts.push(seg);
+  }
+  pvEdOpen(parts.join(sep));
+}
+function edSetRender(t, on){
+  if (!t || !t.main || !edCanRender(t)) return;
+  t.main.classList.toggle("render", on);
+  ED.preferRender = on;
+  if (on) edRenderMd(t); else t.ta.focus();
+  edActivate(ED.tabs.indexOf(t));
+}
+// Re-render while showing (typing, or an agent rewriting the file).
+function edRenderSoon(t){
+  if (!t.main || !t.main.classList.contains("render")) return;
+  clearTimeout(t.renderTimer); t.renderTimer = setTimeout(() => edRenderMd(t), 250);
+}
+
+function edBuildPane(t){
+  const main = pvEl("div", "ed-main"), gut = pvEl("div", "ed-gut"), wrap = pvEl("div", "ed-wrap"), hl = pvEl("pre", "ed-hl"), ta = document.createElement("textarea");
+  ta.className = "ed-ta"; ta.spellcheck = false; ta.wrap = "off"; ta.setAttribute("autocapitalize", "off"); ta.setAttribute("autocomplete", "off");
+  ta.value = t.saved; ta.readOnly = !!t.readonly;
+  if (t.saved.length > PV_ED_HL_MAX || t.lang === "plain") wrap.classList.add("plain");
+  wrap.append(hl, ta); main.append(gut, wrap);
+  t.main = main; t.ta = ta; t.hl = hl; t.gut = gut; t.wrapEl = wrap; t.indent = edIndentUnit(t.saved);
+  let raf = 0;
+  const paint = () => { raf = 0; edPaint(t); };
+  ta.addEventListener("input", () => { if (!raf) raf = requestAnimationFrame(paint); edRenderTabs(); edStatus(); edRenderSoon(t); });
+  ta.addEventListener("scroll", () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; gut.scrollTop = ta.scrollTop; });
+  ta.addEventListener("keydown", (ev) => edKey(ev, t));
+  ["keyup", "click", "select"].forEach((e) => ta.addEventListener(e, () => edStatus()));
+  $("ed-body").appendChild(main);
+  edPaint(t);
+}
+function edPaint(t){
+  const v = t.ta.value;
+  if (!t.wrapEl.classList.contains("plain")) t.hl.innerHTML = edHighlight(v, t.lang) + "\n ";
+  const n = v.split("\n").length;
+  if (n !== t.lines) { t.lines = n; let g = ""; for (let i = 1; i <= n; i++) g += i + "\n"; t.gut.textContent = g + " "; }
+  t.hl.scrollTop = t.ta.scrollTop; t.gut.scrollTop = t.ta.scrollTop;
+}
+// Replace [a,b) with text through the browser's editing stack (keeps undo).
+function edInsert(ta, a, b, text, selA, selB){
+  ta.focus(); ta.setSelectionRange(a, b);
+  if (!document.execCommand("insertText", false, text)) ta.setRangeText(text, a, b, "end");
+  if (selA != null) ta.setSelectionRange(selA, selB);
+  ta.dispatchEvent(new Event("input"));
+}
+function edLineRange(v, a, b){
+  const s0 = v.lastIndexOf("\n", a - 1) + 1;
+  let e = v.indexOf("\n", b > a && v[b - 1] === "\n" ? b - 1 : b); if (e < 0) e = v.length;
+  return [s0, e];
+}
+function edKey(ev, t){
+  const ta = t.ta, v = ta.value, a = ta.selectionStart, b = ta.selectionEnd, mod = ev.ctrlKey || ev.metaKey;
+  if (mod && ev.key.toLowerCase() === "s") { ev.preventDefault(); edSave(false); return; }
+  if (mod && ev.key.toLowerCase() === "f") { ev.preventDefault(); edFind("find"); return; }
+  if (mod && ev.key.toLowerCase() === "h") { ev.preventDefault(); edFind("replace"); return; }
+  if (mod && ev.key.toLowerCase() === "g") { ev.preventDefault(); edFind("line"); return; }
+  if (ta.readOnly) return;
+  if (mod && ev.key === "/") {
+    const mark = ED_COMMENT[t.lang]; if (!mark) return;
+    ev.preventDefault();
+    const [s0, e] = edLineRange(v, a, b), lines = v.slice(s0, e).split("\n");
+    const all = lines.filter((l) => l.trim()).every((l) => l.trimStart().startsWith(mark));
+    const out = lines.map((l) => !l.trim() ? l : all ? l.replace(new RegExp("^(\\s*)" + mark.replace(/[/]/g, "\\/") + " ?"), "$1") : l.replace(/^(\s*)/, "$1" + mark + " ")).join("\n");
+    edInsert(ta, s0, e, out, s0, s0 + out.length);
+    return;
+  }
+  if (ev.key === "Tab") {
+    ev.preventDefault();
+    const unit = t.indent;
+    if (a === b && !ev.shiftKey) { edInsert(ta, a, b, unit); return; }
+    const [s0, e] = edLineRange(v, a, b), lines = v.slice(s0, e).split("\n");
+    const out = lines.map((l) => ev.shiftKey ? l.replace(unit === "\t" ? /^\t/ : new RegExp("^ {1," + unit.length + "}"), "") : (l ? unit + l : l)).join("\n");
+    edInsert(ta, s0, e, out, s0, s0 + out.length);
+    return;
+  }
+  if (ev.key === "Enter" && !mod && !ev.altKey) {
+    ev.preventDefault();
+    const ls = v.lastIndexOf("\n", a - 1) + 1, line = v.slice(ls, a), ind = (line.match(/^[ \t]*/) || [""])[0];
+    const more = /[{([:]\s*$/.test(line) && t.lang !== "md" ? t.indent : "";
+    edInsert(ta, a, b, "\n" + ind + more);
+    return;
+  }
+}
+
+function edRenderTabs(){
+  const box = $("ed-tabs"); box.replaceChildren();
+  ED.tabs.forEach((t, i) => {
+    const el = pvEl("div", "ed-tab" + (i === ED.active ? " on" : "")), dirty = t.ta && t.ta.value !== t.saved;
+    el.title = t.path;
+    el.appendChild(pvEl("span", "nm", pvBase(t.path)));
+    if (dirty) el.appendChild(pvEl("span", "dot", "●"));
+    const x = pvEl("button", "x" + (t.armed ? " armed" : ""), "×");
+    x.type = "button"; x.title = dirty ? (t.armed ? "Click again to discard changes" : "Close (unsaved changes)") : "Close";
+    x.addEventListener("click", (ev) => { ev.stopPropagation(); edCloseTab(i); });
+    el.appendChild(x);
+    el.addEventListener("click", () => edActivate(i));
+    el.addEventListener("auxclick", (ev) => { if (ev.button === 1) edCloseTab(i); });
+    box.appendChild(el);
+  });
+  $("ed-empty").style.display = ED.tabs.length ? "none" : "";
+}
+function edActivate(i){
+  ED.active = i;
+  ED.tabs.forEach((t, j) => t.main && t.main.classList.toggle("on", j === i));
+  const t = edTab();
+  $("ed-path").textContent = t ? (t.host || t.path) : "";
+  $("ed-path").title = t ? t.path + (t.host && t.host !== t.path ? "  →  " + t.host : "") : "";
+  $("ed-save-b").disabled = !t || !t.ta || t.ta.readOnly;
+  $("ed-wrap-b").classList.toggle("on", !!(t && t.main && t.main.classList.contains("wrap")));
+  const can = edCanRender(t), rendered = !!(t && t.main && t.main.classList.contains("render"));
+  $("ed-view-b").style.display = can ? "" : "none";
+  $("ed-view-b").classList.toggle("on", rendered);
+  $("ed-view-b").textContent = rendered ? "Edit" : "Rendered";
+  edWarn(t && t.warn);
+  edRenderTabs(); edStatus();
+  if (t && t.ta && !rendered) setTimeout(() => t.ta.focus(), 0);
+}
+function edCloseTab(i){
+  const t = ED.tabs[i]; if (!t) return;
+  if (t.ta && t.ta.value !== t.saved && !t.armed) {
+    t.armed = true; edRenderTabs();
+    setTimeout(() => { t.armed = false; edRenderTabs(); }, 3000);
+    return;
+  }
+  if (t.main) t.main.remove();
+  ED.tabs.splice(i, 1);
+  edActivate(Math.min(ED.tabs.length - 1, i >= ED.active ? ED.active : ED.active - 1));
+}
+function edShow(){ $("pv-ed").classList.add("on"); if (!ED.poll) ED.poll = setInterval(edPoll, 2500); }
+function edHide(){ $("pv-ed").classList.remove("on"); clearInterval(ED.poll); ED.poll = null; }
+
+async function pvEdOpen(path){
+  edShow();
+  const have = ED.tabs.findIndex((t) => t.path === path);
+  if (have >= 0) { edActivate(have); return; }
+  const t = {path, lang: edLang(path), saved: "", loading: true};
+  ED.tabs.push(t); edActivate(ED.tabs.length - 1);
+  const msg = pvEl("div", "ed-msg", "opening " + pvBase(path) + "…"), holder = pvEl("div", "ed-main on");
+  holder.appendChild(msg); t.main = holder; $("ed-body").appendChild(holder); edActivate(ED.tabs.indexOf(t));
+  const {j} = await edPost("/api/files/open", {path}).catch((e) => ({j: {ok: false, error: String(e)}}));
+  holder.remove();
+  if (!j.ok) {
+    const m = pvEl("div", "ed-msg err", "can't open " + path + " — " + (j.error || "unknown error"));
+    const h = pvEl("div", "ed-main"); h.appendChild(m); t.main = h; $("ed-body").appendChild(h);
+    t.loading = false; edActivate(ED.tabs.indexOf(t)); return;
+  }
+  Object.assign(t, {loading: false, host: j.host_path, saved: j.text, eol: j.eol, bom: j.bom, mtime: j.mtime_ms, size: j.size, readonly: j.readonly, savedAt: 0});
+  edBuildPane(t);
+  if (ED.preferRender && edCanRender(t)) { t.main.classList.add("render"); edRenderMd(t); }
+  edActivate(ED.tabs.indexOf(t));
+}
+async function edSave(force){
+  const t = edTab(); if (!t || !t.ta || t.ta.readOnly) return;
+  const text = t.ta.value;
+  const {status, j} = await edPost("/api/files/save", {path: t.path, text, base_mtime_ms: t.mtime, eol: t.eol, bom: t.bom, force: !!force})
+    .catch((e) => ({status: 0, j: {ok: false, error: String(e)}}));
+  if (j.ok) { t.saved = text; t.mtime = j.mtime_ms; t.size = j.size; t.savedAt = Date.now(); t.warn = null; edWarn(null); edRenderTabs(); edStatus(); return; }
+  if (status === 409) {
+    t.warn = {text: pvBase(t.path) + " changed on disk since you opened it (an agent may be editing it).",
+      a: ["Reload theirs", () => edReload(t)], b: ["Overwrite with mine", () => edSave(true)]};
+  } else t.warn = {text: "Save failed: " + (j.error || "unknown error"), a: ["Retry", () => edSave(false)], b: ["Dismiss", () => { t.warn = null; edWarn(null); }]};
+  edWarn(t.warn);
+}
+async function edReload(t){
+  const {j} = await edPost("/api/files/open", {path: t.path}).catch((e) => ({j: {ok: false, error: String(e)}}));
+  if (!j.ok) { t.warn = {text: "Reload failed: " + (j.error || ""), a: ["Retry", () => edReload(t)], b: ["Dismiss", () => { t.warn = null; edWarn(null); }]}; edWarn(t.warn); return; }
+  const ta = t.ta, pos = ta.selectionStart, st = ta.scrollTop;
+  Object.assign(t, {saved: j.text, eol: j.eol, bom: j.bom, mtime: j.mtime_ms, size: j.size, warn: null});
+  // Through the editing stack, so the reload itself can be undone.
+  edInsert(ta, 0, ta.value.length, j.text);
+  ta.setSelectionRange(Math.min(pos, j.text.length), Math.min(pos, j.text.length)); ta.scrollTop = st;
+  edPaint(t); edWarn(null); edRenderTabs(); edStatus(); edRenderSoon(t);
+}
+async function edPoll(){
+  const t = edTab(); if (!t || !t.ta || document.visibilityState !== "visible") return;
+  const j = await fetch("/api/files/stat?path=" + encodeURIComponent(t.path)).then((r) => r.json()).catch(() => null);
+  if (!j || !j.ok || edTab() !== t) return;
+  if (j.missing) { if (!t.warn) { t.warn = {text: pvBase(t.path) + " was deleted on disk.", a: ["Save to recreate", () => edSave(true)], b: ["Dismiss", () => { t.warn = null; edWarn(null); }]}; edWarn(t.warn); } return; }
+  if (j.mtime_ms === t.mtime) return;
+  if (t.ta.value === t.saved) { await edReload(t); t.flash = Date.now(); edStatus(); return; }
+  if (!t.warn) {
+    t.warn = {text: pvBase(t.path) + " changed on disk while you have unsaved edits.", a: ["Reload theirs", () => edReload(t)],
+      b: ["Keep mine", () => { t.warn = null; edWarn(null); }]};
+    edWarn(t.warn);
+  }
+}
+function edWarn(w){
+  $("ed-warn").classList.toggle("on", !!w); if (!w) return;
+  $("ed-warn-t").textContent = w.text;
+  const set = (id, x) => { const b = $(id); b.textContent = x[0]; b.onclick = x[1]; };
+  set("ed-warn-a", w.a); set("ed-warn-b", w.b);
+}
+function edStatus(){
+  const t = edTab(), box = $("ed-stat"); box.replaceChildren();
+  if (!t || !t.ta) return;
+  const v = t.ta.value, a = t.ta.selectionStart, before = v.slice(0, a), ln = before.split("\n").length, col = a - before.lastIndexOf("\n");
+  const kv = (k, val, cls) => { const s0 = pvEl("span", null, k + " "); const b = pvEl("b", cls || null, val); s0.appendChild(b); box.appendChild(s0); };
+  const dirty = v !== t.saved;
+  kv("", dirty ? "● unsaved" : t.flash && Date.now() - t.flash < 4000 ? "reloaded — changed on disk" : t.savedAt ? "saved " + pvAgo(t.savedAt) + " ago" : "clean", dirty ? "dirty" : "ok");
+  kv("ln", ln + ":" + col);
+  if (t.ta.selectionEnd > a) kv("sel", String(t.ta.selectionEnd - a));
+  kv("lines", String(v.split("\n").length));
+  kv("", t.lang === "plain" ? "text" : t.lang === "hash" ? "script" : t.lang === "c" ? "code" : t.lang);
+  kv("", (t.eol || "lf").toUpperCase() + (t.bom ? " BOM" : ""));
+  kv("", fmtB(new Blob([v]).size));
+  if (t.readonly) kv("", "read-only");
+  const f = PV.files.find((x) => x.path === t.path);
+  if (f && f.links.size) kv("by", [...f.links.keys()].map((id) => (PV.alias.get(id) || {}).label || id).join(", "));
+}
+
+// Find / replace / go to line.
+function edFind(mode){
+  const t = edTab(); if (!t || !t.ta) return;
+  if (t.main.classList.contains("render")) edSetRender(t, false);
+  ED.findMode = mode;
+  const bar = $("ed-find"), q = $("ed-q"), r = $("ed-r");
+  bar.classList.add("on");
+  r.style.display = $("ed-rep1").style.display = $("ed-repall").style.display = mode === "replace" ? "" : "none";
+  $("ed-case").style.display = $("ed-prev").style.display = $("ed-next").style.display = mode === "line" ? "none" : "";
+  q.placeholder = mode === "line" ? "line number (or line:col)" : "find";
+  const sel = t.ta.value.slice(t.ta.selectionStart, t.ta.selectionEnd);
+  if (mode !== "line" && sel && !sel.includes("\n")) q.value = sel;
+  if (mode === "line") q.value = "";
+  q.focus(); q.select(); edCount();
+}
+function edFindClose(){ $("ed-find").classList.remove("on"); const t = edTab(); if (t && t.ta) t.ta.focus(); }
+function edMatches(v, q){
+  if (!q) return [];
+  const hay = ED.matchCase ? v : v.toLowerCase(), needle = ED.matchCase ? q : q.toLowerCase(), out = [];
+  for (let i = hay.indexOf(needle); i >= 0 && out.length < 20000; i = hay.indexOf(needle, i + Math.max(1, needle.length))) out.push(i);
+  return out;
+}
+function edReveal(ta, a, b){
+  ta.focus(); ta.setSelectionRange(a, b);
+  const line = ta.value.slice(0, a).split("\n").length - 1, lh = 18;
+  if (line * lh < ta.scrollTop || line * lh > ta.scrollTop + ta.clientHeight - lh * 2) ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 3);
+  ta.dispatchEvent(new Event("scroll")); edStatus();
+}
+function edGo(dir){
+  const t = edTab(); if (!t || !t.ta) return;
+  const q = $("ed-q").value;
+  if (ED.findMode === "line") {
+    const [l, c] = q.split(":").map((x) => parseInt(x, 10)); if (!l) return;
+    const lines = t.ta.value.split("\n"), li = Math.min(lines.length, Math.max(1, l)) - 1;
+    let off = 0; for (let i = 0; i < li; i++) off += lines[i].length + 1;
+    off += Math.min(lines[li].length, Math.max(0, (c || 1) - 1));
+    edReveal(t.ta, off, off); edFindClose(); return;
+  }
+  const ms = edMatches(t.ta.value, q); if (!ms.length) { edCount(); return; }
+  const from = dir < 0 ? t.ta.selectionStart - 1 : t.ta.selectionEnd;
+  let i = dir < 0 ? ms.findLastIndex((m) => m <= from) : ms.findIndex((m) => m >= from);
+  if (i < 0) i = dir < 0 ? ms.length - 1 : 0;
+  edReveal(t.ta, ms[i], ms[i] + q.length);
+  // Keep typing in the find box.
+  $("ed-q").focus(); edCount(i);
+}
+function edCount(i){
+  const t = edTab(), q = $("ed-q").value;
+  if (!t || !t.ta || ED.findMode === "line") { $("ed-ct").textContent = ""; return; }
+  const n = edMatches(t.ta.value, q).length;
+  $("ed-ct").textContent = !q ? "" : n ? (i != null ? (i + 1) + " / " : "") + n + " match" + (n === 1 ? "" : "es") : "no matches";
+}
+function edReplace(all){
+  const t = edTab(); if (!t || !t.ta || t.ta.readOnly) return;
+  const q = $("ed-q").value, r = $("ed-r").value; if (!q) return;
+  const ta = t.ta, v = ta.value;
+  if (all) {
+    const ms = edMatches(v, q); if (!ms.length) return;
+    let out = "", last = 0; for (const m of ms) { out += v.slice(last, m) + r; last = m + q.length; }
+    out += v.slice(last);
+    const st = ta.scrollTop; edInsert(ta, 0, v.length, out, 0, 0); ta.scrollTop = st; edCount(); return;
+  }
+  const a = ta.selectionStart, b = ta.selectionEnd, cur = v.slice(a, b);
+  if ((ED.matchCase ? cur : cur.toLowerCase()) === (ED.matchCase ? q : q.toLowerCase())) edInsert(ta, a, b, r, a + r.length, a + r.length);
+  edGo(1);
+}
+
+(function edWire(){
+  $("ed-close").addEventListener("click", edHide);
+  $("pv-ed").addEventListener("mousedown", (ev) => { if (ev.target === $("pv-ed")) edHide(); });
+  $("ed-save-b").addEventListener("click", () => edSave(false));
+  $("ed-reload-b").addEventListener("click", () => { const t = edTab(); if (t && t.ta) edReload(t); });
+  $("ed-view-b").addEventListener("click", () => { const t = edTab(); if (t && t.main) edSetRender(t, !t.main.classList.contains("render")); });
+  $("ed-find-b").addEventListener("click", () => edFind("replace"));
+  $("ed-goto-b").addEventListener("click", () => edFind("line"));
+  $("ed-wrap-b").addEventListener("click", () => {
+    const t = edTab(); if (!t || !t.main) return;
+    t.main.classList.toggle("wrap"); t.ta.wrap = t.main.classList.contains("wrap") ? "soft" : "off";
+    $("ed-wrap-b").classList.toggle("on", t.main.classList.contains("wrap")); edPaint(t);
+  });
+  $("ed-case").addEventListener("click", () => { ED.matchCase = !ED.matchCase; $("ed-case").classList.toggle("on", ED.matchCase); edCount(); });
+  $("ed-next").addEventListener("click", () => edGo(1));
+  $("ed-prev").addEventListener("click", () => edGo(-1));
+  $("ed-rep1").addEventListener("click", () => edReplace(false));
+  $("ed-repall").addEventListener("click", () => edReplace(true));
+  $("ed-q").addEventListener("input", () => edCount());
+  for (const id of ["ed-q", "ed-r"]) $(id).addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); if (id === "ed-r" && ev.ctrlKey) edReplace(true); else if (id === "ed-r") edReplace(false); else edGo(ev.shiftKey ? -1 : 1); }
+    else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); edFindClose(); }
+    else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") { ev.preventDefault(); edSave(false); }
+  });
+  window.addEventListener("keydown", (ev) => {
+    if (!$("pv-ed").classList.contains("on")) return;
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopImmediatePropagation(); if ($("ed-find").classList.contains("on")) edFindClose(); else edHide(); }
+    else if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === "v") { const t = edTab(); if (t && edCanRender(t)) { ev.preventDefault(); edSetRender(t, !t.main.classList.contains("render")); } }
+    else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s" && ev.target === document.body) { ev.preventDefault(); edSave(false); }
+  }, true);
+  window.addEventListener("beforeunload", (ev) => { if (ED.tabs.some((t) => t.ta && t.ta.value !== t.saved)) { ev.preventDefault(); ev.returnValue = ""; } });
+})();
+
+// The band round the floor: each pane's slice in its own colour, out past the
+// names; each tab's panes sit together under a rim in their colours, with the
+// tab's name on it.
+const PV_BAND_OUT = 165;
+function pvBandArc(pos, th0, th1, r){
+  const pts = [], n = Math.max(3, Math.ceil(Math.abs(th1 - th0) / .04));
+  for (let i = 0; i <= n; i++) pts.push(pos(th0 + (th1 - th0) * i / n, r));
+  return pts;
+}
+function pvInPoly(x, y, pts){
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i], b = pts[j];
+    if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+// The pane slice under a point (world coords, pre-view), if any.
+function pvSliceAt(x, y){
+  for (const b of PV.bandPolys || []) if (pvInPoly(x, y, b.pts)) return b.id;
+  return null;
+}
+function pvDrawBand(ctx, pos, R){
+  const half = PV.span * .5, inset = Math.min(.02, PV.span * .06), r0 = R * 1.035, r1 = R + PV_BAND_OUT;
+  const sel = PV.sel;
+  PV.bandPolys = [];
+  for (const a of PV.anim.values()) {
+    const col = a.node.color; if (!col) continue;
+    const dim = sel && a.node.id !== sel ? .45 : 1;
+    const inner = pvBandArc(pos, a.theta - half + inset, a.theta + half - inset, r0);
+    const outer = pvBandArc(pos, a.theta + half - inset, a.theta - half + inset, r1);
+    PV.bandPolys.push({id: a.node.id, pts: [...inner, ...outer]});
+    ctx.beginPath(); [...inner, ...outer].forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath();
+    ctx.globalAlpha = a.alpha * dim * (a.node.id === PV.hover ? .16 : .075); ctx.fillStyle = col; ctx.fill();
+    ctx.globalAlpha = a.alpha * dim * .3; ctx.strokeStyle = col; ctx.lineWidth = 1;
+    ctx.beginPath(); inner.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
+  }
+  // Tab rims and names.
+  ctx.lineCap = "round";
+  for (const g of PV.tabGroups || []) {
+    const as = g.ids.map((id) => PV.anim.get(id)).filter(Boolean); if (!as.length) continue;
+    for (const a of as) {
+      if (!a.node.color) continue;
+      const rim = pvBandArc(pos, a.theta - half + inset, a.theta + half - inset, r1 + 3);
+      ctx.globalAlpha = a.alpha * .85; ctx.strokeStyle = a.node.color; ctx.lineWidth = 3;
+      ctx.beginPath(); rim.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
+    }
+    if (g.name && !/^[0-9a-f-]{36}$/i.test(g.name)) {
+      const mid = as.reduce((t, a) => t + a.theta, 0) / as.length, p = pos(mid, r1 + 16);
+      ctx.globalAlpha = .75; ctx.fillStyle = as[0].node.color || "#94a3b8";
+      ctx.font = "bold 8.5px " + PV_MONO; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(pvClip(ctx, g.name.toUpperCase(), 180), p.x, p.y);
+    }
+  }
+  ctx.globalAlpha = 1; ctx.lineCap = "butt"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+}
+
+// ---- Pane screen: a retro CRT at the rim of the SELECTED terminal pane's slice,
+// showing its live screen text tinted in the pane's colour. Toggle: ▣ screens.
+const PVSC = {on: true, data: new Map(), timer: null, busy: false};
+const pvShownId = () => (PV.focus ? PV.focus.node : PV.hover || PV.sel);
+try { PVSC.on = localStorage.getItem("pv.screens") !== "off"; } catch (_e) {}
+async function pvScrollback(pane, lines){
+  try {
+    const r = await fetch("/api/scrollback?pane=" + encodeURIComponent(pane) + "&lines=" + lines); if (!r.ok) return "";
+    return (await r.text()).replace(/^\[Scrollback:[^\]]*\]\n?/, "").replace(/^\[Scrollback: no history[^\]]*\]$/, "");
+  } catch (_e) { return ""; }
+}
+async function pvScreensPoll(){
+  if (!PV.on || !PVSC.on || PV.mode !== "live" || PVSC.busy || document.visibilityState !== "visible") return;
+  PVSC.busy = true;
+  const sel = pvShownId() && PV.alias.get(pvShownId()), selPane = sel && sel.pane;
+  const panes = PV.panes.filter((p) => p.paneId === selPane && p.cls !== "wb" && p.cls !== "dm");
+  await Promise.all(panes.map(async (p) => {
+    try {
+      const r = await fetch("/api/screen?pane=" + encodeURIComponent(p.paneId)); if (!r.ok) return;
+      let text = await r.text();
+      // A blank screen (idle since a sidecar restart): show recent scrollback.
+      if (!text.trim()) text = await pvScrollback(p.paneId, 40);
+      const d = PVSC.data.get(p.paneId) || {};
+      if (d.text !== text || d.color !== p.color) { d.text = text; d.color = p.color; d.dirty = true; }
+      d.at = Date.now(); PVSC.data.set(p.paneId, d);
+    } catch (_e) {}
+  }));
+  const live = new Set(panes.map((p) => p.paneId));
+  for (const k of [...PVSC.data.keys()]) if (!live.has(k)) PVSC.data.delete(k);
+  PVSC.busy = false;
+}
+// Render a pane's text into its own small canvas (only when it changed).
+function pvScreenCanvas(d, W = 360, H = 216){
+  W = Math.round(W); H = Math.round(H);
+  const key = W + "x" + H;
+  if (d.dirty) { d.canvases = {}; d.dirty = false; }
+  d.canvases = d.canvases || {};
+  if (d.canvases[key]) return d.canvases[key];
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const x = c.getContext("2d"), col = d.color || "#7dd3fc";
+  x.fillStyle = "#03060b"; x.fillRect(0, 0, W, H);
+  const glow = x.createRadialGradient(W / 2, H / 2, 10, W / 2, H / 2, W * .65);
+  glow.addColorStop(0, col + "26"); glow.addColorStop(1, "#00000000");
+  x.fillStyle = glow; x.fillRect(0, 0, W, H);
+  let lines = String(d.text || "").replace(/\r/g, "").split("\n");
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  lines = lines.slice(-80);
+  // Fit the whole screen: rows to the height, the longest line to the width.
+  const cols = Math.min(170, Math.max(40, ...lines.map((l) => l.length))), rows = Math.max(12, lines.length);
+  const pad = Math.max(6, W * .025);
+  const fs = Math.max(3.5, Math.min(22, (H - pad * 2) / rows / 1.2, (W - pad * 2) / (cols * .6)));
+  const LH = fs * 1.2;
+  x.font = fs.toFixed(2) + "px Consolas, 'Cascadia Mono', monospace"; x.textBaseline = "top";
+  x.fillStyle = col; x.shadowColor = col; x.shadowBlur = Math.max(2, fs * .35);
+  lines.forEach((l, i) => x.fillText(l.slice(0, cols), pad, pad + i * LH));
+  x.shadowBlur = 0;
+  const gap = Math.max(3, Math.round(fs * .4));
+  x.fillStyle = "rgba(0,0,0,.24)"; for (let yy = 0; yy < H; yy += gap) x.fillRect(0, yy, W, Math.max(1, gap / 3));
+  const vig = x.createRadialGradient(W / 2, H / 2, H * .35, W / 2, H / 2, W * .62);
+  vig.addColorStop(0, "rgba(0,0,0,0)"); vig.addColorStop(1, "rgba(0,0,0,.55)");
+  x.fillStyle = vig; x.fillRect(0, 0, W, H);
+  const keys = Object.keys(d.canvases); if (keys.length > 3) delete d.canvases[keys[0]];
+  d.canvases[key] = c;
+  return c;
+}
+// Rounded rect with slightly bowed edges, like CRT glass.
+function pvCrtPath(ctx, x, y, w, h, r, bow){
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.quadraticCurveTo(x + w / 2, y - bow, x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.quadraticCurveTo(x + w + bow, y + h / 2, x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.quadraticCurveTo(x + w / 2, y + h + bow, x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.quadraticCurveTo(x - bow, y + h / 2, x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+// Where a pane's monitor stands for a given projection (world coords, pre-view).
+function pvMonitorRect(theta, P3, R){
+  const r = R + PV_BAND_OUT + 34, base = P3(Math.cos(theta) * r, 0, -Math.sin(theta) * r), p = base.p;
+  const W = Math.max(Math.min(r * PV.span * 1.6, 340), 240) * p, H = W * .6, stand = 12 * p, bez = 6 * p;
+  const x = base.x - W / 2, y = base.y - stand - H;
+  return {x, y, W, H, p, bez, base, hit: {x: x - bez, y: y - bez, w: W + bez * 2, h: H + bez * 2}};
+}
+function pvDrawMonitor(ctx, d, col, m, opts = {}){
+  const {x, y, W, H, p, bez, base} = m, dim = opts.alpha == null ? 1 : opts.alpha;
+  ctx.save(); ctx.globalAlpha = dim;
+  if (opts.stand !== false && base) {
+    ctx.fillStyle = "#0b1220"; ctx.strokeStyle = col; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(base.x - W * .12, y + H); ctx.lineTo(base.x + W * .12, y + H);
+    ctx.lineTo(base.x + W * .22, base.y); ctx.lineTo(base.x - W * .22, base.y); ctx.closePath();
+    ctx.fill(); ctx.globalAlpha = dim * .6; ctx.stroke(); ctx.globalAlpha = dim;
+  }
+  if (opts.glow) { ctx.shadowColor = col; ctx.shadowBlur = 24 * opts.glow; }
+  pvCrtPath(ctx, x - bez, y - bez, W + bez * 2, H + bez * 2, 9 * p, 2 * p);
+  ctx.fillStyle = "#0a0f19"; ctx.fill(); ctx.shadowBlur = 0;
+  ctx.strokeStyle = col; ctx.lineWidth = 1.4; ctx.globalAlpha = dim * .85; ctx.stroke(); ctx.globalAlpha = dim;
+  pvCrtPath(ctx, x, y, W, H, 7 * p, 3 * p); ctx.save(); ctx.clip();
+  const px = (window.devicePixelRatio || 1) * pvView().z, cap = opts.sharp ? 2600 : 720;
+  ctx.drawImage(pvScreenCanvas(d, Math.min(cap, W * px), Math.min(cap * .6, H * px)), x, y, W, H);
+  const shine = ctx.createLinearGradient(x, y, x + W * .6, y + H);
+  shine.addColorStop(0, "rgba(255,255,255,.10)"); shine.addColorStop(.35, "rgba(255,255,255,0)");
+  ctx.fillStyle = shine; ctx.fillRect(x, y, W, H);
+  ctx.restore();
+  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x + W - 4 * p, y + H + bez * .55, 1.3 * p, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+// Rim pass: the selected pane's monitor at its slot (not while it's pinned up).
+// Focus pass: the focused monitor on top — at its slot while the camera flies
+// in, pinned while you watch, flying back to its slot on the way out.
+function pvDrawScreens(ctx, R, focusPass){
+  if (!PVSC.on || PV.mode !== "live") return;
+  const g = PV.geom; if (!g || !g.P3) return;
+  if (!focusPass) { PVSC.hit = null; PVSC.base = null; }
+  const f = PV.focus;
+  for (const a of PV.anim.values()) {
+    if (a.node.id !== pvShownId() && !(f && f.node === a.node.id)) continue;
+    const d = a.node.pane && PVSC.data.get(a.node.pane); if (!d || !d.text) continue;
+    const col = a.node.color || "#7dd3fc", m = pvMonitorRect(a.theta, g.P3, R);
+    const focused = !!(f && f.node === a.node.id);
+    if (!focusPass) {
+      PVSC.hit = {...m.hit, pane: a.node.pane, name: a.node.label, color: col};
+      PVSC.base = {x: m.base.x, y: m.base.y};
+      if (!focused) pvDrawMonitor(ctx, d, col, m, {alpha: a.alpha});
+      continue;
+    }
+    if (!focused) continue;
+    let mm = m, tether = 0;
+    if (f.phase === "pinned" || f.phase === "out") {
+      const pin = f.pin, k = f.phase === "out" ? f.e : 0, L = (u, v) => u + (v - u) * k;
+      mm = {x: L(pin.x, m.x), y: L(pin.y, m.y), W: L(pin.W, m.W), H: L(pin.H, m.H), p: L(pin.p, m.p), bez: L(pin.bez, m.bez), base: null};
+      tether = 1 - k;
+    }
+    if (tether > .02) {
+      // Tether from the pinned monitor down to its pane's turning slot.
+      ctx.save(); ctx.globalAlpha = .55 * tether; ctx.strokeStyle = col; ctx.lineWidth = 1.5 / Math.max(.5, pvView().z);
+      ctx.setLineDash([4 / pvView().z, 6 / pvView().z]); ctx.lineDashOffset = -performance.now() / 40;
+      const sx = mm.x + mm.W / 2, sy = mm.y + mm.H + mm.bez;
+      ctx.beginPath(); ctx.moveTo(sx, sy); ctx.quadraticCurveTo(sx, (sy + m.base.y) / 2, m.base.x, m.base.y); ctx.stroke();
+      ctx.restore();
+    }
+    // Zoomed in, the monitor turns slightly see-through so the scene shows behind it.
+    const zoomed = f.phase === "pinned" ? 1 : f.phase === "out" ? 1 - f.e : f.e;
+    pvDrawMonitor(ctx, d, col, mm, {sharp: true, stand: f.phase === "in", glow: zoomed, alpha: 1 - .22 * zoomed});
+  }
+}
+
+// ---- Focused screen: double-click a pane's CRT and the camera flies to it —
+// from the live, turning view straight into a computed end shot (monitor in
+// front, faced square, ~80% of the view, centred). There the monitor is
+// pinned and the camera lets go, so everything keeps turning below it, with a
+// tether to the pane's slot. Esc or double-clicking it flies back.
+const PV_FOCUS_MS = 1000, PV_FOCUS_PITCH = .5;
+const pvEaseIO = (t) => (t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+// The projection pvDrawRing would use for this camera (see its P3).
+function pvProjector(pitch, eff, R, w, h){
+  const F = R * 3.4, cp = Math.cos(pitch), sp = Math.sin(pitch), cyw = Math.cos(eff), syw = Math.sin(eff);
+  const vcx = w * .5, vcy = h * .5 + R * .38 * cp;
+  return (x, y, z) => {
+    const x1 = x*cyw - z*syw, z1 = x*syw + z*cyw, y2 = y*cp + z1*sp, z2 = -y*sp + z1*cp, p = F / (F + z2);
+    return {x: vcx + x1*p, y: vcy - y2*p, z: z2, p};
+  };
+}
+function pvFocusOpen(hit){
+  const n = PV.nodes.find((x) => x.pane === hit.pane), a = n && PV.anim.get(n.id); if (!a) return;
+  const c = $("pv-ring"), w = c.clientWidth, h = c.clientHeight, R = PV.geom.R, v = pvView();
+  // The end shot: monitor in front (effective yaw = theta - 90°), tipped to face it.
+  const want = a.theta - Math.PI / 2, m = pvMonitorRect(a.theta, pvProjector(PV_FOCUS_PITCH, want, R, w, h), R);
+  const z = Math.min(8, (w * .8) / m.hit.w, (h * .8) / m.hit.h);
+  const to = {z, x: w / 2 - (m.hit.x + m.hit.w / 2) * z, y: h / 2 - (m.hit.y + m.hit.h / 2) * z};
+  PV.focus = {pane: hit.pane, node: n.id, phase: "in", t0: performance.now(), e: 0, want, pin: m, to,
+    rot0: PV.rot, from: {eff: PV.rot + PV.cam.yaw, pitch: PV.cam.pitch, view: {z: v.z, x: v.x, y: v.y}}};
+  clearInterval(PVSC.fast); PVSC.fast = setInterval(pvScreensPoll, 1000);
+  pvSound("tick");
+}
+function pvFocusClose(){
+  const f = PV.focus; if (!f || f.phase === "out") return;
+  const v = pvView();
+  f.back = {eff: PV.rot + PV.cam.yaw, pitch: PV.cam.pitch, view: {z: v.z, x: v.x, y: v.y}, rot: PV.rot};
+  f.phase = "out"; f.t0 = performance.now(); f.e = 0;
+  clearInterval(PVSC.fast); PVSC.fast = null;
+}
+// Every frame before drawing: steer the camera.
+function pvFocusStep(){
+  const f = PV.focus; if (!f) return;
+  const raw = Math.min(1, (performance.now() - f.t0) / (PV_REDUCE ? 1 : PV_FOCUS_MS)), e = pvEaseIO(raw);
+  f.e = e;
+  const v = pvView(), angLerp = (a, b, k) => a + pvAngDiff(b, a) * k;
+  const zLerp = (a, b, k) => Math.exp(Math.log(a) + (Math.log(b) - Math.log(a)) * k);
+  if (f.phase === "in") {
+    // Start from where the turning view would be now, blend into the end shot.
+    const live = f.from.eff + (PV.rot - f.rot0);
+    PV.cam.yaw = angLerp(live, f.want, e) - PV.rot;
+    PV.cam.pitch = PV.cam.want = f.from.pitch + (PV_FOCUS_PITCH - f.from.pitch) * e;
+    v.z = zLerp(f.from.view.z, f.to.z, e); v.x = f.from.view.x + (f.to.x - f.from.view.x) * e; v.y = f.from.view.y + (f.to.y - f.from.view.y) * e;
+    if (raw >= 1) { f.phase = "pinned"; PV.cam.yaw = f.want - PV.rot; }
+    return;
+  }
+  if (f.phase === "pinned") { v.z = f.to.z; v.x = f.to.x; v.y = f.to.y; return; }   // the ring turns on its own
+  // Out: back to your tip and zoom, with the rotation carrying on.
+  const target = f.from.eff + (PV.rot - f.rot0), live = f.back.eff + (PV.rot - f.back.rot);
+  PV.cam.yaw = angLerp(live, target, e) - PV.rot;
+  PV.cam.pitch = PV.cam.want = f.back.pitch + (f.from.pitch - f.back.pitch) * e;
+  v.z = zLerp(f.back.view.z, f.from.view.z, e); v.x = f.back.view.x + (f.from.view.x - f.back.view.x) * e; v.y = f.back.view.y + (f.from.view.y - f.back.view.y) * e;
+  if (raw >= 1) { PV.cam.yaw = target - PV.rot; PV.focus = null; }
+}
+
+// ---- Container network (live). n8 pushes each container pane's received and
+// sent bytes/s. Traffic comes down an uplink from a NET hub into the
+// container runtime (a blue marble), then branches out to each container;
+// particles stream down (received, cyan) and up (sent, amber) with it.
+const PVN = {parts: new Map(), last: 0};
+function pvBuildNet(){
+  const ev = (PV.win && PV.win.telemetry && PV.win.telemetry.events) || [], now = Date.now(), m = new Map();
+  for (const e of ev) {
+    if (e.kind !== "Network" || !e.pane_uid || now - (e.ts || 0) > 60000) continue;
+    const r = m.get(e.pane_uid) || {rx: 0, tx: 0, rxTs: 0, txTs: 0};
+    if (/^in/i.test(String(e.direction))) { if ((e.ts || 0) >= r.rxTs) { r.rx = e.bytes || 0; r.rxTs = e.ts || 0; } }
+    else if ((e.ts || 0) >= r.txTs) { r.tx = e.bytes || 0; r.txTs = e.ts || 0; }
+    m.set(e.pane_uid, r);
+  }
+  PV.net = m;
+}
+// Honest scale: idle chatter (a few KB/s) is a faint link and a slow trickle;
+// the link is full at ~1 MB/s, packets climb from ~4 KB/s.
+const pvNetLvl = (bps) => Math.max(0, Math.min(1, Math.log10(Math.max(1, bps) / 1024) / 3));
+const pvNetRate = (b) => (b < 256 ? 0 : b < 4096 ? .5 : Math.min(36, 1 + Math.log2(b / 4096) * 4));
+const pvRate = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + "M" : b >= 1024 ? (b / 1024).toFixed(b >= 10240 ? 0 : 1) + "k" : Math.round(b) + "") ;
+function pvDrawNet(ctx, R){
+  const g = PV.geom; if (!g || !g.P3 || PV.mode !== "live" || !PV.net || !PV.net.size) return;
+  const P3 = g.P3, t = performance.now(), dt = Math.min(.1, (t - (PVN.last || t)) / 1000); PVN.last = t;
+  // NET uplink up top; the container runtime is a blue marble just below it
+  // (a tenth of the floor's diameter); traffic drops down the uplink into the
+  // marble's centre, then branches out to each container (and back).
+  const hubW = [0, R * 1.3, 0], mW = [0, R * 1.02, 0], mr = R * .1, SPLIT = .72;
+  const links = [];
+  for (const a of PV.anim.values()) {
+    const n = a.node, r = n.pane && PV.net.get(n.pane); if (!r) continue;
+    const ease = Math.min(1, dt * 2.5);
+    a.nrx = (a.nrx || 0) + (r.rx - (a.nrx || 0)) * ease; a.ntx = (a.ntx || 0) + (r.tx - (a.ntx || 0)) * ease;
+    links.push(a);
+  }
+  if (!links.length) return;
+  let totRx = 0, totTx = 0;
+  for (const a of links) { totRx += a.nrx; totTx += a.ntx; }
+  const totLvl = pvNetLvl(totRx + totTx);
+  // u: 0 = the container, SPLIT = the marble's centre, 1 = the uplink hub.
+  const pathFor = (a) => {
+    const base = [Math.cos(a.theta) * R, 0, -Math.sin(a.theta) * R], ctl = [base[0] * .55, R * .78, base[2] * .55];
+    return (u) => {
+      if (u >= SPLIT) { const k = (u - SPLIT) / (1 - SPLIT); return P3(0, mW[1] + (hubW[1] - mW[1]) * k, 0); }
+      const w = u / SPLIT, v = 1 - w;   // base → marble centre
+      return P3(v*v*base[0] + 2*v*w*ctl[0] + w*w*mW[0], v*v*base[1] + 2*v*w*ctl[1] + w*w*mW[1], v*v*base[2] + 2*v*w*ctl[2] + w*w*mW[2]);
+    };
+  };
+  ctx.save(); ctx.lineCap = "round";
+  // Branches: marble → each container, in the pane's colour, thicker with traffic.
+  ctx.globalCompositeOperation = "lighter";
+  const paths = new Map();
+  for (const a of links) {
+    const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1, at = pathFor(a); paths.set(a, at);
+    const lvl = pvNetLvl(a.nrx + a.ntx);
+    ctx.globalAlpha = a.alpha * dim * (.12 + .35 * lvl); ctx.strokeStyle = n.color || "#38bdf8"; ctx.lineWidth = .8 + 3 * lvl;
+    ctx.beginPath(); for (let i = 0; i <= 24; i++) { const p = at(SPLIT * i / 24); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); } ctx.stroke();
+  }
+  // Uplink: straight up from the marble to the hub.
+  const M = P3(...mW), hub = P3(...hubW), rs = mr * M.p, top = P3(0, mW[1] + mr, 0);
+  ctx.globalAlpha = .35 + .45 * totLvl; ctx.strokeStyle = "#7dd3fc"; ctx.lineWidth = 1.2 + 3.5 * totLvl;
+  ctx.beginPath(); ctx.moveTo(top.x, top.y); ctx.lineTo(hub.x, hub.y); ctx.stroke();
+  // The marble.
+  ctx.globalCompositeOperation = "source-over";
+  const pulse = PV_REDUCE ? .5 : .5 + .5 * Math.sin(t / 520);
+  const halo = ctx.createRadialGradient(M.x, M.y, rs * .9, M.x, M.y, rs * (1.9 + .5 * totLvl));
+  halo.addColorStop(0, "rgba(59,130,246," + (.28 + .25 * totLvl * pulse).toFixed(3) + ")"); halo.addColorStop(1, "rgba(59,130,246,0)");
+  ctx.globalAlpha = 1; ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(M.x, M.y, rs * (1.9 + .5 * totLvl), 0, Math.PI * 2); ctx.fill();
+  const body = ctx.createRadialGradient(M.x - rs * .38, M.y - rs * .42, rs * .08, M.x, M.y, rs);
+  body.addColorStop(0, "rgba(219,234,254,.95)"); body.addColorStop(.3, "rgba(96,165,250,.85)");
+  body.addColorStop(.75, "rgba(29,78,216,.82)"); body.addColorStop(1, "rgba(23,37,84,.92)");
+  ctx.fillStyle = body; ctx.beginPath(); ctx.arc(M.x, M.y, rs, 0, Math.PI * 2); ctx.fill();
+  // Turning meridians and an equator so it reads as a globe.
+  ctx.save(); ctx.beginPath(); ctx.arc(M.x, M.y, rs, 0, Math.PI * 2); ctx.clip();
+  ctx.strokeStyle = "rgba(191,219,254,.22)"; ctx.lineWidth = .8;
+  for (let k = 0; k < 3; k++) {
+    const ph = (PV_REDUCE ? 0 : t / 2600) + k * Math.PI / 3, w = Math.abs(Math.cos(ph)) * rs;
+    ctx.beginPath(); ctx.ellipse(M.x, M.y, Math.max(.5, w), rs, 0, 0, Math.PI * 2); ctx.stroke();
+  }
+  const eq = Math.max(.15, Math.abs(Math.cos(g.pitch || 1)));
+  ctx.beginPath(); ctx.ellipse(M.x, M.y, rs, rs * eq, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+  ctx.strokeStyle = "rgba(147,197,253,.55)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(M.x, M.y, rs, 0, Math.PI * 2); ctx.stroke();
+  // Packets: down the uplink, through the marble's centre, out to the container (and back up).
+  ctx.globalCompositeOperation = "lighter";
+  if (!PV_REDUCE) {
+    ctx.shadowBlur = 8;
+    for (const a of links) {
+      const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1, at = paths.get(a), lvl = pvNetLvl(a.nrx + a.ntx);
+      let ps = PVN.parts.get(n.id); if (!ps) { ps = {list: [], rx: 0, tx: 0}; PVN.parts.set(n.id, ps); }
+      const rate = pvNetRate;
+      ps.rx += rate(a.nrx) * dt; ps.tx += rate(a.ntx) * dt;
+      while (ps.rx >= 1) { ps.rx--; if (ps.list.length < 160) ps.list.push({u: 1, d: -1, j: Math.random()}); }
+      while (ps.tx >= 1) { ps.tx--; if (ps.list.length < 160) ps.list.push({u: 0, d: 1, j: Math.random()}); }
+      ps.list = ps.list.filter((q) => { q.u += q.d * dt * (.4 + .25 * q.j); return q.u >= 0 && q.u <= 1; });
+      for (const q of ps.list) {
+        const p = at(q.u), c = q.d < 0 ? "#22d3ee" : "#f59e0b";
+        ctx.globalAlpha = a.alpha * dim * .95; ctx.fillStyle = c; ctx.shadowColor = c;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 1.4 + 1.2 * lvl, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.shadowBlur = 0;
+  }
+  // Rates at the foot of each branch.
+  ctx.globalCompositeOperation = "source-over";
+  ctx.font = "8.5px " + PV_MONO; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (const a of links) {
+    const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1;
+    const tag = P3(Math.cos(a.theta) * R * .9, R * .1, -Math.sin(a.theta) * R * .9);
+    ctx.globalAlpha = a.alpha * dim * .9;
+    ctx.fillStyle = "#67e8f9"; ctx.fillText("↓" + pvRate(a.nrx), tag.x - 20, tag.y);
+    ctx.fillStyle = "#fbbf24"; ctx.fillText("↑" + pvRate(a.ntx), tag.x + 20, tag.y);
+  }
+  // Marble label: the runtime and how many containers.
+  const runtime = PV.panes.some((p) => /podman/i.test(p.proc)) ? "PODMAN" : "DOCKER";
+  ctx.globalAlpha = 1; ctx.font = "bold 8.5px " + PV_MONO; ctx.fillStyle = "#93c5fd"; ctx.textBaseline = "top";
+  ctx.fillText(runtime + " · " + links.length + " CONTAINER" + (links.length === 1 ? "" : "S"), M.x, M.y + rs + 6);
+  // The uplink hub.
+  ctx.globalCompositeOperation = "lighter";
+  const rg = ctx.createRadialGradient(hub.x, hub.y, 0, hub.x, hub.y, 24 + 16 * totLvl);
+  rg.addColorStop(0, "rgba(125,211,252," + (.55 + .3 * pulse * totLvl).toFixed(3) + ")"); rg.addColorStop(1, "rgba(125,211,252,0)");
+  ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(hub.x, hub.y, 24 + 16 * totLvl, 0, Math.PI * 2); ctx.fill();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = "#e0f2fe"; ctx.beginPath(); ctx.arc(hub.x, hub.y, 4.5, 0, Math.PI * 2); ctx.fill();
+  ctx.font = "bold 9px " + PV_MONO; ctx.textBaseline = "bottom"; ctx.fillStyle = "#bae6fd";
+  ctx.fillText("NET  ↓" + pvRate(totRx) + "/s  ↑" + pvRate(totTx) + "/s", hub.x, hub.y - 12);
+  ctx.restore();
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+}
+
+// Output activity (live only). A pane is "working" while it printed in the
+// last PV_WORK_MS. Its name gets a halo: the glow pulses with output volume
+// and two bright arcs spin fast while it's printing (faster with more lines/s).
+const PV_WORK_MS = 2500;
+function pvOut(n){
+  if (PV.mode !== "live" || !n || !n.pane) return null;
+  return PV.panes.find((p) => p.paneId === n.pane) || null;
+}
+const pvWorking = (o) => !!o && o.lastOut > 0 && Date.now() - o.lastOut < PV_WORK_MS;
+function pvDrawOutput(ctx, drawn, pos, R, k){
+  for (const a of drawn) {
+    const o = pvOut(a.node), on = pvWorking(o);
+    a.out = (a.out || 0) + ((on ? 1 : 0) - (a.out || 0)) * k;
+    a.lps = (a.lps || 0) + ((on ? o.lps : 0) - (a.lps || 0)) * k;
+    a.bps = (a.bps || 0) + ((on ? o.bps : 0) - (a.bps || 0)) * k;
+    if (a.out < .02 || PV_REDUCE) continue;
+    // Printing = bytes in the last few seconds: spin fast, faster with lines/s.
+    // Working but quiet: a slow drift.
+    const printing = a.bps > 1;
+    a.spin = ((a.spin || 0) + (printing ? .16 + Math.min(.34, a.lps * .02) : .015)) % (Math.PI * 2);
+  }
+}
+// Halo round a name box: pulse = glow with output volume, spin = printing.
+function pvHalo(ctx, a, cx, cy, tw, dim){
+  const level = Math.min(1, Math.log10(1 + (a.bps || 0)) / 4), t = performance.now();
+  const beat = PV_REDUCE ? .6 : .5 + .5 * Math.sin(t / (700 - 380 * level));
+  const rx = tw / 2 + 12, ry = 10.5, col = a.node.color || (a.node.kind === "agent" ? "#fbbf24" : "#7dd3fc");
+  const k = a.out * a.alpha * dim;
+  ctx.save();
+  ctx.strokeStyle = col; ctx.shadowColor = col;
+  // Pulse ring.
+  ctx.globalAlpha = k * (.18 + .4 * level * beat + .12 * beat);
+  ctx.shadowBlur = 4 + 14 * level * beat; ctx.lineWidth = 1 + 1.5 * level;
+  ctx.beginPath(); ctx.ellipse(cx, cy, rx + 2 * beat * level, ry + 1.5 * beat * level, 0, 0, Math.PI * 2); ctx.stroke();
+  // Spinning arcs (still while only working, fast while printing).
+  ctx.globalAlpha = k * (.55 + .45 * level); ctx.shadowBlur = 8; ctx.lineWidth = 1.8; ctx.lineCap = "round";
+  const sp = a.spin || 0, len = .55 + .35 * level;
+  for (const off of [0, Math.PI]) { ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, sp + off, sp + off + len); ctx.stroke(); }
+  ctx.restore();
+}
+// Shimmer: a bright band sweeping across a label.
+function pvShimmer(ctx, text, x, y, tw, align, strength){
+  const x0 = align === "right" ? x - tw : x, u = ((performance.now() / 1100) % 1.6) - .3;
+  const g = ctx.createLinearGradient(x0, 0, x0 + tw, 0), c = (v) => Math.max(0, Math.min(1, v));
+  g.addColorStop(0, "rgba(255,255,255,0)");
+  g.addColorStop(c(u - .15), "rgba(255,255,255,0)");
+  g.addColorStop(c(u), "rgba(255,255,255,"+(.95 * strength).toFixed(3)+")");
+  g.addColorStop(c(u + .15), "rgba(255,255,255,0)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g; ctx.fillText(text, x, y);
+}
+
+// Files touched in the window, most recent first, each with the panes that
+// touched it. A file keeps the spiral slot it got when first seen, so it
+// doesn't jump; a file that drops out frees its slot for the next new one.
+function pvBuildFiles(){
+  const byPath = new Map();
+  for (const e of pvFileEvents(true, PV_FILE_LIVE_MS)) {
+    if (!e.path) continue;
+    const read = e.kind === "read";
+    const node = PV.alias.get("pane:"+e.pane) || PV.alias.get(e.pane);
+    let f = byPath.get(e.path);
+    if (!f) { f = {path: e.path, count: 0, reads: 0, last: 0, kind: e.kind, add: 0, del: 0, links: new Map()}; byPath.set(e.path, f); }
+    if (read) f.reads++; else { f.count++; f.add += e.add || 0; f.del += e.del || 0; }
+    if (e.ts >= f.last) f.last = e.ts;
+    if (!read && (f.kind === "read" || e.ts >= (f.lastChange || 0))) { f.kind = e.kind; f.lastChange = e.ts; }
+    if (node) {
+      const l = f.links.get(node.id) || {count: 0, reads: 0, last: 0, kind: e.kind};
+      if (read) l.reads++; else l.count++;
+      if (e.ts >= l.last) l.last = e.ts;
+      if (!read && (l.kind === "read" || e.ts >= (l.lastChange || 0))) { l.kind = e.kind; l.lastChange = e.ts; }
+      f.links.set(node.id, l);
+    }
+    // First sight of this event: spark along its thread.
+    const key = e.ts+"|"+e.path+"|"+e.kind+"|"+e.pane;
+    if (!PV.fileSeen.has(key)) {
+      PV.fileSeen.add(key);
+      if (read) continue;
+      if (PV.primed && !PV_REDUCE && node && PV.fileFlashes.length < 40) PV.fileFlashes.push({path: e.path, node: node.id, kind: e.kind, born: performance.now()});
+      if (PV.primed) pvSound("blip", e.kind);
+    }
+  }
+  if (PV.fileSeen.size > 6000) PV.fileSeen = new Set([...PV.fileSeen].slice(-3000));
+  const list = [...byPath.values()].sort((a, b) => b.last - a.last).slice(0, PV_FILE_MAX);
+  const keep = new Set(list.map((f) => f.path));
+  for (const p of [...PV.fileSlots.keys()]) if (!keep.has(p)) PV.fileSlots.delete(p);
+  const used = new Set(PV.fileSlots.values());
+  let next = 0;
+  for (const f of list) {
+    if (!PV.fileSlots.has(f.path)) { while (used.has(next)) next++; PV.fileSlots.set(f.path, next); used.add(next); }
+    f.slot = PV.fileSlots.get(f.path);
+  }
+  PV.files = list;
+  if (PV.selFile && !keep.has(PV.selFile)) PV.selFile = null;
+  pvBuildDirs(list);
+}
+
+// Directory tree: every dir on a file's path, with single-child chains merged
+// (C:/…/lume is one node) so shared parents like crates/ stay as junctions
+// linking their children. Past PV_DIR_MAX nodes the deepest leaves fold up.
+const PV_DIR_MAX = 24;
+const pvSplit = (p) => String(p).split(/[\\/]/).filter(Boolean);
+const pvInSub = (key, top) => top === "" || key === top || key.startsWith(top + "/");
+function pvBuildDirs(list){
+  const nodes = new Map();
+  const get = (segs) => {
+    const key = segs.join("/").toLowerCase();
+    let d = nodes.get(key);
+    if (!d) {
+      d = {key, segs, parent: null, kids: new Set(), files: []};
+      nodes.set(key, d);
+      if (segs.length) { const p = get(segs.slice(0, -1)); d.parent = p.key; p.kids.add(key); }
+    }
+    return d;
+  };
+  for (const f of list) get(pvSplit(f.path).slice(0, -1)).files.push(f);
+  // Splice a node out: its kids and files move to its parent.
+  const drop = (d) => {
+    const p = d.parent != null ? nodes.get(d.parent) : null;
+    for (const k of d.kids) { nodes.get(k).parent = d.parent; if (p) p.kids.add(k); }
+    if (p) { p.kids.delete(d.key); p.files.push(...d.files); }
+    nodes.delete(d.key);
+  };
+  const squash = () => { for (const d of [...nodes.values()]) if (nodes.has(d.key) && !d.files.length && d.kids.size === 1) drop(d); };
+  // The "" root joins unrelated roots (C:, /workspace); keep it only if files sit at it.
+  squash();
+  const top = nodes.get(""); if (top && !top.files.length) { drop(top); squash(); }
+  while (nodes.size > PV_DIR_MAX) {
+    const leaf = [...nodes.values()].filter((d) => !d.kids.size && d.parent != null)
+      .sort((a, b) => b.segs.length - a.segs.length || a.files.length - b.files.length)[0];
+    if (!leaf) break;
+    drop(leaf); squash();
+  }
+  const dirs = [...nodes.values()];
+  for (const d of dirs) {
+    let n = 0; for (let p = d.parent; p != null; p = nodes.get(p).parent) n++;
+    d.depth = n;
+    const rel = d.segs.slice(d.parent != null ? nodes.get(d.parent).segs.length : 0);
+    d.path = d.segs.join("/") + "/";
+    d.label = (d.parent != null ? (rel.length > 2 ? "…/" + rel.slice(-2).join("/") : rel.join("/")) : d.segs.slice(-2).join("/")) + "/";
+    d.count = d.files.reduce((t, f) => t + f.count, 0);
+    d.last = d.files.reduce((t, f) => Math.max(t, f.last), 0);
+    d.tFiles = 0; d.tCount = 0; d.tLast = 0;
+  }
+  // Subtree totals: hub size, selection and the callout.
+  for (const d of dirs) for (let p = d; p; p = p.parent != null ? nodes.get(p.parent) : null) {
+    p.tFiles += d.files.length; p.tCount += d.count; p.tLast = Math.max(p.tLast, d.last);
+  }
+  // Stable slots among siblings: a dir keeps its branch, a file its place round its dir.
+  const keep = new Set(dirs.map((d) => d.key));
+  for (const k of [...PV.dirSlots.keys()]) if (!keep.has(k)) { PV.dirSlots.delete(k); PV.dirFileSlots.delete(k); }
+  const sib = new Map(), par = (d) => d.parent == null ? "\u0000" : d.parent;
+  for (const d of dirs) {
+    const sl = PV.dirSlots.get(d.key);
+    if (sl && sl.parent === par(d)) { if (!sib.has(sl.parent)) sib.set(sl.parent, new Set()); sib.get(sl.parent).add(sl.slot); }
+    else PV.dirSlots.delete(d.key);
+  }
+  for (const d of dirs.sort((a, b) => a.key < b.key ? -1 : 1)) {
+    let sl = PV.dirSlots.get(d.key);
+    if (!sl) {
+      const used = sib.get(par(d)) || new Set(); let n = 0; while (used.has(n)) n++;
+      used.add(n); sib.set(par(d), used); sl = {parent: par(d), slot: n}; PV.dirSlots.set(d.key, sl);
+    }
+    d.slot = sl.slot;
+    const slots = PV.dirFileSlots.get(d.key) || new Map(), mine = new Set(d.files.map((f) => f.path));
+    for (const p of [...slots.keys()]) if (!mine.has(p)) slots.delete(p);
+    const fu = new Set(slots.values());
+    for (const f of d.files) {
+      if (!slots.has(f.path)) { let n = 0; while (fu.has(n)) n++; slots.set(f.path, n); fu.add(n); }
+      f.dir = d.key; f.dslot = slots.get(f.path);
+    }
+    PV.dirFileSlots.set(d.key, slots);
+  }
+  for (const d of dirs) d.nsib = Math.max(...(sib.get(par(d)) || new Set([0]))) + 1;
+  PV.dirs = dirs;
+  PV.dirByKey = nodes;
+  if (PV.selDir != null && !keep.has(PV.selDir)) PV.selDir = null;
+}
+
+const PV_FILE_COLOR = {edit: "#fb923c", write: "#c084fc", create: "#4ade80", delete: "#e11d48", rename: "#94a3b8", read: "#64748b"};
+const pvBase = (p) => String(p).split(/[\\/]/).pop();
+
+// 3D tree: roots at the centre, each dir's children fan out on a cone around
+// the branch it grew from; each dir's files orbit it on its own tilted axis.
+// Positions ease in 3D, then project with perspective.
+function pvFib(i, n){
+  if (n <= 1) return [0, 0, 0];
+  const y = 1 - 2 * (i + .5) / n, r = Math.sqrt(Math.max(0, 1 - y*y)), a = i * 2.39996;
+  return [Math.cos(a) * r, y, Math.sin(a) * r];
+}
+const pvRotY = (v, a) => [v[0]*Math.cos(a) + v[2]*Math.sin(a), v[1], -v[0]*Math.sin(a) + v[2]*Math.cos(a)];
+const pvRotX = (v, a) => [v[0], v[1]*Math.cos(a) - v[2]*Math.sin(a), v[1]*Math.sin(a) + v[2]*Math.cos(a)];
+const pvRotZ = (v, a) => [v[0]*Math.cos(a) - v[1]*Math.sin(a), v[0]*Math.sin(a) + v[1]*Math.cos(a), v[2]];
+const pvNorm3 = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0]/l, v[1]/l, v[2]/l]; };
+const pvCross3 = (a, b) => [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
+// Fibonacci points on the upper hemisphere (y from ~1 down to .2).
+function pvUpper(i, n){
+  const y = 1 - .8 * (i + .5) / n, r = Math.sqrt(Math.max(0, 1 - y*y)), a = i * 2.39996;
+  return [Math.cos(a) * r, y, Math.sin(a) * r];
+}
+// Target position and branch direction of every dir, parents first.
+function pvTreeLayout(R){
+  const out = new Map(), L1 = 1, roots = PV.dirs.filter((d) => d.parent == null);
+  const one = roots.length === 1;
+  for (const d of [...PV.dirs].sort((a, b) => a.depth - b.depth)) {
+    let c, u;
+    if (d.parent == null) {
+      // Several roots stand round the centre, leaning up and out.
+      if (one) { c = [0, 0, 0]; u = [0, 1, 0]; }
+      else { const a = (2 * Math.PI * d.slot) / Math.max(2, d.nsib); u = pvNorm3([Math.cos(a), .55, Math.sin(a)]); c = u.map((x) => x * L1 * .8); }
+    } else {
+      const P = out.get(d.parent); if (!P) continue;
+      if (one && d.depth === 1) u = pvNorm3(pvUpper(d.slot, Math.max(2, d.nsib)));   // a dome over the root
+      else {
+        const a = Math.abs(P.u[1]) < .9 ? [0, 1, 0] : [1, 0, 0];
+        const v = pvNorm3(pvCross3(P.u, a)), w = pvCross3(P.u, v);
+        const half = d.nsib === 1 ? .32 : Math.min(1.15, .5 + .13 * d.nsib);
+        const phi = (2 * Math.PI * d.slot) / d.nsib + (pvHash(d.parent) % 628) / 100;
+        u = pvNorm3([0, 1, 2].map((i) => P.u[i] * Math.cos(half) + (v[i] * Math.cos(phi) + w[i] * Math.sin(phi)) * Math.sin(half)));
+      }
+      const len = L1 * Math.pow(.8, Math.max(0, d.depth - (one ? 1 : 0)));
+      c = [0, 1, 2].map((i) => P.c[i] + u[i] * len);
+    }
+    out.set(d.key, {c, u});
+  }
+  // Fit: the tree spans ~55% of the floor's radius, a small one its natural size.
+  let far = 0; for (const v of out.values()) far = Math.max(far, Math.hypot(...v.c));
+  const k = far ? Math.min(R * .55 / far, R * .3) : 0;
+  for (const v of out.values()) v.c = v.c.map((x) => x * k);
+  // Then lift it so every node sits above the floor.
+  let low = Infinity; for (const v of out.values()) low = Math.min(low, v.c[1]);
+  const lift = (isFinite(low) ? -low : 0) + R * .2;
+  for (const v of out.values()) v.c[1] += lift;
+  return out;
+}
+const pvLerp3 = (a, b, k) => [a[0] + (b[0]-a[0])*k, a[1] + (b[1]-a[1])*k, a[2] + (b[2]-a[2])*k];
+// 1 = nearest the viewer, 0 = far side.
+const pvDepth = (z) => Math.max(0, Math.min(1, .5 - z / (2.2 * Math.max(((PV.geom || {}).R || 100), 1))));
+
+function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
+  const now = Date.now(), t = performance.now(), ts = PV_REDUCE ? 0 : t / 1000;
+  const lay = pvTreeLayout(R), P3 = PV.geom.P3;
+  // The tree turns slowly on its own vertical axis, above the floor.
+  const gy = ts * .05;
+  const project = (v) => { const w = pvRotY(v, gy); return P3(w[0], w[1], w[2]); };
+  // Dirs.
+  const presentD = new Set();
+  for (const d of PV.dirs) {
+    presentD.add(d.key);
+    const tgt = (lay.get(d.key) || {c: [0, 0, 0]}).c;
+    let a = PV.dirAnim.get(d.key);
+    if (!a) {
+      const r = pvRand(pvHash(d.key));
+      a = {c: tgt, alpha: 0, ax: (r()-.5)*1.6, az: (r()-.5)*1.6, sp: (.25 + r()*.45) * (r() < .5 ? -1 : 1), ph: r()*6.28};
+      PV.dirAnim.set(d.key, a);
+    }
+    a.d = d; a.c = pvLerp3(a.c, tgt, k); a.alpha += (1 - a.alpha) * k;
+    a.rf = R * (.03 + .014 * Math.sqrt(d.files.length));
+    const pr = project(a.c); a.x = pr.x; a.y = pr.y; a.z = pr.z; a.p = pr.p;
+  }
+  for (const [key, a] of PV.dirAnim) if (!presentD.has(key)) { a.alpha -= a.alpha * k; if (a.alpha < .02) PV.dirAnim.delete(key); }
+  // Files: orbit their dir in the dir's own space.
+  const present = new Set();
+  for (const f of PV.files) {
+    const da = PV.dirAnim.get(f.dir); if (!da) continue;
+    present.add(f.path);
+    const off = pvFib(f.dslot, Math.max(da.d.files.length, 2)).map((x) => x * da.rf);
+    let a = PV.fileAnim.get(f.path);
+    if (!a || !a.o) { a = {o: [0, 0, 0], alpha: 0}; PV.fileAnim.set(f.path, a); }
+    a.f = f; a.da = da; a.o = pvLerp3(a.o, off, k); a.alpha += (1 - a.alpha) * k;
+    const l = pvRotZ(pvRotX(pvRotY(a.o, da.ph + ts * da.sp), da.ax), da.az);
+    const pr = project([da.c[0] + l[0], da.c[1] + l[1], da.c[2] + l[2]]);
+    a.x = pr.x; a.y = pr.y; a.z = pr.z; a.p = pr.p;
+  }
+  for (const [p, a] of PV.fileAnim) if (!present.has(p)) { a.alpha -= a.alpha * k; if (a.alpha < .02) PV.fileAnim.delete(p); }
+  if (!PV.fileAnim.size && !PV.dirAnim.size) return;
+  const sel = PV.sel, selFile = PV.selFile, selDir = PV.selDir;
+  const hasSel = selDir != null;
+  const lit = (f, nodeId) => (selFile ? f.path === selFile : hasSel ? pvInSub(f.dir, selDir) : sel ? nodeId === sel : true);
+  const on = (f) => (selFile ? f.path === selFile : hasSel ? pvInSub(f.dir, selDir) : sel ? f.links.has(sel) : true);
+  const dirOn = (d) => (hasSel ? pvInSub(d.key, selDir) : selFile ? PV.files.some((f) => f.path === selFile && pvInSub(f.dir, d.key))
+    : sel ? PV.files.some((f) => f.links.has(sel) && pvInSub(f.dir, d.key)) : true);
+  // Branches: each dir to its parent, thicker with more files below.
+  for (const a of PV.dirAnim.values()) {
+    const pa = a.d.parent != null && PV.dirAnim.get(a.d.parent); if (!pa) continue;
+    ctx.globalAlpha = Math.min(a.alpha, pa.alpha) * (dirOn(a.d) ? .22 + .4 * pvDepth((a.z + pa.z) / 2) : .05);
+    ctx.strokeStyle = "#38bdf8"; ctx.lineWidth = Math.min(3, .8 + Math.sqrt(a.d.tFiles) * .35);
+    ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(a.x, a.y); ctx.stroke();
+  }
+  // Each dir's own space: a faint shell, and spokes out to its files.
+  ctx.strokeStyle = "#7dd3fc"; ctx.lineWidth = 1;
+  for (const a of PV.dirAnim.values()) {
+    ctx.globalAlpha = a.alpha * (dirOn(a.d) ? .1 + .14 * pvDepth(a.z) : .03);
+    ctx.beginPath(); ctx.arc(a.x, a.y, a.rf * a.p * 1.05, 0, Math.PI*2); ctx.stroke();
+  }
+  ctx.lineWidth = .7;
+  for (const a of PV.fileAnim.values()) {
+    if (!a.da || !PV.dirAnim.has(a.f.dir)) continue;
+    ctx.globalAlpha = a.alpha * a.da.alpha * (on(a.f) ? .16 + .3 * pvDepth((a.z + a.da.z) / 2) : .04);
+    ctx.beginPath(); ctx.moveTo(a.da.x, a.da.y); ctx.lineTo(a.x, a.y); ctx.stroke();
+  }
+  // Threads: file → each pane that touched it.
+  ctx.globalCompositeOperation = "lighter";
+  for (const a of PV.fileAnim.values()) {
+    const f = a.f, dep = pvDepth(a.z);
+    for (const [nodeId, l] of f.links) {
+      const n = PV.anim.get(nodeId); if (!n) continue;
+      const p = pos(n.theta, R*.97), o = lit(f, nodeId), fresh = now - l.last < 60000;
+      const onlyRead = !l.count;
+      ctx.strokeStyle = PV_FILE_COLOR[l.kind] || "#94a3b8";
+      ctx.globalAlpha = a.alpha * n.alpha * (o ? (fresh ? .75 : .38) * (.55 + .45 * dep) * (onlyRead ? .7 : 1) : .05);
+      ctx.lineWidth = onlyRead ? .8 : Math.min(3.2, .6 + Math.log2(1 + l.count) * .55);
+      ctx.setLineDash(onlyRead ? [1.5, 3] : []);
+      const mx = (a.x + p.x) / 2 + (cy - (a.y + p.y) / 2) * .12, my = (a.y + p.y) / 2 + ((a.x + p.x) / 2 - cx) * .12;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.quadraticCurveTo(mx, my, p.x, p.y); ctx.stroke();
+    }
+  }
+  ctx.setLineDash([]);
+  // New changes: a spark running pane → file along the thread.
+  PV.fileFlashes = PV.fileFlashes.filter((fl) => t - fl.born < 900);
+  for (const fl of PV.fileFlashes) {
+    const a = PV.fileAnim.get(fl.path), n = PV.anim.get(fl.node); if (!a || !n) continue;
+    const p = pos(n.theta, R*.97), u = Math.min(1, (t - fl.born) / 700);
+    const mx = (a.x + p.x) / 2 + (cy - (a.y + p.y) / 2) * .12, my = (a.y + p.y) / 2 + ((a.x + p.x) / 2 - cx) * .12;
+    const x = (1-u)*(1-u)*p.x + 2*(1-u)*u*mx + u*u*a.x, y = (1-u)*(1-u)*p.y + 2*(1-u)*u*my + u*u*a.y;
+    const col = PV_FILE_COLOR[fl.kind] || "#f8fafc";
+    ctx.globalAlpha = 1 - Math.max(0, (t - fl.born - 700) / 200);
+    ctx.shadowColor = col; ctx.shadowBlur = 14; ctx.fillStyle = "#f8fafc";
+    ctx.beginPath(); ctx.arc(x, y, 2.8, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.shadowBlur = 0; ctx.globalCompositeOperation = "source-over";
+  // Nodes back to front: dir hubs and files, nearer = bigger and brighter.
+  const items = [...PV.dirAnim.values()].map((a) => ({a, dir: true})).concat([...PV.fileAnim.values()].map((a) => ({a, dir: false})));
+  items.sort((x, y) => y.a.z - x.a.z);
+  for (const {a, dir} of items) {
+    const shade = .45 + .55 * pvDepth(a.z);
+    if (dir) {
+      const d = a.d, isSel = hasSel && d.key === selDir, r = (3 + Math.min(8, Math.sqrt(d.tFiles) * 1.4)) * a.p;
+      ctx.globalAlpha = a.alpha * (dirOn(d) ? shade : .15);
+      ctx.fillStyle = d.files.length ? "rgba(14,116,144,.55)" : "rgba(5,7,11,.9)"; ctx.strokeStyle = isSel ? "#f8fafc" : "#7dd3fc"; ctx.lineWidth = isSel ? 2 : 1.2;
+      ctx.beginPath(); ctx.arc(a.x, a.y, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = "#e0f2fe"; ctx.beginPath(); ctx.arc(a.x, a.y, Math.max(1.2, r * .28), 0, Math.PI*2); ctx.fill();
+      continue;
+    }
+    const f = a.f, r = (2.2 + Math.min(6, Math.log2(1 + f.count + f.reads * .25) * 1.4)) * a.p, col = PV_FILE_COLOR[f.kind] || "#94a3b8";
+    ctx.globalAlpha = a.alpha * (on(f) ? shade : .15);
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(a.x, a.y, r, 0, Math.PI*2); ctx.fill();
+    if ((f.count && now - (f.lastChange || 0) < 60000) || f.path === selFile) {
+      ctx.strokeStyle = f.path === selFile ? "#f8fafc" : col; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(a.x, a.y, r + 3 + (f.path === selFile ? 1.5 : 0), 0, Math.PI*2); ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Labels for the busiest files, in screen space, skipping overlaps.
+function pvLabelFiles(ctx, vw, w, h){
+  if (!PV.fileAnim.size && !PV.dirAnim.size) return;
+  const placed = [];
+  ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  // Dir names first (nearest wins a clash), then the busiest files.
+  ctx.font = "bold 9px "+PV_MONO;
+  const dirs = [...PV.dirAnim.values()].sort((x, y) => (y.d.key === PV.selDir) - (x.d.key === PV.selDir) || x.z - y.z);
+  for (const a of dirs) {
+    const x = a.x*vw.z + vw.x + 10, y = a.y*vw.z + vw.y - 10;
+    if (x < 0 || x > w || y < 0 || y > h) continue;
+    const text = a.d.label, tw = ctx.measureText(text).width;
+    const box = {x0: x, x1: x + tw, y0: y - 6, y1: y + 6};
+    if (a.d.key !== PV.selDir && placed.some((b) => box.x0 < b.x1 + 3 && box.x1 > b.x0 - 3 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
+    placed.push(box);
+    ctx.globalAlpha = a.alpha * (PV.selDir == null || pvInSub(a.d.key, PV.selDir) ? .5 + .45 * pvDepth(a.z) : .2);
+    ctx.fillStyle = a.d.key === PV.selDir ? "#f8fafc" : "#7dd3fc";
+    ctx.fillText(text, x, y);
+  }
+  ctx.font = "9px "+PV_MONO;
+  const inSel = (f) => PV.selDir != null && pvInSub(f.dir, PV.selDir);
+  const order = [...PV.fileAnim.values()].sort((x, y) => (y.f.path === PV.selFile) - (x.f.path === PV.selFile) || inSel(y.f) - inSel(x.f) || y.f.count - x.f.count);
+  for (const a of order.slice(0, 24)) {
+    const x = a.x*vw.z + vw.x + 8, y = a.y*vw.z + vw.y;
+    if (x < 0 || x > w || y < 0 || y > h) continue;
+    const text = pvBase(a.f.path), tw = ctx.measureText(text).width;
+    const box = {x0: x, x1: x + tw, y0: y - 6, y1: y + 6};
+    if (a.f.path !== PV.selFile && placed.some((b) => box.x0 < b.x1 + 3 && box.x1 > b.x0 - 3 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
+    placed.push(box);
+    const on = PV.selFile ? a.f.path === PV.selFile : PV.selDir != null ? pvInSub(a.f.dir, PV.selDir) : PV.sel ? a.f.links.has(PV.sel) : true;
+    ctx.globalAlpha = a.alpha * (on ? .9 : .25);
+    ctx.fillStyle = a.f.path === PV.selFile ? "#f8fafc" : "#cbd5e1";
+    ctx.fillText(text, x, y);
+  }
+  ctx.globalAlpha = 1; ctx.textBaseline = "alphabetic";
+}
+
+// Callout for the selected file.
+function pvFileCallout(ctx, vw, w, h){
+  let a, l1, l2;
+  const da = !PV.selFile && PV.selDir != null && PV.dirAnim.get(PV.selDir);
+  if (da) {
+    const d = da.d, ids = new Set();
+    for (const f of PV.files) if (pvInSub(f.dir, d.key)) for (const id of f.links.keys()) ids.add(id);
+    const panes = [...ids].map((id) => (PV.alias.get(id) || {}).label || id), subs = d.kids.size;
+    a = da; l1 = "DIR "+d.path;
+    l2 = d.tFiles+" FILE"+(d.tFiles === 1 ? "" : "S")+(subs ? " IN "+(subs + (d.files.length ? 1 : 0))+" BRANCHES" : "")+" | "+d.tCount+" CHANGE"+(d.tCount === 1 ? "" : "S")+" | LAST "+pvAgo(d.tLast)+" | BY "+(panes.join(", ") || "—");
+  } else {
+    a = PV.selFile && PV.fileAnim.get(PV.selFile); if (!a) return;
+    const f = a.f, panes = [...f.links.keys()].map((id) => (PV.alias.get(id) || {}).label || id);
+    l1 = "FILE "+f.path+"   ·   DOUBLE-CLICK TO EDIT";
+    l2 = f.count+" CHANGE"+(f.count === 1 ? "" : "S")+(f.reads ? " | "+f.reads+" READ"+(f.reads === 1 ? "" : "S") : "")+" | LAST "+f.kind.toUpperCase()+" "+pvAgo(f.last)+(f.add || f.del ? " | +"+pvK(f.add)+" −"+pvK(f.del) : "")+" | BY "+panes.join(", ");
+  }
+  ctx.font = "10px "+PV_MONO;
+  const bw = Math.min(w - 28, Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 20), bh = 36, bx = 14, by = 30;
+  const px = a.x*vw.z + vw.x, py = a.y*vw.z + vw.y;
+  ctx.strokeStyle = "#f8fafc"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(bx + bw*.5, by + bh); ctx.lineTo(px, py); ctx.stroke();
+  ctx.fillStyle = "rgba(5,7,11,.92)"; ctx.fillRect(bx, by, bw, bh); ctx.strokeRect(bx+.5, by+.5, bw-1, bh-1);
+  ctx.fillStyle = "#f8fafc"; ctx.fillText(pvClip(ctx, l1, bw-20), bx+10, by+15);
+  ctx.fillStyle = "#cbd5e1"; ctx.fillText(pvClip(ctx, l2, bw-20), bx+10, by+29);
+}
+
 // Select a ring node (or clear): ring, callout, top comms and stream follow it.
 function pvSelect(id){
+  if (id || PV.sel) pvSound("tick");
   PV.sel = id && id !== PV.sel ? id : null;
+  PV.selFile = null; PV.selDir = null;
+  if (PV.sel && PVSC.on) pvScreensPoll();
+  if (PV.focus && (!PV.sel || (PV.alias.get(PV.sel) || {}).pane !== PV.focus.pane)) pvFocusClose();
+  pvRenderAll();
+}
+function pvSelectFile(path){
+  pvSound("tick");
+  PV.selFile = path && path !== PV.selFile ? path : null;
+  PV.sel = null; PV.selDir = null;
+  pvRenderAll();
+}
+function pvSelectDir(key){
+  pvSound("tick");
+  PV.selDir = key != null && key !== PV.selDir ? key : null;
+  PV.sel = null; PV.selFile = null;
   pvRenderAll();
 }
 
@@ -1149,6 +2913,35 @@ function pvRenderMode(){
     try { localStorage.setItem("pv.range", String(v)); } catch (_e) {}
     pvPoll();
   }));
+  const dim = pvEl("span", "pv-seg");
+  for (const [d, label, tip] of [["3d", "3D", "Tilted view — Ctrl+drag to tip and orbit"], ["2d", "2D", "Straight down on the floor"]]) {
+    const b = pvEl("button", PV.dim === d ? "on" : null, label); b.type = "button"; b.title = tip;
+    b.addEventListener("click", () => {
+      PV.dim = d; PV.cam.want = d === "2d" ? PV_PITCH_2D : PV_PITCH_3D; if (d === "2d") PV.cam.yaw = 0;
+      try { localStorage.setItem("pv.dim", d); } catch (_e) {}
+      pvRenderMode(); if (PV_REDUCE || !PV.raf) pvDrawRing();
+    });
+    dim.appendChild(b);
+  }
+  box.appendChild(dim);
+  const scr = pvEl("span", "pv-seg"), scb = pvEl("button", PVSC.on ? "on" : null, PVSC.on ? "▣ screens" : "▢ screens");
+  scb.type = "button"; scb.title = "Live screens at the rim of each terminal pane";
+  scb.addEventListener("click", () => {
+    PVSC.on = !PVSC.on;
+    try { localStorage.setItem("pv.screens", PVSC.on ? "on" : "off"); } catch (_e) {}
+    if (PVSC.on) pvScreensPoll();
+    pvRenderMode(); if (PV_REDUCE || !PV.raf) pvDrawRing();
+  });
+  scr.appendChild(scb); box.appendChild(scr);
+  const snd = pvEl("span", "pv-seg"), sb = pvEl("button", PVS.on ? "on" : null, PVS.on ? "♪ on" : "♪ off");
+  sb.type = "button"; sb.title = "Sound effects";
+  sb.addEventListener("click", () => {
+    PVS.on = !PVS.on;
+    try { localStorage.setItem("pv.sound", PVS.on ? "on" : "off"); } catch (_e) {}
+    if (PVS.on) { pvAudio(); PVS.last = {}; pvSound("chime"); }
+    pvRenderMode();
+  });
+  snd.appendChild(sb); box.appendChild(snd);
   if (PV.sel) {
     const n = PV.alias.get(PV.sel), chip = pvEl("span", "pv-selbox", "● "+(n ? n.label : PV.sel)+"  ×");
     chip.title = "Clear selection (Esc)"; chip.addEventListener("click", () => pvSelect(null));
@@ -1180,6 +2973,7 @@ function pvRenderChips(){
     const node = PV.alias.get("pane:"+p.paneId), id = node ? node.id : "pane:"+p.paneId;
     const chip = pvEl("span", "pv-chip "+p.cls+(p.focused ? " focus" : "")+(id === PV.sel ? " sel" : ""), p.name);
     chip.title = [p.name, p.proc || "—", p.state, p.tab].filter(Boolean).join(" · ")+" — click to select";
+    if (p.color && id !== PV.sel) { chip.style.color = p.color; chip.style.borderColor = p.color; }
     chip.addEventListener("click", () => pvSelect(id));
     box.appendChild(chip);
   }
@@ -1417,7 +3211,7 @@ async function pvPoll(){
   if (w.status === "fulfilled") PV.win = w.value;
   if (p.status === "fulfilled") PV.pane = p.value;
   PV.comms = cm.status === "fulfilled" && cm.value && Array.isArray(cm.value.mail_edges) ? cm.value : null;
-  pvBuildNodes(); pvNoteArrivals(); pvRenderAll();
+  pvBuildNodes(); pvBuildFiles(); pvBuildNet(); pvNoteArrivals(); pvRenderAll();
 }
 
 function pvLoop(ts){
@@ -1425,7 +3219,7 @@ function pvLoop(ts){
   PV.raf = requestAnimationFrame(pvLoop);
   if (ts - PV.lastFrame < 33) return;   // ~30 fps is plenty for a slow spin
   const dt = PV.lastFrame ? Math.min(100, ts - PV.lastFrame) : 0; PV.lastFrame = ts;
-  PV.rot += dt * .00004; pvDrawRing();
+  PV.rot += dt * .00004; pvFocusStep(); pvDrawRing(); pvRadioTick();
 }
 
 function pvSetMode(){
@@ -1434,52 +3228,107 @@ function pvSetMode(){
   document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("on",
     on ? a.getAttribute("href") === "#proto_viz" : a.getAttribute("href") === "/dashboard"));
   clearInterval(PV.timer); PV.timer = null;
-  if (!on) return;
+  clearInterval(PV.radioTimer); PV.radioTimer = null;
+  if (!on) { if (PV.replay) { PV.replay.audio.pause(); PV.replay = null; } return; }
   pvPoll(); PV.timer = setInterval(pvPoll, 3000);
+  clearInterval(PVSC.timer); pvScreensPoll(); PVSC.timer = setInterval(pvScreensPoll, 2000);
+  pvRadioPoll(); PV.radioTimer = setInterval(pvRadioPoll, 1000);
   if (!PV_REDUCE && !PV.raf) { PV.lastFrame = 0; PV.raf = requestAnimationFrame(pvLoop); }
 }
 window.addEventListener("hashchange", pvSetMode);
 // Click a node on the ring to select it; click empty space to clear.
+// The file node under the pointer, if any.
+function pvHitFile(ev){
+  const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z;
+  let best = null, bestD = Infinity;
+  for (const [p, a] of PV.fileAnim) { const dd = Math.hypot(ox - a.x, oy - a.y); if (dd < bestD) { bestD = dd; best = p; } }
+  return best && bestD < 12 / v.z + 4 ? best : null;
+}
 $("pv-ring").addEventListener("click", (ev) => {
   const g = PV.geom; if (!g) return;
   if (Date.now() - PV.dragged < 250) return;   // the end of a pan, not a click
-  const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z;
-  const dx = ox - g.cx, dy = (oy - g.cy) / g.tilt, d = Math.hypot(dx, dy);
-  // The ring, its bars and the names outside it are all clickable.
-  if (d < g.R*.7 || d > g.R + 230) { pvSelect(null); return; }
-  const th = Math.atan2(dy, dx) - g.rot;
+  const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z, reach = 12 / v.z + 4;
+  if (PV.focus) { pvFocusClose(); return; }   // click again to leave
+  const sh = PVSC.hit; if (sh && ox >= sh.x && ox <= sh.x + sh.w && oy >= sh.y && oy <= sh.y + sh.h) { pvFocusOpen(sh); return; }
+  // Files and dirs float above the floor: nearest within reach wins.
   let best = null, bestD = Infinity;
+  for (const [p, a] of PV.fileAnim) { const dd = Math.hypot(ox - a.x, oy - a.y); if (dd < bestD) { bestD = dd; best = {file: p}; } }
+  for (const [key, a] of PV.dirAnim) { const dd = Math.hypot(ox - a.x, oy - a.y) - 3; if (dd < bestD) { bestD = dd; best = {dir: key}; } }
+  if (best && bestD < reach) { if (best.dir != null) pvSelectDir(best.dir); else pvSelectFile(best.file); return; }
+  // Then the agents on the floor: their marker or their name.
+  let node = null, nodeD = Infinity;
   for (const [id, a] of PV.anim) {
     if (!PV.alias.has(id)) continue;
-    const dd = Math.abs(pvAngDiff(th, a.theta)); if (dd < bestD) { bestD = dd; best = id; }
+    const b = a.lbox, inLabel = b && ox >= b.x0 && ox <= b.x1 && oy >= b.y0 && oy <= b.y1;
+    const dd = inLabel ? 0 : Math.hypot(ox - (a.sx || 0), oy - (a.sy || 0));
+    if (dd < nodeD) { nodeD = dd; node = id; }
   }
-  pvSelect(best && bestD < Math.max(.12, PV.span*.6) ? best : null);
+  if (node && nodeD < 26 / v.z + 6) { pvSelect(node); return; }
+  // Anywhere in a pane's slice, out to its name.
+  const slice = pvSliceAt(ox, oy); if (slice) { if (slice !== PV.sel) pvSelect(slice); return; }
+  PV.selFile = null; PV.selDir = null; pvSelect(null);
 });
-window.addEventListener("keydown", (ev) => { if (PV.on && ev.key === "Escape" && PV.sel) pvSelect(null); });
-// Wheel zooms around the cursor, drag pans, double-click resets.
+window.addEventListener("keydown", (ev) => {
+  if (!PV.on || ev.key !== "Escape" || $("pv-ed").classList.contains("on")) return;
+  if (PV.focus) { pvFocusClose(); return; }
+  if (PV.sel) pvSelect(null);
+});
+function pvHoverAt(ev){
+  if (PV.focus) { $("pv-ring").style.cursor = "zoom-out"; return; }
+  const v = pvView(), ox = (ev.offsetX - v.x) / v.z, oy = (ev.offsetY - v.y) / v.z, sh = PVSC.hit;
+  const onMon = sh && ox >= sh.x && ox <= sh.x + sh.w && oy >= sh.y && oy <= sh.y + sh.h;
+  const slice = onMon ? null : pvSliceAt(ox, oy);
+  $("pv-ring").style.cursor = onMon ? "zoom-in" : slice ? "pointer" : "";
+  clearTimeout(PV.hoverOff);
+  if (onMon) return;
+  if (slice) {
+    if (slice !== PV.hover) { PV.hover = slice; if (PVSC.on) pvScreensPoll(); }
+    return;
+  }
+  // Off everything: let it go after a moment (time to reach the monitor).
+  if (PV.hover) PV.hoverOff = setTimeout(() => { PV.hover = null; }, 450);
+}
+// Wheel zooms around the cursor, drag moves around the floor, Ctrl+drag tips
+// and orbits (3D), double-click resets.
 (() => {
   const el = $("pv-ring"); let drag = null;
   const redraw = () => { if (PV_REDUCE || !PV.raf) pvDrawRing(); };
   el.addEventListener("wheel", (ev) => {
     ev.preventDefault();
+    if (PV.focus) return;
     const v = pvView(), z = Math.min(8, Math.max(.5, v.z * Math.exp(-ev.deltaY * .0015)));
     v.x = ev.offsetX - (ev.offsetX - v.x) * (z / v.z); v.y = ev.offsetY - (ev.offsetY - v.y) * (z / v.z); v.z = z;
     redraw();
   }, {passive: false});
   el.addEventListener("pointerdown", (ev) => {
-    if (ev.button !== 0) return;
-    drag = {x: ev.clientX, y: ev.clientY, vx: pvView().x, vy: pvView().y, moved: false};
+    if (ev.button !== 0 || PV.focus) return;
+    drag = {x: ev.clientX, y: ev.clientY, vx: pvView().x, vy: pvView().y, moved: false,
+      tip: (ev.ctrlKey || ev.metaKey) && PV.dim === "3d", pitch: PV.cam.want, yaw: PV.cam.yaw};
     el.setPointerCapture(ev.pointerId);
   });
   el.addEventListener("pointermove", (ev) => {
-    if (!drag) return;
+    if (!drag) { pvHoverAt(ev); return; }
     const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
     if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 4) { drag.moved = true; el.style.cursor = "grabbing"; }
-    if (drag.moved) { const v = pvView(); v.x = drag.vx + dx; v.y = drag.vy + dy; redraw(); }
+    if (!drag.moved) return;
+    if (drag.tip) {
+      PV.cam.want = PV.cam.pitch = Math.max(.12, Math.min(PV_PITCH_2D, drag.pitch + dy * .006));
+      PV.cam.yaw = drag.yaw + dx * .008;
+    } else { const v = pvView(); v.x = drag.vx + dx; v.y = drag.vy + dy; }
+    redraw();
   });
   const end = () => { if (drag && drag.moved) PV.dragged = Date.now(); drag = null; el.style.cursor = ""; };
+  el.addEventListener("pointerleave", () => { clearTimeout(PV.hoverOff); PV.hoverOff = setTimeout(() => { PV.hover = null; }, 450); });
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
-  el.addEventListener("dblclick", () => { PV.views[PV.mode] = {z: 1, x: 0, y: 0}; redraw(); });
+  el.addEventListener("dblclick", (ev) => {
+    const sh = PVSC.hit, vv = pvView(), sx = (ev.offsetX - vv.x) / vv.z, sy = (ev.offsetY - vv.y) / vv.z;
+    if (PV.focus || (sh && sx >= sh.x && sx <= sh.x + sh.w && sy >= sh.y && sy <= sh.y + sh.h)) return;
+    const hit = pvHitFile(ev);
+    if (hit) { PV.selFile = hit; PV.sel = null; PV.selDir = null; pvEdOpen(hit); return; }
+    PV.views[PV.mode] = {z: 1, x: 0, y: 0};
+    PV.cam.yaw = 0; PV.cam.want = PV.dim === "2d" ? PV_PITCH_2D : PV_PITCH_3D;
+    redraw();
+  });
 })();
 window.addEventListener("resize", () => { if (PV.on) pvRenderAll(); });
 pvSetMode();

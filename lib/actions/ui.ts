@@ -24,9 +24,11 @@ import {
   UI_CONTEXTMENU_OPEN,
   UI_COMMAND_EXEC,
   SESSION_AGENT_STATUS,
+  UI_RADIO_CALLSIGNS,
   UI_TAB_BELL_SET,
   UI_TAB_BELL_CLEAR
 } from '../../typings/constants/ui';
+import type {RadioCallsigns} from '../../typings/constants/ui';
 import type {HyperState, HyperDispatch, HyperActions, ITermGroups} from '../../typings/hyper';
 import rpc from '../rpc';
 import {getRootGroups} from '../selectors';
@@ -414,6 +416,10 @@ export function execCommand(command: string, fn: (e: any, dispatch: HyperDispatc
         }
       }
     });
+}
+
+export function setRadioCallsigns(radio: RadioCallsigns) {
+  return {type: UI_RADIO_CALLSIGNS, radio} as const;
 }
 
 export function setAgentStatus(

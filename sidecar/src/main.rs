@@ -26,6 +26,7 @@ mod delivery;
 mod delivery_service;
 mod perms;
 mod process;
+mod host_telemetry;
 mod lume_store;
 mod screen;
 mod stream;
@@ -35,6 +36,9 @@ mod workspace;
 mod settings;
 mod snapshot_image;
 mod telemetry;
+mod radio_log;
+mod file_edit;
+mod radio;
 #[cfg(feature = "tts")]
 mod tts;
 
@@ -422,7 +426,16 @@ async fn post_tts(
         tts::radio_wrap(&recipient, &caller, &req.text)
     };
     let requester = (!caller_raw.is_empty()).then_some(caller_raw.as_str());
-    match tts::speak(&spoken, voice, req.speed, requester).await {
+    // Log the transmission as it goes on air (dashboard radio view + replay).
+    let meta = radio_log::Meta {
+        from: if caller_raw.is_empty() { caller.clone() } else { caller_raw.clone() },
+        from_pane: match &id { identity::CallerIdentity::Pane { pane, .. } => Some(pane.clone()), _ => None },
+        to: recipient.clone(),
+        text: req.text.trim().to_string(),
+        spoken: spoken.clone(),
+    };
+    let on_air: tts::OnAir = Box::new(move |audio, rate, voice, engine| radio_log::record(meta, audio, rate, voice, engine));
+    match tts::speak(&spoken, voice, req.speed, requester, Some(on_air)).await {
         // `spoken` echoes the EXACT transcript delivered to the user (frame
         // included) so callers can see the wrapper already carries the
         // callsigns + "Over and out" and don't add their own radio phrases.
@@ -4712,9 +4725,15 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Ferricula client: {} (run ferricula separately, e.g. via docker compose)", ferricula_url);
 
     let bridge = Bridge::new();
-    let telem = telemetry::TelemetryStore::new();
+    let telem = telemetry::TelemetryStore::persistent(
+        fsnav::home_dir().join(".hyperia").join("telemetry").join("file-events.jsonl"),
+    );
     let dash_state = dashboard::DashboardState::new(telem.clone());
     let state = AppState { bridge, log_buffer, telemetry: telem, render: render::RenderStore::new() };
+    // Host-pane telemetry → n8 gateway (server of record); buffers while it is down.
+    host_telemetry::forward::spawn_sender();
+    host_telemetry::watcher::spawn(state.bridge.clone(), state.telemetry.clone());
+    radio::spawn(state.bridge.clone());
     // Grab lume handles before `state` is moved into the router below.
     let lume_for_flush = state.bridge.lume();
     let lume_for_shutdown = state.bridge.lume();
@@ -4738,6 +4757,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/logs", axum::routing::get(get_logs))
         .route("/api/log", axum::routing::post(post_client_log))
         .route("/api/tts", axum::routing::post(post_tts))
+        .route("/api/files/open", axum::routing::post(file_edit::open))
+        .route("/api/files/stat", axum::routing::get(file_edit::stat))
+        .route("/api/files/save", axum::routing::post(file_edit::save))
+        .route("/api/files/render", axum::routing::post(file_edit::render))
+        .route("/api/radio/callsigns", axum::routing::get(radio::get_callsigns))
+        .route("/api/radio/deliver", axum::routing::post(radio::deliver))
         .route("/api/audio/play", axum::routing::post(post_audio_play))
         .route("/api/audio/probe", axum::routing::post(post_audio_probe))
         .route("/api/audio/mute", axum::routing::post(post_audio_mute))
@@ -4835,11 +4860,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/dashboard/version", axum::routing::get(dashboard::get_dashboard_version))
         // Metadata-only comms graph for the dashboard (no subjects/bodies/payloads).
         .route("/api/dashboard/comms", axum::routing::get(dashboard_comms::get_dashboard_comms))
+        .route("/api/radio/log", axum::routing::get(radio_log::get_log))
+        .route("/api/radio/audio/{id}", axum::routing::get(radio_log::get_audio))
         .route("/api/maximus/toggle", axum::routing::post(dashboard::post_maximus_toggle))
         .route("/api/telemetry/snapshot", axum::routing::get(dashboard::get_telemetry_snapshot))
         .route("/api/telemetry/toggle", axum::routing::post(dashboard::post_telemetry_toggle))
         .route("/api/telemetry/reset", axum::routing::post(dashboard::post_telemetry_reset))
         .route("/api/telemetry/event", axum::routing::post(dashboard::post_telemetry_event))
+        // Claude Code OpenTelemetry (OTLP http/json) from agents in panes.
+        .route("/otel/v1/logs", axum::routing::post(host_telemetry::otlp::post_logs))
+        .route("/otel/v1/metrics", axum::routing::post(host_telemetry::otlp::post_metrics))
         .route("/api/dashboard/widgets", axum::routing::get(dashboard::get_widgets).post(dashboard::post_widgets))
         .with_state(dash_state);
 

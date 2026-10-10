@@ -67,7 +67,58 @@ pub struct ShellAppInfo {
     pub pid: u32,
 }
 
+/// Recent PTY output rate: bytes and newlines in one-second buckets, for the
+/// dashboard's activity meter.
+#[derive(Clone, Debug, Default)]
+pub struct OutMeter {
+    buckets: [(u64, u64, u64); OUT_METER_SECS], // (unix sec, bytes, lines)
+}
+
+const OUT_METER_SECS: usize = 8;
+
+impl OutMeter {
+    pub fn record(&mut self, bytes: &[u8]) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.record_at(now, bytes.len() as u64, bytes.iter().filter(|&&b| b == b'\n').count() as u64);
+    }
+
+    fn record_at(&mut self, sec: u64, bytes: u64, lines: u64) {
+        let b = &mut self.buckets[(sec as usize) % OUT_METER_SECS];
+        if b.0 != sec {
+            *b = (sec, 0, 0);
+        }
+        b.1 += bytes;
+        b.2 += lines;
+    }
+
+    /// (bytes/s, lines/s) averaged over the last `window` whole seconds.
+    pub fn rate(&self, window: u64) -> (f64, f64) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.rate_at(now, window)
+    }
+
+    fn rate_at(&self, now: u64, window: u64) -> (f64, f64) {
+        let window = window.clamp(1, OUT_METER_SECS as u64 - 1);
+        // Whole seconds before the current, still-filling one.
+        let (mut bytes, mut lines) = (0, 0);
+        for &(sec, b, l) in &self.buckets {
+            if sec < now && now - sec <= window {
+                bytes += b;
+                lines += l;
+            }
+        }
+        (bytes as f64 / window as f64, lines as f64 / window as f64)
+    }
+}
+
 pub struct SessionInfo {
+    pub out_meter: OutMeter,
     pub name: String,
     /// Friendly, layout-stable pane name (e.g. "Suspicious Marlin 🧄"),
     /// generated per-pane in the renderer and pushed via `SessionName`.
@@ -358,6 +409,10 @@ struct BridgeInner {
     /// Whether a Hyperia window is the OS-foreground app (false → the human is in
     /// another app, e.g. Chrome). Set from the renderer's AppFocus messages.
     app_foreground: Mutex<bool>,
+    /// Last AppFocus heartbeat (apps that send one every few seconds). Once seen,
+    /// a missing heartbeat means Hyperia is NOT in front: a stale "in front" must
+    /// never hold an agent's mail because a blur event was missed.
+    app_focus_heartbeat: Mutex<Option<std::time::Instant>>,
     /// Serializes complete body/Enter transactions across legacy and retained transports.
     input_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// CREATE commands (Split/NewTab/OpenWebPane) held while the human decides on
@@ -433,7 +488,10 @@ impl Bridge {
                 seq: AtomicU64::new(1),
                 sessions: Mutex::new(HashMap::new()),
                 focused_window_id: Mutex::new(None),
-                app_foreground: Mutex::new(true),
+                // Unknown until the app says so: assume the human is elsewhere, so a
+                // sidecar restart can't leave mail held behind a phantom focus.
+                app_foreground: Mutex::new(false),
+                app_focus_heartbeat: Mutex::new(None),
                 input_locks: Mutex::new(HashMap::new()),
                 held_creates: Mutex::new(HashMap::new()),
                 resolved_creates: Mutex::new(HashMap::new()),
@@ -686,12 +744,20 @@ impl Bridge {
         *self.inner.app_foreground.lock().await = foreground;
     }
 
+    /// Hyperia is the OS-foreground app: the last report said so and, if the app
+    /// sends heartbeats, one arrived recently.
+    pub async fn hyperia_foreground(&self) -> bool {
+        let fg = *self.inner.app_foreground.lock().await;
+        let hb = *self.inner.app_focus_heartbeat.lock().await;
+        fg && hb.is_none_or(|t| t.elapsed() < std::time::Duration::from_secs(8))
+    }
+
     /// Where the human's keyboard is right now — the active pane of the focused
     /// window, how long since they touched it, and whether Hyperia is the
     /// foreground app. Lets a focus caller see if forcing would steal the view.
     pub async fn human_focus_report(&self) -> serde_json::Value {
         let focused_win = *self.inner.focused_window_id.lock().await;
-        let app_foreground = *self.inner.app_foreground.lock().await;
+        let app_foreground = self.hyperia_foreground().await;
         let sessions = self.inner.sessions.lock().await;
         let here = sessions
             .iter()
@@ -1059,7 +1125,7 @@ impl Bridge {
         };
         let classification = pane_class::classify(&evidence);
         let focused_window = *self.inner.focused_window_id.lock().await;
-        let hyperia_foreground = *self.inner.app_foreground.lock().await;
+        let hyperia_foreground = self.hyperia_foreground().await;
         let actively_typed = last_user_activity
             .map(|t| t.elapsed().as_secs() < 15)
             .unwrap_or(false);
@@ -1943,6 +2009,7 @@ impl Bridge {
                         let user_active_secs_ago = info
                             .last_user_activity
                             .map(|t| t.elapsed().as_secs());
+                        let (out_bps, out_lps) = info.out_meter.rate(3);
                         // `name` = the friendly, layout-stable pane name
                         // (e.g. "Suspicious Marlin 🧄"). Fall back to `title`
                         // until the renderer's first `SessionName` arrives, so
@@ -1985,6 +2052,11 @@ impl Bridge {
                             "active": info.pane_active,
                             "focused": focused,
                             "userActiveSecsAgo": user_active_secs_ago,
+                            // Output activity: rate over the last 3 s, and seconds
+                            // since the last byte (null if never).
+                            "outBps": out_bps.round(),
+                            "outLps": (out_lps * 10.0).round() / 10.0,
+                            "outSecsAgo": info.last_output_at.map(|t| (t.elapsed().as_millis() as f64 / 100.0).round() / 10.0),
                             "cwd": info.cwd,
                             "title": info.title,
                             "state": state,
@@ -1992,6 +2064,8 @@ impl Bridge {
                             "lastExit": info.shell_last_exit,
                             // BSP bounding box in 0–100 % — lets tab_image
                             // draw the layout to scale.
+                            // Split letter (a, b, …): with tabId it gives the pane its colour.
+                            "splitLabel": info.split_label,
                             "bspX": info.bsp_x,
                             "bspY": info.bsp_y,
                             "bspW": info.bsp_w,
@@ -2067,7 +2141,12 @@ impl Bridge {
                 let tab_active = msg["tabActive"].as_bool().unwrap_or(false);
                 let pane_active = msg["paneActive"].as_bool().unwrap_or(false);
                 let title = msg["title"].as_str().unwrap_or("").to_string();
-                let shell_name = msg["shellName"].as_str().unwrap_or("").to_string();
+                let mut shell_name = msg["shellName"].as_str().unwrap_or("").to_string();
+                // The app re-registers panes after a sidecar restart without their
+                // names; use the one this pane last had.
+                if shell_name.is_empty() {
+                    shell_name = pane_names::get(&uid).unwrap_or_default();
+                }
                 tracing::info!("Session registered: {uid} ({tab_name}) {cols}x{rows} pid={pid} tab={root_tab_uid} win={window_id}");
                 // Register the pane's injected identity token so an in-pane
                 // agent's Authorization header resolves to this pane.
@@ -2082,6 +2161,7 @@ impl Bridge {
                 self.inner.sessions.lock().await.insert(
                     uid,
                     SessionInfo {
+                        out_meter: Default::default(),
                         name,
                         shell_name,
                         tab_name,
@@ -2193,6 +2273,7 @@ impl Bridge {
                     info.shell_name = name.clone();
                     tracing::info!("Session {uid} name updated: {name}");
                 }
+                pane_names::set(uid, &name);
             }
 
             "SessionLayout" => {
@@ -2255,6 +2336,9 @@ impl Bridge {
                 // human is in another application, e.g. Chrome).
                 let fg = msg["foreground"].as_bool().unwrap_or(true);
                 *self.inner.app_foreground.lock().await = fg;
+                if msg["heartbeat"].as_bool() == Some(true) {
+                    *self.inner.app_focus_heartbeat.lock().await = Some(std::time::Instant::now());
+                }
             }
 
             "SessionData" => {
@@ -2271,6 +2355,7 @@ impl Bridge {
                             // means the view isn't parked. A streaming/thinking agent
                             // keeps this current; a silent prompt lets it go stale.
                             info.last_output_at = Some(std::time::Instant::now());
+                            info.out_meter.record(&bytes);
                         }
                         drop(sessions);
                         // Append ANSI-stripped text to the lume per-shell log
@@ -2534,9 +2619,83 @@ where
     }
 }
 
+/// Pane names on disk (~/.hyperia/pane-names.json), so a sidecar restart
+/// keeps them; the app only re-sends a name when the layout changes.
+mod pane_names {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    static NAMES: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+    fn path() -> std::path::PathBuf {
+        crate::fsnav::home_dir().join(".hyperia").join("pane-names.json")
+    }
+
+    fn with<R>(f: impl FnOnce(&mut HashMap<String, String>) -> R) -> R {
+        let mut g = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+        let m = g.get_or_insert_with(|| {
+            std::fs::read_to_string(path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+        });
+        f(m)
+    }
+
+    pub fn get(uid: &str) -> Option<String> {
+        with(|m| m.get(uid).cloned()).filter(|n| !n.is_empty())
+    }
+
+    pub fn set(uid: &str, name: &str) {
+        if uid.is_empty() || name.is_empty() {
+            return;
+        }
+        let json = with(|m| {
+            if m.get(uid).map(String::as_str) == Some(name) {
+                return None;
+            }
+            if m.len() >= 2000 {
+                m.clear();
+            }
+            m.insert(uid.to_string(), name.to_string());
+            serde_json::to_string(m).ok()
+        });
+        if let Some(j) = json {
+            let _ = std::fs::write(path(), j);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_stale_focus_report_means_the_human_is_elsewhere() {
+        let bridge = Bridge::new();
+        // Nothing heard yet: not in front.
+        assert!(!bridge.hyperia_foreground().await);
+        // An event-only app says "in front": believed.
+        bridge.set_app_foreground(true).await;
+        assert!(bridge.hyperia_foreground().await);
+        // A heartbeat app whose last beat is 10 s old: not in front any more.
+        *bridge.inner.app_focus_heartbeat.lock().await =
+            std::time::Instant::now().checked_sub(std::time::Duration::from_secs(10));
+        assert!(!bridge.hyperia_foreground().await);
+        *bridge.inner.app_focus_heartbeat.lock().await = Some(std::time::Instant::now());
+        assert!(bridge.hyperia_foreground().await);
+    }
+
+    #[test]
+    fn out_meter_rates_whole_seconds_and_forgets_old_ones() {
+        let mut m = OutMeter::default();
+        m.record_at(100, 3000, 30);
+        m.record_at(101, 600, 6);
+        m.record_at(102, 900, 9); // still filling at now=102: not counted
+        assert_eq!(m.rate_at(102, 3), (1200.0, 12.0));
+        // Ten seconds on, every bucket is stale.
+        assert_eq!(m.rate_at(112, 3), (0.0, 0.0));
+        // A reused bucket starts from zero.
+        m.record_at(108, 50, 1);
+        assert_eq!(m.rate_at(109, 1), (50.0, 1.0));
+    }
 
     #[test]
     fn link_watch_goes_stale_only_past_the_limit() {
@@ -2658,6 +2817,7 @@ mod tests {
     }
     fn session_info(window_id: u32, root_tab_uid: &str, split_label: &str, tab_active: bool, pane_active: bool) -> SessionInfo {
         SessionInfo {
+            out_meter: Default::default(),
             name: "shell".into(),
             shell_name: String::new(),
             tab_name: "tab".into(),

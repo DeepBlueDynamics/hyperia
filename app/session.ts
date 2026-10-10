@@ -14,6 +14,7 @@ import shellEnv from 'shell-env';
 import * as config from './config';
 import {productName, version} from './package.json';
 import {getDecoratedEnv} from './plugins';
+import {agentTelemetryEnv} from './utils/agent-telemetry-env';
 import {getFallBackShellConfig} from './utils/shell-fallback';
 
 const createNodePtyError = () =>
@@ -193,6 +194,12 @@ export default class Session extends EventEmitter {
     };
 
     const userConfig = config.getConfig();
+    // Claude Code in this pane reports tokens and file edits to the sidecar
+    // (OTLP); a user-set collector or variable is left alone.
+    Object.assign(
+      baseEnv,
+      agentTelemetryEnv(baseEnv, {pane: uid, port: hyperiaPort, enabled: userConfig.agentTelemetry !== false})
+    );
     const shellIntegrationEnabled = userConfig.shellIntegration !== false;
     const staticIntegrationDir = resolve(__dirname, 'static/shell-integration');
     const integrationDir = join(app.getPath('userData'), 'shell-integration');
