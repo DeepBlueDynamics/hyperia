@@ -2257,7 +2257,9 @@ function pvDrawScreens(ctx, R, focusPass){
       ctx.beginPath(); ctx.moveTo(sx, sy); ctx.quadraticCurveTo(sx, (sy + m.base.y) / 2, m.base.x, m.base.y); ctx.stroke();
       ctx.restore();
     }
-    pvDrawMonitor(ctx, d, col, mm, {sharp: true, stand: f.phase === "in", glow: f.phase === "pinned" ? 1 : f.phase === "out" ? 1 - f.e : f.e});
+    // Zoomed in, the monitor turns slightly see-through so the scene shows behind it.
+    const zoomed = f.phase === "pinned" ? 1 : f.phase === "out" ? 1 - f.e : f.e;
+    pvDrawMonitor(ctx, d, col, mm, {sharp: true, stand: f.phase === "in", glow: zoomed, alpha: 1 - .22 * zoomed});
   }
 }
 
