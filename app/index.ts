@@ -582,6 +582,9 @@ app.on('ready', () => {
   app.on('browser-window-blur', () => {
     setTimeout(() => sendAppFocus(BrowserWindow.getAllWindows().some((w) => w.isFocused())), 60);
   });
+  // Heartbeat: the real foreground state every 2 s (and so right after a sidecar
+  // restart), so a missed blur can't leave the sidecar thinking you're here.
+  setInterval(() => sendAppFocus(BrowserWindow.getFocusedWindow() !== null, true), 2000);
 
   void installDevExtensions(isDev)
     .then(() => {

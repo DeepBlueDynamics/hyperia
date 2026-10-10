@@ -1403,8 +1403,8 @@ function sendResult(seq: number | undefined, result: string) {
  * the human is in another application (e.g. Chrome). Powers the human-location
  * report so an agent can see whether forcing a focus would steal the view.
  */
-export function sendAppFocus(foreground: boolean) {
-  send({type: 'AppFocus', foreground});
+export function sendAppFocus(foreground: boolean, heartbeat = false) {
+  send({type: 'AppFocus', foreground, heartbeat});
 }
 
 export function startBridge(port: number = 9800) {
