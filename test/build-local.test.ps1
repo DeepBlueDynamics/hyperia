@@ -68,10 +68,12 @@ try {
         [pscustomobject]@{Name='Hyperia.exe'; ExecutablePath='C:\Users\test\AppData\Local\Programs\Hyperia\Hyperia.exe'; CommandLine='installed'},
         [pscustomobject]@{Name='hyperia-sidecar.exe'; ExecutablePath='C:\Users\test\AppData\Local\Programs\Hyperia\resources\sidecar\hyperia-sidecar.exe'; CommandLine='installed'},
         [pscustomobject]@{Name='electron.exe'; ExecutablePath="$root\node_modules\electron\dist\electron.exe"; CommandLine='dev'},
-        [pscustomobject]@{Name='node.exe'; ExecutablePath='C:\node\node.exe'; CommandLine="node $root\node_modules\electronmon\bin\electronmon.js target"}
+        [pscustomobject]@{Name='node.exe'; ExecutablePath='C:\node\node.exe'; CommandLine="node $root\node_modules\electronmon\bin\electronmon.js target"},
+        # A sibling checkout whose name starts with this one's (hyperia-css) is not this repo.
+        [pscustomobject]@{Name='node.exe'; ExecutablePath='C:\node\node.exe'; CommandLine="node $root-css\node_modules\webpack\bin\webpack.js -w"}
     )
     $blocked = @(Get-BlockingProcesses $root $processes)
-    Assert-True ($blocked.Count -eq 2) 'Installed app blocked or repo dev process missed'
+    Assert-True ($blocked.Count -eq 2) 'Installed app or sibling checkout blocked, or repo dev process missed'
     Assert-True ($blocked[0].Name -eq 'electron.exe' -and $blocked[1].Name -eq 'node.exe') 'Wrong processes blocked'
     Assert-Rejected { Invoke-Checked node @('-e', 'process.exit(17)') } 'exit 17'
     Write-Host "PASS local build safeguards: $checks checks"

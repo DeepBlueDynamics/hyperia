@@ -116,10 +116,10 @@ function Get-BlockingProcesses {
         $fromRepo = $exe.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
         ($fromRepo -and $_.Name -match '^(electron|Hyperia|hyperia-sidecar)\.exe$') -or
         ($_.Name -match '^(node|cmd)\.exe$' -and
-            $cmd.IndexOf($Root, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+            $cmd.IndexOf($prefix, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
             $cmd -match 'electronmon|electron[\\/]cli\.js|webpack.+(?:-w|--watch)|tsc.+--watch') -or
         ($_.Name -match '^(cargo|rustc)\.exe$' -and
-            ($cmd -match 'hyperia.sidecar' -or $cmd.IndexOf($Root, [StringComparison]::OrdinalIgnoreCase) -ge 0))
+            ($cmd -match 'hyperia.sidecar' -or $cmd.IndexOf($prefix, [StringComparison]::OrdinalIgnoreCase) -ge 0))
     })
 }
 
