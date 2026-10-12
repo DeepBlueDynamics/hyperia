@@ -4,7 +4,9 @@
 //! call sign. While the radio is running and was just used, the signs show as
 //! gold badges on those panes. hertz routes a call by sign, and delivering on
 //! a sign rotates it: a sign heard over the air (or replayed) never works twice.
-//! Signs are only ever given to the human (badges) and to hertz-radio.
+//! A pane otherwise keeps its sign while the grant lasts — brief not-an-agent
+//! blips don't churn it. Signs are only ever given to the human (badges) and
+//! to hertz-radio.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
@@ -29,6 +31,9 @@ const WORDS: [&str; 26] = [
 const SHOW_FOR: Duration = Duration::from_secs(5 * 60);
 /// Retired signs not handed out again for a while.
 const RECENT: usize = 120;
+/// A sign survives this long a stretch of the pane not looking like an agent
+/// (running a tool flips the foreground to bash/pwsh and back).
+const SIGN_GRACE: Duration = Duration::from_secs(120);
 
 #[derive(Default)]
 struct RadioState {
@@ -36,6 +41,8 @@ struct RadioState {
     heard_at: Option<Instant>,
     /// pane uid → call sign
     signs: HashMap<String, String>,
+    /// When each pane last looked like an agent; anchors the sign grace clock.
+    last_agent: HashMap<String, Instant>,
     recent: VecDeque<String>,
     /// Last rotation (pane, unix ms) so the badge can flash.
     rotated: Option<(String, u64)>,
@@ -139,7 +146,38 @@ async fn push(bridge: &Bridge, force: bool) {
     }
 }
 
-/// Keep signs on exactly the agent panes hertz-radio may message.
+/// Keep an existing sign? A gone grant (or a pane with no live session, which
+/// refresh never offers as grant_ok) drops it at once; a pane that merely
+/// stopped looking like an agent keeps it for SIGN_GRACE since it last was one.
+fn keep_sign(grant_ok: bool, agent_now: bool, last_agent: Option<Instant>, now: Instant) -> bool {
+    if !grant_ok {
+        return false;
+    }
+    agent_now || last_agent.is_some_and(|t| now.duration_since(t) <= SIGN_GRACE)
+}
+
+/// Keep/drop existing signs, then hand first signs to newly eligible panes.
+/// Takes only the gathered snapshot, so tests need no Bridge.
+fn apply_refresh(s: &mut RadioState, grant_ok: &HashSet<String>, agent_now: &HashSet<String>, now: Instant) {
+    s.signs.retain(|uid, _| keep_sign(grant_ok.contains(uid), agent_now.contains(uid), s.last_agent.get(uid).copied(), now));
+    for uid in agent_now {
+        s.last_agent.insert(uid.clone(), now);
+    }
+    let mut taken: HashSet<String> = s.signs.values().map(|v| normalize(v)).collect();
+    for uid in agent_now.iter().filter(|u| grant_ok.contains(*u)) {
+        if !s.signs.contains_key(uid) {
+            let sign = new_sign(&taken, &s.recent);
+            taken.insert(normalize(&sign));
+            s.signs.insert(uid.clone(), sign);
+        }
+    }
+    // Prune after assigning, so a first sign also keeps its grace anchor.
+    s.last_agent.retain(|uid, _| s.signs.contains_key(uid));
+}
+
+/// Keep signs on the panes hertz-radio may message, surviving brief
+/// not-an-agent blips (see keep_sign); grant checks only cover live sessions,
+/// so a dead session drops its sign as a side effect.
 async fn refresh(bridge: &Bridge) {
     let uids: Vec<String> = bridge
         .sessions()
@@ -149,23 +187,19 @@ async fn refresh(bridge: &Bridge) {
         .map(|(u, _)| u.clone())
         .collect();
     let requester = format!("agent:{}", radio_agent());
-    let mut eligible = HashSet::new();
-    for uid in uids {
-        if bridge.perms().has_message_grant(&requester, &format!("pane:{uid}")).await && bridge.is_agent_pane(&uid).await {
-            eligible.insert(uid);
+    let mut grant_ok = HashSet::new();
+    let mut agent_now = HashSet::new();
+    for uid in &uids {
+        if !bridge.perms().has_message_grant(&requester, &format!("pane:{uid}")).await {
+            continue;
+        }
+        grant_ok.insert(uid.clone());
+        if bridge.is_agent_pane(&uid).await {
+            agent_now.insert(uid.clone());
         }
     }
-    with(|s| {
-        s.signs.retain(|uid, _| eligible.contains(uid));
-        let mut taken: HashSet<String> = s.signs.values().map(|v| normalize(v)).collect();
-        for uid in eligible {
-            if !s.signs.contains_key(&uid) {
-                let sign = new_sign(&taken, &s.recent);
-                taken.insert(normalize(&sign));
-                s.signs.insert(uid, sign);
-            }
-        }
-    });
+    let now = Instant::now();
+    with(|s| apply_refresh(s, &grant_ok, &agent_now, now));
 }
 
 /// Watch hertz's event stream: connected = running; a transcription = heard.
@@ -332,5 +366,58 @@ mod tests {
             let s = new_sign(&taken, &recent);
             assert!(taken.insert(normalize(&s)), "duplicate sign {s}");
         }
+    }
+
+    fn ids(v: &[&str]) -> HashSet<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn blip_under_grace_keeps_sign() {
+        let mut s = RadioState::default();
+        s.signs.insert("pane-a".into(), "Bravo Tango".into());
+        let was = Instant::now();
+        s.last_agent.insert("pane-a".into(), was);
+        // Tool running: pane momentarily not an agent, grant intact.
+        apply_refresh(&mut s, &ids(&["pane-a"]), &ids(&[]), was + Duration::from_secs(119));
+        assert_eq!(s.signs.get("pane-a").map(String::as_str), Some("Bravo Tango"));
+        assert!(keep_sign(true, false, Some(was), was + SIGN_GRACE)); // edge keeps
+    }
+
+    #[test]
+    fn over_grace_drops_sign() {
+        let mut s = RadioState::default();
+        s.signs.insert("pane-a".into(), "Bravo Tango".into());
+        let was = Instant::now();
+        s.last_agent.insert("pane-a".into(), was);
+        apply_refresh(&mut s, &ids(&["pane-a"]), &ids(&[]), was + Duration::from_secs(121));
+        assert!(s.signs.get("pane-a").is_none());
+        assert!(s.last_agent.get("pane-a").is_none());
+        assert!(!keep_sign(true, false, None, Instant::now())); // never an agent
+    }
+
+    #[test]
+    fn missing_grant_drops_sign_at_once() {
+        let mut s = RadioState::default();
+        s.signs.insert("pane-a".into(), "Bravo Tango".into());
+        let now = Instant::now();
+        s.last_agent.insert("pane-a".into(), now);
+        // Revoked grant (or dead session) drops immediately, even mid-agent.
+        apply_refresh(&mut s, &ids(&[]), &ids(&[]), now + Duration::from_secs(1));
+        assert!(s.signs.get("pane-a").is_none());
+        assert!(!keep_sign(false, true, Some(now), now));
+    }
+
+    #[test]
+    fn first_time_eligible_gets_sign() {
+        let mut s = RadioState::default();
+        let now = Instant::now();
+        apply_refresh(&mut s, &ids(&["pane-a"]), &ids(&["pane-a"]), now);
+        let sign = s.signs.get("pane-a").cloned().expect("eligible pane gets a sign");
+        assert_eq!(sign.split(' ').count(), 2);
+        assert_eq!(s.last_agent.get("pane-a"), Some(&now));
+        // Staying eligible keeps that sign: no churn between refreshes.
+        apply_refresh(&mut s, &ids(&["pane-a"]), &ids(&["pane-a"]), now + Duration::from_secs(3));
+        assert_eq!(s.signs.get("pane-a").map(String::as_str), Some(sign.as_str()));
     }
 }
