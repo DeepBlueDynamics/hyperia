@@ -66,7 +66,10 @@ test.after(async () => {
     .then(async (imageBuffer) => {
       // outputFile (not writeFile): dist/tmp doesn't exist on a fresh build.
       await fs.outputFile(`dist/tmp/${process.platform}_test.png`, imageBuffer);
-    });
+    })
+    // The screenshot is diagnostic; a headless GPU hiccup (UnknownVizError
+    // under xvfb) mustn't fail a run whose tests passed.
+    .catch((err) => console.log(`[e2e] screenshot skipped: ${String(err)}`));
   // app.close() waits for process EXIT — but Hyperia (tray keep-alive on
   // Windows) outlives its windows, so an unbounded close hangs ava until the
   // suite times out even after every test passed. Bound it, then hard-kill.
