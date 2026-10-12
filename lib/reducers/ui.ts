@@ -24,6 +24,7 @@ import {
   UI_ENTER_FULLSCREEN,
   UI_LEAVE_FULLSCREEN,
   SESSION_AGENT_STATUS,
+  UI_RADIO_CALLSIGNS,
   UI_TAB_BELL_SET,
   UI_TAB_BELL_CLEAR
 } from '../../typings/constants/ui';
@@ -126,6 +127,7 @@ const initial: uiState = Immutable<Mutable<uiState>>({
   defaultProfile: '',
   profiles: [],
   agentStatuses: {},
+  radioCallsigns: {running: false, visible: false, signs: {}, rotated: null},
   env: {}
 });
 
@@ -410,6 +412,10 @@ const reducer: IUiReducer = (state = initial, action) => {
           delete statuses_[action.uid];
           return statuses_;
         });
+      break;
+
+    case UI_RADIO_CALLSIGNS:
+      state_ = state.set('radioCallsigns', action.radio);
       break;
 
     case SESSION_AGENT_STATUS:

@@ -1054,6 +1054,19 @@ function handleCommand(msg: Record<string, unknown>) {
       break;
     }
 
+    case 'RadioCallsigns': {
+      // Fire-and-forget push (no seq): every window's pane headers.
+      for (const win of (app as any).getWindows?.() || []) {
+        win.rpc?.emit('radio callsigns', {
+          running: msg.running,
+          visible: msg.visible,
+          signs: msg.signs,
+          rotated: msg.rotated
+        });
+      }
+      break;
+    }
+
     case 'AgentStatus': {
       // Resolve sessionUid: use explicit uid, or resolve from pane index, or fall back to first session
       let sessionUid = msg.sessionUid as string | undefined;
@@ -1390,8 +1403,8 @@ function sendResult(seq: number | undefined, result: string) {
  * the human is in another application (e.g. Chrome). Powers the human-location
  * report so an agent can see whether forcing a focus would steal the view.
  */
-export function sendAppFocus(foreground: boolean) {
-  send({type: 'AppFocus', foreground});
+export function sendAppFocus(foreground: boolean, heartbeat = false) {
+  send({type: 'AppFocus', foreground, heartbeat});
 }
 
 export function startBridge(port: number = 9800) {

@@ -465,6 +465,7 @@ mod tests {
         let bridge = Bridge::new();
         let pane = "messaging-pane-token-deadlock-regression";
         bridge.sessions().await.insert(pane.into(), SessionInfo {
+            out_meter: Default::default(),
             name: "shell".into(),
             shell_name: "Mailbox regression".into(),
             tab_name: "test".into(),

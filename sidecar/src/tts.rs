@@ -564,7 +564,10 @@ pub struct SpokenResult {
 /// Voice is a pack name or weighted blend. Without one, the authenticated
 /// requester's display name selects a stable blend; anonymous uses af_heart.
 /// The caller must obtain requester from authentication, never the request body.
-pub async fn speak(text: &str, voice: Option<&str>, speed: Option<f32>, requester: Option<&str>) -> Result<SpokenResult> {
+/// Called once as playback starts: (samples, sample rate, voice, engine).
+pub type OnAir = Box<dyn FnOnce(&[f32], u32, &str, &str) + Send>;
+
+pub async fn speak(text: &str, voice: Option<&str>, speed: Option<f32>, requester: Option<&str>, on_air: Option<OnAir>) -> Result<SpokenResult> {
     let text = text.trim();
     if text.is_empty() {
         return Err(anyhow!("text is empty"));
@@ -619,7 +622,11 @@ pub async fn speak(text: &str, voice: Option<&str>, speed: Option<f32>, requeste
     // Playback is serialized process-wide: rodio drives a cpal stream on its own
     // thread and we sleep until the buffer drains. Summaries synthesize in
     // parallel, but play sequentially to completion in arrival order.
-    play_samples_serialized(audio).await?;
+    let start = on_air.map(|f| {
+        let (v, e) = (resolved_voice.clone(), used_engine);
+        Box::new(move |a: &[f32]| f(a, SAMPLE_RATE, &v, e)) as Box<dyn FnOnce(&[f32]) + Send>
+    });
+    play_samples_serialized(audio, start).await?;
 
     Ok(SpokenResult { duration_secs: secs, voice: resolved_voice, engine: used_engine })
 }
@@ -974,7 +981,7 @@ fn play_samples(audio: Vec<f32>) -> Result<()> {
 /// Ensures only one spoken summary plays at a time so concurrent calls never
 /// overlap or cut each other off (epic #162 bug M). Calls line up in FIFO order
 /// and wait up to `playback_timeout()` to acquire the playback mutex.
-async fn play_samples_serialized(audio: Vec<f32>) -> Result<()> {
+async fn play_samples_serialized(audio: Vec<f32>, on_start: Option<Box<dyn FnOnce(&[f32]) + Send>>) -> Result<()> {
     let timeout = playback_timeout();
     let lock_res = tokio::time::timeout(timeout, PLAYBACK_MUTEX.lock()).await;
     let _guard = lock_res.map_err(|_| {
@@ -983,6 +990,9 @@ async fn play_samples_serialized(audio: Vec<f32>) -> Result<()> {
             timeout.as_secs()
         )
     })?;
+    if let Some(f) = on_start {
+        f(&audio);
+    }
 
     tokio::task::spawn_blocking(move || play_samples(audio))
         .await

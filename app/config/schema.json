@@ -350,6 +350,10 @@
                         },
                         "useConpty": {
                             "type": "boolean"
+                        },
+                        "agentTelemetry": {
+                            "description": "point Claude Code's OpenTelemetry in each pane at Hyperia (tokens, file edits); default `true`",
+                            "type": "boolean"
                         }
                     },
                     "required": [

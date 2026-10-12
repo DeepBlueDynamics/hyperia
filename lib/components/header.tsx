@@ -90,7 +90,12 @@ const Header = forwardRef<HTMLElement, HeaderProps>((props, ref) => {
     <header
       className={`header_header ${isMac && 'header_headerRounded'}`}
       onMouseDownCapture={handleHeaderMouseDown}
-      onMouseUp={() => window.focusActiveTerm()}
+      onMouseUp={(e) => {
+        // Not from a text field (the tab rename box): stealing focus there
+        // blurred it mid-selection, which submitted the rename.
+        if ((e.target as HTMLElement).closest?.('input, textarea, [contenteditable="true"]')) return;
+        window.focusActiveTerm();
+      }}
       onDoubleClick={handleHeaderDoubleClick}
       ref={ref}
     >

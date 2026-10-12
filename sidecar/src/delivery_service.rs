@@ -260,6 +260,8 @@ pub async fn submit_input(bridge: &Bridge, headers: &HeaderMap, req: InputReques
     let pane = messaging::resolve_target(bridge, &address).await?;
     let candidate = bridge.classification_for(&pane).await
         .ok_or_else(|| messaging::error(StatusCode::NOT_FOUND, "Target pane closed."))?;
+    // An agent driving this pane: watch its folder so what it builds shows up.
+    crate::host_telemetry::watcher::note_driven(&pane);
     let compatible = if agent { candidate.classification.accepts_direct_input() } else { candidate.classification.terminal_run_allowed() };
     if !compatible {
         return Err(messaging::error(StatusCode::CONFLICT, format!("{} Use pane_send for agent input and terminal_run only at a shell prompt.", candidate.classification.summary)));

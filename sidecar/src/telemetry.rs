@@ -180,7 +180,7 @@ pub struct WindowMetrics {
     /// Cross-pane recent-events ring (cap 200) feeding the live stream.
     #[serde(skip)]
     pub recent: std::collections::VecDeque<RecordedEvent>,
-    /// FileOp-only ring (cap 300). Kept separate because the Network tick flood
+    /// FileOp-only ring (cap FILE_RING). Kept separate because the Network tick flood
     /// evicts rare FileOps from `recent` within minutes — the dashboard's file
     /// matrix reads this and survives page reloads.
     #[serde(skip)]
@@ -190,7 +190,19 @@ pub struct WindowMetrics {
 #[derive(Clone)]
 pub struct TelemetryStore {
     inner: Arc<Mutex<WindowMetrics>>,
+    /// Path → last pane that touched it (any file event). Outlives the event
+    /// rings so the dashboard editor can open what agents worked on.
+    touched: Arc<Mutex<HashMap<String, String>>>,
+    /// File events journal (jsonl), so a sidecar restart doesn't empty the
+    /// dashboard's file view. None in tests.
+    journal: Option<std::path::PathBuf>,
 }
+
+const MAX_TOUCHED: usize = 5000;
+/// File events kept in memory (and reloaded from the journal at start).
+const FILE_RING: usize = 1500;
+/// Journal lines kept on disk; trimmed to half at start when over.
+const JOURNAL_MAX: usize = 20_000;
 
 impl TelemetryStore {
     pub fn new() -> Self {
@@ -201,7 +213,53 @@ impl TelemetryStore {
                 recent: std::collections::VecDeque::new(),
                 recent_files: std::collections::VecDeque::new(),
             })),
+            touched: Arc::new(Mutex::new(HashMap::new())),
+            journal: None,
         }
+    }
+
+    /// A store that journals file events to `path` and reloads them now.
+    pub fn persistent(path: std::path::PathBuf) -> Self {
+        let mut s = Self::new();
+        s.load_journal(&path);
+        s.journal = Some(path);
+        s
+    }
+
+    fn load_journal(&mut self, path: &std::path::Path) {
+        let Ok(text) = std::fs::read_to_string(path) else { return };
+        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        let mut store = self.inner.lock().unwrap();
+        let mut touched = self.touched.lock().unwrap();
+        for line in &lines {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            let (Some(ts_ms), Some(pane)) = (v["ts"].as_u64(), v["pane_uid"].as_str()) else { continue };
+            let Ok(event) = serde_json::from_value::<TelemetryEvent>(v["event"].clone()) else { continue };
+            if let TelemetryEvent::FileOp { path, .. } | TelemetryEvent::Edit { path, .. } = &event {
+                touched.insert(path.clone(), pane.to_string());
+            }
+            if store.recent_files.len() >= FILE_RING {
+                store.recent_files.pop_front();
+            }
+            store.recent_files.push_back(RecordedEvent { ts_ms, pane_uid: pane.to_string(), event });
+        }
+        if touched.len() > MAX_TOUCHED {
+            touched.clear();
+        }
+        if lines.len() > JOURNAL_MAX {
+            let keep = lines[lines.len() - JOURNAL_MAX / 2..].join("\n") + "\n";
+            let _ = std::fs::write(path, keep);
+        }
+    }
+
+    fn journal(&self, ts_ms: u64, pane_uid: &str, event: &TelemetryEvent) {
+        let Some(path) = &self.journal else { return };
+        use std::io::Write;
+        let line = serde_json::json!({"ts": ts_ms, "pane_uid": pane_uid, "event": event}).to_string();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut f| writeln!(f, "{line}"));
     }
 
     /// Record an event for a pane.
@@ -212,6 +270,13 @@ impl TelemetryStore {
         let mut store = self.inner.lock().unwrap();
         if !store.enabled {
             return;
+        }
+        if let TelemetryEvent::FileOp { path, .. } | TelemetryEvent::Edit { path, .. } = &event {
+            let mut t = self.touched.lock().unwrap();
+            if t.len() >= MAX_TOUCHED && !t.contains_key(path) {
+                t.clear();
+            }
+            t.insert(path.clone(), pane_uid.to_string());
         }
         // Feed the cross-pane live-stream ring (with time + pane context).
         let ts_ms = std::time::SystemTime::now()
@@ -227,7 +292,7 @@ impl TelemetryStore {
             event: event.clone(),
         });
         if matches!(event, TelemetryEvent::FileOp { .. } | TelemetryEvent::Edit { .. }) {
-            if store.recent_files.len() >= 300 {
+            if store.recent_files.len() >= FILE_RING {
                 store.recent_files.pop_front();
             }
             store.recent_files.push_back(RecordedEvent {
@@ -235,6 +300,7 @@ impl TelemetryStore {
                 pane_uid: pane_uid.to_string(),
                 event: event.clone(),
             });
+            self.journal(ts_ms, pane_uid, &event);
         }
         store
             .panes
@@ -248,6 +314,11 @@ impl TelemetryStore {
         let mut store = self.inner.lock().unwrap();
         store.enabled = enabled;
         enabled
+    }
+
+    /// The pane that last touched `path`, if any agent file event named it.
+    pub fn toucher(&self, path: &str) -> Option<String> {
+        self.touched.lock().unwrap().get(path).cloned()
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -388,4 +459,19 @@ mod tests {
         assert_eq!(env.pane_uid, "abc");
         assert!(matches!(env.event, TelemetryEvent::Edit { substitutions: 4, .. }));
     }
+
+    #[test]
+    fn journal_survives_a_restart() {
+        let p = std::env::temp_dir().join(format!("telem-journal-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let a = TelemetryStore::persistent(p.clone());
+        a.record("pane-1", TelemetryEvent::FileOp { path: "C:/w/a.rs".into(), op: FileOp::Write, bytes: Some(3) });
+        a.record("pane-1", TelemetryEvent::Network { direction: NetDirection::Inbound, host: "h".into(), bytes: 1 });
+        let b = TelemetryStore::persistent(p.clone());
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(b.toucher("C:/w/a.rs").as_deref(), Some("pane-1"));
+        let snap = b.snapshot_json("window", None);
+        assert_eq!(snap["file_events"].as_array().map(|v| v.len()), Some(1));
+    }
+
 }

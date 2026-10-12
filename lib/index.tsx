@@ -586,6 +586,18 @@ rpc.on('leave full screen', () => {
   store_.dispatch(uiActions.leaveFullScreen());
 });
 
+// Radio call signs (sidecar → main → here): gold badges on agent panes.
+rpc.on('radio callsigns', (radio) => {
+  store_.dispatch(
+    uiActions.setRadioCallsigns({
+      running: !!radio?.running,
+      visible: !!radio?.visible,
+      signs: radio?.signs || {},
+      rotated: radio?.rotated || null
+    })
+  );
+});
+
 rpc.on('agent status', ({sessionUid, connected, working, label, humanPercent}) => {
   // If no sessionUid provided, fall back to active session
   const uid = sessionUid || store_.getState().sessions.activeUid;

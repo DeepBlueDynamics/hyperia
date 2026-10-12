@@ -23,6 +23,7 @@ export const UI_LEAVE_FULLSCREEN = 'UI_LEAVE_FULLSCREEN';
 export const UI_CONTEXTMENU_OPEN = 'UI_CONTEXTMENU_OPEN';
 export const UI_COMMAND_EXEC = 'UI_COMMAND_EXEC';
 export const SESSION_AGENT_STATUS = 'SESSION_AGENT_STATUS';
+export const UI_RADIO_CALLSIGNS = 'UI_RADIO_CALLSIGNS';
 export const UI_TAB_BELL_SET = 'UI_TAB_BELL_SET';
 export const UI_TAB_BELL_CLEAR = 'UI_TAB_BELL_CLEAR';
 
@@ -110,6 +111,17 @@ export interface SessionAgentStatusAction {
   label?: string;
   humanPercent?: number;
 }
+export interface UIRadioCallsignsAction {
+  type: typeof UI_RADIO_CALLSIGNS;
+  radio: RadioCallsigns;
+}
+export interface RadioCallsigns {
+  running: boolean;
+  visible: boolean;
+  /** pane uid → two-word call sign */
+  signs: Record<string, string>;
+  rotated: {pane: string; at: number} | null;
+}
 export interface UITabBellSetAction {
   type: typeof UI_TAB_BELL_SET;
   uid: string;
@@ -120,6 +132,7 @@ export interface UITabBellClearAction {
 }
 
 export type UIActions =
+  | UIRadioCallsignsAction
   | UIFontSizeSetAction
   | UIFontSizeIncrAction
   | UIFontSizeDecrAction

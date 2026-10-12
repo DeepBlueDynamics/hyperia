@@ -39,7 +39,7 @@ fn read_token_blocking() -> Option<String> {
 fn read_token_blocking() -> Option<String> { None }
 
 /// Keychain reads can block on a locked store, so keep them off the runtime.
-async fn auth_token() -> Option<String> {
+pub(crate) async fn auth_token() -> Option<String> {
     tokio::task::spawn_blocking(read_token_blocking).await.ok().flatten()
 }
 
