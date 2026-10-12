@@ -961,7 +961,7 @@ function pvIngestStatus(j){
         const lastOut = p.outSecsAgo == null ? 0 : Date.now() - p.outSecsAgo * 1000;
         panes.push({paneId: p.paneId, name, proc, cls, focused: !!p.focused, state: p.state || "", tab: tab.name || "",
           tabIdx: t, tabId: tab.tabId || "", split: p.splitLabel || "",
-          color: cls === "wb" ? null : pvPaneColor(tab.tabId, p.splitLabel),
+          color: cls === "wb" ? null : pvPaneColor(tab.tabId, p.splitLabel), url: web ? String(p.cwd || "") : "",
           bps: Number(p.outBps) || 0, lps: Number(p.outLps) || 0, lastOut});
         names[p.paneId] = name;
       } } }
@@ -1003,7 +1003,7 @@ function pvBuildNodes(){
   for (const p of PV.panes) {
     if (p.cls === "ag") PV.agentSeen.set(p.paneId, nowMs);
     const wasAgent = nowMs - (PV.agentSeen.get(p.paneId) || 0) < 600000;
-    nodes.set("pane:"+p.paneId, {id: "pane:"+p.paneId, label: p.name, pane: p.paneId, color: p.color,
+    nodes.set("pane:"+p.paneId, {id: "pane:"+p.paneId, label: p.name, pane: p.paneId, color: p.cls === "wb" ? PV_WEB_COLOR : p.color, url: p.url, wt: p.cls === "wb" ? PV_WEB_WT : 1,
       tabIdx: p.tabIdx, tabId: p.tabId, tabName: p.tab, split: p.split,
       kind: p.cls === "wb" ? "web" : wasAgent ? "agent" : "pane", sent: 0, received: 0, access: 0, alias: new Set()});
   }
@@ -1064,7 +1064,8 @@ function pvBuildNodes(){
   const order = [...list].sort((a, b) => tabOf(a) - tabOf(b) || String(a.split || "").localeCompare(String(b.split || "")) || slots.get(a.id).i - slots.get(b.id).i);
   const GAP = .7, at = new Map();
   let u = 0;
-  order.forEach((n, j) => { if (j && tabOf(n) !== tabOf(order[j - 1])) u += GAP; at.set(n.id, u); u += 1; });
+  // Web panes take a narrower slice.
+  order.forEach((n, j) => { const wt = n.wt || 1; if (j && tabOf(n) !== tabOf(order[j - 1])) u += GAP; at.set(n.id, u + (wt - 1) / 2); u += wt; });
   if (order.length > 1 && tabOf(order[0]) !== tabOf(order[order.length - 1])) u += GAP;
   PV.ringTotal = Math.max(6, u);
   // Tab groups for the perimeter rims.
@@ -1235,9 +1236,9 @@ function pvDrawRing(){
     const dimN = sel && n.id !== sel ? .28 : 1;
     {
       // Grey network strip across the slice, brighter with traffic.
-      const ins = Math.min(.02, PV.span * .06), nl = pvNetLvl((a.nrx || 0) + (a.ntx || 0));
-      const q = [...pvBandArc(pos, a.theta - PV.span / 2 + ins, a.theta + PV.span / 2 - ins, R + PV_STRIP_IN),
-        ...pvBandArc(pos, a.theta + PV.span / 2 - ins, a.theta - PV.span / 2 + ins, R + PV_STRIP_IN + PV_STRIP_W)];
+      const sp = PV.span * (n.wt || 1), ins = Math.min(.02, sp * .06), nl = pvNetLvl((a.nrx || 0) + (a.ntx || 0));
+      const q = [...pvBandArc(pos, a.theta - sp / 2 + ins, a.theta + sp / 2 - ins, R + PV_STRIP_IN),
+        ...pvBandArc(pos, a.theta + sp / 2 - ins, a.theta - sp / 2 + ins, R + PV_STRIP_IN + PV_STRIP_W)];
       ctx.globalAlpha = (.25 + .5 * nl) * a.alpha * dimN; ctx.fillStyle = nl > .05 ? "#94a3b8" : "#475569";
       ctx.beginPath(); q.forEach((p, j) => j ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath(); ctx.fill();
     }
@@ -1256,7 +1257,7 @@ function pvDrawRing(){
     const kinds = [...byKind.keys()].sort((x, y) => (BAR_ORDER.indexOf(x) + 99 * (BAR_ORDER.indexOf(x) < 0)) - (BAR_ORDER.indexOf(y) + 99 * (BAR_ORDER.indexOf(y) < 0)));
     // The group spans the pane's whole slice and stays wider than tall; each
     // event's height follows its size (lines, bytes), compressed when tall.
-    const inset = Math.min(.02, PV.span * .06), groupW = PV.span - 2 * inset, colW = groupW / kinds.length;
+    const nsp = PV.span * (n.wt || 1), inset = Math.min(.02, nsp * .06), groupW = nsp - 2 * inset, colW = groupW / kinds.length;
     // Never past the slice's outer edge.
     const maxH = Math.min(R * groupW * .5, PV_BAND_OUT - PV_STACK_R - 4);
     const depth = (Math.sin(a.theta + rot) + 1) / 2;
@@ -1329,6 +1330,11 @@ function pvDrawRing(){
       ctx.fillStyle = on ? "#f8fafc" : n.color || (n.kind === "agent" ? "#fbbf24" : n.kind === "web" ? "#86efac" : n.kind === "system" ? "#e5e7eb" : "#7dd3fc");
       ctx.textAlign = left ? "right" : "left";
       ctx.fillText(text, p.x, p.y);
+      if (n.kind === "web" && n.url) {
+        ctx.font = "8px " + PV_MONO; ctx.fillStyle = "#94a3b8";
+        ctx.fillText(pvClip(ctx, pvWebWhere(n.url), Math.max(60, (left ? p.x : w - p.x) - 8)), p.x, p.y + 11);
+        box.y1 += 10; a.lbox.y1 = (box.y1 - vw.y) / vw.z;
+      }
       if ((a.out || 0) > .05) {
         pvHalo(ctx, a, left ? p.x - tw / 2 : p.x + tw / 2, p.y, tw, sel && !on ? .35 : 1);
         if (!PV_REDUCE) pvShimmer(ctx, text, p.x, p.y, tw, ctx.textAlign, a.out * a.alpha);
@@ -2134,11 +2140,12 @@ function pvSliceAt(x, y){
   return null;
 }
 function pvDrawBand(ctx, pos, R){
-  const half = PV.span * .5, inset = Math.min(.02, PV.span * .06), r0 = R * 1.035, r1 = R + PV_BAND_OUT;
+  const r0 = R * 1.035, r1 = R + PV_BAND_OUT;
   const sel = PV.sel;
   PV.bandPolys = [];
   for (const a of PV.anim.values()) {
     const col = a.node.color; if (!col) continue;
+    const sp = PV.span * (a.node.wt || 1), half = sp * .5, inset = Math.min(.02, sp * .06);
     const dim = sel && a.node.id !== sel ? .45 : 1;
     const inner = pvBandArc(pos, a.theta - half + inset, a.theta + half - inset, r0);
     const outer = pvBandArc(pos, a.theta + half - inset, a.theta - half + inset, r1);
@@ -2154,6 +2161,7 @@ function pvDrawBand(ctx, pos, R){
     const as = g.ids.map((id) => PV.anim.get(id)).filter(Boolean); if (!as.length) continue;
     for (const a of as) {
       if (!a.node.color) continue;
+      const sp = PV.span * (a.node.wt || 1), half = sp * .5, inset = Math.min(.02, sp * .06);
       const rim = pvBandArc(pos, a.theta - half + inset, a.theta + half - inset, r1 + 3);
       ctx.globalAlpha = a.alpha * .85; ctx.strokeStyle = a.node.color; ctx.lineWidth = 3;
       ctx.beginPath(); rim.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
@@ -2172,6 +2180,45 @@ function pvDrawBand(ctx, pos, R){
 // showing its live screen text tinted in the pane's colour. Toggle: ▣ screens.
 const PVSC = {on: true, data: new Map(), timer: null, busy: false};
 const pvShownId = () => (PV.focus ? PV.focus.node : PV.hover || PV.sel);
+// ---- Web panes: each streams its rendered page (/ws/pixels, a JPEG only when
+// it changes) — a small thumbnail always, sharper when shown, sharpest focused.
+// Changing frames are the pane's activity.
+const PV_WEB_COLOR = "#86efac", PV_WEB_WT = .5, PVW = new Map();
+function pvWebWhere(url){
+  try { const u = new URL(url); return (u.host + u.pathname + u.hash).replace(/\/$/, ""); } catch (_e) { return String(url); }
+}
+function pvWebTick(){
+  const want = new Map();
+  if (PV.on && PV.mode === "live" && document.visibilityState === "visible") {
+    const shown = pvShownId() && PV.alias.get(pvShownId()), focus = PV.focus && PV.focus.pane;
+    for (const p of PV.panes) {
+      // Not the deck itself (a mirror of a mirror).
+      if (p.cls !== "wb" || /\/dashboard/.test(p.url || "")) continue;
+      want.set(p.paneId, p.paneId === focus ? "1280x800x4" : shown && shown.pane === p.paneId ? "640x400x2" : "320x200x1");
+    }
+  }
+  for (const [id, ws] of PVW) if (want.get(id) !== ws.spec) { try { ws.sock.close(); } catch (_e) {} if (!want.has(id)) PVW.delete(id); }
+  for (const [id, spec] of want) {
+    const cur = PVW.get(id); if (cur && cur.spec === spec && cur.sock.readyState <= 1) continue;
+    const [w, h, fps] = spec.split("x"), ws = cur || {bps: 0, fps: 0, last: 0};
+    ws.spec = spec;
+    ws.sock = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/pixels/" + encodeURIComponent(id) + "?w=" + w + "&h=" + h + "&fps=" + fps);
+    ws.sock.binaryType = "blob";
+    ws.sock.onmessage = async (ev) => {
+      if (typeof ev.data === "string") return;
+      const now = Date.now(), dt = Math.max(.5, (now - (ws.last || now - 1000)) / 1000);
+      ws.bps = ws.bps * .5 + (ev.data.size / dt) * .5; ws.fps = ws.fps * .5 + (1 / dt) * .5; ws.last = now;
+      try {
+        const img = await createImageBitmap(ev.data), d = PVSC.data.get(id) || {};
+        if (d.img && d.img.close) d.img.close();
+        d.img = img; d.color = PV_WEB_COLOR; d.dirty = true; d.at = now; PVSC.data.set(id, d);
+      } catch (_e) {}
+    };
+    PVW.set(id, ws);
+  }
+  for (const k of [...PVSC.data.keys()]) if (PVSC.data.get(k).img && !PVW.has(k)) PVSC.data.delete(k);
+}
+setInterval(pvWebTick, 1000);
 try { PVSC.on = localStorage.getItem("pv.screens") !== "off"; } catch (_e) {}
 async function pvScrollback(pane, lines){
   try {
@@ -2196,7 +2243,7 @@ async function pvScreensPoll(){
     } catch (_e) {}
   }));
   const live = new Set(panes.map((p) => p.paneId));
-  for (const k of [...PVSC.data.keys()]) if (!live.has(k)) PVSC.data.delete(k);
+  for (const k of [...PVSC.data.keys()]) if (!live.has(k) && !PVW.has(k)) PVSC.data.delete(k);
   PVSC.busy = false;
 }
 // Render a pane's text into its own small canvas (only when it changed).
@@ -2208,6 +2255,18 @@ function pvScreenCanvas(d, W = 360, H = 216){
   if (d.canvases[key]) return d.canvases[key];
   const c = document.createElement("canvas"); c.width = W; c.height = H;
   const x = c.getContext("2d"), col = d.color || "#7dd3fc";
+  if (d.img) {
+    // A web page: the live picture, cover-fit, with a light CRT finish.
+    x.fillStyle = "#03060b"; x.fillRect(0, 0, W, H);
+    const k = Math.max(W / d.img.width, H / d.img.height), iw = d.img.width * k, ih = d.img.height * k;
+    x.drawImage(d.img, (W - iw) / 2, 0, iw, ih);
+    x.fillStyle = "rgba(0,0,0,.10)"; for (let yy = 0; yy < H; yy += 3) x.fillRect(0, yy, W, 1);
+    const vg = x.createRadialGradient(W / 2, H / 2, H * .45, W / 2, H / 2, W * .7);
+    vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,.4)");
+    x.fillStyle = vg; x.fillRect(0, 0, W, H);
+    d.canvases[key] = c;
+    return c;
+  }
   x.fillStyle = "#03060b"; x.fillRect(0, 0, W, H);
   const glow = x.createRadialGradient(W / 2, H / 2, 10, W / 2, H / 2, W * .65);
   glow.addColorStop(0, col + "26"); glow.addColorStop(1, "#00000000");
@@ -2288,7 +2347,7 @@ function pvDrawScreens(ctx, R, focusPass){
   const f = PV.focus;
   for (const a of PV.anim.values()) {
     if (a.node.id !== pvShownId() && !(f && f.node === a.node.id)) continue;
-    const d = a.node.pane && PVSC.data.get(a.node.pane); if (!d || !d.text) continue;
+    const d = a.node.pane && PVSC.data.get(a.node.pane); if (!d || !(d.text || d.img)) continue;
     const col = a.node.color || "#7dd3fc", m = pvMonitorRect(a.theta, g.P3, R);
     const focused = !!(f && f.node === a.node.id);
     if (!focusPass) {
@@ -2530,7 +2589,9 @@ function pvDrawNet(ctx, R){
 const PV_WORK_MS = 2500;
 function pvOut(n){
   if (PV.mode !== "live" || !n || !n.pane) return null;
-  return PV.panes.find((p) => p.paneId === n.pane) || null;
+  const p = PV.panes.find((x) => x.paneId === n.pane) || null, ws = p && p.cls === "wb" && PVW.get(p.paneId);
+  // A web page is "printing" while its picture keeps changing.
+  return ws ? {...p, lastOut: ws.last || 0, bps: ws.bps || 0, lps: ws.fps || 0} : p;
 }
 const pvWorking = (o) => !!o && o.lastOut > 0 && Date.now() - o.lastOut < PV_WORK_MS;
 function pvDrawOutput(ctx, drawn, pos, R, k){
