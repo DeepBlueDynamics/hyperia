@@ -69,6 +69,13 @@ interface TrackedSession {
   /** Current web-pane URL, when this session's pane is (or carries) a web pane.
    *  Kept for layout capture (#82/#84) so save needs no renderer roundtrip. */
   webUrl?: string | null;
+  /** Last title / name / URL the layout sync reported, replayed on register:
+   *  syncs are deduped, so one sent before the socket opened is never resent. */
+  layoutTitle?: string;
+  layoutName?: string;
+  layoutUrl?: string;
+  /** The tab name came from a web page's title, not a terminal or a rename. */
+  tabNameFromWeb?: boolean;
 }
 const trackedSessions = new Map<string, TrackedSession>();
 
@@ -258,6 +265,9 @@ function sendSessionRegister(uid: string, tracked: TrackedSession) {
   // The sidecar starts a register from "idle, no app"; replay what we know so a
   // reconnect doesn't make a long-running agent look like a bare shell.
   for (const m of sessionReplayMessages(uid, tracked.session)) send(m);
+  if (tracked.layoutTitle) send({type: 'SessionTitle', uid, title: tracked.layoutTitle});
+  if (tracked.layoutName) send({type: 'SessionName', uid, name: tracked.layoutName});
+  if (tracked.layoutUrl) send({type: 'SessionCwd', uid, cwd: tracked.layoutUrl});
 }
 
 // ---------------------------------------------------------------------------
@@ -1725,6 +1735,23 @@ export function updateSessionLayout(
         }
       });
 
+      // Only terminal titles and renames name a tab, so a web-only tab kept its
+      // uid as its name; name it after its page instead (a rename still wins).
+      const webOnly = tab.panes.every((p) => p.isWeb);
+      if (
+        pane.isWeb &&
+        pane.title &&
+        !tracked.manualTitle &&
+        pane.title !== tracked.tabName &&
+        (tracked.tabName === tab.rootGroupUid || (webOnly && tracked.tabNameFromWeb))
+      ) {
+        tracked.tabName = pane.title;
+        tracked.tabNameFromWeb = true;
+        send({type: 'SessionTabName', uid: pane.uid, tabName: pane.title});
+      }
+      tracked.layoutTitle = pane.title || tracked.layoutTitle;
+      tracked.layoutName = pane.shellName || tracked.layoutName;
+      tracked.layoutUrl = pane.url || tracked.layoutUrl;
       if (pane.title) {
         send({type: 'SessionTitle', uid: pane.uid, title: pane.title});
       }
