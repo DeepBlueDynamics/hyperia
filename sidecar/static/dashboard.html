@@ -2332,7 +2332,11 @@ function pvBuildNet(){
   const ev = (PV.win && PV.win.telemetry && PV.win.telemetry.events) || [], now = Date.now(), m = new Map();
   for (const e of ev) {
     if (e.kind !== "Network" || !e.pane_uid || now - (e.ts || 0) > 60000) continue;
-    const r = m.get(e.pane_uid) || {rx: 0, tx: 0, rxTs: 0, txTs: 0};
+    const src = e.host === "proxy" ? "exact" : e.host === "io-approx" ? "approx" : "container";
+    const r = m.get(e.pane_uid) || {rx: 0, tx: 0, rxTs: 0, txTs: 0, src};
+    if (src === "approx" && r.src === "exact") continue;
+    if (src === "exact" && r.src !== "exact") { r.src = "exact"; r.rx = r.tx = r.rxTs = r.txTs = 0; }
+    if (src === "container") r.src = "container";
     if (/^in/i.test(String(e.direction))) { if ((e.ts || 0) >= r.rxTs) { r.rx = e.bytes || 0; r.rxTs = e.ts || 0; } }
     else if ((e.ts || 0) >= r.txTs) { r.tx = e.bytes || 0; r.txTs = e.ts || 0; }
     m.set(e.pane_uid, r);
@@ -2356,6 +2360,7 @@ function pvDrawNet(ctx, R){
     const n = a.node, r = n.pane && PV.net.get(n.pane); if (!r) continue;
     const ease = Math.min(1, dt * 2.5);
     a.nrx = (a.nrx || 0) + (r.rx - (a.nrx || 0)) * ease; a.ntx = (a.ntx || 0) + (r.tx - (a.ntx || 0)) * ease;
+    a.nsrc = r.src || "container";
     links.push(a);
   }
   if (!links.length) return;
@@ -2365,6 +2370,11 @@ function pvDrawNet(ctx, R){
   // u: 0 = the container, SPLIT = the marble's centre, 1 = the uplink hub.
   const pathFor = (a) => {
     const base = [Math.cos(a.theta) * R, 0, -Math.sin(a.theta) * R], ctl = [base[0] * .55, R * .78, base[2] * .55];
+    if (a.nsrc !== "container") {
+      // Host agent: one curve, floor → hub, bowing outward.
+      const hc = [base[0] * .9, R * 1.05, base[2] * .9];
+      return (u) => { const v = 1 - u; return P3(v*v*base[0] + 2*v*u*hc[0] + u*u*hubW[0], v*v*base[1] + 2*v*u*hc[1] + u*u*hubW[1], v*v*base[2] + 2*v*u*hc[2] + u*u*hubW[2]); };
+    }
     return (u) => {
       if (u >= SPLIT) { const k = (u - SPLIT) / (1 - SPLIT); return P3(0, mW[1] + (hubW[1] - mW[1]) * k, 0); }
       const w = u / SPLIT, v = 1 - w;   // base → marble centre
@@ -2379,7 +2389,10 @@ function pvDrawNet(ctx, R){
     const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1, at = pathFor(a); paths.set(a, at);
     const lvl = pvNetLvl(a.nrx + a.ntx);
     ctx.globalAlpha = a.alpha * dim * (.12 + .35 * lvl); ctx.strokeStyle = n.color || "#38bdf8"; ctx.lineWidth = .8 + 3 * lvl;
-    ctx.beginPath(); for (let i = 0; i <= 24; i++) { const p = at(SPLIT * i / 24); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); } ctx.stroke();
+    const end = a.nsrc === "container" ? SPLIT : 1;
+    if (a.nsrc === "approx") ctx.setLineDash([5, 5]);
+    ctx.beginPath(); for (let i = 0; i <= 24; i++) { const p = at(end * i / 24); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); } ctx.stroke();
+    ctx.setLineDash([]);
   }
   // Uplink: straight up from the marble to the hub.
   const M = P3(...mW), hub = P3(...hubW), rs = mr * M.p, top = P3(0, mW[1] + mr, 0);
@@ -2433,13 +2446,15 @@ function pvDrawNet(ctx, R){
     const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1;
     const tag = P3(Math.cos(a.theta) * R * .9, R * .1, -Math.sin(a.theta) * R * .9);
     ctx.globalAlpha = a.alpha * dim * .9;
-    ctx.fillStyle = "#67e8f9"; ctx.fillText("↓" + pvRate(a.nrx), tag.x - 20, tag.y);
-    ctx.fillStyle = "#fbbf24"; ctx.fillText("↑" + pvRate(a.ntx), tag.x + 20, tag.y);
+    const approx = a.nsrc === "approx" ? "~" : "";
+    ctx.fillStyle = "#67e8f9"; ctx.fillText(approx + "↓" + pvRate(a.nrx), tag.x - 22, tag.y);
+    ctx.fillStyle = "#fbbf24"; ctx.fillText(approx + "↑" + pvRate(a.ntx), tag.x + 22, tag.y);
+    if (a.nsrc !== "container") { ctx.fillStyle = "#64748b"; ctx.fillText(a.nsrc === "exact" ? "HOST" : "HOST ~I/O", tag.x, tag.y + 10); }
   }
   // Marble label: the runtime and how many containers.
-  const runtime = PV.panes.some((p) => /podman/i.test(p.proc)) ? "PODMAN" : "DOCKER";
+  const runtime = PV.panes.some((p) => /podman/i.test(p.proc)) ? "PODMAN" : "DOCKER", nc = links.filter((a) => a.nsrc === "container").length;
   ctx.globalAlpha = 1; ctx.font = "bold 8.5px " + PV_MONO; ctx.fillStyle = "#93c5fd"; ctx.textBaseline = "top";
-  ctx.fillText(runtime + " · " + links.length + " CONTAINER" + (links.length === 1 ? "" : "S"), M.x, M.y + rs + 6);
+  ctx.fillText(runtime + " · " + nc + " CONTAINER" + (nc === 1 ? "" : "S"), M.x, M.y + rs + 6);
   // The uplink hub.
   ctx.globalCompositeOperation = "lighter";
   const rg = ctx.createRadialGradient(hub.x, hub.y, 0, hub.x, hub.y, 24 + 16 * totLvl);

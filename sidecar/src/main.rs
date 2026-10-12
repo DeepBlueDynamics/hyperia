@@ -4734,6 +4734,8 @@ async fn main() -> anyhow::Result<()> {
     host_telemetry::forward::spawn_sender();
     host_telemetry::watcher::spawn(state.bridge.clone(), state.telemetry.clone());
     radio::spawn(state.bridge.clone());
+    host_telemetry::netio::spawn(state.bridge.clone(), state.telemetry.clone());
+    host_telemetry::proxy::spawn(state.telemetry.clone(), host_telemetry::proxy::port_for(args.port));
     // Grab lume handles before `state` is moved into the router below.
     let lume_for_flush = state.bridge.lume();
     let lume_for_shutdown = state.bridge.lume();

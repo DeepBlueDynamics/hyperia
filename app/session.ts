@@ -14,7 +14,7 @@ import shellEnv from 'shell-env';
 import * as config from './config';
 import {productName, version} from './package.json';
 import {getDecoratedEnv} from './plugins';
-import {agentTelemetryEnv} from './utils/agent-telemetry-env';
+import {agentProxyEnv, agentTelemetryEnv} from './utils/agent-telemetry-env';
 import {getFallBackShellConfig} from './utils/shell-fallback';
 
 const createNodePtyError = () =>
@@ -199,6 +199,16 @@ export default class Session extends EventEmitter {
     Object.assign(
       baseEnv,
       agentTelemetryEnv(baseEnv, {pane: uid, port: hyperiaPort, enabled: userConfig.agentTelemetry !== false})
+    );
+    // Host agents' network, exact: HTTPS through the sidecar's counting proxy
+    // (sidecar port + 13). Off with agentNetworkProxy: false.
+    Object.assign(
+      baseEnv,
+      agentProxyEnv(baseEnv, {
+        pane: uid,
+        proxyPort: String(Number(hyperiaPort) + 13),
+        enabled: userConfig.agentTelemetry !== false && userConfig.agentNetworkProxy !== false
+      })
     );
     const shellIntegrationEnabled = userConfig.shellIntegration !== false;
     const staticIntegrationDir = resolve(__dirname, 'static/shell-integration');

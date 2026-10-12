@@ -42,6 +42,8 @@ type rootConfigOptions = {
   shellIntegration?: boolean;
   /** point Claude Code's OpenTelemetry in each pane at Hyperia (tokens, file edits); default `true` */
   agentTelemetry?: boolean;
+  /** Route agent panes' HTTPS through the sidecar's counting proxy (exact network per pane). Default on. */
+  agentNetworkProxy?: boolean;
 };
 
 export type PathTranslate = {
