@@ -1,0 +1,104 @@
+/* Stacking toast column, DOM fallback (toast-stack.tsx). fixed positioning stays
+   inline — test/unit/web-pane-occluders.test.ts counts it per .tsx file. */
+@keyframes hyToastGrow {
+  from {
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    max-height: 140px;
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes hyToastShrink {
+  from {
+    max-height: 140px;
+    opacity: 1;
+  }
+  to {
+    max-height: 0;
+    opacity: 0;
+  }
+}
+
+.hy-toast-stack {
+  right: 16px;
+  bottom: 16px;
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+/* max-height animates so the OLDER toasts above slide up smoothly as this one
+   grows in (and back down as it collapses out). 180ms = EXIT_MS in the .tsx. */
+.hy-toast-item {
+  overflow: hidden;
+  max-height: 140px;
+  animation: hyToastGrow 180ms ease;
+  pointer-events: auto;
+}
+.hy-toast-item--leaving {
+  animation: hyToastShrink 180ms ease forwards;
+}
+
+.hy-toast-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 400px;
+  padding: 10px 10px 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-neutral, rgba(255, 255, 255, 0.15));
+  background: var(--bg-secondary, #1a1a1a);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  color: var(--text-primary, #eee);
+  font-family: var(--font-sans, sans-serif);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.hy-toast-body--error {
+  border-color: var(--danger-text, #fe354e);
+}
+
+/* Compound selector so it beats tabler's .ti rules on the same element. */
+.ti.hy-toast-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--info-text, #7aa2f7);
+}
+.ti.hy-toast-icon--error {
+  color: var(--danger-text, #fe354e);
+}
+
+.hy-toast-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.hy-toast-close {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--text-tertiary, #888);
+  font-size: 14px;
+  line-height: 1;
+  user-select: none;
+}
+/* Hover only tints the background: the old inline color always beat the hover
+   color, so the glyph stays tertiary (kept to preserve the look). */
+.hy-toast-close:hover {
+  background: var(--border-neutral, rgba(255, 255, 255, 0.15));
+}

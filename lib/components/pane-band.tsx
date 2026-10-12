@@ -13,6 +13,8 @@ import {cloneLaunchForUid, openLayout} from '../utils/layouts';
 import {SPLIT_COMMANDS} from '../utils/shortcut-hint';
 import {useSuppressWebPanes} from '../utils/web-pane-suppress';
 
+import './pane-band.css';
+
 type SplitDir = 'right' | 'down' | 'left' | 'up';
 const SPLIT_LABELS: Record<SplitDir, string> = {right: 'Right', down: 'Down', left: 'Left', up: 'Up'};
 const ALL_SPLIT_COMMANDS = [...Object.values(SPLIT_COMMANDS.split), ...Object.values(SPLIT_COMMANDS.clone)] as const;
@@ -23,30 +25,9 @@ const QUICK_LAYOUTS = [
 ];
 
 // Pulse picker pills + action buttons (re-poke watchdog editor in the band).
-const pulseSeg = (active: boolean): React.CSSProperties => ({
-  padding: '3px 9px',
-  fontSize: '11px',
-  borderRadius: '5px',
-  border: '1px solid',
-  borderColor: active ? 'var(--accent-primary, #6ea8fe)' : 'var(--border-neutral, rgba(255,255,255,0.12))',
-  background: active ? 'var(--accent-primary, #6ea8fe)' : 'transparent',
-  color: active ? '#0b0b0f' : 'var(--text-secondary, #9a9aa2)',
-  fontWeight: active ? 600 : 400,
-  cursor: 'pointer',
-  whiteSpace: 'nowrap'
-});
-const pulseBtn = (primary: boolean, busy: boolean): React.CSSProperties => ({
-  padding: '5px 14px',
-  fontSize: '12px',
-  fontWeight: 600,
-  borderRadius: '6px',
-  border: '1px solid',
-  borderColor: primary ? 'var(--accent-primary, #6ea8fe)' : 'var(--border-neutral, rgba(255,255,255,0.15))',
-  background: primary ? 'var(--accent-primary, #6ea8fe)' : 'transparent',
-  color: primary ? '#0b0b0f' : 'var(--text-primary, #e8e8ea)',
-  cursor: busy ? 'default' : 'pointer',
-  opacity: busy ? 0.55 : 1
-});
+const pulseSeg = (active: boolean) => `hy-band-seg${active ? ' hy-band-seg--on' : ''}`;
+const pulseBtn = (primary: boolean, busy: boolean) =>
+  `hy-band-btn${primary ? ' hy-band-btn--primary' : ''}${busy ? ' hy-band-btn--busy' : ''}`;
 
 type PaneBandProps = {
   paneType: 'shell' | 'web' | 'ai';
@@ -148,7 +129,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
     const radioRotatedAt = radio?.rotated?.pane === paneId ? radio?.rotated?.at : 0;
     const radioFlash = !!radioRotatedAt && Date.now() - radioRotatedAt < 6000;
     const bellIndicator = hasBell ? (
-      <span role="img" aria-label="Pane needs attention" title="Pane needs attention" style={{flexShrink: 0}}>
+      <span role="img" aria-label="Pane needs attention" title="Pane needs attention" className="hy-band-bell">
         🔔
       </span>
     ) : null;
@@ -448,46 +429,32 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       icon !== undefined ? (
         icon
       ) : isAi ? (
-        <span style={{fontSize: '12px'}}>✨</span>
+        <span className="hy-band-iconAi">✨</span>
       ) : paneType === 'web' ? (
         <span>🌐</span>
       ) : (
         // Terminal panes: the classic shell prompt glyph (no clean emoji exists
         // for ">_", so render it in mono so it reads as a console).
-        <span style={{fontFamily: 'var(--font-mono)', fontSize: '11px', fontWeight: 700, opacity: 0.85}}>{'>_'}</span>
+        <span className="hy-band-iconShell">{'>_'}</span>
       );
 
     return (
       <div
         ref={ref}
-        className={`pane-band-container pane-band-tint-${resolvedTint} pane-band-height-${height}`}
+        className={`pane-band-container pane-band-tint-${resolvedTint} pane-band-height-${height} hy-band-root${
+          onClick ? ' hy-band-root--clickable' : ''
+        }`}
         onClick={onClick}
         onContextMenu={onContextMenu}
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          width: '100%',
           // Both paddings ride the squeeze ramp (left overrides the class's
           // var(--space-10) so the whole band tightens symmetrically).
           paddingLeft: sq(10, 4),
-          paddingRight: sq(10, 4),
-          flexShrink: 0,
-          boxSizing: 'border-box',
-          cursor: onClick ? 'pointer' : 'default',
-          userSelect: 'none',
-          position: 'relative'
+          paddingRight: sq(10, 4)
         }}
       >
         {/* Left-justified content: name, nav, URL bar. URL bar fills the row. */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: sq(8, 3),
-            flex: 1,
-            minWidth: 0
-          }}
-        >
+        <div className="hy-band-left" style={{gap: sq(8, 3)}}>
           {paneType !== 'shell' ? (
             /* Web / AI: ONE tight, left-anchored icon row — the globe and the nav
                arrows sit together. No title text: it's variable-length, shoved the
@@ -496,43 +463,20 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                the globe stays click-to-copy the pane name (transient confirm). */
             <>
               {/* Left-anchored icon row: globe + nav arrows, fixed (flexShrink:0). */}
-              <div
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-2)',
-                  flexShrink: 0
-                }}
-              >
-                {resolvedIcon && (
-                  <span style={{display: 'flex', alignItems: 'center', flexShrink: 0}}>{resolvedIcon}</span>
-                )}
+              <div onClick={(e) => e.stopPropagation()} className="hy-band-iconRow">
+                {resolvedIcon && <span className="hy-band-iconWrap">{resolvedIcon}</span>}
                 {navCluster}
               </div>
               {/* Page title — TRUNCATED. The icons above are left-anchored, so this
                   shrinks/ellipsizes first and can never shove the arrows on
                   navigation. Click to copy the full name; full title on hover. */}
               <span
-                className="pane-band-name-cluster"
+                className="pane-band-name-cluster hy-band-nameWeb"
                 onClick={handleNameClick}
                 onContextMenu={handleNameContextMenu}
                 draggable
                 onDragStart={handleNameDragStart}
                 title={copied ? 'Copied ✓' : 'Click to copy name · drag onto a pane to type it there'}
-                style={{
-                  flex: '0 1 auto',
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontSize: '11px',
-                  fontWeight: 500,
-                  opacity: 0.75,
-                  cursor: 'pointer',
-                  padding: '2px var(--space-4)',
-                  borderRadius: 'var(--radius-4)'
-                }}
               >
                 {copied ? 'Copied ✓' : label}
               </span>
@@ -542,54 +486,19 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
             <>
               {/* Name Cluster */}
               <div
-                className="pane-band-name-cluster"
+                className="pane-band-name-cluster hy-band-nameShell"
                 onClick={handleNameClick}
                 onContextMenu={handleNameContextMenu}
                 draggable
                 onDragStart={handleNameDragStart}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: sq(6, 3),
-                  fontSize: '11px',
-                  fontWeight: 500,
-                  flexShrink: 1,
-                  minWidth: 0,
-                  cursor: 'pointer',
-                  position: 'relative',
-                  padding: `2px ${sq(4, 2)}`,
-                  borderRadius: 'var(--radius-4)',
-                  transition: 'background 0.15s ease',
-                  overflowX: 'auto',
-                  whiteSpace: 'nowrap'
-                }}
+                style={{gap: sq(6, 3), padding: `2px ${sq(4, 2)}`}}
                 title="Click to copy name · drag onto a pane to type it there"
               >
-                {!isPlaceholder && resolvedIcon && (
-                  <span style={{display: 'flex', alignItems: 'center', flexShrink: 0}}>{resolvedIcon}</span>
-                )}
+                {!isPlaceholder && resolvedIcon && <span className="hy-band-iconWrap">{resolvedIcon}</span>}
                 {isPlaceholder ? (
-                  <span
-                    style={{
-                      color: 'var(--text-tertiary)',
-                      fontStyle: 'italic',
-                      fontWeight: 400,
-                      whiteSpace: 'nowrap',
-                      flexShrink: 0
-                    }}
-                  >
-                    {copied ? 'Copied ✓' : label}
-                  </span>
+                  <span className="hy-band-placeholder">{copied ? 'Copied ✓' : label}</span>
                 ) : (
-                  <span
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 'var(--space-4)',
-                      whiteSpace: 'nowrap',
-                      flexShrink: 0
-                    }}
-                  >
+                  <span className="hy-band-label">
                     {copied ? (
                       'Copied ✓'
                     ) : (
@@ -614,8 +523,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
 
         {/* Controls Cluster — splits + close, anchored to the right. */}
         <div
-          className="pane-band-controls-cluster"
-          style={{display: 'flex', alignItems: 'center', gap: sq(10, 3), flexShrink: 0}}
+          className="pane-band-controls-cluster hy-band-controls"
+          style={{gap: sq(10, 3)}}
           onClick={(e) => e.stopPropagation()}
         >
           {radioSign && (
@@ -634,20 +543,15 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               ladder: it stays through the narrowest state. */}
           {paneId && paneType === 'shell' && !isPlaceholder && (
             <>
-              <style>{`@keyframes hyPulseRun{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.72)}}`}</style>
               <span
                 ref={pulseIconRef}
-                className="pane-band-control-icon pane-band-tooltip-trigger"
+                className="pane-band-control-icon pane-band-tooltip-trigger hy-band-ctl"
                 onClick={(e) => {
                   e.stopPropagation();
                   togglePulseOpen();
                 }}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: pulseActive ? 'var(--accent-primary, #6ea8fe)' : undefined
-                }}
+                // Inline so it also beats the control icon's :hover colour.
+                style={{color: pulseActive ? 'var(--accent-primary, #6ea8fe)' : undefined}}
               >
                 {/* Animate the SVG only — the hover tooltip is a child of this
                     span, so animating the span made the tooltip (a big bordered
@@ -661,7 +565,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   strokeWidth="2"
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  style={{animation: pulseActive ? 'hyPulseRun 1.4s ease-in-out infinite' : undefined}}
+                  className={pulseActive ? 'hy-band-pulseRun' : undefined}
                   aria-hidden="true"
                 >
                   <circle cx="12" cy="12" r="9" />
@@ -673,10 +577,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                     overlap (the tooltip anchors to the same icon). */}
                 {!pulseOpen && (
                   <div className="pane-band-tooltip pane-band-pulse-tooltip">
-                    <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
-                      {pulseActive ? 'Pulse running' : 'Periodic pulse'}
-                    </div>
-                    <div style={{fontSize: '11px', color: 'var(--text-secondary)', marginTop: 'var(--space-2)'}}>
+                    <div className="hy-band-tipTitle">{pulseActive ? 'Pulse running' : 'Periodic pulse'}</div>
+                    <div className="hy-band-tipSub">
                       {pulseActive ? 'Click to edit or clear' : 'Re-poke this pane on a timer'}
                     </div>
                   </div>
@@ -687,10 +589,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
 
           {/* Layouts Button — also on picker (placeholder) panes */}
           {paneId && !hideQuickLayout && !isSplitRightDisabled && !isSplitDownDisabled && (
-            <span
-              className="pane-band-control-icon pane-band-tooltip-trigger"
-              style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
-            >
+            <span className="pane-band-control-icon pane-band-tooltip-trigger hy-band-ctl">
               <svg
                 width="13"
                 height="13"
@@ -707,18 +606,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 <rect x="4" y="4" width="4" height="4" fill="currentColor" opacity="0.3" />
                 <rect x="16" y="16" width="4" height="4" fill="currentColor" opacity="0.3" />
               </svg>
-              <div className="pane-band-tooltip pane-band-layout-tooltip" style={{minWidth: '180px'}}>
-                <div
-                  style={{
-                    fontSize: '11px',
-                    color: 'var(--text-primary)',
-                    fontWeight: 600,
-                    marginBottom: '8px',
-                    textAlign: 'center'
-                  }}
-                >
-                  Quick Layouts
-                </div>
+              <div className="pane-band-tooltip pane-band-layout-tooltip">
+                <div className="hy-band-layoutTitle">Quick Layouts</div>
                 <div className="pane-band-layout-grid">
                   {QUICK_LAYOUTS.map(({pattern, label: layoutLabel, cells}) => (
                     <div
@@ -735,9 +624,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                     </div>
                   ))}
                 </div>
-                <div style={{fontSize: '10px', color: 'var(--text-secondary)', marginTop: '8px', textAlign: 'center'}}>
-                  {layoutHint}
-                </div>
+                <div className="hy-band-layoutHint">{layoutHint}</div>
               </div>
             </span>
           )}
@@ -746,12 +633,11 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               full-control-set direction; width ladder still governs it. */}
           {!isSplitDownDisabled && (
             <span
-              className="pane-band-control-icon pane-band-tooltip-trigger"
+              className="pane-band-control-icon pane-band-tooltip-trigger hy-band-ctl"
               onClick={(e) => {
                 e.stopPropagation();
                 doSplit('down', e.shiftKey);
               }}
-              style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
             >
               <svg
                 width="13"
@@ -770,7 +656,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               <div className="pane-band-tooltip pane-band-split-down-tooltip">
                 {splitRow('down', false)}
                 {splitRow('up', false)}
-                <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: '4px 0'}} />
+                <div className="hy-band-sep" />
                 {splitRow('down', true)}
                 {splitRow('up', true)}
               </div>
@@ -781,12 +667,11 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               full-control-set direction; width ladder still governs it. */}
           {!isSplitRightDisabled && (
             <span
-              className="pane-band-control-icon pane-band-tooltip-trigger"
+              className="pane-band-control-icon pane-band-tooltip-trigger hy-band-ctl"
               onClick={(e) => {
                 e.stopPropagation();
                 doSplit('right', e.shiftKey);
               }}
-              style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center'}}
             >
               <svg
                 width="13"
@@ -805,7 +690,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               <div className="pane-band-tooltip pane-band-split-right-tooltip">
                 {splitRow('right', false)}
                 {splitRow('left', false)}
-                <div style={{height: '0.5px', background: 'var(--border-neutral)', margin: '4px 0'}} />
+                <div className="hy-band-sep" />
                 {splitRow('right', true)}
                 {splitRow('left', true)}
               </div>
@@ -814,7 +699,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
 
           {/* Close */}
           <span
-            className="pane-band-control-icon pane-band-tooltip-trigger"
+            className="pane-band-control-icon pane-band-tooltip-trigger hy-band-ctl hy-band-close"
             onClick={(e) => {
               e.stopPropagation();
               if (isBusy && !confirmClose) {
@@ -828,13 +713,6 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 return;
               }
               onClose();
-            }}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-              position: 'relative'
             }}
           >
             {/* Inline SVG (not the `ti` icon font, which may not be loaded —
@@ -850,48 +728,22 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
-              style={{cursor: 'pointer'}}
+              className="hy-band-pointer"
               aria-hidden="true"
             >
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
-            <div className="pane-band-tooltip" style={{right: '-2px'}}>
-              <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
+            <div className="pane-band-tooltip hy-band-closeTip">
+              <div className="hy-band-tipTitle">
                 {resolvedTint === 'neutral' && paneType === 'web' ? 'Restore terminal' : 'Close pane'}
               </div>
-              <div
-                style={{
-                  fontSize: '11px',
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--text-secondary)',
-                  marginTop: 'var(--space-2)'
-                }}
-              >
+              <div className="hy-band-tipSub hy-band-tipKey">
                 {resolvedTint === 'neutral' && paneType === 'web' ? 'Escape' : 'Ctrl+Shift+W'}
               </div>
             </div>
             {confirmClose && (
-              <div
-                className="pane-band-confirm-close-toast"
-                style={{
-                  position: 'absolute',
-                  top: '28px',
-                  right: '0px',
-                  background: 'var(--accent-warning, #d29922)',
-                  color: '#0f0f18',
-                  padding: 'var(--space-4) var(--space-8)',
-                  borderRadius: 'var(--radius-3)',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  whiteSpace: 'nowrap',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-                  zIndex: 3000,
-                  pointerEvents: 'none'
-                }}
-              >
-                Click again to close
-              </div>
+              <div className="pane-band-confirm-close-toast hy-band-confirmToast">Click again to close</div>
             )}
           </span>
         </div>
@@ -900,27 +752,14 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           <div
             ref={pulsePopoverRef}
             onClick={(e) => e.stopPropagation()}
-            style={{
-              position: 'fixed',
-              left: pulsePos.left,
-              top: pulsePos.top,
-              zIndex: 1000,
-              width: 'min(320px, calc(100vw - 16px))',
-              padding: '12px 14px',
-              boxSizing: 'border-box',
-              background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',
-              border: '1px solid var(--accent-primary, #6ea8fe)',
-              borderRadius: 10,
-              boxShadow: '0 10px 24px rgba(0,0,0,0.45)',
-              color: 'var(--text-primary, #e8e8ea)',
-              fontFamily: 'var(--font-sans)',
-              cursor: 'default'
-            }}
+            className="hy-band-pulsePop"
+            // position stays inline: the web-pane occluder test counts it here.
+            style={{position: 'fixed', left: pulsePos.left, top: pulsePos.top}}
           >
-            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12.5}}>
-              <span style={{fontSize: 14}}>⏱</span>
+            <div className="hy-band-pulseHead">
+              <span className="hy-band-pulseClock">⏱</span>
               <b>Periodic pulse</b>
-              <span style={{color: 'var(--text-secondary, #9a9aa2)', fontSize: 11}}>— re-pokes this pane</span>
+              <span className="hy-band-pulseNote">— re-pokes this pane</span>
             </div>
 
             <textarea
@@ -928,26 +767,12 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               onChange={(e) => setPKeys(e.target.value)}
               placeholder="Prompt to re-submit (e.g. continue, or status?)"
               rows={2}
-              style={{
-                width: '100%',
-                boxSizing: 'border-box',
-                resize: 'vertical',
-                fontFamily: 'var(--font-mono, monospace)',
-                fontSize: 12,
-                padding: '6px 8px',
-                borderRadius: 6,
-                border: '1px solid var(--border-neutral, rgba(255,255,255,0.15))',
-                background: 'var(--bg-secondary, #15151a)',
-                color: 'inherit',
-                marginBottom: 10
-              }}
+              className="hy-band-pulseKeys"
             />
 
-            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8}}>
-              <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>
-                Every
-              </span>
-              <div style={{display: 'flex', gap: 4}}>
+            <div className="hy-band-pulseRow">
+              <span className="hy-band-pulseLbl">Every</span>
+              <div className="hy-band-segs">
                 {(
                   [
                     ['30s', 30],
@@ -960,7 +785,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                     key={lbl}
                     type="button"
                     onClick={() => setPInterval(secs)}
-                    style={pulseSeg(pInterval === secs)}
+                    className={pulseSeg(pInterval === secs)}
                   >
                     {lbl}
                   </button>
@@ -970,30 +795,28 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                   type="button"
                   title="Random interval 30s–5m (jitter so pulses don't fire in lockstep)"
                   onClick={() => setPInterval(30 + Math.floor(Math.random() * 271))}
-                  style={pulseSeg(![30, 60, 120, 300].includes(pInterval))}
+                  className={pulseSeg(![30, 60, 120, 300].includes(pInterval))}
                 >
                   {[30, 60, 120, 300].includes(pInterval) ? '⚄ rand' : `⚄ ${pInterval}s`}
                 </button>
               </div>
             </div>
 
-            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8}}>
-              <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>
-                When
-              </span>
-              <div style={{display: 'flex', gap: 4}}>
-                <button type="button" onClick={() => setPIdleOnly(true)} style={pulseSeg(pIdleOnly)}>
+            <div className="hy-band-pulseRow">
+              <span className="hy-band-pulseLbl">When</span>
+              <div className="hy-band-segs">
+                <button type="button" onClick={() => setPIdleOnly(true)} className={pulseSeg(pIdleOnly)}>
                   Only if idle
                 </button>
-                <button type="button" onClick={() => setPIdleOnly(false)} style={pulseSeg(!pIdleOnly)}>
+                <button type="button" onClick={() => setPIdleOnly(false)} className={pulseSeg(!pIdleOnly)}>
                   Always
                 </button>
               </div>
             </div>
 
-            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12}}>
-              <span style={{fontSize: 10, color: 'var(--text-secondary, #9a9aa2)', width: 52, flexShrink: 0}}>For</span>
-              <div style={{display: 'flex', gap: 4}}>
+            <div className="hy-band-pulseRow hy-band-pulseRow--last">
+              <span className="hy-band-pulseLbl">For</span>
+              <div className="hy-band-segs">
                 {(
                   [
                     ['15 min', 900],
@@ -1004,7 +827,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                     key={lbl}
                     type="button"
                     onClick={() => setPLifetime(secs)}
-                    style={pulseSeg(pLifetime === secs)}
+                    className={pulseSeg(pLifetime === secs)}
                   >
                     {lbl}
                   </button>
@@ -1012,27 +835,17 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               </div>
             </div>
 
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                marginBottom: 12,
-                fontSize: 11,
-                cursor: 'pointer',
-                color: 'var(--text-secondary, #9a9aa2)'
-              }}
-            >
+            <label className="hy-band-pulseCheck">
               <input type="checkbox" checked={pSubmit} onChange={(e) => setPSubmit(e.target.checked)} />
               Submit to agent (press Enter) — uncheck to type only
             </label>
 
-            <div style={{display: 'flex', gap: 8, justifyContent: 'flex-end'}}>
+            <div className="hy-band-pulseActions">
               <button
                 type="button"
                 disabled={pBusy}
                 onClick={pulseActive ? clearPulse : () => setPulseOpen(false)}
-                style={pulseBtn(false, pBusy)}
+                className={pulseBtn(false, pBusy)}
               >
                 {pulseActive ? 'Clear and close' : 'Cancel'}
               </button>
@@ -1040,7 +853,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
                 type="button"
                 disabled={pBusy || !pKeys.trim()}
                 onClick={submitPulse}
-                style={pulseBtn(true, pBusy)}
+                className={pulseBtn(true, pBusy)}
               >
                 {pulseActive ? 'Update' : 'Set'}
               </button>

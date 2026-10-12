@@ -1,0 +1,13 @@
+/* Sized panes don't grow; beats styled-jsx .splitpane_pane { flex: 1 }.
+   The size itself (height/width + flex-basis) stays inline. */
+.splitpane_panes > .splitpane_pane.hy-split-pane {
+  flex-grow: 0;
+}
+
+.splitpane_shim.hy-split-shim {
+  display: none;
+}
+
+.splitpane_shim.hy-split-shim--dragging {
+  display: block;
+}

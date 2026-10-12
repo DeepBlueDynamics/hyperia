@@ -1,0 +1,300 @@
+/* Web pane chrome. Layout that sizes the native WebContentsView (wrapper,
+   header, body, geometry anchor) stays inline in web-pane.tsx on purpose. */
+
+/* ---- HTTP-auth credential toast ---- */
+.hy-web-auth-backdrop {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 48px;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 20;
+}
+
+.hy-web-auth-card {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-neutral);
+  border-radius: var(--radius-4);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  padding: 16px 18px;
+  width: min(360px, calc(100% - 32px));
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.hy-web-auth-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.hy-web-auth-subtitle {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  margin-bottom: 12px;
+}
+
+.hy-web-auth-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border-neutral);
+  border-radius: var(--radius-4);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  margin-bottom: 8px;
+}
+
+.hy-web-auth-input.is-last {
+  margin-bottom: 14px;
+}
+
+.hy-web-auth-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.hy-web-auth-btn {
+  padding: 5px 12px;
+  border-radius: var(--radius-4);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.hy-web-auth-btn.is-cancel {
+  background: transparent;
+  border: 1px solid var(--border-neutral);
+  color: var(--text-secondary);
+}
+
+.hy-web-auth-btn.is-submit {
+  background: var(--accent, #4a9eff);
+  border: 1px solid transparent;
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ---- Header nav cluster ---- */
+.hy-web-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* Compound selectors: must beat the global .term_controlIcon / .term_tooltip. */
+.term_controlIcon.hy-web-navbtn {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.term_controlIcon.hy-web-navbtn.is-enabled {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.term_controlIcon.hy-web-navbtn.is-disabled {
+  cursor: default;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.hy-web-navicon {
+  font-size: 14px;
+}
+
+.term_tooltip.hy-web-tip-160 {
+  min-width: 160px;
+}
+
+.term_tooltip.hy-web-tip-180 {
+  min-width: 180px;
+}
+
+.term_tooltip.hy-web-tip-200 {
+  min-width: 200px;
+}
+
+.hy-web-tip-title {
+  font-size: 11px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.hy-web-tip-hint {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  margin-top: var(--space-2);
+}
+
+/* ---- Location bar. .web_locationBarCollapsed (!important) still wins. ---- */
+.hy-web-locbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-focus);
+  border-radius: var(--radius-3);
+  padding: 0 var(--space-6);
+  height: 24px;
+  /* Fill the row; below the floor the bar is hidden (showUrlBar), never a stub. */
+  flex: 1;
+  min-width: 80px;
+  cursor: pointer;
+  box-sizing: border-box;
+  margin-left: var(--space-4);
+  margin-right: var(--space-8);
+}
+
+.hy-web-spinner {
+  font-size: 11px;
+  display: inline-block;
+  animation: web-pane-spin 1s linear infinite;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.hy-web-locbar-icon {
+  font-size: 12px;
+  color: var(--info-text);
+  flex-shrink: 0;
+}
+
+.hy-web-locbar-icon.is-ai {
+  color: var(--color-ai-purple, #7f77dd);
+}
+
+.hy-web-locbar-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hy-web-locbar-text.is-ai {
+  font-family: var(--font-sans);
+}
+
+/* Click-off backdrop, just under the navigator (z 10000). */
+.hy-web-nav-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 9999;
+}
+
+/* ---- Load error ---- */
+.hy-web-error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  gap: 12px;
+}
+
+.hy-web-error-emoji {
+  font-size: 48px;
+}
+
+.hy-web-error-title {
+  font-size: 14px;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-medium);
+}
+
+.hy-web-error-detail {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  max-width: 300px;
+  text-align: center;
+}
+
+.hy-web-error-url {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+}
+
+/* ---- Seeker log ---- */
+.hy-web-log-icon {
+  color: var(--success-text);
+  margin-right: 8px;
+}
+
+.hy-web-log-icon.is-running {
+  color: var(--warning-text);
+}
+
+.hy-web-log-icon.is-fail {
+  color: var(--danger-text);
+}
+
+.seeker_log_name.hy-web-log-name {
+  color: var(--text-secondary);
+}
+
+.seeker_log_name.hy-web-log-name.is-running {
+  color: var(--text-primary);
+}
+
+.hy-web-log-section {
+  margin-bottom: 6px;
+}
+
+.hy-web-log-label {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.hy-web-synth-heading {
+  color: var(--info-text);
+  font-size: 11px;
+  font-weight: bold;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.hy-web-synth-line {
+  min-height: 18px;
+}
+
+.hy-web-error-tag {
+  color: var(--danger-text);
+  font-weight: bold;
+  margin-right: 6px;
+}
+
+/* Still frame shown while the native view is hidden. */
+.hy-web-frozen {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top left;
+}
+
+/* Spinner when the header strip is hidden. */
+.hy-web-corner-spinner {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  z-index: 10;
+  pointer-events: none;
+  animation: web-pane-spin 1s linear infinite;
+}

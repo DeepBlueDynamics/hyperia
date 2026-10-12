@@ -1,0 +1,6 @@
+/* Tab static styles. Pane colours, drag offset and rename width stay inline. */
+
+/* The pane-colour strip shows on every tab, dimmer when inactive. */
+.tab_activeIndicator.hy-tab-indicatorDim {
+  opacity: 0.5;
+}

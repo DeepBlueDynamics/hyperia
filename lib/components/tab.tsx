@@ -4,6 +4,8 @@ import type {TabProps} from '../../typings/hyper';
 import rpc from '../rpc';
 import {clearTabAutosave, getTabAutosave, TAB_AUTOSAVED_EVENT} from '../utils/tab-autosave';
 
+import './tab.css';
+
 const PICKER_EMOJIS = [
   '🌐',
   '📌',
@@ -493,15 +495,14 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
       >
         <div
           key={savePulse}
-          className={`tab_activeIndicator ${pulsing && isActive ? 'tab_autosavePulse' : ''}`}
+          className={`tab_activeIndicator ${pulsing && isActive ? 'tab_autosavePulse' : ''} ${
+            isActive ? '' : 'hy-tab-indicatorDim'
+          }`}
           onAnimationEnd={() => setPulsing(false)}
           style={{
             background: indicatorColor,
             // Glow colour for the autosave pulse: the tab's (first) pane colour.
-            ['--tab-pulse-color' as any]: paneColors[0] || 'var(--text-info)',
-            // Show the pane-color strip on EVERY tab (dimmer when inactive) so a
-            // tab's panes are identifiable at a glance, brightest on the active one.
-            opacity: isActive ? 1 : 0.5
+            ['--tab-pulse-color' as any]: paneColors[0] || 'var(--text-info)'
           }}
         />
         {props.customChildrenBefore}

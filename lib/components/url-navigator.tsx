@@ -5,6 +5,8 @@ import {faviconForUrl, historyRootKey, isValidUrl} from '../utils/web-pane-helpe
 
 import type {WebHistoryEntry} from './web-pane';
 
+import './url-navigator.css';
+
 export interface UrlNavigatorProps {
   url: string;
   sessionUid?: string | null;
@@ -58,7 +60,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
     return (
       <span>
         {before}
-        <span style={{textDecoration: 'underline', textUnderlineOffset: '2px'}}>{matched}</span>
+        <span className="hy-urlnav-match">{matched}</span>
         {after}
       </span>
     );
@@ -71,9 +73,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
     return (
       <span>
         {text.substring(0, idx)}
-        <span style={{textDecoration: 'underline', textUnderlineOffset: '2px'}}>
-          {text.substring(idx, idx + q.length)}
-        </span>
+        <span className="hy-urlnav-match">{text.substring(idx, idx + q.length)}</span>
         {text.substring(idx + q.length)}
       </span>
     );
@@ -278,25 +278,11 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
       const conv = props.aiConversations.find((c) => c.id === conversationId);
       const title = conv ? conv.title : 'AI Conversation';
       return (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--space-6)',
-            padding: 'var(--space-8) var(--space-12)',
-            borderBottom: '0.5px solid var(--border-neutral)',
-            background: 'var(--bg-dim)',
-            fontSize: '11px',
-            color: 'var(--text-secondary)',
-            fontFamily: 'var(--font-sans)',
-            fontWeight: 500,
-            userSelect: 'none'
-          }}
-        >
-          <i className="ti ti-sparkles" style={{color: 'var(--color-ai-purple, #7F77DD)', marginRight: '4px'}} />
+        <div className="hy-urlnav-crumbs is-ai">
+          <i className="ti ti-sparkles hy-urlnav-crumbs-ai-icon" />
           <span>AI Chat</span>
-          <span style={{color: 'var(--text-tertiary)'}}>&gt;</span>
-          <span style={{color: 'var(--text-primary)'}}>{title}</span>
+          <span className="hy-urlnav-dim">&gt;</span>
+          <span className="hy-urlnav-bright">{title}</span>
         </div>
       );
     }
@@ -323,24 +309,9 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
 
     if (!showHops) {
       return (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--space-6)',
-            padding: 'var(--space-8) var(--space-12)',
-            borderBottom: '0.5px solid var(--border-neutral)',
-            background: 'var(--bg-dim)',
-            fontSize: '11px',
-            color: 'var(--text-secondary)',
-            fontFamily: 'var(--font-mono)',
-            userSelect: 'none'
-          }}
-        >
-          <i className="ti ti-world" style={{color: 'var(--info-text)', marginRight: '4px'}} />
-          <span style={{color: 'var(--text-primary)', wordBreak: 'break-all', overflowWrap: 'anywhere', minWidth: 0}}>
-            {currentUrl}
-          </span>
+        <div className="hy-urlnav-crumbs">
+          <i className="ti ti-world hy-urlnav-crumbs-url-icon" />
+          <span className="hy-urlnav-crumbs-raw">{currentUrl}</span>
         </div>
       );
     }
@@ -398,72 +369,31 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
     }
 
     return (
-      <div
-        className="web_navigatorBreadcrumbs"
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          gap: 'var(--space-4)',
-          padding: 'var(--space-8) var(--space-12)',
-          borderBottom: '0.5px solid var(--border-neutral)',
-          background: 'var(--bg-dim)',
-          fontSize: '11px',
-          color: 'var(--text-secondary)',
-          fontFamily: 'var(--font-mono)',
-          userSelect: 'none',
-          maxWidth: '100%',
-          boxSizing: 'border-box',
-          overflowX: 'hidden'
-        }}
-      >
+      <div className="web_navigatorBreadcrumbs hy-urlnav-crumbs is-hops">
         <span
           onClick={() => {
             props.onNavigate(rootUrl);
             props.onUpdateState({isUrlNavigatorOpen: false});
           }}
-          style={{cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: 'var(--text-secondary)'}}
+          className="hy-urlnav-crumbs-root"
           title={`Go to root site: ${rootUrl}`}
         >
-          <i className="ti ti-world" style={{fontSize: '13px'}} aria-hidden="true" />
+          <i className="ti ti-world hy-urlnav-crumbs-root-icon" aria-hidden="true" />
         </span>
         {hops.map((hop, index) => {
           const isLast = index === hops.length - 1;
           return (
             <React.Fragment key={index}>
-              <span style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>/</span>
+              <span className="hy-urlnav-sep">/</span>
               {isLast ? (
-                <span
-                  style={{
-                    fontSize: '11px',
-                    color: 'var(--text-primary)',
-                    fontWeight: 500,
-                    fontFamily: 'var(--font-mono)',
-                    wordBreak: 'break-all',
-                    overflowWrap: 'anywhere',
-                    minWidth: 0,
-                    maxWidth: '100%'
-                  }}
-                >
-                  {hop.name}
-                </span>
+                <span className="hy-urlnav-hop-last">{hop.name}</span>
               ) : (
                 <span
                   onClick={() => {
                     props.onNavigate(hop.url);
                     props.onUpdateState({isUrlNavigatorOpen: false});
                   }}
-                  style={{
-                    fontSize: '11px',
-                    color: 'var(--text-secondary)',
-                    fontFamily: 'var(--font-mono)',
-                    cursor: 'pointer',
-                    wordBreak: 'break-all',
-                    overflowWrap: 'anywhere',
-                    minWidth: 0,
-                    maxWidth: '100%'
-                  }}
-                  className="web_breadcrumbHop"
+                  className="web_breadcrumbHop hy-urlnav-hop"
                   title={hop.title}
                 >
                   {hop.name}
@@ -474,41 +404,11 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
         })}
         {varKeys.length > 0 && (
           <React.Fragment>
-            <span
-              style={{
-                fontSize: '11px',
-                color: 'var(--text-tertiary)',
-                fontFamily: 'var(--font-mono)',
-                marginLeft: '2px'
-              }}
-            >
-              ?
-            </span>
+            <span className="hy-urlnav-query-mark">?</span>
             {varKeys.map((k, vi) => (
               <React.Fragment key={'var-' + vi}>
-                {vi > 0 && (
-                  <span
-                    style={{
-                      fontSize: '11px',
-                      color: 'var(--text-tertiary)',
-                      fontFamily: 'var(--font-mono)',
-                      opacity: 0.6
-                    }}
-                  >
-                    ·
-                  </span>
-                )}
-                <span
-                  title={`Query variable: ${k}`}
-                  style={{
-                    fontSize: '11px',
-                    color: 'var(--text-tertiary)',
-                    fontFamily: 'var(--font-mono)',
-                    opacity: 0.75,
-                    wordBreak: 'break-all',
-                    minWidth: 0
-                  }}
-                >
+                {vi > 0 && <span className="hy-urlnav-query-dot">·</span>}
+                <span title={`Query variable: ${k}`} className="hy-urlnav-query-var">
                   {k}
                 </span>
               </React.Fragment>
@@ -541,73 +441,31 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
             props.onNavigate(row.entries[0].value);
           }
         }}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: '6px 12px',
-          cursor: 'pointer',
-          background: isFocused ? 'var(--info-bg)' : undefined
-        }}
-        className={isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow'}
+        className={
+          (isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow') +
+          ' hy-urlnav-row' +
+          (isFocused ? ' is-focused' : '')
+        }
       >
         <i
-          className={expanded ? 'ti ti-chevron-down' : 'ti ti-chevron-right'}
-          style={{fontSize: '12px', color: 'var(--text-tertiary)', flexShrink: 0}}
+          className={(expanded ? 'ti ti-chevron-down' : 'ti ti-chevron-right') + ' hy-urlnav-chevron'}
           aria-hidden="true"
         />
-        <span
-          style={{
-            position: 'relative',
-            width: '14px',
-            height: '14px',
-            flexShrink: 0,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}
-        >
-          <i
-            className="ti ti-world"
-            style={{fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--text-tertiary)'}}
-            aria-hidden="true"
-          />
+        <span className="hy-urlnav-fav">
+          <i className="ti ti-world hy-urlnav-fav-globe" aria-hidden="true" />
           <img
             src={faviconForUrl(sample.value)}
             width={14}
             height={14}
             alt=""
-            style={{position: 'absolute', inset: 0, borderRadius: '2px', objectFit: 'contain'}}
+            className="hy-urlnav-fav-img"
             onError={(e) => {
               (e.currentTarget as HTMLImageElement).style.display = 'none';
             }}
           />
         </span>
-        <span
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '11px',
-            fontWeight: 600,
-            color: isFocused ? 'var(--info-text)' : 'var(--text-primary)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            flex: 1
-          }}
-        >
-          {row.label}
-        </span>
-        <span
-          style={{
-            fontSize: '10px',
-            color: 'var(--text-tertiary)',
-            fontFamily: 'var(--font-sans)',
-            flexShrink: 0,
-            marginRight: 'var(--space-6)'
-          }}
-        >
-          {row.entries.length}
-        </span>
+        <span className="hy-urlnav-root-label">{row.label}</span>
+        <span className="hy-urlnav-root-count">{row.entries.length}</span>
       </div>
     );
   };
@@ -643,107 +501,38 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
             props.onNavigate(item.value);
           }
         }}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: indent ? '5px 12px 5px 32px' : '6px 12px',
-          cursor: 'pointer',
-          background: isFocused ? 'var(--info-bg)' : undefined,
-          transition: 'background 0.1s ease'
-        }}
-        className={isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow'}
+        className={
+          (isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow') +
+          ' hy-urlnav-row has-fade is-history' +
+          (indent ? ' is-child' : '') +
+          (isAiRow ? ' is-ai' : '') +
+          (isFocused ? ' is-focused' : '')
+        }
       >
         {isAiRow ? (
-          <i
-            className="ti ti-sparkles"
-            style={{
-              fontSize: '13px',
-              color: isFocused ? 'var(--info-text)' : 'var(--color-ai-purple, #7F77DD)',
-              flexShrink: 0
-            }}
-          />
+          <i className="ti ti-sparkles hy-urlnav-ai-icon" />
         ) : (
-          <span
-            style={{
-              position: 'relative',
-              width: '14px',
-              height: '14px',
-              flexShrink: 0,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}
-          >
-            <i
-              className="ti ti-world"
-              style={{fontSize: '13px', color: isFocused ? 'var(--info-text)' : 'var(--text-tertiary)'}}
-              aria-hidden="true"
-            />
+          <span className="hy-urlnav-fav">
+            <i className="ti ti-world hy-urlnav-fav-globe" aria-hidden="true" />
             <img
               src={faviconForUrl(item.value)}
               width={14}
               height={14}
               alt=""
-              style={{position: 'absolute', inset: 0, borderRadius: '2px', objectFit: 'contain'}}
+              className="hy-urlnav-fav-img"
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).style.display = 'none';
               }}
             />
           </span>
         )}
-        <span
-          style={{
-            fontFamily: isAiRow ? 'var(--font-sans)' : 'var(--font-mono)',
-            fontSize: '11px',
-            color: isFocused
-              ? isAiRow
-                ? 'var(--color-ai-purple, #7F77DD)'
-                : 'var(--info-text)'
-              : 'var(--text-primary)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            userSelect: 'none',
-            flex: 1
-          }}
-        >
+        <span className="hy-urlnav-label">
           {item.titleAtVisit ? (
-            <span
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 'var(--space-6)',
-                minWidth: 0,
-                maxWidth: '100%',
-                overflow: 'hidden'
-              }}
-            >
-              <span
-                title={item.titleAtVisit}
-                style={{
-                  fontWeight: 600,
-                  maxWidth: '45%',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  flexShrink: 0
-                }}
-              >
+            <span className="hy-urlnav-label-split">
+              <span title={item.titleAtVisit} className="hy-urlnav-label-title">
                 {highlightHistory(item.titleAtVisit, q)}
               </span>
-              <span
-                title={item.value}
-                style={{
-                  color: 'var(--text-tertiary)',
-                  fontSize: '10px',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  minWidth: 0,
-                  flex: 1
-                }}
-              >
+              <span title={item.value} className="hy-urlnav-label-url">
                 {highlightHistory(item.value, q)}
               </span>
             </span>
@@ -756,23 +545,10 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
             e.stopPropagation();
             props.onRemoveHistoryEntry(item.kind, item.value, item.visitedAt);
           }}
-          className="web-navigator-row-delete"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '18px',
-            height: '18px',
-            borderRadius: '50%',
-            color: 'var(--text-tertiary)',
-            cursor: 'pointer',
-            transition: 'background 0.15s, color 0.15s',
-            marginLeft: 'var(--space-6)',
-            flexShrink: 0
-          }}
+          className="web-navigator-row-delete hy-urlnav-delete"
           title="Delete from history"
         >
-          <i className="ti ti-x" style={{fontSize: '10px'}} aria-hidden="true" />
+          <i className="ti ti-x hy-urlnav-delete-icon" aria-hidden="true" />
         </div>
       </div>
     );
@@ -814,48 +590,12 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
     }
 
     return (
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          borderTop: '0.5px solid var(--border-neutral)',
-          background: 'var(--bg-primary)',
-          borderBottomLeftRadius: '4px',
-          borderBottomRightRadius: '4px',
-          boxSizing: 'border-box'
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--space-8)',
-            padding: 'var(--space-8) var(--space-12)',
-            boxSizing: 'border-box'
-          }}
-        >
+      <div className="hy-urlnav-footer">
+        <div className="hy-urlnav-inputbar">
           {props.loading && url ? (
-            <span
-              style={{
-                fontSize: '11px',
-                display: 'inline-block',
-                animation: 'web-pane-spin 1s linear infinite',
-                opacity: 0.6,
-                flexShrink: 0
-              }}
-            >
-              ⟳
-            </span>
+            <span className="hy-urlnav-spinner">⟳</span>
           ) : (
-            <i
-              className="ti ti-search"
-              style={{
-                fontSize: '13px',
-                color: 'var(--text-tertiary)',
-                flexShrink: 0
-              }}
-              aria-hidden="true"
-            />
+            <i className="ti ti-search hy-urlnav-search-icon" aria-hidden="true" />
           )}
           <input
             ref={props.navigatorInputRef}
@@ -865,17 +605,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
             // immediately (more reliable than the rAF focus, which can miss).
             autoFocus
             onFocus={(e) => e.currentTarget.select()}
-            style={{
-              flex: 1,
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              color: 'var(--text-primary)',
-              fontSize: '11px',
-              fontFamily: isAi || (val.trim() && !isValidUrl(val)) ? 'var(--font-sans)' : 'var(--font-mono)',
-              height: '24px',
-              padding: 0
-            }}
+            className={'hy-urlnav-input' + (isAi || (val.trim() && !isValidUrl(val)) ? ' is-sans' : '')}
             placeholder={
               isAi ? 'Search threads or ask a new question...' : 'Search history or type URL... (Esc to close)'
             }
@@ -911,105 +641,36 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
           <span
             onClick={handleGo}
             onMouseDown={(e) => e.preventDefault()}
-            style={{
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 'var(--space-4)',
-              fontSize: '10px',
-              fontWeight: 600,
-              fontFamily: 'var(--font-mono)',
-              color: 'var(--text-info)',
-              border: '0.5px solid var(--border-neutral)',
-              borderRadius: 'var(--radius-3)',
-              padding: '1px var(--space-6)',
-              background: 'var(--bg-secondary)',
-              userSelect: 'none',
-              whiteSpace: 'nowrap'
-            }}
+            className="hy-urlnav-go"
             title="Navigate (Enter)"
           >
             enter
           </span>
         </div>
 
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            padding: '4px 12px 6px 12px',
-            fontSize: '9px',
-            color: 'var(--text-tertiary)',
-            fontFamily: 'var(--font-sans)',
-            userSelect: 'none',
-            borderTop: '0.5px solid rgba(255, 255, 255, 0.03)',
-            gap: 'var(--space-12)'
-          }}
-        >
+        <div className="hy-urlnav-status">
           <span>{statusText}</span>
 
           <div
             onClick={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
-            style={{display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', marginRight: '12px'}}
+            className="hy-urlnav-save"
             title={props.saveHistory ? 'History saving is enabled' : 'History saving is disabled (Private mode)'}
           >
-            <span style={{fontSize: '9px', color: 'var(--text-secondary)'}}>Save History</span>
-            <label
-              className="web_historyToggle"
-              style={{
-                position: 'relative',
-                display: 'inline-block',
-                width: '24px',
-                height: '13px',
-                cursor: 'pointer',
-                userSelect: 'none',
-                margin: 0
-              }}
-            >
+            <span className="hy-urlnav-save-label">Save History</span>
+            <label className={'web_historyToggle hy-urlnav-toggle' + (props.saveHistory ? ' is-on' : '')}>
               <input
                 type="checkbox"
                 checked={props.saveHistory}
                 onChange={props.onToggleSaveHistory}
-                style={{
-                  opacity: 0,
-                  width: 0,
-                  height: 0,
-                  margin: 0,
-                  position: 'absolute'
-                }}
+                className="hy-urlnav-toggle-input"
               />
-              <span
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  backgroundColor: props.saveHistory ? 'var(--text-info, #007aff)' : 'var(--bg-tertiary, #3e3e3f)',
-                  borderRadius: '13px',
-                  transition: 'background-color 0.2s ease-in-out'
-                }}
-              />
-              <span
-                style={{
-                  position: 'absolute',
-                  content: '""',
-                  height: '9px',
-                  width: '9px',
-                  left: props.saveHistory ? '13px' : '2px',
-                  bottom: '2px',
-                  backgroundColor: '#ffffff',
-                  borderRadius: '50%',
-                  transition: 'left 0.2s ease-in-out',
-                  boxShadow: '0 1px 2px rgba(0,0,0,0.2)'
-                }}
-              />
+              <span className="hy-urlnav-toggle-track" />
+              <span className="hy-urlnav-toggle-knob" />
             </label>
           </div>
 
-          <span style={{color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)'}}>Esc to close</span>
+          <span className="hy-urlnav-esc">Esc to close</span>
         </div>
       </div>
     );
@@ -1020,19 +681,12 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
   return (
     <div
       ref={props.urlNavigatorRef}
+      className="hy-urlnav"
+      // Measured placement stays inline.
       style={{
-        position: 'absolute',
         top: `${props.navigatorTop ?? 38}px`,
         left: `${props.navigatorLeft ?? 8}px`,
-        width: `${props.navigatorWidth ?? 320}px`,
-        minWidth: '320px',
-        background: 'var(--bg-secondary)',
-        border: '0.5px solid var(--border-neutral)',
-        borderRadius: '4px',
-        zIndex: 10000,
-        display: 'flex',
-        flexDirection: 'column',
-        boxSizing: 'border-box'
+        width: `${props.navigatorWidth ?? 320}px`
       }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -1040,52 +694,14 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
       {renderUrlBreadcrumbs()}
 
       {/* Error Message if invalid */}
-      {props.navigatorError && (
-        <div
-          style={{
-            padding: '4px 12px',
-            fontSize: '10px',
-            color: 'var(--danger-text)',
-            background: 'var(--danger-bg)',
-            borderBottom: '0.5px solid var(--border-neutral)',
-            fontFamily: 'var(--font-sans)'
-          }}
-        >
-          {props.navigatorError}
-        </div>
-      )}
+      {props.navigatorError && <div className="hy-urlnav-error">{props.navigatorError}</div>}
 
       {/* Body: history list */}
-      <div
-        style={{
-          maxHeight: '200px',
-          overflowY: 'auto'
-        }}
-      >
+      <div className="hy-urlnav-list">
         {isAi ? (
           <>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '6px 12px 4px 12px',
-                borderBottom: '0.5px solid var(--border-neutral)',
-                background: 'var(--bg-dim)',
-                userSelect: 'none'
-              }}
-            >
-              <span
-                style={{
-                  fontSize: '9px',
-                  fontWeight: 600,
-                  color: 'var(--text-tertiary)',
-                  letterSpacing: '0.5px',
-                  fontFamily: 'var(--font-sans)'
-                }}
-              >
-                RECENT THREADS
-              </span>
+            <div className="hy-urlnav-section">
+              <span className="hy-urlnav-section-title">RECENT THREADS</span>
               {props.aiConversations.length > 0 && (
                 <span
                   onClick={(e) => {
@@ -1094,15 +710,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
                       props.onClearAllAiConversations();
                     }
                   }}
-                  className="web-navigator-clear-all"
-                  style={{
-                    fontSize: '9px',
-                    fontWeight: 600,
-                    color: 'var(--danger-text)',
-                    cursor: 'pointer',
-                    textTransform: 'uppercase',
-                    fontFamily: 'var(--font-sans)'
-                  }}
+                  className="web-navigator-clear-all hy-urlnav-clear-all"
                   title="Clear all threads"
                 >
                   Clear All
@@ -1110,17 +718,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
               )}
             </div>
             {props.aiConversations.length === 0 ? (
-              <div
-                style={{
-                  padding: '12px',
-                  textAlign: 'center',
-                  fontSize: '11px',
-                  color: 'var(--text-tertiary)',
-                  fontFamily: 'var(--font-sans)'
-                }}
-              >
-                No threads found
-              </div>
+              <div className="hy-urlnav-empty">No threads found</div>
             ) : (
               props.aiConversations.map((item, index) => {
                 const isFocused = index === props.navigatorFocusedIndex;
@@ -1131,61 +729,23 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
                       props.onNavigate(`ai://${item.id}`);
                       props.onUpdateState({isUrlNavigatorOpen: false});
                     }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '6px 12px',
-                      cursor: 'pointer',
-                      background: isFocused ? 'var(--info-bg)' : undefined,
-                      transition: 'background 0.1s ease'
-                    }}
-                    className={isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow'}
+                    className={
+                      (isFocused ? 'term_navigatorDirRow_focused' : 'term_navigatorDirRow') +
+                      ' hy-urlnav-row has-fade is-ai' +
+                      (isFocused ? ' is-focused' : '')
+                    }
                   >
-                    <i
-                      className="ti ti-sparkles"
-                      style={{
-                        fontSize: '13px',
-                        color: 'var(--color-ai-purple, #7F77DD)',
-                        flexShrink: 0
-                      }}
-                    />
-                    <span
-                      style={{
-                        fontFamily: 'var(--font-sans)',
-                        fontSize: '11px',
-                        color: isFocused ? 'var(--color-ai-purple, #7F77DD)' : 'var(--text-primary)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        userSelect: 'none',
-                        flex: 1
-                      }}
-                    >
-                      {highlightMatch(item.title, activeQuery)}
-                    </span>
+                    <i className="ti ti-sparkles hy-urlnav-ai-icon" />
+                    <span className="hy-urlnav-label">{highlightMatch(item.title, activeQuery)}</span>
                     <div
                       onClick={(e) => {
                         e.stopPropagation();
                         props.onRemoveAiConversation(item.id);
                       }}
-                      className="web-navigator-row-delete"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        width: '18px',
-                        height: '18px',
-                        borderRadius: '50%',
-                        color: 'var(--text-tertiary)',
-                        cursor: 'pointer',
-                        transition: 'background 0.15s, color 0.15s',
-                        marginLeft: 'var(--space-6)',
-                        flexShrink: 0
-                      }}
+                      className="web-navigator-row-delete hy-urlnav-delete"
                       title="Delete thread"
                     >
-                      <i className="ti ti-x" style={{fontSize: '10px'}} aria-hidden="true" />
+                      <i className="ti ti-x hy-urlnav-delete-icon" aria-hidden="true" />
                     </div>
                   </div>
                 );
@@ -1194,28 +754,8 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
           </>
         ) : (
           <>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '6px 12px 4px 12px',
-                borderBottom: '0.5px solid var(--border-neutral)',
-                background: 'var(--bg-dim)',
-                userSelect: 'none'
-              }}
-            >
-              <span
-                style={{
-                  fontSize: '9px',
-                  fontWeight: 600,
-                  color: 'var(--text-tertiary)',
-                  letterSpacing: '0.5px',
-                  fontFamily: 'var(--font-sans)'
-                }}
-              >
-                BROWSER HISTORY
-              </span>
+            <div className="hy-urlnav-section">
+              <span className="hy-urlnav-section-title">BROWSER HISTORY</span>
               {rows.length > 0 && (
                 <span
                   onClick={(e) => {
@@ -1224,15 +764,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
                       props.onClearAllHistory();
                     }
                   }}
-                  className="web-navigator-clear-all"
-                  style={{
-                    fontSize: '9px',
-                    fontWeight: 600,
-                    color: 'var(--danger-text)',
-                    cursor: 'pointer',
-                    textTransform: 'uppercase',
-                    fontFamily: 'var(--font-sans)'
-                  }}
+                  className="web-navigator-clear-all hy-urlnav-clear-all"
                   title="Clear all history"
                 >
                   Clear All
@@ -1240,17 +772,7 @@ export const UrlNavigator: React.FC<UrlNavigatorProps> = (props) => {
               )}
             </div>
             {rows.length === 0 ? (
-              <div
-                style={{
-                  padding: '12px',
-                  textAlign: 'center',
-                  fontSize: '11px',
-                  color: 'var(--text-tertiary)',
-                  fontFamily: 'var(--font-sans)'
-                }}
-              >
-                No history matches
-              </div>
+              <div className="hy-urlnav-empty">No history matches</div>
             ) : (
               rows.map((row, index) =>
                 row.type === 'root'

@@ -10,6 +10,8 @@ import React from 'react';
 
 import {onToastLayerAction, setLayerToasts, useToastLayer} from '../toast-layer';
 
+import './toast-stack.css';
+
 export interface ToastOptions {
   kind?: 'info' | 'error';
   /** Auto-expire after this many ms (default 30s). */
@@ -56,6 +58,7 @@ export function dismissStickyToast(key: string): void {
   dismissStickyImpl?.(key);
 }
 
+// Keep in sync with the 180ms animations in toast-stack.css.
 const EXIT_MS = 180;
 
 export default function ToastStack(): React.ReactElement | null {
@@ -149,70 +152,20 @@ export default function ToastStack(): React.ReactElement | null {
   if (layer || toasts.length === 0) return null;
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        right: '16px',
-        bottom: '16px',
-        zIndex: 9000,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'flex-end',
-        gap: '8px',
-        pointerEvents: 'none'
-      }}
-    >
-      <style>{`
-        @keyframes hyToastGrow {
-          from { max-height: 0; opacity: 0; transform: translateY(10px); }
-          to   { max-height: 140px; opacity: 1; transform: translateY(0); }
-        }
-        @keyframes hyToastShrink {
-          from { max-height: 140px; opacity: 1; }
-          to   { max-height: 0; opacity: 0; }
-        }
-        .hy-toast-close:hover { background: var(--border-neutral, rgba(255,255,255,0.15)); color: var(--text-primary, #fff); }
-      `}</style>
+    // position stays inline: the web-pane-occluders test counts it per file
+    <div className="hy-toast-stack" style={{position: 'fixed'}}>
       {toasts.map((t) => (
-        <div
-          key={t.id}
-          // max-height animates so the OLDER toasts above slide up smoothly as
-          // this one grows in (and back down as it collapses out).
-          style={{
-            overflow: 'hidden',
-            maxHeight: '140px',
-            animation: `${leaving.has(t.id) ? 'hyToastShrink' : 'hyToastGrow'} ${EXIT_MS}ms ease ${leaving.has(t.id) ? 'forwards' : ''}`,
-            pointerEvents: 'auto'
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '10px',
-              maxWidth: '400px',
-              padding: '10px 10px 10px 12px',
-              borderRadius: '8px',
-              border: `1px solid ${t.kind === 'error' ? 'var(--danger-text, #fe354e)' : 'var(--border-neutral, rgba(255,255,255,0.15))'}`,
-              background: 'var(--bg-secondary, #1a1a1a)',
-              boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
-              color: 'var(--text-primary, #eee)',
-              fontFamily: 'var(--font-sans, sans-serif)',
-              fontSize: '12px',
-              lineHeight: 1.45
-            }}
-          >
+        <div key={t.id} className={leaving.has(t.id) ? 'hy-toast-item hy-toast-item--leaving' : 'hy-toast-item'}>
+          <div className={t.kind === 'error' ? 'hy-toast-body hy-toast-body--error' : 'hy-toast-body'}>
             <i
-              className={t.kind === 'error' ? 'ti ti-alert-triangle' : 'ti ti-copy-check'}
-              style={{
-                fontSize: '14px',
-                flexShrink: 0,
-                marginTop: '1px',
-                color: t.kind === 'error' ? 'var(--danger-text, #fe354e)' : 'var(--info-text, #7aa2f7)'
-              }}
+              className={
+                t.kind === 'error'
+                  ? 'ti ti-alert-triangle hy-toast-icon hy-toast-icon--error'
+                  : 'ti ti-copy-check hy-toast-icon'
+              }
               aria-hidden="true"
             />
-            <span style={{flex: 1, minWidth: 0, overflowWrap: 'anywhere', whiteSpace: 'pre-wrap'}}>{t.text}</span>
+            <span className="hy-toast-text">{t.text}</span>
             <span
               className="hy-toast-close"
               role="button"
@@ -222,20 +175,6 @@ export default function ToastStack(): React.ReactElement | null {
                 e.preventDefault();
                 e.stopPropagation();
                 beginDismiss(t.id);
-              }}
-              style={{
-                flexShrink: 0,
-                width: '20px',
-                height: '20px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: '5px',
-                cursor: 'pointer',
-                color: 'var(--text-tertiary, #888)',
-                fontSize: '14px',
-                lineHeight: 1,
-                userSelect: 'none'
               }}
             >
               ×

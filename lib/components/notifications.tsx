@@ -7,6 +7,8 @@ import {decorate} from '../utils/plugins';
 
 import Notification_ from './notification';
 
+import './notifications.css';
+
 const Notification = decorate(Notification_, 'Notification');
 
 const openExternal = (url: string | undefined | null) => {
@@ -132,7 +134,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>((props, ref
             <>
               {props.messageText} (
               <a
-                style={{color: '#fff'}}
+                className="hy-notif-link--light"
                 onClick={(ev) => {
                   void window.require('electron').shell.openExternal(ev.currentTarget.href);
                   ev.preventDefault();
@@ -159,7 +161,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>((props, ref
           Version <b>{props.updateVersion}</b> ready.
           {props.updateNote && ` ${props.updateNote.trim().replace(/\.$/, '')}`} (
           <a
-            style={{color: '#000'}}
+            className="hy-notif-link--dark"
             onClick={(ev) => {
               void window.require('electron').shell.openExternal(ev.currentTarget.href);
               ev.preventDefault();
@@ -170,24 +172,12 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>((props, ref
           </a>
           ).{' '}
           {props.updateCanInstall ? (
-            <a
-              style={{
-                cursor: 'pointer',
-                textDecoration: 'underline',
-                fontWeight: 'bold'
-              }}
-              onClick={props.onUpdateInstall}
-            >
+            <a className="hy-notif-action" onClick={props.onUpdateInstall}>
               Restart
             </a>
           ) : (
             <a
-              style={{
-                color: '#000',
-                cursor: 'pointer',
-                textDecoration: 'underline',
-                fontWeight: 'bold'
-              }}
+              className="hy-notif-action hy-notif-link--dark"
               onClick={(ev) => {
                 void window.require('electron').shell.openExternal(ev.currentTarget.href);
                 ev.preventDefault();

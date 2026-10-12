@@ -1,0 +1,487 @@
+/* Web-pane URL navigator popup. Position/width stay inline (measured). */
+.hy-urlnav {
+  position: absolute;
+  min-width: 320px;
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-neutral);
+  border-radius: 4px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.hy-urlnav-match {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ---- Breadcrumb header ---- */
+.hy-urlnav-crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-8) var(--space-12);
+  border-bottom: 0.5px solid var(--border-neutral);
+  background: var(--bg-dim);
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  user-select: none;
+}
+
+.hy-urlnav-crumbs.is-ai {
+  font-family: var(--font-sans);
+  font-weight: 500;
+}
+
+.hy-urlnav-crumbs.is-hops {
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+.hy-urlnav-crumbs-ai-icon {
+  color: var(--color-ai-purple, #7f77dd);
+  margin-right: 4px;
+}
+
+.hy-urlnav-crumbs-url-icon {
+  color: var(--info-text);
+  margin-right: 4px;
+}
+
+.hy-urlnav-dim {
+  color: var(--text-tertiary);
+}
+
+.hy-urlnav-bright {
+  color: var(--text-primary);
+}
+
+.hy-urlnav-crumbs-raw {
+  color: var(--text-primary);
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.hy-urlnav-crumbs-root {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-secondary);
+}
+
+.hy-urlnav-crumbs-root-icon {
+  font-size: 13px;
+}
+
+.hy-urlnav-sep {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.hy-urlnav-hop {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  cursor: pointer;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Current (last) hop: not clickable, so no cursor. */
+.hy-urlnav-hop-last {
+  font-size: 11px;
+  color: var(--text-primary);
+  font-weight: 500;
+  font-family: var(--font-mono);
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.hy-urlnav-query-mark {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  margin-left: 2px;
+}
+
+.hy-urlnav-query-dot {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  opacity: 0.6;
+}
+
+.hy-urlnav-query-var {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  opacity: 0.75;
+  word-break: break-all;
+  min-width: 0;
+}
+
+/* ---- Error + list ---- */
+.hy-urlnav-error {
+  padding: 4px 12px;
+  font-size: 10px;
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border-bottom: 0.5px solid var(--border-neutral);
+  font-family: var(--font-sans);
+}
+
+.hy-urlnav-list {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.hy-urlnav-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px 4px 12px;
+  border-bottom: 0.5px solid var(--border-neutral);
+  background: var(--bg-dim);
+  user-select: none;
+}
+
+.hy-urlnav-section-title {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  letter-spacing: 0.5px;
+  font-family: var(--font-sans);
+}
+
+.hy-urlnav-clear-all {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--danger-text);
+  cursor: pointer;
+  text-transform: uppercase;
+  font-family: var(--font-sans);
+}
+
+.hy-urlnav-empty {
+  padding: 12px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+}
+
+/* ---- Rows. No base background: .term_navigatorDirRow:hover paints it. ---- */
+.hy-urlnav-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.hy-urlnav-row.has-fade {
+  transition: background 0.1s ease;
+}
+
+.hy-urlnav-row.is-child {
+  padding: 5px 12px 5px 32px;
+}
+
+.hy-urlnav-row.is-focused {
+  background: var(--info-bg);
+}
+
+.hy-urlnav-chevron {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.hy-urlnav-fav {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hy-urlnav-fav-globe {
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.hy-urlnav-row.is-focused .hy-urlnav-fav-globe {
+  color: var(--info-text);
+}
+
+.hy-urlnav-fav-img {
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.hy-urlnav-ai-icon {
+  font-size: 13px;
+  color: var(--color-ai-purple, #7f77dd);
+  flex-shrink: 0;
+}
+
+/* History AI rows turn the sparkle blue when focused; thread rows don't. */
+.hy-urlnav-row.is-focused.is-history .hy-urlnav-ai-icon {
+  color: var(--info-text);
+}
+
+.hy-urlnav-root-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.hy-urlnav-row.is-focused .hy-urlnav-root-label {
+  color: var(--info-text);
+}
+
+.hy-urlnav-root-count {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  flex-shrink: 0;
+  margin-right: var(--space-6);
+}
+
+.hy-urlnav-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+  flex: 1;
+}
+
+.hy-urlnav-row.is-ai .hy-urlnav-label {
+  font-family: var(--font-sans);
+}
+
+.hy-urlnav-row.is-focused .hy-urlnav-label {
+  color: var(--info-text);
+}
+
+.hy-urlnav-row.is-focused.is-ai .hy-urlnav-label {
+  color: var(--color-ai-purple, #7f77dd);
+}
+
+.hy-urlnav-label-split {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.hy-urlnav-label-title {
+  font-weight: 600;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.hy-urlnav-label-url {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+/* Show/hide + hover colours live on .web-navigator-row-delete (<style> block). */
+.hy-urlnav-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+  margin-left: var(--space-6);
+  flex-shrink: 0;
+}
+
+.hy-urlnav-delete-icon {
+  font-size: 10px;
+}
+
+/* ---- Footer: search/URL input ---- */
+.hy-urlnav-footer {
+  display: flex;
+  flex-direction: column;
+  border-top: 0.5px solid var(--border-neutral);
+  background: var(--bg-primary);
+  border-bottom-left-radius: 4px;
+  border-bottom-right-radius: 4px;
+  box-sizing: border-box;
+}
+
+.hy-urlnav-inputbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-12);
+  box-sizing: border-box;
+}
+
+.hy-urlnav-spinner {
+  font-size: 11px;
+  display: inline-block;
+  animation: web-pane-spin 1s linear infinite;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.hy-urlnav-search-icon {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.hy-urlnav-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  height: 24px;
+  padding: 0;
+}
+
+.hy-urlnav-input.is-sans {
+  font-family: var(--font-sans);
+}
+
+.hy-urlnav-go {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text-info);
+  border: 0.5px solid var(--border-neutral);
+  border-radius: var(--radius-3);
+  padding: 1px var(--space-6);
+  background: var(--bg-secondary);
+  user-select: none;
+  white-space: nowrap;
+}
+
+.hy-urlnav-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 12px 6px 12px;
+  font-size: 9px;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  user-select: none;
+  border-top: 0.5px solid rgba(255, 255, 255, 0.03);
+  gap: var(--space-12);
+}
+
+.hy-urlnav-save {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  margin-right: 12px;
+}
+
+.hy-urlnav-save-label {
+  font-size: 9px;
+  color: var(--text-secondary);
+}
+
+.hy-urlnav-toggle {
+  position: relative;
+  display: inline-block;
+  width: 24px;
+  height: 13px;
+  cursor: pointer;
+  user-select: none;
+  margin: 0;
+}
+
+.hy-urlnav-toggle-input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+  position: absolute;
+}
+
+.hy-urlnav-toggle-track {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--bg-tertiary, #3e3e3f);
+  border-radius: 13px;
+  transition: background-color 0.2s ease-in-out;
+}
+
+.hy-urlnav-toggle.is-on .hy-urlnav-toggle-track {
+  background-color: var(--text-info, #007aff);
+}
+
+.hy-urlnav-toggle-knob {
+  position: absolute;
+  height: 9px;
+  width: 9px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #ffffff;
+  border-radius: 50%;
+  transition: left 0.2s ease-in-out;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.hy-urlnav-toggle.is-on .hy-urlnav-toggle-knob {
+  left: 13px;
+}
+
+.hy-urlnav-esc {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}

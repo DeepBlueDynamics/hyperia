@@ -1,0 +1,55 @@
+/* Shared find bar (web pane + terminal). Floats top-right of the pane. */
+.hy-find-bar {
+  position: absolute;
+  top: var(--hy-find-top, 8px);
+  right: 12px;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-neutral);
+  border-radius: var(--radius-6);
+  padding: 3px var(--space-8);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+}
+
+.hy-find-icon {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.hy-find-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  width: 160px;
+}
+
+.hy-find-count {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+  min-width: 40px;
+  text-align: right;
+}
+
+/* Compound selector: must beat the global .term_controlIcon (inline-flex). */
+.term_controlIcon.hy-find-btn {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+
+.hy-find-btn-icon {
+  font-size: 14px;
+}
+
+.hy-find-btn-icon-close {
+  font-size: 13px;
+}

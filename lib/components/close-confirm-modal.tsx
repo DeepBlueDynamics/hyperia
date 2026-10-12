@@ -2,6 +2,8 @@ import React from 'react';
 
 import {useSuppressWebPanes} from '../utils/web-pane-suppress';
 
+import './close-confirm-modal.css';
+
 // In-app (styled) confirmation for closing a window/tab or quitting when panes
 // are running a foreground program. Replaces the native OS dialog. Driven by a
 // tiny module bus that lib/index.tsx feeds from the main-process 'close-confirm'
@@ -84,84 +86,31 @@ export default function CloseConfirmModal(): JSX.Element | null {
         // Backdrop click = Cancel (safe default).
         if (e.target === e.currentTarget) done(false);
       }}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 9999,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'rgba(0,0,0,0.45)',
-        backdropFilter: 'blur(2px)'
-      }}
+      className="hy-closeconfirm-backdrop"
+      // position stays inline: the web-pane-occluders test counts it per file
+      style={{position: 'fixed'}}
     >
-      <div
-        style={{
-          minWidth: 340,
-          maxWidth: 460,
-          background: 'var(--bg-secondary, #1a1a24)',
-          border: '0.5px solid var(--border-neutral, #33333f)',
-          borderRadius: 10,
-          boxShadow: '0 12px 40px rgba(0,0,0,0.55)',
-          padding: '18px 20px 16px',
-          fontFamily: 'var(--font-sans, system-ui, sans-serif)',
-          color: 'var(--text-primary, #e6e6ee)'
-        }}
-      >
-        <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8}}>
-          <span style={{fontSize: 16}}>⚠️</span>
-          <div style={{fontSize: 14, fontWeight: 600}}>{heading}</div>
+      <div className="hy-closeconfirm-card">
+        <div className="hy-closeconfirm-head">
+          <span className="hy-closeconfirm-icon">⚠️</span>
+          <div className="hy-closeconfirm-title">{heading}</div>
         </div>
-        <div style={{fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary, #b8b8c8)'}}>{lead}</div>
+        <div className="hy-closeconfirm-lead">{lead}</div>
         {n.length > 1 && (
-          <div
-            style={{
-              margin: '8px 0 2px',
-              fontFamily: 'var(--font-mono, monospace)',
-              fontSize: 12,
-              color: 'var(--text-primary, #e6e6ee)',
-              maxHeight: 120,
-              overflowY: 'auto'
-            }}
-          >
+          <div className="hy-closeconfirm-names">
             {n.map((name, i) => (
               <div key={i}>• {name}</div>
             ))}
           </div>
         )}
-        <div style={{fontSize: 12.5, color: 'var(--text-secondary, #b8b8c8)', marginTop: 8}}>
+        <div className="hy-closeconfirm-stop">
           {stopVerb} {n.length === 1 ? 'it' : 'them'}. {verb} anyway?
         </div>
-        <div style={{display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16}}>
-          <button
-            type="button"
-            onClick={() => done(false)}
-            style={{
-              padding: '6px 14px',
-              fontSize: 13,
-              borderRadius: 6,
-              border: '0.5px solid var(--border-neutral, #44444f)',
-              background: 'transparent',
-              color: 'var(--text-primary, #e6e6ee)',
-              cursor: 'pointer'
-            }}
-          >
+        <div className="hy-closeconfirm-actions">
+          <button type="button" onClick={() => done(false)} className="hy-closeconfirm-cancel">
             Cancel
           </button>
-          <button
-            type="button"
-            onClick={() => done(true)}
-            style={{
-              padding: '6px 14px',
-              fontSize: 13,
-              fontWeight: 600,
-              borderRadius: 6,
-              border: 'none',
-              background: 'var(--accent-danger, #d9534f)',
-              color: '#fff',
-              cursor: 'pointer'
-            }}
-          >
+          <button type="button" onClick={() => done(true)} className="hy-closeconfirm-confirm">
             {verb}
           </button>
         </div>

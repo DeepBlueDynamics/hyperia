@@ -1,0 +1,12 @@
+/* Links inside the legacy DOM notices (notifications.tsx). */
+.hy-notif-link--light {
+  color: #fff;
+}
+.hy-notif-link--dark {
+  color: #000;
+}
+.hy-notif-action {
+  cursor: pointer;
+  text-decoration: underline;
+  font-weight: bold;
+}

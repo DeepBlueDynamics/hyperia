@@ -1,0 +1,6 @@
+/* Empty-group placeholder; --hy-tg-bg is the config background (set inline).
+   Beats term.tsx's .term_wrapper.term_fit { background: transparent }. */
+.term_wrapper.term_fit.hy-tg-empty {
+  position: relative;
+  background: var(--hy-tg-bg);
+}

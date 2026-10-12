@@ -40,6 +40,7 @@ import {PaneBand} from './pane-band';
 const path = require('path');
 
 import '@xterm/xterm/css/xterm.css';
+import './term.css';
 
 export const activeTerminals = new Map<string, Term>();
 
@@ -2340,79 +2341,23 @@ export default class Term extends React.PureComponent<
     return (
       <div
         ref={this.navigatorRecentRef}
-        className="term_navigatorRecent"
-        style={{
-          borderTop: '0.5px solid var(--border-neutral)',
-          padding: 'var(--space-4) var(--space-8)',
-          flex: '0 1 auto',
-          minHeight: `${this.state.navigatorRecentMin}px`,
-          // Label sits INLINE left of the chips (not on its own line above) so
-          // the one-line floor is just one chip line — it has to fit short panes.
-          display: 'flex',
-          flexDirection: 'row',
-          // Only the chip row stretches (so it can scroll); the label keeps its
-          // natural height — a stretched label fed its own height back into
-          // the one-line floor measurement and RECENT grew without bound.
-          alignItems: 'flex-start',
-          gap: 'var(--space-6)',
-          overflow: 'hidden',
-          boxSizing: 'border-box'
-        }}
+        // Label sits INLINE left of the chips so the one-line floor is just one
+        // chip line; only the chip row stretches (a stretched label fed back
+        // into the floor measurement and RECENT grew without bound).
+        className="term_navigatorRecent hy-term-recent"
+        style={{minHeight: `${this.state.navigatorRecentMin}px`}}
       >
-        <div
-          style={{
-            flex: 'none',
-            alignSelf: 'flex-start',
-            fontSize: '9px',
-            lineHeight: '18px',
-            color: 'var(--text-tertiary)',
-            fontFamily: 'var(--font-sans)',
-            textTransform: 'uppercase',
-            letterSpacing: '0.04em',
-            paddingLeft: 'var(--space-4)'
-          }}
-        >
-          recent
-        </div>
-        <div
-          className="term_navigatorRecentRow"
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignContent: 'flex-start',
-            gap: 'var(--space-4) var(--space-6)',
-            flex: '1 1 auto',
-            alignSelf: 'stretch',
-            minWidth: 0,
-            minHeight: 0,
-            overflowY: 'auto',
-            overflowX: 'hidden'
-          }}
-        >
+        <div className="hy-term-recent-label">recent</div>
+        <div className="term_navigatorRecentRow hy-term-recent-row">
           {items.map(({path: itemPath, accent}) => (
+            // Chips wrap when narrow; an over-wide path chip ellipsizes (full
+            // path on hover via title).
             <span
               key={itemPath}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => this.loadNavigatorDirs(itemPath)}
               title={accent ? `Home — ${itemPath}` : itemPath}
-              style={{
-                cursor: 'pointer',
-                // Wrap onto new lines when the pane is narrow instead of
-                // side-scrolling; a single over-wide path chip ellipsizes
-                // (full path still on hover via title) rather than overflowing.
-                maxWidth: '100%',
-                minWidth: 0,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                fontFamily: 'var(--font-mono)',
-                fontSize: '10px',
-                padding: '2px var(--space-6)',
-                borderRadius: 'var(--radius-3)',
-                border: '0.5px solid var(--border-neutral)',
-                color: accent ? 'var(--info-text)' : 'var(--text-secondary)',
-                background: accent ? 'var(--info-bg)' : 'var(--bg-primary)'
-              }}
+              className={accent ? 'hy-term-chip hy-term-chip--accent' : 'hy-term-chip'}
             >
               {itemPath}
             </span>
@@ -2423,21 +2368,7 @@ export default class Term extends React.PureComponent<
               onMouseDown={(e) => e.preventDefault()}
               onClick={this.clearDirHistory}
               title="Clear recent directories"
-              style={{
-                cursor: 'pointer',
-                flexShrink: 0,
-                userSelect: 'none',
-                whiteSpace: 'nowrap',
-                lineHeight: '1.2',
-                fontFamily: 'var(--font-mono)',
-                fontSize: '10px',
-                fontWeight: 600,
-                padding: '2px var(--space-6)',
-                borderRadius: 'var(--radius-3)',
-                border: '0.5px solid var(--border-neutral)',
-                color: 'var(--text-tertiary)',
-                background: 'var(--bg-primary)'
-              }}
+              className="hy-term-chip-clear"
             >
               clear
             </span>
@@ -2615,30 +2546,16 @@ export default class Term extends React.PureComponent<
 
     return (
       <div
-        className="term_navigatorBreadcrumbs"
-        style={{
-          // Pinned to the popup's top: never shrinks, never scrolls away.
-          flex: 'none',
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          gap: 'var(--space-4)',
-          padding: 'var(--space-6) var(--space-12)',
-          borderBottom: '0.5px solid var(--border-neutral)'
-        }}
+        // Pinned to the popup's top: never shrinks, never scrolls away.
+        className="term_navigatorBreadcrumbs hy-term-crumbs"
       >
         <span
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => handleHopClick(rootPath)}
-          style={{
-            cursor: 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            color: 'var(--text-secondary)'
-          }}
+          className="hy-term-crumb-root"
           title="Root directory"
         >
-          <i className="ti ti-home" style={{fontSize: '13px'}} aria-hidden="true" />
+          <i className="ti ti-home hy-term-ico13" aria-hidden="true" />
         </span>
         {hops.map((hop, index) => {
           const isLast = index === hops.length - 1;
@@ -2648,39 +2565,14 @@ export default class Term extends React.PureComponent<
           const showSep = isWindows ? index > 0 : true;
           return (
             <React.Fragment key={hop.path}>
-              {showSep && (
-                <span
-                  style={{
-                    fontSize: '11px',
-                    color: 'var(--text-tertiary)',
-                    fontFamily: 'var(--font-mono)'
-                  }}
-                >
-                  {sep}
-                </span>
-              )}
+              {showSep && <span className="hy-term-crumb-sep">{sep}</span>}
               {isLast ? (
-                <span
-                  style={{
-                    fontSize: '11px',
-                    color: 'var(--text-primary)',
-                    fontWeight: 500,
-                    fontFamily: 'var(--font-mono)'
-                  }}
-                >
-                  {hop.name}
-                </span>
+                <span className="hy-term-crumb-current">{hop.name}</span>
               ) : (
                 <span
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => handleHopClick(hop.path)}
-                  style={{
-                    fontSize: '11px',
-                    color: 'var(--text-secondary)',
-                    fontFamily: 'var(--font-mono)',
-                    cursor: 'pointer'
-                  }}
-                  className="term_breadcrumbHop"
+                  className="term_breadcrumbHop hy-term-crumb-hop"
                 >
                   {hop.name}
                 </span>
@@ -2694,23 +2586,8 @@ export default class Term extends React.PureComponent<
         <span
           onClick={this.goToNavigatorDir}
           onMouseDown={(e) => e.preventDefault()}
-          className="term_navigatorGo"
+          className="term_navigatorGo hy-term-crumb-go"
           title="cd to this directory (Ctrl+Enter)"
-          style={{
-            marginLeft: 'auto',
-            cursor: 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 'var(--space-4)',
-            fontSize: '10px',
-            fontWeight: 600,
-            fontFamily: 'var(--font-mono)',
-            color: 'var(--text-info)',
-            border: '0.5px solid var(--border-neutral)',
-            borderRadius: 'var(--radius-3)',
-            padding: '1px var(--space-6)',
-            whiteSpace: 'nowrap'
-          }}
         >
           ctrl-enter
         </span>
@@ -2742,33 +2619,16 @@ export default class Term extends React.PureComponent<
     // height) the list still gets the larger share when space is short.
     const rowH = this.state.navigatorRowMin;
     const listBasis = Math.min(220, Math.max(1, filteredDirs.length) * rowH);
-    const regionStyle: React.CSSProperties = {
-      flex: `1 1 ${listBasis}px`,
-      minHeight: `${this.state.navigatorDirMin}px`,
-      overflowY: 'auto',
-      overflowX: 'hidden',
-      boxSizing: 'border-box'
-    };
+    const minHeight = `${this.state.navigatorDirMin}px`;
 
     if (filteredDirs.length === 0) {
+      // Empty state: a shrinkable ~60px basis (padding would not shrink below
+      // the one-row floor).
       return (
         <div
           ref={this.navigatorDirListRef}
-          className="term_navigatorDirList"
-          style={{
-            ...regionStyle,
-            // Same ~60px as before, but as a shrinkable basis (padding would
-            // not shrink below the one-row floor).
-            flex: '1 1 60px',
-            padding: '0 12px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            textAlign: 'center',
-            fontSize: '11px',
-            color: 'var(--text-tertiary)',
-            fontFamily: 'var(--font-sans)'
-          }}
+          className="term_navigatorDirList hy-term-dirlist hy-term-dirlist--empty"
+          style={{minHeight}}
         >
           No matching subdirectories
         </div>
@@ -2776,7 +2636,11 @@ export default class Term extends React.PureComponent<
     }
 
     return (
-      <div ref={this.navigatorDirListRef} style={regionStyle} className="term_navigatorDirList">
+      <div
+        ref={this.navigatorDirListRef}
+        style={{flex: `1 1 ${listBasis}px`, minHeight}}
+        className="term_navigatorDirList hy-term-dirlist"
+      >
         {filteredDirs.map((dir, index) => {
           const isMatched = index === focusedIndex;
           const showFocus = isMatched;
@@ -2792,23 +2656,11 @@ export default class Term extends React.PureComponent<
               const beforePart = dirName.substring(0, matchIndex);
               const matchedPart = dirName.substring(matchIndex, matchIndex + prefixLower.length);
               const afterPart = dirName.substring(matchIndex + prefixLower.length);
+              // Focused colour/weight come from the row's _focused class.
               dirLabelNode = (
-                <span
-                  style={{
-                    color: showFocus ? 'var(--info-text)' : 'var(--text-primary)',
-                    fontWeight: showFocus ? 500 : 'normal'
-                  }}
-                >
+                <span className="hy-term-match">
                   <span>{beforePart}</span>
-                  <span
-                    style={{
-                      textDecoration: 'underline',
-                      textUnderlineOffset: '2px',
-                      fontWeight: 'bold'
-                    }}
-                  >
-                    {matchedPart}
-                  </span>
+                  <span className="hy-term-match-hit">{matchedPart}</span>
                   <span>{afterPart}</span>
                 </span>
               );
@@ -2820,73 +2672,18 @@ export default class Term extends React.PureComponent<
               key={dirName}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => handleRowClick(dirName)}
-              className={`term_navigatorDirRow ${showFocus ? 'term_navigatorDirRow_focused' : ''}`}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: 'var(--space-6) var(--space-12)',
-                cursor: 'pointer',
-                background: showFocus ? 'var(--info-bg)' : undefined,
-                transition: 'background 0.1s ease'
-              }}
+              className={`term_navigatorDirRow hy-term-navrow ${showFocus ? 'term_navigatorDirRow_focused' : ''}`}
             >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-6)',
-                  minWidth: 0,
-                  flex: 1
-                }}
-              >
-                <i
-                  className="ti ti-folder term_folderIcon"
-                  style={{
-                    fontSize: '13px',
-                    color: showFocus ? 'var(--info-text)' : 'var(--text-tertiary)',
-                    flexShrink: 0
-                  }}
-                  aria-hidden="true"
-                />
-                <span
-                  className="term_dirLabel"
-                  style={{
-                    fontSize: '11px',
-                    color: showFocus ? 'var(--info-text)' : 'var(--text-primary)',
-                    fontFamily: 'var(--font-sans)',
-                    fontWeight: showFocus ? 500 : 'normal',
-                    userSelect: 'none',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    marginRight: 'var(--space-6)'
-                  }}
-                >
-                  {dirLabelNode}
-                </span>
+              <div className="hy-term-navrow-main">
+                <i className="ti ti-folder term_folderIcon hy-term-navrow-folder" aria-hidden="true" />
+                <span className="term_dirLabel hy-term-navrow-label">{dirLabelNode}</span>
                 {typeof dirCount === 'number' && !isNaN(dirCount) && (
-                  <span
-                    style={{
-                      fontSize: '10px',
-                      color: showFocus ? 'var(--info-text)' : 'var(--text-tertiary)',
-                      fontFamily: 'var(--font-sans)',
-                      flexShrink: 0
-                    }}
-                  >
+                  <span className="hy-term-navrow-count">
                     ({dirCount} {dirCount === 1 ? 'directory' : 'directories'})
                   </span>
                 )}
               </div>
-              <i
-                className="ti ti-chevron-right term_chevronIcon"
-                style={{
-                  fontSize: '11px',
-                  color: showFocus ? 'var(--info-text)' : 'var(--text-tertiary)',
-                  flexShrink: 0
-                }}
-                aria-hidden="true"
-              />
+              <i className="ti ti-chevron-right term_chevronIcon hy-term-navrow-chevron" aria-hidden="true" />
             </div>
           );
         })}
@@ -3024,44 +2821,14 @@ export default class Term extends React.PureComponent<
     const canOpenLocally = this.isLocalDirPath(browsed);
     return (
       <div
-        className="term_navigatorFooter"
-        style={{
-          // Pinned to the popup's bottom: never shrinks, never scrolls away.
-          flex: 'none',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 'var(--space-8)',
-          padding: 'var(--space-6) var(--space-12)',
-          borderTop: '0.5px solid var(--border-neutral)',
-          background: 'var(--bg-primary)',
-          borderBottomLeftRadius: '4px',
-          borderBottomRightRadius: '4px',
-          boxSizing: 'border-box'
-        }}
+        // Pinned to the popup's bottom: never shrinks, never scrolls away.
+        className="term_navigatorFooter hy-term-navfooter"
       >
-        <i
-          className="ti ti-search"
-          style={{
-            fontSize: '13px',
-            color: 'var(--text-tertiary)',
-            flexShrink: 0
-          }}
-          aria-hidden="true"
-        />
+        <i className="ti ti-search hy-term-navfooter-icon" aria-hidden="true" />
         <input
           ref={this.navigatorSearchInputRef}
           type="text"
-          style={{
-            flex: 1,
-            background: 'transparent',
-            border: 'none',
-            outline: 'none',
-            color: 'var(--text-primary)',
-            fontSize: '11px',
-            fontFamily: 'var(--font-mono)',
-            height: '24px',
-            padding: 0
-          }}
+          className="hy-term-navsearch"
           placeholder="Search or enter path... (Esc to close, Ctrl+Enter to Go)"
           value={this.state.searchBuffer}
           onChange={this.handleSearchInputChange}
@@ -3070,21 +2837,7 @@ export default class Term extends React.PureComponent<
         <span
           onClick={canOpenLocally ? () => this.openInFileBrowser(browsed) : undefined}
           onMouseDown={(e) => e.preventDefault()}
-          className="term_navigatorOpenFolder"
-          style={{
-            cursor: canOpenLocally ? 'pointer' : 'not-allowed',
-            display: 'inline-flex',
-            alignItems: 'center',
-            fontSize: '12px',
-            color: canOpenLocally ? 'var(--text-info)' : 'var(--text-secondary)',
-            border: '0.5px solid var(--border-neutral)',
-            borderRadius: 'var(--radius-3)',
-            padding: '1px var(--space-6)',
-            background: 'var(--bg-secondary)',
-            userSelect: 'none',
-            whiteSpace: 'nowrap',
-            opacity: canOpenLocally ? 1 : 0.5
-          }}
+          className={`term_navigatorOpenFolder hy-term-openfolder${canOpenLocally ? '' : ' hy-term-openfolder--disabled'}`}
           title={canOpenLocally ? fileBrowserLabel() : 'Not a local directory'}
         >
           <i className="ti ti-external-link" aria-hidden="true" />
@@ -3092,23 +2845,7 @@ export default class Term extends React.PureComponent<
         <span
           onClick={this.isTerminalBusy() ? undefined : this.goToNavigatorDir}
           onMouseDown={(e) => e.preventDefault()}
-          style={{
-            cursor: this.isTerminalBusy() ? 'not-allowed' : 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 'var(--space-4)',
-            fontSize: '10px',
-            fontWeight: 600,
-            fontFamily: 'var(--font-mono)',
-            color: this.isTerminalBusy() ? 'var(--text-secondary)' : 'var(--text-info)',
-            border: '0.5px solid var(--border-neutral)',
-            borderRadius: 'var(--radius-3)',
-            padding: '1px var(--space-6)',
-            background: 'var(--bg-secondary)',
-            userSelect: 'none',
-            whiteSpace: 'nowrap',
-            opacity: this.isTerminalBusy() ? 0.5 : 1
-          }}
+          className={`hy-term-gobtn${this.isTerminalBusy() ? ' hy-term-gobtn--busy' : ''}`}
           title={
             this.isTerminalBusy()
               ? 'Directory change locked while process is running'
@@ -3525,41 +3262,22 @@ export default class Term extends React.PureComponent<
     return (
       <div
         ref={this.termOuterRef}
-        className={`term_fit ${this.props.isTermActive ? 'term_active' : ''}`}
+        className={`term_fit hy-term-root ${this.props.isTermActive ? 'term_active' : ''}`}
         onMouseUp={this.onMouseUp}
         onDragOver={this.onFileDragOver}
         onDragLeave={this.onFileDragLeave}
         onDrop={this.onFileDrop}
-        style={{position: 'relative'}}
       >
         {/* Workspace-restore substitution notice (#168): a restored pane whose
             cwd (etc.) was missing fell back loudly — this banner says what was
             substituted. Dismissible; never blocks the terminal. */}
         {(this.props as any).restoreNotice && !this.state.restoreNoticeDismissed && (
-          <div
-            className="term_restoreNotice"
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              zIndex: 6,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '4px 10px',
-              fontSize: '11px',
-              fontFamily: 'var(--font-sans, sans-serif)',
-              background: 'var(--warning-bg, rgba(180, 130, 0, 0.25))',
-              color: 'var(--text-primary, #eee)',
-              borderBottom: '1px solid var(--border-neutral, rgba(255,255,255,0.15))'
-            }}
-          >
-            <span style={{flex: 1}}>⚠ {(this.props as any).restoreNotice}</span>
+          <div className="term_restoreNotice hy-term-restore">
+            <span className="hy-term-restore-text">⚠ {(this.props as any).restoreNotice}</span>
             <span
               role="button"
               aria-label="Dismiss restore notice"
-              style={{cursor: 'pointer', opacity: 0.8, padding: '0 4px'}}
+              className="hy-term-restore-close"
               onClick={() => this.setState({restoreNoticeDismissed: true})}
             >
               ✕
@@ -3570,19 +3288,7 @@ export default class Term extends React.PureComponent<
             as background: faint, diagonal, centered, mouse-transparent. Drawn
             over the canvas because xterm paints an opaque background. */}
         {((this.props as any).watermark || (this.props as any).watermarkImage) && (
-          <div
-            aria-hidden="true"
-            style={{
-              position: 'absolute',
-              inset: 0,
-              zIndex: 5,
-              pointerEvents: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              overflow: 'hidden'
-            }}
-          >
+          <div aria-hidden="true" className="hy-term-wm">
             {(this.props as any).watermarkImage && (
               <img
                 alt=""
@@ -3593,27 +3299,18 @@ export default class Term extends React.PureComponent<
                     ? imgSrc
                     : `file:///${imgSrc.replace(/\\/g, '/')}`;
                 })()}
-                style={{
-                  position: 'absolute',
-                  maxWidth: '62%',
-                  maxHeight: '62%',
-                  opacity: (this.props as any).watermarkOpacity ?? 0.08,
-                  userSelect: 'none'
-                }}
+                className="hy-term-wm-img"
+                style={{'--hy-term-wm-opacity': (this.props as any).watermarkOpacity ?? 0.08} as React.CSSProperties}
               />
             )}
             {(this.props as any).watermark && (
               <span
-                style={{
-                  transform: 'rotate(-28deg)',
-                  fontFamily: 'var(--font-sans)',
-                  fontWeight: 900,
-                  fontSize: 'clamp(28px, 12cqw, 160px)',
-                  letterSpacing: '0.18em',
-                  whiteSpace: 'nowrap',
-                  color: (this.props as any).watermarkColor || 'rgba(255, 140, 0, 0.10)',
-                  userSelect: 'none'
-                }}
+                className="hy-term-wm-text"
+                style={
+                  {
+                    '--hy-term-wm-color': (this.props as any).watermarkColor || 'rgba(255, 140, 0, 0.10)'
+                  } as React.CSSProperties
+                }
               >
                 {(this.props as any).watermark}
               </span>
@@ -3622,41 +3319,17 @@ export default class Term extends React.PureComponent<
         )}
         {/* CRT scan-line overlay (paneStyle.scanlines) — pure cosmetics: sits
             above the terminal canvas, ignores the mouse, costs no layout. */}
-        {(this.props as any).scanlines && (
-          <div
-            aria-hidden="true"
-            style={{
-              position: 'absolute',
-              inset: 0,
-              zIndex: 6,
-              pointerEvents: 'none',
-              background:
-                'repeating-linear-gradient(to bottom, rgba(0,0,0,0.28) 0px, rgba(0,0,0,0.28) 1px, transparent 1px, transparent 3px)'
-            }}
-          />
-        )}
+        {(this.props as any).scanlines && <div aria-hidden="true" className="hy-term-scanlines" />}
         {this.state.showCopied && (
           <div
-            style={{
-              position: 'absolute',
-              // Anchored under the clear-buffer button (left edges aligned); falls
-              // back to the top-right corner if the button wasn't measured.
-              ...(this.state.copiedPos
+            className="hy-term-copied"
+            // Anchored under the clear-buffer button (left edges aligned); falls
+            // back to the top-right corner if the button wasn't measured.
+            style={
+              this.state.copiedPos
                 ? {left: this.state.copiedPos.left, top: this.state.copiedPos.top}
-                : {top: 40, right: 12}),
-              zIndex: 50,
-              pointerEvents: 'none',
-              textAlign: 'left',
-              whiteSpace: 'nowrap',
-              background: 'var(--accent-success, #3fb950)',
-              color: '#06140a',
-              fontSize: '11px',
-              fontWeight: 600,
-              padding: '4px 10px',
-              borderRadius: '6px',
-              fontFamily: 'var(--font-sans)',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.35)'
-            }}
+                : {top: 40, right: 12}
+            }
           >
             {this.state.copiedMsg || 'Copied!'}
           </div>
@@ -3731,99 +3404,42 @@ export default class Term extends React.PureComponent<
                 </span>
               )
             }
-            icon={<span style={{fontFamily: 'var(--font-mono)', fontWeight: 700}}>{icon}</span>}
+            icon={<span className="hy-term-band-icon">{icon}</span>}
             navCluster={
               hideNavArrows && hideClearBuffer && hideScreenshot ? null : (
                 <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: sq(4, 2),
-                    marginLeft: sq(6, 2),
-                    marginRight: sq(6, 2),
-                    flexShrink: 0
-                  }}
+                  className="hy-term-navcluster"
+                  style={{gap: sq(4, 2), marginLeft: sq(6, 2), marginRight: sq(6, 2)}}
                   onClick={(e) => e.stopPropagation()}
                 >
                   {!hideNavArrows && (
                     <>
                       <span
-                        className="term_controlIcon term_tooltipTrigger"
+                        className={`term_controlIcon term_tooltipTrigger hy-term-navbtn hy-term-navbtn--hist${
+                          this.state.cwdCursor <= 0 ? ' hy-term-navbtn--disabled' : ''
+                        }`}
                         onClick={this.navigateBack}
                         onContextMenu={this.handleBackContextMenu}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          cursor: this.state.cwdCursor <= 0 ? 'default' : 'pointer',
-                          opacity: this.state.cwdCursor <= 0 ? 0.4 : 1,
-                          pointerEvents: this.state.cwdCursor <= 0 ? 'none' : 'auto'
-                        }}
                       >
-                        <i className="ti ti-arrow-left" style={{fontSize: '14px'}} aria-hidden="true" />
-                        <div className="term_tooltip" style={{minWidth: '160px'}}>
-                          <div
-                            style={{
-                              fontSize: '11px',
-                              color: 'var(--text-primary)',
-                              fontWeight: 500
-                            }}
-                          >
-                            Previous directory
-                          </div>
-                          <div
-                            style={{
-                              fontSize: '11px',
-                              fontFamily: 'var(--font-mono)',
-                              color: 'var(--text-secondary)',
-                              marginTop: 'var(--space-2)'
-                            }}
-                          >
-                            Alt+Left
-                          </div>
+                        <i className="ti ti-arrow-left hy-term-ico14" aria-hidden="true" />
+                        <div className="term_tooltip hy-term-tip">
+                          <div className="hy-term-tip-title">Previous directory</div>
+                          <div className="hy-term-tip-keys">Alt+Left</div>
                         </div>
                       </span>
                       <span
-                        className="term_controlIcon term_tooltipTrigger"
+                        className={`term_controlIcon term_tooltipTrigger hy-term-navbtn hy-term-navbtn--hist${
+                          this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
+                            ? ' hy-term-navbtn--disabled'
+                            : ''
+                        }`}
                         onClick={this.navigateForward}
                         onContextMenu={this.handleForwardContextMenu}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          cursor:
-                            this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
-                              ? 'default'
-                              : 'pointer',
-                          opacity:
-                            this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
-                              ? 0.4
-                              : 1,
-                          pointerEvents:
-                            this.state.cwdCursor === -1 || this.state.cwdCursor >= this.state.cwdHistory.length - 1
-                              ? 'none'
-                              : 'auto'
-                        }}
                       >
-                        <i className="ti ti-arrow-right" style={{fontSize: '14px'}} aria-hidden="true" />
-                        <div className="term_tooltip" style={{minWidth: '160px'}}>
-                          <div
-                            style={{
-                              fontSize: '11px',
-                              color: 'var(--text-primary)',
-                              fontWeight: 500
-                            }}
-                          >
-                            Next directory
-                          </div>
-                          <div
-                            style={{
-                              fontSize: '11px',
-                              fontFamily: 'var(--font-mono)',
-                              color: 'var(--text-secondary)',
-                              marginTop: 'var(--space-2)'
-                            }}
-                          >
-                            Alt+Right
-                          </div>
+                        <i className="ti ti-arrow-right hy-term-ico14" aria-hidden="true" />
+                        <div className="term_tooltip hy-term-tip">
+                          <div className="hy-term-tip-title">Next directory</div>
+                          <div className="hy-term-tip-keys">Alt+Right</div>
                         </div>
                       </span>
                     </>
@@ -3831,63 +3447,28 @@ export default class Term extends React.PureComponent<
                   {!hideClearBuffer && (
                     <span
                       ref={this._clearBtnRef}
-                      className="term_controlIcon term_tooltipTrigger"
+                      className="term_controlIcon term_tooltipTrigger hy-term-navbtn"
                       onClick={() => {
                         this.clear();
                         this.focus();
                       }}
-                      style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
                     >
-                      <i className="ti ti-clear-all" style={{fontSize: '14px'}} aria-hidden="true" />
-                      <div className="term_tooltip" style={{minWidth: '160px'}}>
-                        <div
-                          style={{
-                            fontSize: '11px',
-                            color: 'var(--text-primary)',
-                            fontWeight: 500
-                          }}
-                        >
-                          Clear buffer
-                        </div>
-                        <div
-                          style={{
-                            fontSize: '11px',
-                            fontFamily: 'var(--font-mono)',
-                            color: 'var(--text-secondary)',
-                            marginTop: 'var(--space-2)'
-                          }}
-                        >
-                          Wipe scrollback — shell only, not TUIs
-                        </div>
+                      <i className="ti ti-clear-all hy-term-ico14" aria-hidden="true" />
+                      <div className="term_tooltip hy-term-tip">
+                        <div className="hy-term-tip-title">Clear buffer</div>
+                        <div className="hy-term-tip-keys">Wipe scrollback — shell only, not TUIs</div>
                       </div>
                     </span>
                   )}
                   {!hideScreenshot && (
                     <span
-                      className="term_controlIcon term_tooltipTrigger"
+                      className="term_controlIcon term_tooltipTrigger hy-term-navbtn"
                       onClick={(e) => void this.captureScreenshot(e)}
-                      style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
                     >
-                      <i className="ti ti-camera" style={{fontSize: '14px'}} aria-hidden="true" />
-                      <div className="term_tooltip" style={{minWidth: '160px'}}>
-                        <div
-                          style={{
-                            fontSize: '11px',
-                            color: 'var(--text-primary)',
-                            fontWeight: 500
-                          }}
-                        >
-                          Click: screenshot · Shift+click: whole scrollback
-                        </div>
-                        <div
-                          style={{
-                            fontSize: '11px',
-                            color: 'var(--text-secondary)',
-                            marginTop: 'var(--space-2)'
-                          }}
-                        >
-                          Copy PNG + save to ~/.hyperia/snapshots
-                        </div>
+                      <i className="ti ti-camera hy-term-ico14" aria-hidden="true" />
+                      <div className="term_tooltip hy-term-tip">
+                        <div className="hy-term-tip-title">Click: screenshot · Shift+click: whole scrollback</div>
+                        <div className="hy-term-tip-note">Copy PNG + save to ~/.hyperia/snapshots</div>
                       </div>
                     </span>
                   )}
@@ -3897,7 +3478,10 @@ export default class Term extends React.PureComponent<
             locationBar={
               <div
                 ref={this.pathBarRef}
-                className="term_locationBar term_tooltipTrigger"
+                // Anchor (position: relative) for the styled hover tooltip (#182).
+                className={`term_locationBar term_tooltipTrigger hy-term-locbar${
+                  this.isTerminalBusy() ? ' hy-term-locbar--busy' : ''
+                }`}
                 onClick={(e) => {
                   e.stopPropagation();
                   this.toggleDirNavigator();
@@ -3926,14 +3510,8 @@ export default class Term extends React.PureComponent<
                   });
                 }}
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
                   gap: sq(4, 2),
-                  background: 'var(--bg-primary)',
-                  border: '0.5px solid var(--border-focus)',
-                  borderRadius: 'var(--radius-3)',
                   padding: `0 ${sq(6, 3)}`,
-                  height: '24px',
                   // Fill the row (flex:1 absorbs space freed by hidden icons —
                   // never a dead gap); the floor eases 80px → 26px (dirMinWidth)
                   // so the path squeezes to a char or two before the ladder's
@@ -3941,43 +3519,22 @@ export default class Term extends React.PureComponent<
                   // Clint: no stretched empty pill — the #184 tooltip still
                   // reveals the full path on hover).
                   ...(dirIconOnly ? {flex: '0 0 auto', minWidth: 'auto'} : {flex: 1, minWidth: `${dirMinWidth}px`}),
-                  cursor: this.isTerminalBusy() ? 'not-allowed' : 'pointer',
-                  opacity: this.isTerminalBusy() ? 0.5 : 1,
-                  boxSizing: 'border-box',
                   marginLeft: sq(4, 2),
-                  marginRight: sq(8, 2),
-                  // Anchor for the styled hover tooltip (replaces the old
-                  // native title=, which couldn't show the full path AND
-                  // the action notice as distinct lines — #182).
-                  position: 'relative'
+                  marginRight: sq(8, 2)
                 }}
               >
                 <i
-                  className={
+                  className={`hy-term-locbar-icon ${
                     this.isTerminalBusy()
                       ? 'ti ti-lock'
                       : this.state.isDirNavigatorOpen
                         ? 'ti ti-folder-open'
                         : 'ti ti-folder'
-                  }
-                  style={{
-                    fontSize: '12px',
-                    color: 'var(--info-text)',
-                    flexShrink: 0
-                  }}
+                  }`}
                   aria-hidden="true"
                 />
                 {!dirIconOnly && (
-                  <span
-                    style={{
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '11px',
-                      color: 'var(--text-primary)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
+                  <span className="hy-term-locbar-path">
                     {this.state.isDirNavigatorOpen
                       ? this.state.navigatorCurrentPath || '/'
                       : this.props.sessionCwd || '/'}
@@ -3989,41 +3546,17 @@ export default class Term extends React.PureComponent<
                       browsing. */}
                 {!this.state.isDirNavigatorOpen && (
                   <div
-                    className="term_tooltip"
+                    className="term_tooltip hy-term-dirtip"
+                    // position: fixed stays inline (web-pane occluder test counts it)
                     style={
                       this.state.dirTipPos
-                        ? {
-                            position: 'fixed',
-                            minWidth: '160px',
-                            left: this.state.dirTipPos.left,
-                            top: this.state.dirTipPos.top,
-                            right: 'auto'
-                          }
-                        : {minWidth: '160px', left: '-6px', right: 'auto'}
+                        ? {position: 'fixed', left: this.state.dirTipPos.left, top: this.state.dirTipPos.top}
+                        : undefined
                     }
                   >
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        fontFamily: 'var(--font-mono)',
-                        color: 'var(--text-primary)',
-                        fontWeight: 500,
-                        // Deep paths wrap instead of clipping at the window
-                        // edge; break-all because paths have no spaces.
-                        whiteSpace: 'normal',
-                        wordBreak: 'break-all',
-                        maxWidth: 'min(60ch, 70vw)'
-                      }}
-                    >
-                      {(this.props as any).sessionCwd || '/'}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        color: 'var(--text-secondary)',
-                        marginTop: 'var(--space-2)'
-                      }}
-                    >
+                    {/* Deep paths wrap (break-all: paths have no spaces) instead of clipping. */}
+                    <div className="hy-term-dirtip-path">{(this.props as any).sessionCwd || '/'}</div>
+                    <div className="hy-term-tip-note">
                       {this.isTerminalBusy()
                         ? 'Directory browsing locked while a process is running'
                         : 'Click to browse directories · Ctrl+Shift+O'}
@@ -4058,25 +3591,15 @@ export default class Term extends React.PureComponent<
             ref={this.dirNavigatorRef}
             tabIndex={0}
             onKeyDown={this.handleNavigatorKeyDown}
-            className="term_dirNavigatorPopup"
+            className="term_dirNavigatorPopup hy-term-navpopup"
             style={{
-              position: 'absolute',
               top: `${this.state.navigatorTop}px`,
               left: `${this.state.navigatorLeft}px`,
               width: `${this.state.navigatorWidth}px`,
               // Measured room to the pane's bottom edge (measureNavigatorGeometry);
               // the popup NEVER extends below its pane, so focusing the search
               // box can never make Chromium scroll a layout ancestor.
-              maxHeight: `${this.state.navigatorMaxHeight}px`,
-              overflow: 'hidden',
-              background: 'var(--bg-secondary)',
-              border: '0.5px solid var(--border-neutral)',
-              borderRadius: '4px',
-              zIndex: 2000,
-              display: 'flex',
-              flexDirection: 'column',
-              boxSizing: 'border-box',
-              outline: 'none'
+              maxHeight: `${this.state.navigatorMaxHeight}px`
             }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -4087,16 +3610,7 @@ export default class Term extends React.PureComponent<
                 shrink to nothing so the header and search footer always fit;
                 inside, the dir list (larger share) and RECENT each scroll on
                 their own down to one row / one chip line. */}
-            <div
-              className="term_navigatorBody"
-              style={{
-                flex: '1 1 auto',
-                minHeight: 0,
-                display: 'flex',
-                flexDirection: 'column',
-                overflow: 'hidden'
-              }}
-            >
+            <div className="term_navigatorBody hy-term-navbody">
               {/* Directory list */}
               {this.renderNavigatorDirectoryList()}
 
@@ -4107,31 +3621,19 @@ export default class Term extends React.PureComponent<
             {/* Status bar */}
             {this.state.navigatorStatus && (
               <div
-                style={{
-                  flex: 'none',
-                  padding: '6px var(--space-12)',
-                  fontSize: '10px',
-                  color: this.state.navigatorStatus.startsWith('Directory change refused')
-                    ? 'var(--danger-text)'
-                    : 'var(--info-text)',
-                  fontFamily: 'var(--font-sans)',
-                  borderTop: '0.5px solid var(--border-neutral)',
-                  background: 'var(--bg-secondary)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px'
-                }}
+                className={`hy-term-navstatus${
+                  this.state.navigatorStatus.startsWith('Directory change refused') ? ' hy-term-navstatus--error' : ''
+                }`}
               >
                 <i
-                  className={
+                  className={`hy-term-ico11 ${
                     this.state.navigatorStatus.startsWith('Directory change refused')
                       ? 'ti ti-alert-triangle'
                       : 'ti ti-clock'
-                  }
-                  style={{fontSize: '11px'}}
+                  }`}
                   aria-hidden="true"
                 />
-                <span style={{fontWeight: 500}}>{this.state.navigatorStatus}</span>
+                <span className="hy-term-navstatus-text">{this.state.navigatorStatus}</span>
               </div>
             )}
 
@@ -4185,8 +3687,8 @@ export default class Term extends React.PureComponent<
         ) : (
           <div
             ref={this.onTermWrapperRef}
-            className={'term_fit term_wrapper ' + (this.state.isDirNavigatorOpen ? 'term_dimmed' : '')}
-            style={{background: (this.props as any).backgroundColor}}
+            className={'term_fit term_wrapper hy-term-canvas ' + (this.state.isDirNavigatorOpen ? 'term_dimmed' : '')}
+            style={{'--hy-term-bg': (this.props as any).backgroundColor} as React.CSSProperties}
           />
         )}
 
@@ -4194,72 +3696,29 @@ export default class Term extends React.PureComponent<
           <div
             // In-pane, not a full-screen overlay: fills the pane BELOW the pane
             // band (keeps the "new pane" top bar visible) and covers the picker
-            // buttons + URL bar. Back returns to them.
-            style={{
-              position: 'absolute',
-              top: 'var(--band-height-compact)',
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: 'var(--bg-primary)',
-              display: 'flex',
-              // Config-pane treatment: top-aligned full-height column (not a
-              // small centered card) so the form has room up and down.
-              alignItems: 'flex-start',
-              justifyContent: 'center',
-              zIndex: 50,
-              color: 'var(--text-primary)',
-              fontFamily: 'var(--font-sans)',
-              cursor: 'default',
-              padding: 'var(--space-12)',
-              boxSizing: 'border-box',
-              overflowY: 'auto'
-            }}
+            // buttons + URL bar. Back returns to them. Config-pane treatment:
+            // top-aligned full-height column so the form has room up and down.
+            className="hy-term-cmodal"
             // No backdrop-click dismiss: a stray click or a text-selection drag
             // that ended on the backdrop used to snap the whole modal shut (back
             // to the chooser). Close only via Back / Cancel.
           >
             <div
               // Flat page like the Hyperia agent config — no card, no border.
-              style={{
-                width: '100%',
-                maxWidth: '640px',
-                minHeight: 'calc(100% - 8px)',
-                padding: '24px 22px 32px',
-                boxSizing: 'border-box',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '20px'
-              }}
+              className="hy-term-cmodal-page"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header — Back returns to the picker buttons + URL bar */}
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center'
-                }}
-              >
+              <div className="hy-term-cmodal-head">
                 <button
                   type="button"
                   onClick={() => this.setState({isCustomModalOpen: false})}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-4)',
-                    background: 'none',
-                    border: 'none',
-                    color: 'var(--text-secondary)',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                    padding: 0
-                  }}
+                  className="hy-term-cmodal-back"
                 >
-                  <i className="ti ti-arrow-left" style={{fontSize: '14px'}} aria-hidden="true" />
+                  <i className="ti ti-arrow-left hy-term-ico14" aria-hidden="true" />
                   Back
                 </button>
-                <span style={{fontSize: '14px', fontWeight: 600}}>
+                <span className="hy-term-cmodal-title">
                   {this.state.editingOriginalName
                     ? this.state.customKind === 'agent'
                       ? 'Edit Custom Agent'
@@ -4268,52 +3727,30 @@ export default class Term extends React.PureComponent<
                       ? 'Create Custom Agent'
                       : 'Create Custom Shell'}
                 </span>
-                <span style={{width: '44px'}} />
+                <span className="hy-term-cmodal-spacer" />
               </div>
 
               {/* Profile Name */}
-              <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-                <label
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    color: 'var(--text-secondary)'
-                  }}
-                >
-                  Profile Name
-                </label>
+              <div className="hy-term-field">
+                <label className="hy-term-field-label">Profile Name</label>
                 <input
                   type="text"
                   placeholder="e.g. My Shell"
                   value={this.state.profileName}
                   onChange={(e) => this.setState({profileName: e.target.value})}
-                  style={{
-                    background: 'var(--bg-primary)',
-                    border: '0.5px solid var(--border-neutral)',
-                    color: 'var(--text-primary)',
-                    borderRadius: '4px',
-                    padding: '8px 10px',
-                    fontSize: '12px'
-                  }}
+                  className="hy-term-input"
                 />
               </div>
 
               {/* Base Shell — run a command inside a real detected shell. This is
                   how a custom shell runs e.g. `ssh …` reliably (shells only). */}
               {this.state.customKind === 'shell' && (
-                <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-                  <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Base Shell</label>
+                <div className="hy-term-field">
+                  <label className="hy-term-field-label">Base Shell</label>
                   <select
                     value={this.state.baseShell}
                     onChange={(e) => this.setState({baseShell: e.target.value})}
-                    style={{
-                      background: 'var(--bg-primary)',
-                      border: '0.5px solid var(--border-neutral)',
-                      color: 'var(--text-primary)',
-                      borderRadius: '4px',
-                      padding: '8px 10px',
-                      fontSize: '12px'
-                    }}
+                    className="hy-term-input"
                   >
                     <option value="">Direct — run an executable path (advanced)</option>
                     {this.baseShellOptions().map((o) => (
@@ -4325,26 +3762,16 @@ export default class Term extends React.PureComponent<
 
               {/* Command to run inside the base shell */}
               {this.state.customKind === 'shell' && this.state.baseShell !== '' && (
-                <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-                  <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>
-                    Command to run in it
-                  </label>
+                <div className="hy-term-field">
+                  <label className="hy-term-field-label">Command to run in it</label>
                   <input
                     type="text"
                     placeholder="e.g. ssh -i C:\Users\you\.ssh\id_key user@host   (blank = just open the shell)"
                     value={this.state.command}
                     onChange={(e) => this.setState({command: e.target.value})}
-                    style={{
-                      background: 'var(--bg-primary)',
-                      border: '0.5px solid var(--border-neutral)',
-                      color: 'var(--text-primary)',
-                      borderRadius: '4px',
-                      padding: '8px 10px',
-                      fontSize: '12px',
-                      fontFamily: 'var(--font-mono)'
-                    }}
+                    className="hy-term-input hy-term-input--mono"
                   />
-                  <span style={{fontSize: '10.5px', color: 'var(--text-tertiary)'}}>
+                  <span className="hy-term-field-hint">
                     Runs in the base shell and stays open afterward. Leave blank to just launch the shell.
                   </span>
                 </div>
@@ -4355,27 +3782,12 @@ export default class Term extends React.PureComponent<
               {this.state.baseShell === '' && (
                 <>
                   {/* Shell Executable Path — pick from detected shells, or type/browse a custom one */}
-                  <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-                    <label
-                      style={{
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        color: 'var(--text-secondary)'
-                      }}
-                    >
-                      Shell Path
-                    </label>
+                  <div className="hy-term-field">
+                    <label className="hy-term-field-label">Shell Path</label>
                     <select
                       value={this.state.shellPath}
                       onChange={(e) => this.setState({shellPath: e.target.value})}
-                      style={{
-                        background: 'var(--bg-primary)',
-                        border: '0.5px solid var(--border-neutral)',
-                        color: 'var(--text-primary)',
-                        borderRadius: '4px',
-                        padding: '8px 10px',
-                        fontSize: '12px'
-                      }}
+                      className="hy-term-input"
                     >
                       <option value="">Pick an existing shell… (or enter a path below)</option>
                       {(() => {
@@ -4389,22 +3801,13 @@ export default class Term extends React.PureComponent<
                           ));
                       })()}
                     </select>
-                    <div style={{display: 'flex', gap: '6px'}}>
+                    <div className="hy-term-row6">
                       <input
                         type="text"
                         placeholder="e.g. /bin/bash or C:\Windows\System32\cmd.exe"
                         value={this.state.shellPath}
                         onChange={(e) => this.setState({shellPath: e.target.value})}
-                        style={{
-                          flex: 1,
-                          background: 'var(--bg-primary)',
-                          border: '0.5px solid var(--border-neutral)',
-                          color: 'var(--text-primary)',
-                          borderRadius: '4px',
-                          padding: '8px 10px',
-                          fontSize: '12px',
-                          fontFamily: 'var(--font-mono)'
-                        }}
+                        className="hy-term-input hy-term-input--mono hy-term-input--grow"
                       />
                       <button
                         type="button"
@@ -4418,15 +3821,7 @@ export default class Term extends React.PureComponent<
                             }
                           })();
                         }}
-                        style={{
-                          background: 'var(--bg-tertiary)',
-                          border: '0.5px solid var(--border-neutral)',
-                          color: 'var(--text-primary)',
-                          borderRadius: '4px',
-                          padding: '0 10px',
-                          fontSize: '12px',
-                          cursor: 'pointer'
-                        }}
+                        className="hy-term-browse"
                       >
                         Browse…
                       </button>
@@ -4434,100 +3829,32 @@ export default class Term extends React.PureComponent<
                   </div>
 
                   {/* Shell Arguments */}
-                  <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-                    <label
-                      style={{
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        color: 'var(--text-secondary)'
-                      }}
-                    >
-                      Arguments (comma separated)
-                    </label>
+                  <div className="hy-term-field">
+                    <label className="hy-term-field-label">Arguments (comma separated)</label>
                     <input
                       type="text"
                       placeholder="e.g. --login, -i"
                       value={this.state.shellArgs}
                       onChange={(e) => this.setState({shellArgs: e.target.value})}
-                      style={{
-                        background: 'var(--bg-primary)',
-                        border: '0.5px solid var(--border-neutral)',
-                        color: 'var(--text-primary)',
-                        borderRadius: '4px',
-                        padding: '8px 10px',
-                        fontSize: '12px',
-                        fontFamily: 'var(--font-mono)'
-                      }}
+                      className="hy-term-input hy-term-input--mono"
                     />
                   </div>
                 </>
               )}
 
               {/* Environment Variables */}
-              <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-                <label
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    color: 'var(--text-secondary)'
-                  }}
-                >
-                  Environment Variables
-                </label>
-                <div
-                  style={{
-                    background: 'var(--bg-primary)',
-                    border: '0.5px solid var(--border-neutral)',
-                    borderRadius: '6px',
-                    padding: '10px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '6px'
-                  }}
-                >
+              <div className="hy-term-field">
+                <label className="hy-term-field-label">Environment Variables</label>
+                <div className="hy-term-envbox">
                   {/* Env list */}
-                  <div
-                    style={{
-                      maxHeight: '80px',
-                      overflowY: 'auto',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '6px'
-                    }}
-                  >
+                  <div className="hy-term-envlist">
                     {this.state.envVars.length === 0 ? (
-                      <span
-                        style={{
-                          fontSize: '10px',
-                          color: 'var(--text-tertiary)',
-                          fontStyle: 'italic'
-                        }}
-                      >
-                        No environment variables added.
-                      </span>
+                      <span className="hy-term-envempty">No environment variables added.</span>
                     ) : (
                       this.state.envVars.map((v, i) => (
-                        <div
-                          key={i}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            background: 'var(--bg-secondary)',
-                            borderRadius: '4px',
-                            padding: '3px 8px',
-                            fontSize: '11px',
-                            fontFamily: 'var(--font-mono)'
-                          }}
-                        >
-                          <span
-                            style={{
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap'
-                            }}
-                          >
-                            <span style={{color: 'var(--info-text)'}}>{v.key}</span>={v.val}
+                        <div key={i} className="hy-term-envitem">
+                          <span className="hy-term-envtext">
+                            <span className="hy-term-envkey">{v.key}</span>={v.val}
                           </span>
                           <button
                             type="button"
@@ -4536,13 +3863,7 @@ export default class Term extends React.PureComponent<
                                 envVars: this.state.envVars.filter((_, idx) => idx !== i)
                               })
                             }
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              color: 'var(--danger-text)',
-                              cursor: 'pointer',
-                              fontSize: '14px'
-                            }}
+                            className="hy-term-envdel"
                           >
                             ×
                           </button>
@@ -4552,7 +3873,7 @@ export default class Term extends React.PureComponent<
                   </div>
 
                   {/* Add inline form */}
-                  <div style={{display: 'flex', gap: '6px'}}>
+                  <div className="hy-term-row6">
                     <input
                       type="text"
                       placeholder="KEY"
@@ -4562,32 +3883,14 @@ export default class Term extends React.PureComponent<
                           newEnvKey: e.target.value.replace(/[^a-zA-Z0-9_]/g, '')
                         })
                       }
-                      style={{
-                        flex: 1,
-                        background: 'var(--bg-secondary)',
-                        border: '0.5px solid var(--border-neutral)',
-                        color: 'var(--text-primary)',
-                        borderRadius: '4px',
-                        padding: '6px 8px',
-                        fontSize: '10px',
-                        fontFamily: 'var(--font-mono)'
-                      }}
+                      className="hy-term-envinput"
                     />
                     <input
                       type="text"
                       placeholder="VALUE"
                       value={this.state.newEnvVal}
                       onChange={(e) => this.setState({newEnvVal: e.target.value})}
-                      style={{
-                        flex: 1.5,
-                        background: 'var(--bg-secondary)',
-                        border: '0.5px solid var(--border-neutral)',
-                        color: 'var(--text-primary)',
-                        borderRadius: '4px',
-                        padding: '6px 8px',
-                        fontSize: '10px',
-                        fontFamily: 'var(--font-mono)'
-                      }}
+                      className="hy-term-envinput hy-term-envinput--val"
                     />
                     <button
                       type="button"
@@ -4602,15 +3905,7 @@ export default class Term extends React.PureComponent<
                           });
                         }
                       }}
-                      style={{
-                        background: 'var(--info-text)',
-                        color: 'var(--bg-primary)',
-                        border: 'none',
-                        borderRadius: '4px',
-                        padding: '0 10px',
-                        fontSize: '10px',
-                        cursor: 'pointer'
-                      }}
+                      className="hy-term-envadd"
                     >
                       Add
                     </button>
@@ -4619,47 +3914,19 @@ export default class Term extends React.PureComponent<
               </div>
 
               {/* Actions — Delete (edit mode) on the left; Cancel/Save on the right */}
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: '10px',
-                  marginTop: '10px'
-                }}
-              >
+              <div className="hy-term-actions">
                 {this.state.editingOriginalName ? (
-                  <button
-                    type="button"
-                    onClick={this.deleteEditingProfile}
-                    style={{
-                      background: 'none',
-                      border: '0.5px solid rgba(229,72,77,0.45)',
-                      color: '#e5484d',
-                      borderRadius: '4px',
-                      padding: '8px 14px',
-                      fontSize: '12px',
-                      cursor: 'pointer'
-                    }}
-                  >
+                  <button type="button" onClick={this.deleteEditingProfile} className="hy-term-btn-delete">
                     Delete
                   </button>
                 ) : (
                   <span />
                 )}
-                <div style={{display: 'flex', gap: '10px'}}>
+                <div className="hy-term-actions-right">
                   <button
                     type="button"
                     onClick={() => this.setState({isCustomModalOpen: false})}
-                    style={{
-                      background: 'var(--bg-primary)',
-                      border: '0.5px solid var(--border-neutral)',
-                      color: 'var(--text-secondary)',
-                      borderRadius: '4px',
-                      padding: '8px 14px',
-                      fontSize: '12px',
-                      cursor: 'pointer'
-                    }}
+                    className="hy-term-btn-cancel"
                   >
                     Cancel
                   </button>
@@ -4667,16 +3934,7 @@ export default class Term extends React.PureComponent<
                     type="button"
                     disabled={!this.canSaveProfile()}
                     onClick={this.saveCustomProfile}
-                    style={{
-                      background: this.canSaveProfile() ? 'var(--info-text)' : 'var(--border-neutral)',
-                      color: 'var(--bg-primary)',
-                      border: 'none',
-                      borderRadius: '4px',
-                      padding: '8px 14px',
-                      fontSize: '12px',
-                      cursor: this.canSaveProfile() ? 'pointer' : 'default',
-                      opacity: this.canSaveProfile() ? 1 : 0.6
-                    }}
+                    className={`hy-term-btn-save${this.canSaveProfile() ? '' : ' hy-term-btn-save--disabled'}`}
                   >
                     {this.state.editingOriginalName ? 'Save Changes' : 'Save Profile'}
                   </button>

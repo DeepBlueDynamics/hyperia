@@ -21,6 +21,8 @@ import {activeTerminals} from './term';
 import {UrlNavigator} from './url-navigator';
 import {TOGGLE_DOWNLOADS_EVENT} from './web-downloads';
 
+import './web-pane.css';
+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {ipcMain, ipcRenderer} = require('electron');
 
@@ -1807,46 +1809,16 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
     const subtitle =
       (ar.realm ? `"${ar.realm}" · ${ar.scheme} auth` : `${ar.scheme} auth`) +
       (plainHttp ? ' · sent unencrypted (http)' : '');
-    const inputStyle: React.CSSProperties = {
-      display: 'block',
-      width: '100%',
-      boxSizing: 'border-box',
-      padding: '6px 8px',
-      background: 'var(--bg-secondary, rgba(255,255,255,0.06))',
-      border: '1px solid var(--border-neutral)',
-      borderRadius: 'var(--radius-4)',
-      color: 'var(--text-primary)',
-      fontSize: '13px',
-      outline: 'none'
-    };
     return (
       <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'center',
-          paddingTop: '48px',
-          background: 'rgba(0, 0, 0, 0.45)',
-          zIndex: 20
-        }}
+        className="hy-web-auth-backdrop"
         onMouseDown={(e) => {
           // Backdrop click = cancel (matches consent-toast snooze feel).
           if (e.target === e.currentTarget) this.cancelAuth();
         }}
       >
         <div
-          style={{
-            background: 'var(--bg-primary)',
-            border: '1px solid var(--border-neutral)',
-            borderRadius: 'var(--radius-4)',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-            padding: '16px 18px',
-            width: 'min(360px, calc(100% - 32px))',
-            color: 'var(--text-primary)',
-            fontSize: '13px'
-          }}
+          className="hy-web-auth-card"
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
               e.stopPropagation();
@@ -1854,11 +1826,11 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             }
           }}
         >
-          <div style={{fontWeight: 600, marginBottom: '4px'}}>
+          <div className="hy-web-auth-title">
             {ar.isProxy ? 'Proxy sign-in' : 'Sign in'} — {ar.host}
             {port}
           </div>
-          <div style={{color: 'var(--text-tertiary)', fontSize: '11px', marginBottom: '12px'}}>{subtitle}</div>
+          <div className="hy-web-auth-subtitle">{subtitle}</div>
           <input
             ref={this.authUserRef}
             type="text"
@@ -1870,7 +1842,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             }}
             autoComplete="off"
             spellCheck={false}
-            style={{...inputStyle, marginBottom: '8px'}}
+            className="hy-web-auth-input"
           />
           <input
             type="password"
@@ -1881,36 +1853,13 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
               if (e.key === 'Enter') this.submitAuth();
             }}
             autoComplete="off"
-            style={{...inputStyle, marginBottom: '14px'}}
+            className="hy-web-auth-input is-last"
           />
-          <div style={{display: 'flex', justifyContent: 'flex-end', gap: '8px'}}>
-            <button
-              onClick={this.cancelAuth}
-              style={{
-                padding: '5px 12px',
-                background: 'transparent',
-                border: '1px solid var(--border-neutral)',
-                borderRadius: 'var(--radius-4)',
-                color: 'var(--text-secondary)',
-                fontSize: '12px',
-                cursor: 'pointer'
-              }}
-            >
+          <div className="hy-web-auth-actions">
+            <button onClick={this.cancelAuth} className="hy-web-auth-btn is-cancel">
               Cancel
             </button>
-            <button
-              onClick={this.submitAuth}
-              style={{
-                padding: '5px 12px',
-                background: 'var(--accent, #4a9eff)',
-                border: '1px solid transparent',
-                borderRadius: 'var(--radius-4)',
-                color: '#fff',
-                fontSize: '12px',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-            >
+            <button onClick={this.submitAuth} className="hy-web-auth-btn is-submit">
               Sign in
             </button>
           </div>
@@ -2321,6 +2270,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           // mouse passes never flash the view; restored the moment the cursor
           // leaves.
           <div
+            // Inline: part of the layout chain that sizes the native view.
             style={{flexShrink: 0, display: 'flex', flexDirection: 'column'}}
             onMouseEnter={this.onHeaderMouseEnter}
             onMouseLeave={this.onHeaderMouseLeave}
@@ -2335,136 +2285,69 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
               isSplitRightDisabled={hideSplits}
               isSplitDownDisabled={isSplitDownDisabled || hideSplits}
               navCluster={
-                <div
-                  className="web-nav-cluster"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-2)',
-                    flexShrink: 0
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                >
+                <div className="web-nav-cluster hy-web-nav" onClick={(e) => e.stopPropagation()}>
                   {showBack && (
                     <span
-                      className="term_controlIcon term_tooltipTrigger"
+                      className={
+                        'term_controlIcon term_tooltipTrigger hy-web-navbtn ' +
+                        (this.state.canGoBack ? 'is-enabled' : 'is-disabled')
+                      }
                       onClick={this.goBack}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        cursor: this.state.canGoBack ? 'pointer' : 'default',
-                        opacity: this.state.canGoBack ? 1 : 0.4,
-                        pointerEvents: this.state.canGoBack ? 'auto' : 'none'
-                      }}
                     >
-                      <i className="ti ti-arrow-left" style={{fontSize: '14px'}} aria-hidden="true" />
-                      <div className="term_tooltip" style={{minWidth: '160px'}}>
-                        <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Back</div>
-                        <div
-                          style={{
-                            fontSize: '11px',
-                            fontFamily: 'var(--font-mono)',
-                            color: 'var(--text-secondary)',
-                            marginTop: 'var(--space-2)'
-                          }}
-                        >
-                          Alt+Left
-                        </div>
+                      <i className="ti ti-arrow-left hy-web-navicon" aria-hidden="true" />
+                      <div className="term_tooltip hy-web-tip-160">
+                        <div className="hy-web-tip-title">Back</div>
+                        <div className="hy-web-tip-hint">Alt+Left</div>
                       </div>
                     </span>
                   )}
                   {showForward && (
                     <span
-                      className="term_controlIcon term_tooltipTrigger"
+                      className={
+                        'term_controlIcon term_tooltipTrigger hy-web-navbtn ' +
+                        (this.state.canGoForward ? 'is-enabled' : 'is-disabled')
+                      }
                       onClick={this.goForward}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        cursor: this.state.canGoForward ? 'pointer' : 'default',
-                        opacity: this.state.canGoForward ? 1 : 0.4,
-                        pointerEvents: this.state.canGoForward ? 'auto' : 'none'
-                      }}
                     >
-                      <i className="ti ti-arrow-right" style={{fontSize: '14px'}} aria-hidden="true" />
-                      <div className="term_tooltip" style={{minWidth: '160px'}}>
-                        <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Forward</div>
-                        <div
-                          style={{
-                            fontSize: '11px',
-                            fontFamily: 'var(--font-mono)',
-                            color: 'var(--text-secondary)',
-                            marginTop: 'var(--space-2)'
-                          }}
-                        >
-                          Alt+Right
-                        </div>
+                      <i className="ti ti-arrow-right hy-web-navicon" aria-hidden="true" />
+                      <div className="term_tooltip hy-web-tip-160">
+                        <div className="hy-web-tip-title">Forward</div>
+                        <div className="hy-web-tip-hint">Alt+Right</div>
                       </div>
                     </span>
                   )}
                   <span
-                    className="term_controlIcon term_tooltipTrigger"
+                    className="term_controlIcon term_tooltipTrigger hy-web-navbtn"
                     onClick={(e) => {
                       e.stopPropagation();
                       this.openInExternal();
                     }}
-                    style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
                   >
-                    <i className="ti ti-external-link" style={{fontSize: '14px'}} aria-hidden="true" />
-                    <div className="term_tooltip" style={{minWidth: '180px'}}>
-                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
-                        Open in Chrome
-                      </div>
-                      <div
-                        style={{
-                          fontSize: '11px',
-                          fontFamily: 'var(--font-mono)',
-                          color: 'var(--text-secondary)',
-                          marginTop: 'var(--space-2)'
-                        }}
-                      >
-                        System browser — bypasses bot walls
-                      </div>
+                    <i className="ti ti-external-link hy-web-navicon" aria-hidden="true" />
+                    <div className="term_tooltip hy-web-tip-180">
+                      <div className="hy-web-tip-title">Open in Chrome</div>
+                      <div className="hy-web-tip-hint">System browser — bypasses bot walls</div>
                     </div>
                   </span>
                   {showReload && (
                     <span
-                      className="term_controlIcon term_tooltipTrigger"
+                      className="term_controlIcon term_tooltipTrigger hy-web-navbtn"
                       onClick={(e) => {
                         e.stopPropagation();
                         if (loading) this.stopWebview();
                         else this.reloadWebview(e.shiftKey);
                       }}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        cursor: 'pointer'
-                      }}
                     >
-                      <i
-                        className={loading ? 'ti ti-x' : 'ti ti-refresh'}
-                        style={{fontSize: '14px'}}
-                        aria-hidden="true"
-                      />
-                      <div className="term_tooltip" style={{minWidth: '160px'}}>
-                        <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
-                          {loading ? 'Stop loading' : 'Reload'}
-                        </div>
-                        <div
-                          style={{
-                            fontSize: '11px',
-                            fontFamily: 'var(--font-mono)',
-                            color: 'var(--text-secondary)',
-                            marginTop: 'var(--space-2)'
-                          }}
-                        >
-                          {loading ? 'Esc' : 'Reload · F5'}
-                        </div>
+                      <i className={(loading ? 'ti ti-x' : 'ti ti-refresh') + ' hy-web-navicon'} aria-hidden="true" />
+                      <div className="term_tooltip hy-web-tip-160">
+                        <div className="hy-web-tip-title">{loading ? 'Stop loading' : 'Reload'}</div>
+                        <div className="hy-web-tip-hint">{loading ? 'Esc' : 'Reload · F5'}</div>
                       </div>
                     </span>
                   )}
                   {showExternal && (
                     <span
-                      className="term_controlIcon term_tooltipTrigger"
+                      className="term_controlIcon term_tooltipTrigger hy-web-navbtn"
                       onClick={(e) => {
                         e.stopPropagation();
                         const linkUrl = this.state.activeUrl || this.props.url || '';
@@ -2474,91 +2357,50 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                           void electronShell.openExternal(linkUrl);
                         }
                       }}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        cursor: 'pointer'
-                      }}
                     >
-                      <i className="ti ti-external-link" style={{fontSize: '14px'}} aria-hidden="true" />
-                      <div className="term_tooltip" style={{minWidth: '160px'}}>
-                        <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
-                          Open in system browser
-                        </div>
+                      <i className="ti ti-external-link hy-web-navicon" aria-hidden="true" />
+                      <div className="term_tooltip hy-web-tip-160">
+                        <div className="hy-web-tip-title">Open in system browser</div>
                       </div>
                     </span>
                   )}
                   <span
-                    className="term_controlIcon term_tooltipTrigger"
+                    className="term_controlIcon term_tooltipTrigger hy-web-navbtn"
                     onClick={(e) => {
                       void this.captureScreenshot(e);
                     }}
-                    style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
                   >
-                    <i className="ti ti-camera" style={{fontSize: '14px'}} aria-hidden="true" />
-                    <div className="term_tooltip" style={{minWidth: '200px'}}>
-                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
-                        Click: screenshot · Shift+click: whole page
-                      </div>
-                      <div
-                        style={{
-                          fontSize: '11px',
-                          fontFamily: 'var(--font-mono)',
-                          color: 'var(--text-secondary)',
-                          marginTop: 'var(--space-2)'
-                        }}
-                      >
-                        Copy to clipboard + save to ~/.hyperia/snapshots
-                      </div>
+                    <i className="ti ti-camera hy-web-navicon" aria-hidden="true" />
+                    <div className="term_tooltip hy-web-tip-200">
+                      <div className="hy-web-tip-title">Click: screenshot · Shift+click: whole page</div>
+                      <div className="hy-web-tip-hint">Copy to clipboard + save to ~/.hyperia/snapshots</div>
                     </div>
                   </span>
                   <span
-                    className="term_controlIcon term_tooltipTrigger"
+                    className="term_controlIcon term_tooltipTrigger hy-web-navbtn"
                     onClick={(e) => {
                       e.stopPropagation();
                       window.dispatchEvent(new CustomEvent(TOGGLE_DOWNLOADS_EVENT));
                     }}
-                    style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
                   >
-                    <i className="ti ti-download" style={{fontSize: '14px'}} aria-hidden="true" />
-                    <div className="term_tooltip" style={{minWidth: '160px'}}>
-                      <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>Downloads</div>
-                      <div
-                        style={{
-                          fontSize: '11px',
-                          fontFamily: 'var(--font-mono)',
-                          color: 'var(--text-secondary)',
-                          marginTop: 'var(--space-2)'
-                        }}
-                      >
-                        Progress + recent files
-                      </div>
+                    <i className="ti ti-download hy-web-navicon" aria-hidden="true" />
+                    <div className="term_tooltip hy-web-tip-160">
+                      <div className="hy-web-tip-title">Downloads</div>
+                      <div className="hy-web-tip-hint">Progress + recent files</div>
                     </div>
                   </span>
                   {!isAi && (
                     <span
-                      className="term_controlIcon term_tooltipTrigger"
+                      className="term_controlIcon term_tooltipTrigger hy-web-navbtn"
                       onClick={(e) => {
                         e.stopPropagation();
                         this.newStickyFromPage();
                       }}
-                      style={{display: 'flex', alignItems: 'center', cursor: 'pointer'}}
                     >
-                      <i className="ti ti-note" style={{fontSize: '14px'}} aria-hidden="true" />
-                      <div className="term_tooltip" style={{minWidth: '160px'}}>
-                        <div style={{fontSize: '11px', color: 'var(--text-primary)', fontWeight: 500}}>
-                          New sticky from page
-                        </div>
-                        <div
-                          style={{
-                            fontSize: '11px',
-                            fontFamily: 'var(--font-mono)',
-                            color: 'var(--text-secondary)',
-                            marginTop: 'var(--space-2)'
-                          }}
-                        >
-                          Title + URL + selection/extract
-                        </div>
+                      <i className="ti ti-note hy-web-navicon" aria-hidden="true" />
+                      <div className="term_tooltip hy-web-tip-160">
+                        <div className="hy-web-tip-title">New sticky from page</div>
+                        <div className="hy-web-tip-hint">Title + URL + selection/extract</div>
                       </div>
                     </span>
                   )}
@@ -2568,7 +2410,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 showUrlBar ? (
                   <div
                     ref={this.urlBarRef}
-                    className={`web_locationBar ${this.state.paneWidth < 380 ? 'web_locationBarCollapsed' : ''}`}
+                    className={`web_locationBar hy-web-locbar ${this.state.paneWidth < 380 ? 'web_locationBarCollapsed' : ''}`}
                     onContextMenu={(e) => {
                       // Right-click the URL bar → Copy URL (this is toolbar chrome,
                       // not the guest page, so it's a plain renderer menu).
@@ -2646,60 +2488,17 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                         }
                       );
                     }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 'var(--space-4)',
-                      background: 'var(--bg-primary)',
-                      border: '0.5px solid var(--border-focus)',
-                      borderRadius: 'var(--radius-3)',
-                      padding: '0 var(--space-6)',
-                      height: '24px',
-                      // Fill the row. Hard floor of ~11 chars ("https://" + a few
-                      // letters); below that the whole bar is hidden (showUrlBar),
-                      // never shrunk to a sub-"https://" stub.
-                      flex: 1,
-                      minWidth: '80px',
-                      cursor: 'pointer',
-                      boxSizing: 'border-box',
-                      marginLeft: 'var(--space-4)',
-                      marginRight: 'var(--space-8)'
-                    }}
                     title={isAi ? 'Click to view recent threads' : 'Click to navigate'}
                   >
                     {loading && url ? (
-                      <span
-                        style={{
-                          fontSize: '11px',
-                          display: 'inline-block',
-                          animation: 'web-pane-spin 1s linear infinite',
-                          opacity: 0.6,
-                          flexShrink: 0
-                        }}
-                      >
-                        ⟳
-                      </span>
+                      <span className="hy-web-spinner">⟳</span>
                     ) : (
                       <i
-                        className={isAi ? 'ti ti-sparkles' : 'ti ti-world'}
-                        style={{
-                          fontSize: '12px',
-                          color: isAi ? 'var(--color-ai-purple, #7F77DD)' : 'var(--info-text)',
-                          flexShrink: 0
-                        }}
+                        className={isAi ? 'ti ti-sparkles hy-web-locbar-icon is-ai' : 'ti ti-world hy-web-locbar-icon'}
                         aria-hidden="true"
                       />
                     )}
-                    <span
-                      style={{
-                        fontFamily: isAi ? 'var(--font-sans)' : 'var(--font-mono)',
-                        fontSize: '11px',
-                        color: 'var(--text-primary)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap'
-                      }}
-                    >
+                    <span className={'hy-web-locbar-text' + (isAi ? ' is-ai' : '')}>
                       {(() => {
                         if (isAi) {
                           const conversationId = url.slice(5);
@@ -2753,10 +2552,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             just under the dropdown (z 9999 < navigator's 10000) so the dropdown
             itself stays interactive. */}
         {this.state.isUrlNavigatorOpen && (
-          <div
-            onMouseDown={() => this.setState({isUrlNavigatorOpen: false})}
-            style={{position: 'absolute', inset: 0, zIndex: 9999}}
-          />
+          <div onMouseDown={() => this.setState({isUrlNavigatorOpen: false})} className="hy-web-nav-backdrop" />
         )}
 
         {this.state.isUrlNavigatorOpen && (
@@ -2791,6 +2587,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
         <div
           className={this.state.isUrlNavigatorOpen ? 'web_pane_dimmed' : ''}
+          // Inline: sizes the body that the native view tracks.
           style={{flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden'}}
         >
           {/* Find-in-page bar (Ctrl+F) — floats top-right over the page. */}
@@ -2811,42 +2608,11 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
             />
           )}
           {error && url && (
-            <div
-              style={{
-                flex: 1,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                background: 'var(--bg-primary)',
-                gap: 12
-              }}
-            >
-              <span style={{fontSize: '48px'}}>🦕</span>
-              <span
-                style={{
-                  fontSize: '14px',
-                  color: 'var(--text-secondary)',
-                  fontFamily: 'var(--font-sans)',
-                  fontWeight: 'var(--weight-medium)'
-                }}
-              >
-                This page could not be loaded
-              </span>
-              <span
-                style={{
-                  fontSize: '11px',
-                  color: 'var(--text-tertiary)',
-                  fontFamily: 'var(--font-sans)',
-                  maxWidth: 300,
-                  textAlign: 'center'
-                }}
-              >
-                {error}
-              </span>
-              <span style={{fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
-                {url}
-              </span>
+            <div className="hy-web-error">
+              <span className="hy-web-error-emoji">🦕</span>
+              <span className="hy-web-error-title">This page could not be loaded</span>
+              <span className="hy-web-error-detail">{error}</span>
+              <span className="hy-web-error-url">{url}</span>
             </div>
           )}
 
@@ -2943,19 +2709,12 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                           const isRunning = log.status === 'running';
                           const isFail = log.status === 'fail';
                           const icon = isRunning ? '🔧' : isFail ? '✗' : '✓';
-                          const statusColor = isRunning
-                            ? 'var(--warning-text)'
-                            : isFail
-                              ? 'var(--danger-text)'
-                              : 'var(--success-text)';
+                          const statusClass = isRunning ? ' is-running' : isFail ? ' is-fail' : '';
                           return (
                             <div key={log.id} className="seeker_log_row">
                               <div className="seeker_log_summary">
-                                <span style={{color: statusColor, marginRight: '8px'}}>{icon}</span>
-                                <span
-                                  className="seeker_log_name"
-                                  style={{color: isRunning ? 'var(--text-primary)' : 'var(--text-secondary)'}}
-                                >
+                                <span className={'hy-web-log-icon' + statusClass}>{icon}</span>
+                                <span className={'seeker_log_name hy-web-log-name' + (isRunning ? ' is-running' : '')}>
                                   {isRunning ? `running ${log.name}...` : `${log.name}`}
                                 </span>
                                 {!isRunning && log.output && (
@@ -2976,14 +2735,14 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                               {log.expanded && !isRunning && (
                                 <div className="seeker_log_details">
                                   {log.input && (
-                                    <div style={{marginBottom: '6px'}}>
-                                      <div style={{color: 'var(--text-tertiary)', fontSize: '10px'}}>INPUT:</div>
+                                    <div className="hy-web-log-section">
+                                      <div className="hy-web-log-label">INPUT:</div>
                                       <pre className="seeker_details_pre">{JSON.stringify(log.input, null, 2)}</pre>
                                     </div>
                                   )}
                                   {log.output && (
                                     <div>
-                                      <div style={{color: 'var(--text-tertiary)', fontSize: '10px'}}>OUTPUT:</div>
+                                      <div className="hy-web-log-label">OUTPUT:</div>
                                       <pre className="seeker_details_pre">{log.output}</pre>
                                     </div>
                                   )}
@@ -2995,21 +2754,10 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
                         {this.state.searchText && (
                           <div className="seeker_text_synthesis">
-                            <div
-                              style={{
-                                color: 'var(--info-text)',
-                                fontSize: '11px',
-                                fontWeight: 'bold',
-                                marginBottom: '8px',
-                                textTransform: 'uppercase',
-                                letterSpacing: '1px'
-                              }}
-                            >
-                              — Seeker Synthesis —
-                            </div>
+                            <div className="hy-web-synth-heading">— Seeker Synthesis —</div>
                             <div className="seeker_synthesis_body">
                               {this.state.searchText.split('\n').map((line, i) => (
-                                <div key={i} style={{minHeight: '18px'}}>
+                                <div key={i} className="hy-web-synth-line">
                                   {line}
                                 </div>
                               ))}
@@ -3020,9 +2768,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
 
                         {this.state.searchState === 'error' && this.state.searchError && (
                           <div className="seeker_error_block">
-                            <span style={{color: 'var(--danger-text)', fontWeight: 'bold', marginRight: '6px'}}>
-                              [Error]
-                            </span>
+                            <span className="hy-web-error-tag">[Error]</span>
                             <span>{this.state.searchError}</span>
                           </div>
                         )}
@@ -3062,18 +2808,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
                 {this.state.frozenShot && (
                   // Still frame of the page shown while the native view is hidden
                   // (URL navigator / find bar open) so the overlay isn't over white.
-                  <img
-                    src={this.state.frozenShot}
-                    alt=""
-                    style={{
-                      position: 'absolute',
-                      inset: 0,
-                      width: '100%',
-                      height: '100%',
-                      objectFit: 'cover',
-                      objectPosition: 'top left'
-                    }}
-                  />
+                  <img src={this.state.frozenShot} alt="" className="hy-web-frozen" />
                 )}
                 {this.renderAuthToast()}
               </div>
@@ -3081,22 +2816,7 @@ class WebPane_ extends React.PureComponent<WebPaneProps, WebPaneState> {
           })()}
         </div>
 
-        {loading && url && !showStrip && (
-          <div
-            style={{
-              position: 'absolute',
-              top: '6px',
-              right: '10px',
-              fontSize: '11px',
-              color: 'var(--text-tertiary)',
-              zIndex: 10,
-              pointerEvents: 'none',
-              animation: 'web-pane-spin 1s linear infinite'
-            }}
-          >
-            ⟳
-          </div>
-        )}
+        {loading && url && !showStrip && <div className="hy-web-corner-spinner">⟳</div>}
 
         <style>{`
           @keyframes web-pane-spin {

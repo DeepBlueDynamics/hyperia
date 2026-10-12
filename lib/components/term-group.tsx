@@ -10,6 +10,8 @@ import SplitPane_ from './split-pane';
 import Term_ from './term';
 import WebPane from './web-pane';
 
+import './term-group.css';
+
 const Term = decorate(Term_, 'Term');
 const SplitPane = decorate(SplitPane_, 'SplitPane');
 
@@ -65,8 +67,8 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
     if (!session) {
       return (
         <div
-          className="term_fit term_wrapper"
-          style={{position: 'relative', background: this.props.backgroundColor || '#0a0a12'}}
+          className="term_fit term_wrapper hy-tg-empty"
+          style={{'--hy-tg-bg': this.props.backgroundColor || '#0a0a12'} as React.CSSProperties}
         />
       );
     }
@@ -200,8 +202,8 @@ class TermGroup_ extends React.PureComponent<TermGroupProps> {
     if (!childGroups || childGroups.length === 0) {
       return (
         <div
-          className="term_fit term_wrapper"
-          style={{position: 'relative', background: this.props.backgroundColor || '#0a0a12'}}
+          className="term_fit term_wrapper hy-tg-empty"
+          style={{'--hy-tg-bg': this.props.backgroundColor || '#0a0a12'} as React.CSSProperties}
         />
       );
     }

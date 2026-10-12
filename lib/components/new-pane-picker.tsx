@@ -6,6 +6,8 @@ import {LS_LAST_SHELL, reportLastUsedShell, resolvePickerShell} from '../utils/p
 
 import UrlPicker from './url-picker';
 
+import './new-pane-picker.css';
+
 const isWindows = ['Windows', 'Win16', 'Win32', 'WinCE'].includes(navigator.platform) || process.platform === 'win32';
 
 // A shell whose path is a Windows path (.exe / backslashes / "C:") only fits a
@@ -212,87 +214,8 @@ interface ComboboxState {
 
 type ComboRow = {type: 'add'} | {type: 'item'; item: ComboItem} | {type: 'create'};
 
-const comboRowStyle = (focused: boolean): React.CSSProperties => ({
-  display: 'flex',
-  alignItems: 'center',
-  gap: '8px',
-  padding: '6px 10px',
-  cursor: 'pointer',
-  background: focused ? 'var(--info-bg)' : undefined
-});
-
-// Shared layout so New Webpane / New Shell / New Agent are the SAME width and
-// look: a fixed-width left label (wide enough for the W/S/A hotkey chip), then
-// a flex box capped at the same maxWidth.
-const PICKER_ROW_MAX = '446px';
-const PICKER_BOX_MAX = '340px';
-const pickerRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 'var(--space-10)',
-  width: '100%',
-  maxWidth: PICKER_ROW_MAX
-};
-const pickerLabelStyle: React.CSSProperties = {
-  width: '96px',
-  flexShrink: 0,
-  fontSize: '11px',
-  color: 'var(--text-secondary)',
-  fontFamily: 'var(--font-sans)',
-  fontWeight: 500
-};
-// Matches the URL box container verbatim (url-picker.tsx).
-const pickerBoxStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 'var(--space-8)',
-  background: 'var(--bg-primary)',
-  border: '0.5px solid var(--border-neutral)',
-  borderRadius: 'var(--radius-6)',
-  padding: '0 var(--space-10)',
-  height: '36px',
-  width: '100%',
-  boxSizing: 'border-box'
-};
-const pickerInputStyle: React.CSSProperties = {
-  flex: 1,
-  background: 'transparent',
-  border: 'none',
-  outline: 'none',
-  color: 'var(--text-primary)',
-  fontSize: '11px',
-  fontFamily: 'var(--font-mono)',
-  height: '100%',
-  padding: 0,
-  minWidth: 0
-};
-// The inline "enter" badge inside the box — identical to the URL box's.
-const pickerEnterBadgeStyle: React.CSSProperties = {
-  fontFamily: 'var(--font-mono)',
-  fontSize: '10px',
-  fontWeight: 600,
-  padding: 'var(--space-2) var(--space-4)',
-  border: '0.5px solid var(--border-neutral)',
-  borderRadius: 'var(--radius-3)',
-  color: 'var(--text-tertiary)',
-  userSelect: 'none',
-  lineHeight: '1.2',
-  whiteSpace: 'nowrap',
-  cursor: 'pointer',
-  flexShrink: 0
-};
-const pickerDropdownStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: 'calc(100% + var(--space-4))',
-  left: 0,
-  right: 0,
-  zIndex: 20,
-  border: '0.5px solid var(--border-neutral)',
-  borderRadius: 'var(--radius-6)',
-  overflow: 'hidden',
-  background: 'var(--bg-primary)',
-  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.25)'
-};
+// Row/label/box/badge/dropdown styles live in new-pane-picker.css
+// (.hy-picker-row, -label, -box, -input, -badge, -dropdown, -opt).
 
 class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
   inputRef = React.createRef<HTMLInputElement>();
@@ -388,21 +311,14 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
     const {text, open, focusedIndex} = this.state;
 
     return (
-      <div style={pickerRowStyle}>
-        <div
-          style={{...pickerLabelStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-4)'}}
-          title={keyHintTitle}
-        >
+      <div className="hy-picker-row">
+        <div className="hy-picker-label" title={keyHintTitle}>
           <span>{label}</span>
         </div>
 
-        <div style={{position: 'relative', flex: 1, minWidth: 0, maxWidth: PICKER_BOX_MAX}}>
-          <div style={pickerBoxStyle}>
-            <i
-              className={leadingIcon}
-              style={{fontSize: '14px', color: 'var(--text-tertiary)', flexShrink: 0}}
-              aria-hidden="true"
-            />
+        <div className="hy-picker-boxCol hy-picker-boxCol--anchor">
+          <div className="hy-picker-box">
+            <i className={`${leadingIcon} hy-picker-leadIcon`} aria-hidden="true" />
             <input
               ref={this.inputRef}
               type="text"
@@ -440,7 +356,7 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                   this.inputRef.current?.blur();
                 }
               }}
-              style={pickerInputStyle}
+              className="hy-picker-input"
             />
             <span
               // Inline "enter" badge inside the box, exactly like the URL box.
@@ -450,15 +366,15 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                 e.stopPropagation();
               }}
               onClick={() => this.commit()}
-              style={pickerEnterBadgeStyle}
+              className="hy-picker-badge"
             >
               {keyHint ? keyHint.toLowerCase() : 'enter'}
             </span>
           </div>
 
           {open && rows.length > 0 && (
-            <div style={pickerDropdownStyle}>
-              <div style={{maxHeight: '208px', overflowY: 'auto'}}>
+            <div className="hy-picker-dropdown">
+              <div className="hy-picker-dropScroll">
                 {rows.map((row, i) => {
                   const isFocused = i === focusedIndex;
 
@@ -472,25 +388,13 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                           this.commitRow(row);
                         }}
                         onMouseEnter={() => this.setState({focusedIndex: i})}
-                        style={comboRowStyle(isFocused)}
+                        className={`hy-picker-opt${isFocused ? ' hy-picker-opt--focused' : ''}`}
                       >
                         <i
-                          className={isAdd ? 'ti ti-plus' : 'ti ti-sparkles'}
-                          style={{fontSize: '13px', color: 'var(--info-text)', flexShrink: 0}}
+                          className={`${isAdd ? 'ti ti-plus' : 'ti ti-sparkles'} hy-picker-optIcon hy-picker-info`}
                           aria-hidden="true"
                         />
-                        <span
-                          style={{
-                            flex: 1,
-                            minWidth: 0,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                            fontSize: '11px',
-                            color: 'var(--info-text)',
-                            fontFamily: 'var(--font-sans)'
-                          }}
-                        >
+                        <span className="hy-picker-optText hy-picker-info">
                           {isAdd ? addLabel : `${createLabel} “${text.trim()}”`}
                         </span>
                       </div>
@@ -515,30 +419,18 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                         ev.preventDefault();
                         ev.stopPropagation();
                       }}
-                      style={comboRowStyle(isFocused)}
+                      className={`hy-picker-opt${isFocused ? ' hy-picker-opt--focused' : ''}`}
                     >
                       <i
-                        className={it.iconClass || 'ti ti-terminal-2'}
-                        style={{fontSize: '13px', flexShrink: 0, ...(it.iconStyle || {})}}
+                        className={`${it.iconClass || 'ti ti-terminal-2'} hy-picker-optIcon`}
+                        // Per-item tint (agent colour) stays inline.
+                        style={it.iconStyle}
                         aria-hidden="true"
                       />
-                      <span
-                        style={{
-                          flex: 1,
-                          minWidth: 0,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          fontSize: '11px',
-                          color: 'var(--text-primary)',
-                          fontFamily: 'var(--font-sans)'
-                        }}
-                      >
-                        {it.label}
-                      </span>
+                      <span className="hy-picker-optText">{it.label}</span>
                       {it.onEdit && (
                         <i
-                          className="ti ti-settings"
+                          className="ti ti-settings hy-picker-gear"
                           title="Edit"
                           onMouseDown={(ev) => {
                             if (ev.button !== 0) return;
@@ -548,13 +440,12 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                             this.close();
                             it.onEdit!();
                           }}
-                          style={{fontSize: '13px', color: 'var(--text-tertiary)', flexShrink: 0, cursor: 'pointer'}}
                           aria-hidden="true"
                         />
                       )}
                       {it.onConfigure && (
                         <i
-                          className="ti ti-settings"
+                          className="ti ti-settings hy-picker-gear"
                           title="Configure"
                           onMouseDown={(ev) => {
                             if (ev.button !== 0) return;
@@ -564,7 +455,6 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                             this.close();
                             it.onConfigure!();
                           }}
-                          style={{fontSize: '13px', color: 'var(--text-tertiary)', flexShrink: 0, cursor: 'pointer'}}
                           aria-hidden="true"
                         />
                       )}
@@ -582,37 +472,19 @@ class InlineCombobox extends React.Component<ComboboxProps, ComboboxState> {
                               this.setState({armedDeleteKey: null});
                               it.onDelete!();
                             }}
-                            style={{
-                              fontSize: '10px',
-                              fontWeight: 600,
-                              color: 'var(--danger-text, #ff5c57)',
-                              flexShrink: 0,
-                              minWidth: '48px',
-                              textAlign: 'right',
-                              whiteSpace: 'nowrap',
-                              cursor: 'pointer'
-                            }}
+                            className="hy-picker-delConfirm"
                           >
                             Delete?
                           </span>
                         ) : (
                           <i
-                            className="ti ti-trash"
+                            className="ti ti-trash hy-picker-trash"
                             title="Delete this saved tab"
                             onMouseDown={(ev) => {
                               if (ev.button !== 0) return;
                               ev.preventDefault();
                               ev.stopPropagation();
                               this.setState({armedDeleteKey: it.key});
-                            }}
-                            style={{
-                              fontSize: '13px',
-                              color: 'var(--text-tertiary)',
-                              flexShrink: 0,
-                              display: 'inline-block',
-                              minWidth: '48px',
-                              textAlign: 'right',
-                              cursor: 'pointer'
                             }}
                             aria-hidden="true"
                           />
@@ -1000,48 +872,16 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
     const installedNames = new Set(profileList.map((p: any) => String(p.name).toLowerCase()));
 
     return (
-      <div className="term_pickerContainer" style={{zoom: pickerZoom, overflowY: 'auto'}}>
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            padding: 'var(--space-10) 0',
-            gap: 'var(--space-8)',
-            width: '100%',
-            flexShrink: 0
-          }}
-        >
-          <div style={{...pickerRowStyle, alignItems: 'center'}}>
-            <span
-              onClick={() => this.setState({view: 'main'})}
-              style={{
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 'var(--space-4)',
-                fontSize: '11px',
-                color: 'var(--text-secondary)',
-                fontFamily: 'var(--font-sans)'
-              }}
-            >
-              <i className="ti ti-arrow-left" style={{fontSize: '13px'}} aria-hidden="true" />
+      <div className="term_pickerContainer hy-picker-root" style={{zoom: pickerZoom}}>
+        <div className="hy-picker-stack hy-picker-stack--tight">
+          <div className="hy-picker-row">
+            <span onClick={() => this.setState({view: 'main'})} className="hy-picker-back">
+              <i className="ti ti-arrow-left hy-picker-backIcon" aria-hidden="true" />
               Back
             </span>
-            <div
-              style={{
-                flex: 1,
-                textAlign: 'center',
-                fontSize: '13px',
-                fontWeight: 500,
-                color: 'var(--text-primary)',
-                fontFamily: 'var(--font-sans)'
-              }}
-            >
-              Install an Agent
-            </div>
+            <div className="hy-picker-installTitle">Install an Agent</div>
             {/* spacer to balance the back button */}
-            <span style={{width: '48px'}} />
+            <span className="hy-picker-spacer" />
           </div>
 
           {INSTALL_CATALOG.map((entry) => {
@@ -1054,41 +894,17 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
             const shown = command || entry.unix;
             const copied = this.state.copiedInstall === shown;
             return (
-              <div
-                key={entry.name}
-                style={{
-                  ...pickerRowStyle,
-                  flexDirection: 'column',
-                  alignItems: 'stretch',
-                  gap: 'var(--space-4)',
-                  padding: 'var(--space-6) 0'
-                }}
-              >
-                <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-8)'}}>
-                  <i className={icon} style={{fontSize: '14px', flexShrink: 0, ...(style || {})}} aria-hidden="true" />
-                  <span
-                    style={{
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      color: 'var(--text-primary)',
-                      fontFamily: 'var(--font-sans)'
-                    }}
-                  >
-                    {entry.name}
-                  </span>
-                  {installed && (
-                    <span
-                      style={{fontSize: '10px', color: 'var(--success-text, #3fb950)', fontFamily: 'var(--font-sans)'}}
-                    >
-                      ✓ installed
-                    </span>
-                  )}
-                  <span style={{flex: 1}} />
+              <div key={entry.name} className="hy-picker-row hy-picker-row--stack hy-picker-row--entry">
+                <div className="hy-picker-line">
+                  <i className={`${icon} hy-picker-agentIcon`} style={style} aria-hidden="true" />
+                  <span className="hy-picker-entryName">{entry.name}</span>
+                  {installed && <span className="hy-picker-ok">✓ installed</span>}
+                  <span className="hy-picker-grow" />
                   {entry.configure && (
                     <span
                       onClick={() => this.openAgentConfig()}
                       title="Configure the Hyperia agent"
-                      style={{...pickerEnterBadgeStyle, cursor: 'pointer', color: 'var(--info-text)'}}
+                      className="hy-picker-badge hy-picker-info"
                     >
                       Configure
                     </span>
@@ -1097,7 +913,7 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                     <span
                       onClick={() => shown && this.copyInstall(shown)}
                       title="Copy command"
-                      style={{...pickerEnterBadgeStyle, cursor: 'pointer'}}
+                      className="hy-picker-badge"
                     >
                       {copied ? 'copied ✓' : 'copy'}
                     </span>
@@ -1106,35 +922,14 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
                     <span
                       onClick={() => this.openInstallShell(command)}
                       title="Open a shell with this command typed — press Enter yourself"
-                      style={{...pickerEnterBadgeStyle, cursor: 'pointer', color: 'var(--info-text)'}}
+                      className="hy-picker-badge hy-picker-info"
                     >
                       open in shell
                     </span>
                   )}
                 </div>
-                {shown && (
-                  <div
-                    style={{
-                      background: 'var(--bg-primary)',
-                      border: '0.5px solid var(--border-neutral)',
-                      borderRadius: 'var(--radius-6)',
-                      padding: 'var(--space-6) var(--space-10)',
-                      fontSize: '11px',
-                      fontFamily: 'var(--font-mono)',
-                      color: 'var(--text-primary)',
-                      overflowX: 'auto',
-                      whiteSpace: 'nowrap',
-                      userSelect: 'text'
-                    }}
-                  >
-                    {shown}
-                  </div>
-                )}
-                {entry.note && (
-                  <div style={{fontSize: '10.5px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
-                    {entry.note}
-                  </div>
-                )}
+                {shown && <div className="hy-picker-cmd">{shown}</div>}
+                {entry.note && <div className="hy-picker-note">{entry.note}</div>}
               </div>
             );
           })}
@@ -1297,10 +1092,10 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
         // Focusable (but not tab-stop) so the picker can hold keyboard focus for
         // its W/S/A hotkeys without a visible focus ring.
         tabIndex={-1}
-        className="term_pickerContainer"
+        className="term_pickerContainer hy-picker-root"
         // Content pinned to the TOP (no vertical centering) and the whole pane
-        // scrolls when it's too short to show everything.
-        style={{zoom: pickerZoom, overflowY: 'auto', outline: 'none'}}
+        // scrolls when it's too short to show everything. Zoom is per-pane state.
+        style={{zoom: pickerZoom}}
         // Clicking anywhere in the picker makes THIS pane the active session, so
         // W/S/A work in whichever picker you click (not just the one that won
         // activation on mount). BUBBLE phase (not capture): a child handles its
@@ -1328,58 +1123,22 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
           }
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            padding: 'var(--space-10) 0',
-            gap: 'var(--space-10)',
-            width: '100%',
-            flexShrink: 0
-          }}
-        >
-          <div
-            style={{
-              fontSize: '14px',
-              fontWeight: 700,
-              color: 'var(--text-primary)',
-              fontFamily: 'var(--font-sans)',
-              letterSpacing: '0.2px',
-              marginBottom: 'var(--space-2)'
-            }}
-          >
-            Webpanes, Shells and Agents. Pick one.
-          </div>
+        <div className="hy-picker-stack">
+          <div className="hy-picker-title">Webpanes, Shells and Agents. Pick one.</div>
 
           {/* New Webpane row — "New Webpane" label left of the URL box, same
               width/shape as the shell + agent rows below it. */}
-          <div style={pickerRowStyle}>
-            <div
-              style={{...pickerLabelStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-4)'}}
-              title="Press W — open the Hyperia guide"
-            >
+          <div className="hy-picker-row">
+            <div className="hy-picker-label" title="Press W — open the Hyperia guide">
               <span>New Webpane</span>
             </div>
-            <div style={{flex: 1, minWidth: 0, maxWidth: PICKER_BOX_MAX}}>
+            <div className="hy-picker-boxCol">
               <UrlPicker
                 value={urlInput || ''}
                 onChange={(v) => this.props.onUrlChange(v)}
                 onNavigate={(url) => this.props.onSubmitUrl(url)}
               />
-              {urlError && (
-                <div
-                  style={{
-                    fontSize: '11px',
-                    color: '#ff3b30',
-                    marginTop: 'var(--space-4)',
-                    textAlign: 'left',
-                    fontFamily: 'var(--font-sans)'
-                  }}
-                >
-                  {urlError}
-                </div>
-              )}
+              {urlError && <div className="hy-picker-urlError">{urlError}</div>}
             </div>
           </div>
 
@@ -1435,36 +1194,19 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
           {/* Quick page links — below the pickers, above the version footer.
               Styled to match the sidecar pages (agent config): quiet text
               links, info accent, no chrome. */}
-          <div
-            style={{
-              ...pickerRowStyle,
-              justifyContent: 'center',
-              gap: 'var(--space-8)',
-              marginTop: 'var(--space-8)'
-            }}
-          >
+          <div className="hy-picker-row hy-picker-row--links">
             <span
               onClick={this.openDashboardPane}
               title="Open the Hyperia dashboard in this pane"
-              style={{
-                fontSize: '11px',
-                fontFamily: 'var(--font-sans)',
-                color: 'var(--info-text)',
-                cursor: 'pointer'
-              }}
+              className="hy-picker-link"
             >
               Dashboard
             </span>
-            <span style={{fontSize: '11px', color: 'var(--text-tertiary)'}}>·</span>
+            <span className="hy-picker-dot">·</span>
             <span
               onClick={this.openAgentConfig}
               title="Open the Hyperia agent configuration in this pane"
-              style={{
-                fontSize: '11px',
-                fontFamily: 'var(--font-sans)',
-                color: 'var(--info-text)',
-                cursor: 'pointer'
-              }}
+              className="hy-picker-link"
             >
               configure
             </span>
@@ -1473,66 +1215,39 @@ export class NewPanePicker extends React.Component<NewPanePickerProps, NewPanePi
           {/* Footer — running version + self-update command. Like the install
               view, [run] opens a shell with the command TYPED but not
               submitted; nothing here auto-runs. */}
-          <div
-            style={{
-              ...pickerRowStyle,
-              flexDirection: 'column',
-              alignItems: 'stretch',
-              gap: 'var(--space-4)',
-              marginTop: 'var(--space-10)'
-            }}
-          >
-            <div style={{display: 'flex', alignItems: 'center', gap: 'var(--space-8)'}}>
-              <span style={{fontSize: '10.5px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-sans)'}}>
+          <div className="hy-picker-row hy-picker-row--stack hy-picker-row--footer">
+            <div className="hy-picker-line">
+              <span className="hy-picker-note">
                 {currentVersion ? `Hyperia v${normalizeVersion(currentVersion)}` : 'Hyperia'}
               </span>
               {upToDate ? (
-                <span style={{fontSize: '10px', color: 'var(--success-text, #3fb950)', fontFamily: 'var(--font-sans)'}}>
-                  ✓ up to date
-                </span>
+                <span className="hy-picker-ok">✓ up to date</span>
               ) : latestVersion ? (
-                <span style={{fontSize: '10px', color: 'var(--info-text)', fontFamily: 'var(--font-sans)'}}>
-                  v{normalizeVersion(latestVersion)} available
-                </span>
+                <span className="hy-picker-ok hy-picker-info">v{normalizeVersion(latestVersion)} available</span>
               ) : null}
-              <span style={{flex: 1}} />
+              <span className="hy-picker-grow" />
               <span
                 onClick={() => this.copyInstall(this.updateCommand())}
                 title="Copy the update command"
-                style={{...pickerEnterBadgeStyle, cursor: 'pointer'}}
+                className="hy-picker-badge"
               >
                 {updateCopied ? 'copied ✓' : 'copy'}
               </span>
               {upToDate ? (
-                <span title="Already up to date" style={{...pickerEnterBadgeStyle, cursor: 'default', opacity: 0.45}}>
+                <span title="Already up to date" className="hy-picker-badge hy-picker-badge--off">
                   run
                 </span>
               ) : (
                 <span
                   onClick={() => this.openInstallShell(this.updateCommand())}
                   title="Open a shell with the update command typed — press Enter yourself"
-                  style={{...pickerEnterBadgeStyle, cursor: 'pointer', color: 'var(--info-text)'}}
+                  className="hy-picker-badge hy-picker-info"
                 >
                   run
                 </span>
               )}
             </div>
-            <div
-              style={{
-                background: 'var(--bg-primary)',
-                border: '0.5px solid var(--border-neutral)',
-                borderRadius: 'var(--radius-6)',
-                padding: 'var(--space-6) var(--space-10)',
-                fontSize: '11px',
-                fontFamily: 'var(--font-mono)',
-                color: 'var(--text-primary)',
-                overflowX: 'auto',
-                whiteSpace: 'nowrap',
-                userSelect: 'text'
-              }}
-            >
-              {this.updateCommand()}
-            </div>
+            <div className="hy-picker-cmd">{this.updateCommand()}</div>
           </div>
         </div>
       </div>
