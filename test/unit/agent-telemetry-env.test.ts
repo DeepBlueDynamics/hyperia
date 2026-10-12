@@ -49,7 +49,10 @@ test('routes HTTPS through the counting proxy, tagged with the pane', (t) => {
 test("a user's proxy wins; their NO_PROXY is kept and extended", (t) => {
   t.deepEqual(agentProxyEnv({HTTPS_PROXY: 'http://corp:8080'}, popts), {});
   t.deepEqual(agentProxyEnv({all_proxy: 'socks5://x'}, popts), {});
-  t.is(agentProxyEnv({NO_PROXY: 'intra.lan,localhost'}, popts).NO_PROXY, 'intra.lan,localhost,127.0.0.1,::1,host.docker.internal');
+  t.is(
+    agentProxyEnv({NO_PROXY: 'intra.lan,localhost'}, popts).NO_PROXY,
+    'intra.lan,localhost,127.0.0.1,::1,host.docker.internal'
+  );
 });
 
 test('proxy disabled or no pane: nothing', (t) => {
