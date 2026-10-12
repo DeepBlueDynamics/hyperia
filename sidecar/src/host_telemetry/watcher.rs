@@ -35,6 +35,9 @@ const FLUSH_EVERY: Duration = Duration::from_millis(250);
 const CAP_EVENTS: usize = 200;
 const CAP_WINDOW: Duration = Duration::from_secs(5);
 const MAX_SIZES: usize = 50_000;
+/// Hold a change this long before reporting, so a Claude report of the same
+/// file (exported every 5s) can claim it first.
+const OTEL_HOLD: Duration = Duration::from_secs(6);
 
 const EXCLUDED_DIRS: &[&str] = &[
     ".git", "target", "node_modules", "dist", "build", ".next", "__pycache__", ".venv", "venv",
@@ -166,6 +169,7 @@ impl Coalescer {
         for path in ready {
             let p = self.pending.remove(&path).expect("listed above");
             let detail = match (exists(&path), p.saw_create) {
+                (true, true) if known(&path) => "modified",
                 (true, true) => "created",
                 (true, false) => "modified",
                 (false, true) if !known(&path) => continue,
@@ -280,6 +284,7 @@ pub fn spawn(bridge: Bridge, telemetry: TelemetryStore) {
         let mut watchers: HashMap<PathBuf, (String, notify::RecommendedWatcher)> = HashMap::new();
         let mut coalescer = Coalescer::new();
         let mut sizes: HashMap<PathBuf, u64> = HashMap::new();
+        let mut held: Vec<(Instant, Change)> = Vec::new();
         let mut scan_tick = tokio::time::interval(SCAN_EVERY);
         let mut flush_tick = tokio::time::interval(FLUSH_EVERY);
         loop {
@@ -303,8 +308,19 @@ pub fn spawn(bridge: Bridge, telemetry: TelemetryStore) {
                 }
                 _ = flush_tick.tick() => {
                     let known = |p: &Path| sizes.contains_key(p);
-                    let changes = coalescer.flush(Instant::now(), |p| p.exists(), known);
-                    for c in changes {
+                    let now = Instant::now();
+                    held.extend(coalescer.flush(now, |p| p.exists(), known).into_iter().map(|c| (now, c)));
+                    let (due, wait): (Vec<_>, Vec<_>) = held.drain(..).partition(|(t, _)| now.duration_since(*t) >= OTEL_HOLD);
+                    held = wait;
+                    for (_, c) in due {
+                        if crate::host_telemetry::otel_recent(&c.pane, &c.path.to_string_lossy()) {
+                            // Claude reported it; still learn the size so the next save isn't "created".
+                            match std::fs::metadata(&c.path) {
+                                Ok(m) if m.is_file() => { sizes.insert(c.path, m.len()); }
+                                _ => { sizes.remove(&c.path); }
+                            }
+                            continue;
+                        }
                         report(&telemetry, &mut sizes, c);
                     }
                 }
@@ -422,6 +438,23 @@ mod tests {
         // Created and gone within the window, never seen before: nothing.
         c.push("pane", p.clone(), Raw::Create, t0);
         assert!(c.flush(t0 + SETTLE, |_| false, |_| false).is_empty());
+    }
+
+    #[test]
+    fn create_for_known_path_is_modified() {
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        let p = PathBuf::from("/w/proj/existing.rs");
+        // Claude saves via write-temp-and-rename: notify reports Create for a
+        // file the watcher already knows. Should be "modified", not "created".
+        c.push("pane", p.clone(), Raw::Create, t0);
+        let out = c.flush(t0 + SETTLE, |_| true, |_| true);
+        assert_eq!(out[0].detail, "modified");
+        // A genuinely new file (unknown) still reports "created".
+        let p2 = PathBuf::from("/w/proj/brand_new.rs");
+        c.push("pane", p2.clone(), Raw::Create, t0);
+        let out2 = c.flush(t0 + SETTLE, |_| true, |_| false);
+        assert_eq!(out2[0].detail, "created");
     }
 
     #[test]
