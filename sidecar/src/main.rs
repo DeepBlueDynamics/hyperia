@@ -380,9 +380,10 @@ async fn post_tts(
     // Caller's spokenable callsign — resolved from the request identity (mirrors
     // maybe_attribute): a pane's friendly codename, or an external agent's name.
     let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
-    let caller_raw = match &id {
+    // Also the speaker's pane, so the deck sounds the voice from it, not the ring's top.
+    let (caller_raw, speaker_pane) = match &id {
         identity::CallerIdentity::Pane { pane, .. } => {
-            state.bridge.pane_display_name(pane).await.unwrap_or_default()
+            (state.bridge.pane_display_name(pane).await.unwrap_or_default(), Some(pane.clone()))
         }
         identity::CallerIdentity::Agent { name, .. } => {
             // Binding comes from authenticated residency, never request JSON.
@@ -400,11 +401,11 @@ async fn post_tts(
             let pane = store.bindings.pane_for_agent(agent).or_else(|| store.bindings.pane_for_agent(name));
             let fallback = || tts::agent_callsign(&id.label());
             match pane {
-                Some(pane) => state.bridge.pane_display_name(&pane).await.unwrap_or_else(fallback),
-                None => fallback(),
+                Some(pane) => (state.bridge.pane_display_name(&pane).await.unwrap_or_else(fallback), Some(pane)),
+                None => (fallback(), None),
             }
         },
-        _ => String::new(),
+        _ => (String::new(), None),
     };
     let caller = match tts::spokenable_name(&caller_raw) {
         s if s.is_empty() => "station".to_string(),
@@ -430,7 +431,7 @@ async fn post_tts(
     // Log the transmission as it goes on air (dashboard radio view + replay).
     let meta = radio_log::Meta {
         from: if caller_raw.is_empty() { caller.clone() } else { caller_raw.clone() },
-        from_pane: match &id { identity::CallerIdentity::Pane { pane, .. } => Some(pane.clone()), _ => None },
+        from_pane: speaker_pane,
         to: recipient.clone(),
         text: req.text.trim().to_string(),
         spoken: spoken.clone(),
