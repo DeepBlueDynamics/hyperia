@@ -21,6 +21,16 @@ export function topCenterBounds(contentWidth: number, cssW: number, cssH: number
   return {x: Math.max(0, Math.round((contentWidth - width) / 2)), y: 0, width, height};
 }
 
+// Window size and the content-sized view, clamped to fit inside it.
+function fit(contentWidth: number, contentHeight: number, cssW: number, cssH: number, zoom: number) {
+  const z = zoom > 0 ? zoom : 1;
+  const w = Math.max(1, Math.floor(contentWidth));
+  const h = Math.max(1, Math.floor(contentHeight));
+  const width = Math.min(Math.max(1, Math.ceil(cssW * z)), w);
+  const height = Math.min(Math.max(1, Math.ceil(cssH * z)), h);
+  return {w, h, z, width, height};
+}
+
 // Bottom-right twin for the notice stack; the page's own padding is the margin.
 export function bottomRightBounds(
   contentWidth: number,
@@ -29,11 +39,7 @@ export function bottomRightBounds(
   cssH: number,
   zoom: number
 ): LayerRect {
-  const z = zoom > 0 ? zoom : 1;
-  const w = Math.max(1, Math.floor(contentWidth));
-  const h = Math.max(1, Math.floor(contentHeight));
-  const width = Math.min(Math.max(1, Math.ceil(cssW * z)), w);
-  const height = Math.min(Math.max(1, Math.ceil(cssH * z)), h);
+  const {w, h, width, height} = fit(contentWidth, contentHeight, cssW, cssH, zoom);
   return {x: w - width, y: h - height, width, height};
 }
 
@@ -45,10 +51,22 @@ export function centerBounds(
   cssH: number,
   zoom: number
 ): LayerRect {
-  const z = zoom > 0 ? zoom : 1;
-  const w = Math.max(1, Math.floor(contentWidth));
-  const h = Math.max(1, Math.floor(contentHeight));
-  const width = Math.min(Math.max(1, Math.ceil(cssW * z)), w);
-  const height = Math.min(Math.max(1, Math.ceil(cssH * z)), h);
+  const {w, h, width, height} = fit(contentWidth, contentHeight, cssW, cssH, zoom);
   return {x: Math.round((w - width) / 2), y: Math.round((h - height) / 2), width, height};
+}
+
+// Below the tab strip (CSS px), so the view never covers the window buttons.
+export const TOP_RIGHT_INSET = 40;
+
+// Top-right, for prompts about the pane the human is in.
+export function topRightBounds(
+  contentWidth: number,
+  contentHeight: number,
+  cssW: number,
+  cssH: number,
+  zoom: number
+): LayerRect {
+  const {w, h, z, width, height} = fit(contentWidth, contentHeight, cssW, cssH, zoom);
+  const y = Math.min(Math.round(TOP_RIGHT_INSET * z), h - height);
+  return {x: w - width, y, width, height};
 }

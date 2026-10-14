@@ -24,6 +24,7 @@ mod n8;
 mod messaging;
 mod delivery;
 mod delivery_service;
+mod held_input;
 mod perms;
 mod process;
 mod host_telemetry;
@@ -1508,7 +1509,8 @@ async fn identity_mw(
     }
     // Approval decisions, enforcement switches and pane credentials belong to
     // the human UI (authenticated by Electron main), never an agent caller.
-    if matches!(path.as_str(), "/api/perms/respond" | "/api/perms/enforce" | "/api/perms/token" | "/ws" | "/api/ui/key")
+    if matches!(path.as_str(), "/api/perms/respond" | "/api/perms/enforce" | "/api/perms/token" | "/ws" | "/api/ui/key"
+        | "/api/delivery/release-held")
         && !id.is_system()
     {
         crate::audit::record_call(&label, kind, &method, &path, 403);
@@ -4805,6 +4807,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pane/send", axum::routing::post(delivery_service::pane_send))
         .route("/api/terminal/run", axum::routing::post(delivery_service::terminal_run))
         .route("/api/delivery/status", axum::routing::get(delivery_service::status))
+        .route("/api/delivery/release-held", axum::routing::post(delivery_service::release_held))
         .route("/api/msg/inbox", axum::routing::get(messaging::inbox))
         .route("/api/msg/read", axum::routing::post(messaging::read))
         .route("/api/msg/check", axum::routing::post(messaging::check))

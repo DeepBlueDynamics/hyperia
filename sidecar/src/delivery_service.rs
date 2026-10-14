@@ -12,6 +12,7 @@ static STORE: OnceCell<DeliveryStore> = OnceCell::const_new();
 // Retry metadata persistence only; never repeat transport after an uncertain write.
 static COMPLETIONS: Mutex<Vec<(String, State, serde_json::Value)>> = Mutex::const_new(Vec::new());
 static PROMPTS: Mutex<Vec<(String, serde_json::Value)>> = Mutex::const_new(Vec::new());
+static HELD: std::sync::LazyLock<Mutex<crate::held_input::Held>> = std::sync::LazyLock::new(Default::default);
 
 async fn store() -> Result<&'static DeliveryStore, ApiError> {
     STORE.get_or_try_init(|| async {
@@ -389,6 +390,29 @@ async fn finish(store: &DeliveryStore, op: &Operation, state: State, outcome: se
     }
 }
 
+/// Tell the window that owns `pane` an agent's input waits on the human's focus.
+async fn announce_held(bridge: &Bridge, op: &Operation, payload: &InputPayload) -> bool {
+    let from = messaging::requester_prompt_name(bridge, &op.requester, &payload.sender.label).await;
+    let preview = match op.kind.as_str() {
+        "keys" => String::new(),
+        _ => crate::held_input::preview(&payload.text),
+    };
+    bridge.notify(serde_json::json!({
+        "type": "InputHeld", "opId": op.id, "pane": payload.pane, "kind": op.kind,
+        "from": from, "preview": preview,
+    })).await.is_ok()
+}
+
+/// The human chose "Send now" on a held-input toast (Hyperia app only).
+pub async fn release_held(Json(body): Json<serde_json::Value>) -> (StatusCode, Json<serde_json::Value>) {
+    let id = body["opId"].as_str().unwrap_or_default();
+    if HELD.lock().await.release(id, std::time::Instant::now()) {
+        (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+    } else {
+        (StatusCode::NOT_FOUND, Json(serde_json::json!({"ok": false, "error": "That input is no longer waiting."})))
+    }
+}
+
 pub async fn tick(bridge: &Bridge) {
     let store = match store().await { Ok(store) => store, Err(_) => return };
     let completions = std::mem::take(&mut *COMPLETIONS.lock().await);
@@ -404,6 +428,10 @@ pub async fn tick(bridge: &Bridge) {
         }
     }
     let queue = match store.queued().await { Ok(queue) => queue, Err(error) => { tracing::error!("Delivery queue read failed: {error}"); return; } };
+    let cleared = HELD.lock().await.sweep(|id| queue.iter().any(|q| q.id == id));
+    for (op, pane) in cleared {
+        let _ = bridge.notify(serde_json::json!({"type": "InputHeldCleared", "opId": op, "pane": pane})).await;
+    }
     for queued in queue {
         let _session_gate = WORKFLOW.lock().await;
         if !bridge.identity().sessions.principal_active(&queued.requester) {
@@ -421,7 +449,17 @@ pub async fn tick(bridge: &Bridge) {
         if queued.kind != "mail" {
             if let Ok(payload) = serde_json::from_value::<InputPayload>(queued.payload.clone()) {
                 if let Some(candidate) = bridge.classification_for(&payload.pane).await {
-                    if !payload.interrupt && (candidate.focus_protected || candidate.actively_typed) { continue; }
+                    let now = std::time::Instant::now();
+                    let released = HELD.lock().await.released(&queued.id, now);
+                    if !payload.interrupt && !released && (candidate.focus_protected || candidate.actively_typed) {
+                        // Only the human's own pane gets the toast; recent typing alone just waits.
+                        if candidate.focus_protected && HELD.lock().await.hold(&queued.id, &payload.pane, now)
+                            && !announce_held(bridge, &queued, &payload).await
+                        {
+                            HELD.lock().await.forget(&queued.id);
+                        }
+                        continue;
+                    }
                 }
             }
         }
@@ -459,10 +497,11 @@ pub async fn tick(bridge: &Bridge) {
             continue;
         }
         let (text, submit) = normalize_agent_enter(payload.text.clone(), op.submit, payload.agent && !payload.raw);
+        let released = HELD.lock().await.released(&op.id, std::time::Instant::now());
         let result = bridge.guarded_input(&payload.pane, serde_json::json!({
             "type": "GuardedInput", "uid": payload.pane, "pid": payload.pid,
             "text": text, "submit": submit, "agent": payload.agent,
-            "control": payload.raw, "interrupt": payload.interrupt,
+            "control": payload.raw, "interrupt": payload.interrupt, "released": released,
         })).await;
         let outcome = match &result {
             Ok(body) => serde_json::from_str::<serde_json::Value>(body).ok().or_else(|| {

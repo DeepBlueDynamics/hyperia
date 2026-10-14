@@ -1,6 +1,6 @@
 import test from 'ava';
 
-import {bottomRightBounds, centerBounds, topCenterBounds} from '../../app/utils/toast-layer-bounds';
+import {bottomRightBounds, centerBounds, topCenterBounds, topRightBounds} from '../../app/utils/toast-layer-bounds';
 
 test('topCenterBounds: centers the content-sized view at the top edge', (t) => {
   t.deepEqual(topCenterBounds(1000, 400, 120, 1), {x: 300, y: 0, width: 400, height: 120});
@@ -31,4 +31,11 @@ test('centerBounds: centers the content-sized view in the window', (t) => {
   t.deepEqual(centerBounds(1000, 800, 400, 200, 1), {x: 300, y: 300, width: 400, height: 200});
   t.deepEqual(centerBounds(1200, 800, 400, 100, 1.2), {x: 360, y: 340, width: 480, height: 120});
   t.deepEqual(centerBounds(300, 200, 400, 400, 1), {x: 0, y: 0, width: 300, height: 200});
+});
+
+test('topRightBounds: pins to the right edge below the tab strip', (t) => {
+  t.deepEqual(topRightBounds(1000, 800, 400, 120, 1), {x: 600, y: 40, width: 400, height: 120});
+  t.deepEqual(topRightBounds(1200, 800, 400, 100, 1.2), {x: 720, y: 48, width: 480, height: 120});
+  // A window too short for the inset still keeps the whole view inside it.
+  t.deepEqual(topRightBounds(500, 100, 400, 90, 1), {x: 100, y: 10, width: 400, height: 90});
 });

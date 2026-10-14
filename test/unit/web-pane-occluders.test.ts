@@ -18,6 +18,7 @@ type Strategy = 'layer' | 'suppress' | 'chrome' | 'gap';
 
 const OCCLUDERS: Record<string, {count: number; strategy: Strategy; note: string}> = {
   'lib/components/agent-toast.tsx': {count: 2, strategy: 'layer', note: 'create-consent cards + waiting pill'},
+  'lib/components/held-input-toast.tsx': {count: 1, strategy: 'layer', note: 'held agent input: Send now / Later'},
   'lib/components/consent-modal.tsx': {
     count: 2,
     strategy: 'suppress',
