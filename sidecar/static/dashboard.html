@@ -1335,6 +1335,12 @@ function pvDrawRing(){
         ctx.fillText(pvClip(ctx, pvWebWhere(n.url), Math.max(60, (left ? p.x : w - p.x) - 8)), p.x, p.y + 11);
         box.y1 += 10; a.lbox.y1 = (box.y1 - vw.y) / vw.z;
       }
+      const sign = PV.signs && PV.signs[pvPaneId(n.id)];
+      if (sign) {
+        ctx.font = "700 8px " + PV_MONO; ctx.fillStyle = "#fbbf24";
+        ctx.fillText(String(sign).toUpperCase(), p.x, p.y + (n.kind === "web" && n.url ? 21 : 11));
+        box.y1 += 10; a.lbox.y1 = (box.y1 - vw.y) / vw.z;
+      }
       if ((a.out || 0) > .05) {
         pvHalo(ctx, a, left ? p.x - tw / 2 : p.x + tw / 2, p.y, tw, sel && !on ? .35 : 1);
         if (!PV_REDUCE) pvShimmer(ctx, text, p.x, p.y, tw, ctx.textAlign, a.out * a.alpha);
@@ -1457,6 +1463,12 @@ async function pvRadioPoll(){
     const j = await r.json(), skew = Date.now() - (j.now || Date.now());
     PV.radio = (j.entries || []).map((e) => ({...e, start: e.ts + skew})); PV.radioErr = false;
   } catch (_e) { PV.radio = []; PV.radioErr = true; }
+  // Call signs, shown under pane names while the radio runs (older sidecars: none).
+  try {
+    const b = await fetch("/api/radio/badges");
+    const j = b.ok ? await b.json() : {};
+    PV.signs = j.running ? (j.signs || {}) : {};
+  } catch (_e) { PV.signs = {}; }
   const sig = PV.radio.map((e) => e.id + (pvRadioLive(e) ? "*" : "")).join(",") + "|" + PV.radioOpen + "|" + (PV.replay && PV.replay.id);
   if (sig !== PV.radioSig) { PV.radioSig = sig; pvRenderRadio(); }
 }

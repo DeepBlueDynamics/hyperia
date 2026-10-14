@@ -4768,6 +4768,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/files/render", axum::routing::post(file_edit::render))
         .route("/api/radio/callsigns", axum::routing::get(radio::get_callsigns))
         .route("/api/radio/deliver", axum::routing::post(radio::deliver))
+        .route("/api/radio/badges", axum::routing::get(radio::get_badges))
         .route("/api/audio/play", axum::routing::post(post_audio_play))
         .route("/api/audio/probe", axum::routing::post(post_audio_probe))
         .route("/api/audio/mute", axum::routing::post(post_audio_mute))

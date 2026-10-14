@@ -5,8 +5,8 @@
 //! gold badges on those panes. hertz routes a call by sign, and delivering on
 //! a sign rotates it: a sign heard over the air (or replayed) never works twice.
 //! A pane otherwise keeps its sign while the grant lasts — brief not-an-agent
-//! blips don't churn it. Signs are only ever given to the human (badges) and
-//! to hertz-radio.
+//! blips don't churn it. Signs are only ever given to the human (badges and
+//! the local-only Control Deck) and to hertz-radio.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
@@ -144,6 +144,16 @@ async fn push(bridge: &Bridge, force: bool) {
     if let Some(m) = msg {
         let _ = bridge.notify(m).await;
     }
+}
+
+/// GET /api/radio/badges — local-only, for the Control Deck: each pane's sign,
+/// shown like the pane badges. Signs only let hertz-radio route a call.
+pub async fn get_badges(axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>) -> Response {
+    if let Some(r) = crate::radio_log::local_only(&peer) {
+        return r;
+    }
+    let body = with(|s| json!({"running": s.running, "visible": visible(s), "signs": s.signs}));
+    Json(body).into_response()
 }
 
 /// Keep an existing sign? A gone grant (or a pane with no live session, which
