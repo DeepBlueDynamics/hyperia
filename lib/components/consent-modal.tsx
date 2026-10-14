@@ -15,6 +15,8 @@ import {onToastLayerAction, setLayerToasts, useToastLayer} from '../toast-layer'
 import {consentSubject, consentTargetName, consentVariant} from '../utils/consent-variant';
 import {useSuppressWebPanes} from '../utils/web-pane-suppress';
 
+import './consent-modal.css';
+
 const CONSENT_PILL_ID = 'consent-modal-pill';
 
 function pillText(expiredReqs: PermRequest[]): string {
@@ -24,57 +26,8 @@ function pillText(expiredReqs: PermRequest[]): string {
     : `${expiredReqs.length} agents waiting for approval — click to review`;
 }
 
-// Segmented-control pill (scope + duration rows). Mirrors the old per-pane card.
-const segStyle = (active: boolean): React.CSSProperties => ({
-  padding: '4px 11px',
-  fontSize: '11px',
-  borderRadius: '5px',
-  border: '1px solid',
-  borderColor: active ? 'var(--accent-primary, #6ea8fe)' : 'var(--border-neutral, rgba(255,255,255,0.12))',
-  background: active ? 'var(--accent-primary, #6ea8fe)' : 'transparent',
-  color: active ? '#0b0b0f' : 'var(--text-secondary, #9a9aa2)',
-  fontWeight: active ? 600 : 400,
-  cursor: 'pointer',
-  whiteSpace: 'nowrap'
-});
-
-// The same pill, frozen: messaging/binding have exactly one possible scope, so
-// it's shown as a fixed chip — not a button, no hover, no pointer.
-const fixedChipStyle: React.CSSProperties = {
-  ...segStyle(true),
-  display: 'inline-block',
-  lineHeight: 'normal',
-  cursor: 'default',
-  userSelect: 'none'
-};
-
-// Row: muted 54px label column + controls. Shared by Access and For so every
-// variant lines up the same way.
-const rowStyle = (last: boolean): React.CSSProperties => ({
-  display: 'flex',
-  alignItems: 'center',
-  gap: '10px',
-  marginBottom: last ? '18px' : '10px'
-});
-const rowLabelStyle: React.CSSProperties = {
-  fontSize: '11px',
-  color: 'var(--text-secondary, #9a9aa2)',
-  width: '54px',
-  flexShrink: 0
-};
-
-const actionStyle = (primary: boolean, busy: boolean): React.CSSProperties => ({
-  padding: '7px 20px',
-  fontSize: '13px',
-  fontWeight: 600,
-  borderRadius: '6px',
-  border: '1px solid',
-  borderColor: primary ? 'var(--accent-success, #3fb950)' : 'var(--border-neutral, rgba(255,255,255,0.15))',
-  background: primary ? 'var(--accent-success, #3fb950)' : 'transparent',
-  color: primary ? '#06140a' : 'var(--text-primary, #e8e8ea)',
-  cursor: busy ? 'default' : 'pointer',
-  opacity: busy ? 0.55 : 1
-});
+// Segmented-control pill class (scope + duration rows); styles in consent-modal.css.
+const segClass = (active: boolean): string => (active ? 'hy-consent-seg hy-consent-seg--active' : 'hy-consent-seg');
 
 async function respond(
   req: PermRequest,
@@ -170,34 +123,11 @@ export default function ConsentModal(): React.ReactElement | null {
       <div
         onClick={() => reviveRequest(first.targetPane, first.id)}
         title="Click to review"
-        style={{
-          position: 'fixed',
-          top: '10px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 99998,
-          // The pill parks INSIDE the frameless window's drag strip — without
-          // no-drag, clicks start a WINDOW DRAG instead of dispatching DOM
-          // events, so "click to review" did nothing.
-          ['WebkitAppRegion' as any]: 'no-drag',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: '6px 14px',
-          borderRadius: '999px',
-          border: '1px solid var(--accent-primary, #6ea8fe)',
-          background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',
-          color: 'var(--text-primary, #e8e8ea)',
-          fontFamily: 'var(--font-sans)',
-          fontSize: '12px',
-          fontWeight: 500,
-          cursor: 'pointer',
-          boxShadow: '0 6px 20px rgba(0,0,0,0.45)',
-          animation: 'hyConsentPill 2.4s ease-in-out infinite'
-        }}
+        className="hy-consent-pill"
+        // position stays inline: the web-pane-occluders test counts it per file
+        style={{position: 'fixed'}}
       >
-        <style>{`@keyframes hyConsentPill{0%,100%{box-shadow:0 6px 20px rgba(0,0,0,0.45)}50%{box-shadow:0 0 14px 2px var(--accent-primary, #6ea8fe)}}`}</style>
-        <span style={{fontSize: '14px', lineHeight: 1}}>🛂</span>
+        <span className="hy-consent-pill-emoji">🛂</span>
         <span>{pillText(expiredReqs)}</span>
       </div>
     );
@@ -218,70 +148,33 @@ export default function ConsentModal(): React.ReactElement | null {
 
   return (
     <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 100000,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'rgba(0,0,0,0.45)',
-        backdropFilter: 'blur(1.5px)',
-        animation: 'hyConsentBg 140ms ease'
-      }}
+      className="hy-consent-backdrop"
+      style={{position: 'fixed'}}
       // Backdrop click SNOOZES to the pill — it must NOT silently DENY: a stray
       // click anywhere in the window was killing agents' requests (and while
       // the prompt was up, this full-window layer ate every hover/click — the
       // "all the icons are broken" reports). Only the explicit buttons decide.
       onClick={() => expireRequest(req.targetPane, req.id)}
     >
-      <style>{`
-        @keyframes hyConsentBg{from{opacity:0}to{opacity:1}}
-        @keyframes hyConsentIn{from{opacity:0;transform:translateY(-10px) scale(0.98)}to{opacity:1;transform:translateY(0) scale(1)}}
-      `}</style>
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 'min(420px, calc(100vw - 32px))',
-          boxSizing: 'border-box',
-          padding: '18px 20px',
-          background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',
-          border: '1px solid var(--accent-primary, #6ea8fe)',
-          borderRadius: '12px',
-          boxShadow: '0 18px 50px rgba(0,0,0,0.6)',
-          color: 'var(--text-primary, #e8e8ea)',
-          fontFamily: 'var(--font-sans)',
-          animation: 'hyConsentIn 160ms ease'
-        }}
-      >
+      <div onClick={(e) => e.stopPropagation()} className="hy-consent-card">
         {/* Who + what + where */}
-        <div style={{display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '16px'}}>
-          <span style={{fontSize: '20px', lineHeight: 1}}>🛂</span>
-          <div style={{fontSize: '13.5px', lineHeight: 1.4}}>
+        <div className="hy-consent-head">
+          <span className="hy-consent-head-emoji">🛂</span>
+          <div className="hy-consent-head-text">
             <b>{req.requesterName || req.requester}</b>
-            <span style={{color: 'var(--text-secondary, #9a9aa2)'}}>{variant.verb}</span>
+            <span className="hy-consent-muted">{variant.verb}</span>
             <b>{paneName}</b>
-            <span style={{color: 'var(--text-secondary, #9a9aa2)'}}> {variant.tail}</span>
+            <span className="hy-consent-muted"> {variant.tail}</span>
             {subject || req.purpose ? (
-              <div
-                style={{
-                  marginTop: '8px',
-                  padding: '6px 9px',
-                  borderLeft: '2px solid var(--accent-primary, #6ea8fe)',
-                  background: 'var(--bg-secondary, rgba(255,255,255,0.04))',
-                  borderRadius: '3px',
-                  fontSize: '12.5px',
-                  color: 'var(--text-secondary, #9a9aa2)'
-                }}
-              >
+              <div className="hy-consent-why">
                 {/* Messaging shows the mail's subject (never its body) in place of Why. */}
                 {subject ? (
-                  <span title={subject.full} style={{overflowWrap: 'anywhere'}}>
-                    <span style={{color: 'var(--text-primary, #e8e8ea)'}}>Subject:</span> {subject.text}
+                  <span title={subject.full} className="hy-consent-subject">
+                    <span className="hy-consent-why-label">Subject:</span> {subject.text}
                   </span>
                 ) : (
                   <>
-                    <span style={{color: 'var(--text-primary, #e8e8ea)'}}>Why:</span> {req.purpose}
+                    <span className="hy-consent-why-label">Why:</span> {req.purpose}
                   </>
                 )}
               </div>
@@ -291,13 +184,20 @@ export default function ConsentModal(): React.ReactElement | null {
 
         {/* Access — every variant uses the same label-column row. Messaging and
             binding have one possible scope, shown as a fixed chip. */}
-        <div role="group" aria-label="Access" style={rowStyle(!variant.showDuration)}>
-          <span style={rowLabelStyle} aria-hidden="true">
+        <div
+          role="group"
+          aria-label="Access"
+          className={variant.showDuration ? 'hy-consent-row' : 'hy-consent-row hy-consent-row--last'}
+        >
+          <span className="hy-consent-row-label" aria-hidden="true">
             Access
           </span>
-          <div style={{display: 'flex', gap: '5px'}}>
+          <div className="hy-consent-seg-group">
             {variant.accessChip ? (
-              <span style={fixedChipStyle} title="The only scope this request can have">
+              <span
+                className="hy-consent-seg hy-consent-seg--active hy-consent-seg--fixed"
+                title="The only scope this request can have"
+              >
                 {variant.accessChip}
               </span>
             ) : (
@@ -313,7 +213,7 @@ export default function ConsentModal(): React.ReactElement | null {
                   type="button"
                   aria-pressed={scope === val}
                   onClick={() => setScope(val)}
-                  style={segStyle(scope === val)}
+                  className={segClass(scope === val)}
                 >
                   {lbl}
                 </button>
@@ -323,11 +223,11 @@ export default function ConsentModal(): React.ReactElement | null {
         </div>
 
         {variant.showDuration ? (
-          <div role="group" aria-label="For" style={rowStyle(true)}>
-            <span style={rowLabelStyle} aria-hidden="true">
+          <div role="group" aria-label="For" className="hy-consent-row hy-consent-row--last">
+            <span className="hy-consent-row-label" aria-hidden="true">
               For
             </span>
-            <div style={{display: 'flex', gap: '5px'}}>
+            <div className="hy-consent-seg-group">
               {(
                 [
                   ['15 min', 900],
@@ -340,7 +240,7 @@ export default function ConsentModal(): React.ReactElement | null {
                   type="button"
                   aria-pressed={duration === secs}
                   onClick={() => setDuration(secs)}
-                  style={segStyle(duration === secs)}
+                  className={segClass(duration === secs)}
                 >
                   {lbl}
                 </button>
@@ -350,17 +250,31 @@ export default function ConsentModal(): React.ReactElement | null {
         ) : null}
 
         {error ? (
-          <div role="alert" style={{color: 'var(--accent-danger, #f85149)', marginBottom: 12}}>
+          <div role="alert" className="hy-consent-error">
             {error}
           </div>
         ) : null}
 
         {/* Actions */}
-        <div style={{display: 'flex', gap: '10px', justifyContent: 'flex-end'}}>
-          <button type="button" disabled={busy} onClick={() => act('deny')} style={actionStyle(false, busy)}>
+        <div className="hy-consent-actions">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => act('deny')}
+            className={busy ? 'hy-consent-action hy-consent-action--busy' : 'hy-consent-action'}
+          >
             Deny
           </button>
-          <button type="button" disabled={busy} onClick={() => act('allow')} style={actionStyle(true, busy)}>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => act('allow')}
+            className={
+              busy
+                ? 'hy-consent-action hy-consent-action--primary hy-consent-action--busy'
+                : 'hy-consent-action hy-consent-action--primary'
+            }
+          >
             Allow
           </button>
         </div>

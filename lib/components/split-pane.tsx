@@ -5,6 +5,8 @@ import sum from 'lodash/sum';
 import type {SplitPaneProps} from '../../typings/hyper';
 import {splitPaneSize} from '../utils/split-sizes';
 
+import './split-pane.css';
+
 const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
   const dragPanePosition = useRef<number>(0);
   const dragTarget = useRef<HTMLDivElement | null>(null);
@@ -100,14 +102,13 @@ const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
         const style = {
           // flexBasis doesn't work for the first horizontal pane, height need to be specified
           [sizeProperty]: size,
-          flexBasis: size,
-          flexGrow: 0
+          flexBasis: size
         };
 
         const isSplit =
           React.isValidElement(child) &&
           !!(child.props?.termGroup?.children && child.props.termGroup.children.length > 0);
-        const paneClass = `splitpane_pane ${isSplit ? 'splitpane_pane_shell' : ''}`;
+        const paneClass = `splitpane_pane hy-split-pane ${isSplit ? 'splitpane_pane_shell' : ''}`;
 
         return (
           <React.Fragment key={i}>
@@ -124,7 +125,7 @@ const SplitPane = forwardRef<HTMLDivElement, SplitPaneProps>((props, ref) => {
           </React.Fragment>
         );
       })}
-      <div style={{display: dragging ? 'block' : 'none'}} className="splitpane_shim" />
+      <div className={`splitpane_shim hy-split-shim${dragging ? ' hy-split-shim--dragging' : ''}`} />
 
       <style jsx>{`
         .splitpane_panes {

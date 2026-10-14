@@ -1,5 +1,7 @@
 import React from 'react';
 
+import './url-picker.css';
+
 // Shared URL picker — used by the pane "Chooser" (and reusable by the web-pane
 // toolbar). Input + a history dropdown (favicon · title · url), de-duped on a
 // normalized key, keyboard-navigable. Self-contained: reads the same history
@@ -175,26 +177,9 @@ export default class UrlPicker extends React.Component<Props, State> {
     const {focusedIndex} = this.state;
 
     return (
-      <div style={{display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '340px'}}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--space-8)',
-            background: 'var(--bg-primary)',
-            border: '0.5px solid var(--border-neutral)',
-            borderRadius: 'var(--radius-6)',
-            padding: '0 var(--space-10)',
-            height: '36px',
-            width: '100%',
-            boxSizing: 'border-box'
-          }}
-        >
-          <i
-            className="ti ti-world"
-            style={{fontSize: '14px', color: 'var(--text-tertiary)', flexShrink: 0}}
-            aria-hidden="true"
-          />
+      <div className="hy-urlpick">
+        <div className="hy-urlpick-field">
+          <i className="ti ti-world hy-urlpick-field-icon" aria-hidden="true" />
           <input
             ref={this.inputRef}
             type="text"
@@ -243,18 +228,7 @@ export default class UrlPicker extends React.Component<Props, State> {
                 else if (value.trim()) onNavigate(value.trim());
               }
             }}
-            style={{
-              flex: 1,
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              color: 'var(--text-primary)',
-              fontSize: '11px',
-              fontFamily: 'var(--font-mono)',
-              height: '100%',
-              padding: 0,
-              minWidth: 0
-            }}
+            className="hy-urlpick-input"
           />
           <span
             // The "enter" badge looked like a button but did nothing — clicking it
@@ -268,35 +242,15 @@ export default class UrlPicker extends React.Component<Props, State> {
               else if (value.trim()) onNavigate(value.trim());
               else this.inputRef.current?.focus({preventScroll: true});
             }}
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '10px',
-              fontWeight: 600,
-              padding: 'var(--space-2) var(--space-4)',
-              border: '0.5px solid var(--border-neutral)',
-              borderRadius: 'var(--radius-3)',
-              color: 'var(--text-tertiary)',
-              userSelect: 'none',
-              lineHeight: '1.2',
-              whiteSpace: 'nowrap',
-              cursor: 'pointer'
-            }}
+            className="hy-urlpick-enter"
           >
             w
           </span>
         </div>
 
         {rows.length > 0 && (
-          <div
-            style={{
-              marginTop: 'var(--space-6)',
-              border: '0.5px solid var(--border-neutral)',
-              borderRadius: 'var(--radius-6)',
-              overflow: 'hidden',
-              background: 'var(--bg-primary)'
-            }}
-          >
-            <div style={{maxHeight: '208px', overflowY: 'auto'}}>
+          <div className="hy-urlpick-dropdown">
+            <div className="hy-urlpick-list">
               {rows.map((row, i) => {
                 const isFocused = i === focusedIndex;
                 if (row.type === 'root') {
@@ -312,65 +266,27 @@ export default class UrlPicker extends React.Component<Props, State> {
                       }}
                       onMouseEnter={() => this.setState({focusedIndex: i})}
                       title={`${row.entries.length} pages · click to ${expanded ? 'collapse' : 'expand'}`}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        padding: '6px 10px',
-                        cursor: 'pointer',
-                        background: isFocused ? 'var(--info-bg)' : undefined
-                      }}
+                      className={'hy-urlpick-row' + (isFocused ? ' is-focused' : '')}
                     >
                       <i
-                        className={expanded ? 'ti ti-chevron-down' : 'ti ti-chevron-right'}
-                        style={{fontSize: '12px', color: 'var(--text-tertiary)', flexShrink: 0}}
+                        className={(expanded ? 'ti ti-chevron-down' : 'ti ti-chevron-right') + ' hy-urlpick-chevron'}
                         aria-hidden="true"
                       />
-                      <span
-                        style={{
-                          position: 'relative',
-                          width: '14px',
-                          height: '14px',
-                          flexShrink: 0,
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}
-                      >
-                        <i
-                          className="ti ti-world"
-                          style={{fontSize: '13px', color: 'var(--text-tertiary)'}}
-                          aria-hidden="true"
-                        />
+                      <span className="hy-urlpick-fav">
+                        <i className="ti ti-world hy-urlpick-fav-globe" aria-hidden="true" />
                         <img
                           src={faviconForUrl(row.entries[0].value)}
                           width={14}
                           height={14}
                           alt=""
-                          style={{position: 'absolute', inset: 0, borderRadius: '2px', objectFit: 'contain'}}
+                          className="hy-urlpick-fav-img"
                           onError={(ev) => {
                             (ev.currentTarget as HTMLImageElement).style.display = 'none';
                           }}
                         />
                       </span>
-                      <span
-                        style={{
-                          flex: 1,
-                          minWidth: 0,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          fontSize: '11px',
-                          fontWeight: 600,
-                          color: 'var(--text-primary)',
-                          fontFamily: 'var(--font-mono)'
-                        }}
-                      >
-                        {row.label}
-                      </span>
-                      <span style={{fontSize: '10px', color: 'var(--text-tertiary)', flexShrink: 0}}>
-                        {row.entries.length}
-                      </span>
+                      <span className="hy-urlpick-root-label">{row.label}</span>
+                      <span className="hy-urlpick-root-count">{row.entries.length}</span>
                     </div>
                   );
                 }
@@ -387,72 +303,29 @@ export default class UrlPicker extends React.Component<Props, State> {
                       onNavigate(e.value);
                     }}
                     onMouseEnter={() => this.setState({focusedIndex: i})}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: row.type === 'child' ? '5px 10px 5px 28px' : '6px 10px',
-                      cursor: 'pointer',
-                      background: isFocused ? 'var(--info-bg)' : undefined
-                    }}
+                    className={
+                      'hy-urlpick-row' + (row.type === 'child' ? ' is-child' : '') + (isFocused ? ' is-focused' : '')
+                    }
                   >
-                    <span
-                      style={{
-                        position: 'relative',
-                        width: '14px',
-                        height: '14px',
-                        flexShrink: 0,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center'
-                      }}
-                    >
-                      <i
-                        className="ti ti-world"
-                        style={{fontSize: '13px', color: 'var(--text-tertiary)'}}
-                        aria-hidden="true"
-                      />
+                    <span className="hy-urlpick-fav">
+                      <i className="ti ti-world hy-urlpick-fav-globe" aria-hidden="true" />
                       <img
                         src={faviconForUrl(e.value)}
                         width={14}
                         height={14}
                         alt=""
-                        style={{position: 'absolute', inset: 0, borderRadius: '2px', objectFit: 'contain'}}
+                        className="hy-urlpick-fav-img"
                         onError={(ev) => {
                           (ev.currentTarget as HTMLImageElement).style.display = 'none';
                         }}
                       />
                     </span>
                     {e.titleAtVisit ? (
-                      <span
-                        title={e.titleAtVisit}
-                        style={{
-                          flex: '0 1 auto',
-                          maxWidth: '45%',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          fontSize: '11px',
-                          fontWeight: 600,
-                          color: 'var(--text-primary)'
-                        }}
-                      >
+                      <span title={e.titleAtVisit} className="hy-urlpick-title">
                         {e.titleAtVisit}
                       </span>
                     ) : null}
-                    <span
-                      title={e.value}
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        fontSize: '10px',
-                        color: 'var(--text-tertiary)',
-                        fontFamily: 'var(--font-mono)'
-                      }}
-                    >
+                    <span title={e.value} className="hy-urlpick-url">
                       {e.value}
                     </span>
                   </div>
@@ -466,18 +339,10 @@ export default class UrlPicker extends React.Component<Props, State> {
                 this.clearHistory();
               }}
               title="Clear browsing history"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '6px 10px',
-                cursor: 'pointer',
-                borderTop: '0.5px solid var(--border-neutral)',
-                color: 'var(--text-tertiary)'
-              }}
+              className="hy-urlpick-clear"
             >
-              <i className="ti ti-trash" style={{fontSize: '13px', flexShrink: 0}} aria-hidden="true" />
-              <span style={{fontSize: '11px', fontFamily: 'var(--font-sans)'}}>Clear history</span>
+              <i className="ti ti-trash hy-urlpick-clear-icon" aria-hidden="true" />
+              <span className="hy-urlpick-clear-label">Clear history</span>
             </div>
           </div>
         )}

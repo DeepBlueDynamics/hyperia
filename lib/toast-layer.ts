@@ -16,6 +16,8 @@ import type {ToastLayerAnchor, ToastLayerHub, ToastLayerItem} from './utils/toas
 
 export type {ToastLayerAnchor, ToastLayerItem, ToastLayerButton} from './utils/toast-layer-hub';
 
+import './toast-layer.css';
+
 let available: boolean | null = null;
 let probe: Promise<boolean> | null = null;
 
@@ -108,8 +110,8 @@ try {
     if (!noDragBox) {
       noDragBox = document.createElement('div');
       noDragBox.id = 'hy-toast-layer-no-drag';
-      Object.assign(noDragBox.style, {position: 'fixed', zIndex: '2147483647', pointerEvents: 'none'});
-      (noDragBox.style as any).webkitAppRegion = 'no-drag';
+      // z-index / pointer-events / no-drag live in toast-layer.css.
+      noDragBox.style.position = 'fixed';
       document.body.appendChild(noDragBox);
     }
     let z = 1;

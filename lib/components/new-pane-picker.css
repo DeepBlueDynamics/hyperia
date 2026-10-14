@@ -1,0 +1,310 @@
+/* NewPanePicker static styles. Zoom and per-agent icon tints stay inline. */
+
+/* Rides on .term_pickerContainer (term.tsx), which already scrolls. */
+.hy-picker-root {
+  overflow-y: auto;
+  outline: none;
+}
+
+.hy-picker-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--space-10) 0;
+  gap: var(--space-10);
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.hy-picker-stack--tight {
+  gap: var(--space-8);
+}
+
+.hy-picker-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  letter-spacing: 0.2px;
+  margin-bottom: var(--space-2);
+}
+
+/* Shared row so New Webpane / Shell / Agent are the SAME width: a fixed-width
+   label (fits the W/S/A chip), then a box capped at 340px. */
+.hy-picker-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  width: 100%;
+  max-width: 446px;
+}
+
+.hy-picker-row--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-4);
+}
+
+.hy-picker-row--entry {
+  padding: var(--space-6) 0;
+}
+
+.hy-picker-row--footer {
+  margin-top: var(--space-10);
+}
+
+.hy-picker-row--links {
+  justify-content: center;
+  gap: var(--space-8);
+  margin-top: var(--space-8);
+}
+
+.hy-picker-label {
+  width: 96px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.hy-picker-boxCol {
+  flex: 1;
+  min-width: 0;
+  max-width: 340px;
+}
+
+.hy-picker-boxCol--anchor {
+  position: relative;
+}
+
+/* Matches the URL box container verbatim (url-picker.tsx). */
+.hy-picker-box {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-neutral);
+  border-radius: var(--radius-6);
+  padding: 0 var(--space-10);
+  height: 36px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.hy-picker-leadIcon {
+  font-size: 14px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.hy-picker-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  height: 100%;
+  padding: 0;
+  min-width: 0;
+}
+
+/* The inline "enter" badge inside the box — identical to the URL box's. */
+.hy-picker-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: var(--space-2) var(--space-4);
+  border: 0.5px solid var(--border-neutral);
+  border-radius: var(--radius-3);
+  color: var(--text-tertiary);
+  user-select: none;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.hy-picker-badge--off {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.hy-picker-dropdown {
+  position: absolute;
+  top: calc(100% + var(--space-4));
+  left: 0;
+  right: 0;
+  z-index: 20;
+  border: 0.5px solid var(--border-neutral);
+  border-radius: var(--radius-6);
+  overflow: hidden;
+  background: var(--bg-primary);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.hy-picker-dropScroll {
+  max-height: 208px;
+  overflow-y: auto;
+}
+
+.hy-picker-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.hy-picker-opt--focused {
+  background: var(--info-bg);
+}
+
+.hy-picker-optIcon {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.hy-picker-optText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}
+
+.hy-picker-gear {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.hy-picker-delConfirm {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--danger-text, #ff5c57);
+  flex-shrink: 0;
+  min-width: 48px;
+  text-align: right;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hy-picker-trash {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  display: inline-block;
+  min-width: 48px;
+  text-align: right;
+  cursor: pointer;
+}
+
+/* Install view */
+.hy-picker-back {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+}
+
+.hy-picker-backIcon {
+  font-size: 13px;
+}
+
+.hy-picker-installTitle {
+  flex: 1;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}
+
+.hy-picker-spacer {
+  width: 48px;
+}
+
+.hy-picker-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.hy-picker-agentIcon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.hy-picker-entryName {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}
+
+.hy-picker-ok {
+  font-size: 10px;
+  color: var(--success-text, #3fb950);
+  font-family: var(--font-sans);
+}
+
+.hy-picker-grow {
+  flex: 1;
+}
+
+.hy-picker-cmd {
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-neutral);
+  border-radius: var(--radius-6);
+  padding: var(--space-6) var(--space-10);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  overflow-x: auto;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.hy-picker-note {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+}
+
+.hy-picker-urlError {
+  font-size: 11px;
+  color: #ff3b30;
+  margin-top: var(--space-4);
+  text-align: left;
+  font-family: var(--font-sans);
+}
+
+.hy-picker-link {
+  font-size: 11px;
+  font-family: var(--font-sans);
+  color: var(--info-text);
+  cursor: pointer;
+}
+
+.hy-picker-dot {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* Info-accent modifier; last so it wins over the colours above. */
+.hy-picker-info {
+  color: var(--info-text);
+}

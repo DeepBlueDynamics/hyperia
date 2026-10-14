@@ -1,0 +1,320 @@
+/* PaneBand static styles (moved out of inline style props).
+   Squeeze-ramp gaps/paddings and popover position stay inline. */
+
+@keyframes hyPulseRun {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.72);
+  }
+}
+
+.hy-band-bell {
+  flex-shrink: 0;
+}
+
+.hy-band-iconAi {
+  font-size: 12px;
+}
+
+.hy-band-iconShell {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.85;
+}
+
+.hy-band-root {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  cursor: default;
+  user-select: none;
+  position: relative;
+}
+
+.hy-band-root--clickable {
+  cursor: pointer;
+}
+
+.hy-band-left {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.hy-band-iconRow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.hy-band-iconWrap {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.hy-band-nameWeb {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.75;
+  cursor: pointer;
+  padding: 2px var(--space-4);
+  border-radius: var(--radius-4);
+}
+
+.hy-band-nameShell {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 500;
+  flex-shrink: 1;
+  min-width: 0;
+  cursor: pointer;
+  position: relative;
+  border-radius: var(--radius-4);
+  transition: background 0.15s ease;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.hy-band-placeholder {
+  color: var(--text-tertiary);
+  font-style: italic;
+  font-weight: 400;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.hy-band-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.hy-band-controls {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.hy-band-ctl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hy-band-close {
+  flex-shrink: 0;
+  position: relative;
+}
+
+.hy-band-pulseRun {
+  animation: hyPulseRun 1.4s ease-in-out infinite;
+}
+
+.hy-band-tipTitle {
+  font-size: 11px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.hy-band-tipSub {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: var(--space-2);
+}
+
+.hy-band-tipKey {
+  font-family: var(--font-mono);
+}
+
+.hy-band-layoutTitle {
+  font-size: 11px;
+  color: var(--text-primary);
+  font-weight: 600;
+  margin-bottom: 8px;
+  text-align: center;
+}
+
+.hy-band-layoutHint {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-top: 8px;
+  text-align: center;
+}
+
+.hy-band-sep {
+  height: 0.5px;
+  background: var(--border-neutral);
+  margin: 4px 0;
+}
+
+.hy-band-pointer {
+  cursor: pointer;
+}
+
+.hy-band-closeTip {
+  right: -2px;
+}
+
+.hy-band-confirmToast {
+  position: absolute;
+  top: 28px;
+  right: 0px;
+  background: var(--accent-warning, #d29922);
+  color: #0f0f18;
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-3);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  z-index: 3000;
+  pointer-events: none;
+}
+
+/* Pulse (re-poke watchdog) editor popover; position/left/top set inline. */
+.hy-band-pulsePop {
+  z-index: 1000;
+  width: min(320px, calc(100vw - 16px));
+  padding: 12px 14px;
+  box-sizing: border-box;
+  background: var(--bg-elevated, var(--bg-secondary, #1c1c22));
+  border: 1px solid var(--accent-primary, #6ea8fe);
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  color: var(--text-primary, #e8e8ea);
+  font-family: var(--font-sans);
+  cursor: default;
+}
+
+.hy-band-pulseHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+}
+
+.hy-band-pulseClock {
+  font-size: 14px;
+}
+
+.hy-band-pulseNote {
+  color: var(--text-secondary, #9a9aa2);
+  font-size: 11px;
+}
+
+.hy-band-pulseKeys {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-neutral, rgba(255, 255, 255, 0.15));
+  background: var(--bg-secondary, #15151a);
+  color: inherit;
+  margin-bottom: 10px;
+}
+
+.hy-band-pulseRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.hy-band-pulseRow--last {
+  margin-bottom: 12px;
+}
+
+.hy-band-pulseLbl {
+  font-size: 10px;
+  color: var(--text-secondary, #9a9aa2);
+  width: 52px;
+  flex-shrink: 0;
+}
+
+.hy-band-segs {
+  display: flex;
+  gap: 4px;
+}
+
+.hy-band-seg {
+  padding: 3px 9px;
+  font-size: 11px;
+  border-radius: 5px;
+  border: 1px solid;
+  border-color: var(--border-neutral, rgba(255, 255, 255, 0.12));
+  background: transparent;
+  color: var(--text-secondary, #9a9aa2);
+  font-weight: 400;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hy-band-seg--on {
+  border-color: var(--accent-primary, #6ea8fe);
+  background: var(--accent-primary, #6ea8fe);
+  color: #0b0b0f;
+  font-weight: 600;
+}
+
+.hy-band-pulseCheck {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-secondary, #9a9aa2);
+}
+
+.hy-band-pulseActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.hy-band-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid;
+  border-color: var(--border-neutral, rgba(255, 255, 255, 0.15));
+  background: transparent;
+  color: var(--text-primary, #e8e8ea);
+  cursor: pointer;
+  opacity: 1;
+}
+
+.hy-band-btn--primary {
+  border-color: var(--accent-primary, #6ea8fe);
+  background: var(--accent-primary, #6ea8fe);
+  color: #0b0b0f;
+}
+
+.hy-band-btn--busy {
+  cursor: default;
+  opacity: 0.55;
+}

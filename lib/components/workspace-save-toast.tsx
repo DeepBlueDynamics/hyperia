@@ -26,6 +26,8 @@ import type {ResumeCandidate} from '../utils/workspace-tab';
 import PaneCountBadge from './pane-count-badge';
 import {activeTerminals} from './term';
 
+import './workspace-save-toast.css';
+
 /**
  * The "Save Workspace" confirm for a tab (#183), styled after the
  * agent/approval toast: name (pre-filled with the tab name) plus the
@@ -40,52 +42,11 @@ export const OPEN_SAVE_TAB_WORKSPACE_EVENT = 'hyperia-save-tab-workspace';
 
 type OpenDetail = {rootUid: string; defaultName: string};
 
-const cardStyle: React.CSSProperties = {
-  position: 'fixed',
-  top: 44,
-  left: '50%',
-  transform: 'translateX(-50%)',
-  zIndex: 1200,
-  background: 'var(--bg-primary)',
-  border: '0.5px solid var(--border-neutral)',
-  borderRadius: 'var(--radius-6, 8px)',
-  padding: '12px 14px',
-  minWidth: '340px',
-  maxWidth: 'min(520px, 90vw)',
-  boxShadow: '0 8px 28px rgba(0, 0, 0, 0.35)',
-  fontFamily: 'var(--font-sans)',
-  fontSize: '12px',
-  color: 'var(--text-primary)'
-};
-
-const btnStyle = (primary: boolean): React.CSSProperties => ({
-  padding: '5px 14px',
-  fontSize: '12px',
-  fontWeight: 600,
-  borderRadius: '6px',
-  border: '1px solid',
-  borderColor: primary ? 'var(--accent-success, #3fb950)' : 'var(--border-neutral, rgba(255,255,255,0.15))',
-  background: primary ? 'var(--accent-success, #3fb950)' : 'transparent',
-  color: primary ? '#06140a' : 'var(--text-primary)',
-  cursor: 'pointer'
-});
-
 // Small pill after the pane name: red when the n8 resume will run with --danger.
-const dangerToggleStyle = (on: boolean, enabled: boolean): React.CSSProperties => ({
-  flexShrink: 0,
-  alignSelf: 'center',
-  padding: '0 7px',
-  fontSize: '10px',
-  lineHeight: '16px',
-  fontWeight: 600,
-  borderRadius: '8px',
-  border: '1px solid',
-  borderColor: on ? 'var(--accent-danger, #f85149)' : 'var(--border-neutral, rgba(255,255,255,0.15))',
-  background: on ? 'var(--accent-danger, #f85149)' : 'transparent',
-  color: on ? '#fff' : 'var(--text-secondary)',
-  opacity: enabled ? 1 : 0.4,
-  cursor: enabled ? 'pointer' : 'default'
-});
+const dangerToggleClass = (on: boolean, enabled: boolean): string =>
+  ['hy-toast-save-danger', on && 'hy-toast-save-danger--on', enabled && 'hy-toast-save-danger--enabled']
+    .filter(Boolean)
+    .join(' ');
 
 const WorkspaceSaveToast: React.FC = () => {
   const store = useStore<HyperState>();
@@ -230,8 +191,13 @@ const WorkspaceSaveToast: React.FC = () => {
   }
 
   return (
-    <div style={cardStyle} onKeyDown={(e) => e.key === 'Escape' && setOpen(null)}>
-      <div style={{fontWeight: 600, marginBottom: '8px'}}>Save Tab</div>
+    <div
+      className="hy-toast-save-card"
+      // position stays inline: the web-pane-occluders test counts it per file
+      style={{position: 'fixed'}}
+      onKeyDown={(e) => e.key === 'Escape' && setOpen(null)}
+    >
+      <div className="hy-toast-save-title">Save Tab</div>
       <input
         ref={inputRef}
         value={name}
@@ -243,23 +209,12 @@ const WorkspaceSaveToast: React.FC = () => {
           if (e.key === 'Enter') save(conflict);
           e.stopPropagation();
         }}
-        style={{
-          width: '100%',
-          boxSizing: 'border-box',
-          padding: '5px 8px',
-          fontSize: '12px',
-          fontFamily: 'var(--font-sans)',
-          background: 'var(--bg-secondary)',
-          color: 'var(--text-primary)',
-          border: '1px solid var(--border-neutral)',
-          borderRadius: '5px',
-          outline: 'none'
-        }}
+        className="hy-toast-save-name"
       />
       {existing.length > 0 && (
-        <div style={{marginTop: '8px'}}>
-          <div style={{color: 'var(--text-secondary)', marginBottom: '4px'}}>Or overwrite a saved tab:</div>
-          <div style={{maxHeight: '120px', overflowY: 'auto'}}>
+        <div className="hy-toast-save-section">
+          <div className="hy-toast-save-label">Or overwrite a saved tab:</div>
+          <div className="hy-toast-save-existing">
             {existing.map((ws) => {
               const selected = ws.name === name.trim();
               const total = ws.panes + ws.webPanes;
@@ -275,33 +230,9 @@ const WorkspaceSaveToast: React.FC = () => {
                   title={`Overwrite “${ws.name}” · ${total} pane${total === 1 ? '' : 's'}${
                     ws.webPanes ? ` (${ws.webPanes} web)` : ''
                   }`}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '3px 6px',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    background: selected ? 'var(--bg-tertiary)' : 'transparent'
-                  }}
-                  onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--bg-tertiary)')}
-                  onMouseLeave={(e) =>
-                    ((e.currentTarget as HTMLElement).style.background = selected
-                      ? 'var(--bg-tertiary)'
-                      : 'transparent')
-                  }
+                  className={selected ? 'hy-toast-save-row hy-toast-save-row--selected' : 'hy-toast-save-row'}
                 >
-                  <span
-                    style={{
-                      flex: 1,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      fontWeight: selected ? 600 : 400
-                    }}
-                  >
-                    {ws.name}
-                  </span>
+                  <span className="hy-toast-save-row-name">{ws.name}</span>
                   <PaneCountBadge count={total} webPanes={ws.webPanes} />
                 </div>
               );
@@ -310,21 +241,16 @@ const WorkspaceSaveToast: React.FC = () => {
         </div>
       )}
       {candidates.length > 0 && (
-        <div style={{marginTop: '10px'}}>
-          <div style={{color: 'var(--text-secondary)', marginBottom: '4px'}}>
-            Will resume on restore (checked commands run once):
-          </div>
+        <div className="hy-toast-save-section hy-toast-save-section--resume">
+          <div className="hy-toast-save-label">Will resume on restore (checked commands run once):</div>
           {candidates.map((c) => (
-            <label
-              key={c.sessionUid}
-              style={{display: 'flex', alignItems: 'baseline', gap: '6px', padding: '2px 0', cursor: 'pointer'}}
-            >
+            <label key={c.sessionUid} className="hy-toast-save-cand">
               <input
                 type="checkbox"
                 checked={!!checked[c.sessionUid]}
                 onChange={(e) => setChecked({...checked, [c.sessionUid]: e.target.checked})}
               />
-              <span style={{color: 'var(--text-secondary)', flexShrink: 0}}>{c.label}</span>
+              <span className="hy-toast-save-cand-label">{c.label}</span>
               {c.source === 'n8' && (
                 <button
                   type="button"
@@ -340,46 +266,40 @@ const WorkspaceSaveToast: React.FC = () => {
                     e.stopPropagation();
                     setDanger({...danger, [c.sessionUid]: !danger[c.sessionUid]});
                   }}
-                  style={dangerToggleStyle(!!danger[c.sessionUid], !!checked[c.sessionUid])}
+                  className={dangerToggleClass(!!danger[c.sessionUid], !!checked[c.sessionUid])}
                 >
                   danger
                 </button>
               )}
-              <span
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '11px',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap'
-                }}
-                title={commandFor(c)}
-              >
+              <span className="hy-toast-save-cmd" title={commandFor(c)}>
                 {commandFor(c)}
               </span>
-              {c.source === 'n8' && <span style={{fontSize: '10px', color: 'var(--info-text)'}}>n8</span>}
+              {c.source === 'n8' && <span className="hy-toast-save-n8">n8</span>}
             </label>
           ))}
         </div>
       )}
       <label
-        style={{display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', cursor: 'pointer'}}
+        className="hy-toast-save-autosave"
         title="Re-save this tab under the same name whenever it changes, until it's closed or Hyperia quits"
       >
         <input type="checkbox" checked={autosave} onChange={(e) => setAutosave(e.target.checked)} />
         <span>Autosave changes to this tab for the rest of the session</span>
       </label>
       {conflict && (
-        <div style={{marginTop: '8px', color: 'var(--warning-text, #d9a300)'}}>
-          A saved tab named “{name.trim()}” exists — overwrite it?
-        </div>
+        <div className="hy-toast-save-conflict">A saved tab named “{name.trim()}” exists — overwrite it?</div>
       )}
-      {error && <div style={{marginTop: '8px', color: 'var(--danger-text, #ff5c57)'}}>{error}</div>}
-      <div style={{display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px'}}>
-        <button type="button" style={btnStyle(false)} onClick={() => setOpen(null)}>
+      {error && <div className="hy-toast-save-error">{error}</div>}
+      <div className="hy-toast-save-actions">
+        <button type="button" className="hy-toast-save-btn" onClick={() => setOpen(null)}>
           Cancel
         </button>
-        <button type="button" style={btnStyle(true)} disabled={busy || !name.trim()} onClick={() => save(conflict)}>
+        <button
+          type="button"
+          className="hy-toast-save-btn hy-toast-save-btn--primary"
+          disabled={busy || !name.trim()}
+          onClick={() => save(conflict)}
+        >
           {busy ? 'Saving…' : conflict ? 'Overwrite' : 'Save'}
         </button>
       </div>

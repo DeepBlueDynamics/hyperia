@@ -2,6 +2,8 @@ import React, {forwardRef, useEffect, useRef, useState} from 'react';
 
 import type {NotificationProps} from '../../typings/hyper';
 
+import './notification.css';
+
 const Notification = forwardRef<HTMLDivElement, React.PropsWithChildren<NotificationProps>>((props, ref) => {
   const dismissTimer = useRef<NodeJS.Timeout | undefined>(undefined);
   const [dismissing, setDismissing] = useState(false);
@@ -59,10 +61,14 @@ const Notification = forwardRef<HTMLDivElement, React.PropsWithChildren<Notifica
     };
   }, []);
 
+  // Colours come from props, so they stay inline (they must beat the scoped rule below).
   const {backgroundColor, color} = props;
-  const opacity = dismissing ? 0 : 1;
   return (
-    <div ref={onElement} style={{opacity, backgroundColor, color}} className="notification_indicator">
+    <div
+      ref={onElement}
+      style={{backgroundColor, color}}
+      className={dismissing ? 'notification_indicator hy-notif--dismissing' : 'notification_indicator'}
+    >
       {props.customChildrenBefore}
       {props.children || props.text}
       {props.userDismissable ? (

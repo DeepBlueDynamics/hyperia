@@ -1,0 +1,119 @@
+/* Create-consent toast, DOM fallback (agent-toast.tsx). fixed positioning stays
+   inline — test/unit/web-pane-occluders.test.ts counts it per .tsx file. */
+@keyframes hyToastPill {
+  0%,
+  100% {
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 14px 2px var(--accent-primary, #6ea8fe);
+  }
+}
+@keyframes hyToastIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hy-toast-agent-pill {
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 99998;
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-primary, #6ea8fe);
+  background: var(--bg-elevated, var(--bg-secondary, #1c1c22));
+  color: var(--text-primary, #e8e8ea);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  animation: hyToastPill 2.4s ease-in-out infinite;
+}
+
+.hy-toast-agent-pill-emoji {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.hy-toast-agent-stack {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 99999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.hy-toast-agent-card {
+  pointer-events: auto;
+  /* Top-center = the frameless window's drag strip; without no-drag, clicks on
+     the card's TOP edge start a window drag instead of reaching the buttons. */
+  -webkit-app-region: no-drag;
+  background: var(--bg-elevated, var(--bg-secondary, #1c1c22));
+  border: 1px solid var(--accent-primary, #6ea8fe);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+  padding: 12px 14px;
+  min-width: 340px;
+  color: var(--text-primary, #e8e8ea);
+  font-family: var(--font-sans);
+  animation: hyToastIn 160ms ease;
+}
+
+.hy-toast-agent-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.hy-toast-agent-emoji {
+  font-size: 15px;
+}
+
+.hy-toast-agent-muted {
+  color: var(--text-secondary, #9a9aa2);
+}
+
+.hy-toast-agent-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.hy-toast-agent-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--border-neutral, rgba(255, 255, 255, 0.15));
+  background: transparent;
+  color: var(--text-primary, #e8e8ea);
+  cursor: pointer;
+}
+.hy-toast-agent-btn--allow {
+  border-color: var(--accent-success, #3fb950);
+  background: var(--accent-success, #3fb950);
+  color: #06140a;
+}
+.hy-toast-agent-btn--deny {
+  border-color: var(--accent-danger, #f85149);
+  color: var(--accent-danger, #f85149);
+}

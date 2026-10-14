@@ -385,10 +385,10 @@
       <div class="pv-key">
         <span><i style="background:#f59e0b"></i>mail</span><span><i style="background:#38bdf8"></i>pane access</span>
         <span><i style="background:#e5e7eb"></i>system mail</span><span><i class="dot" style="background:#ef4444"></i>edit &lt;60s</span>
-        <span><i style="background:#fb923c"></i>bar: file edit (length = lines)</span><span><i style="background:#c084fc"></i>bar: file write (length = bytes)</span>
-        <span><i style="background:#4ade80"></i>bar: create</span><span><i style="background:#e11d48"></i>bar: delete</span><span><i style="background:#94a3b8"></i>bar: rename</span>
-        <span><i style="background:#fde68a"></i>bar: mail</span>
-        <span><i style="background:#7dd3fc"></i>bar: pane access</span>
+        <span><i style="background:#fb923c"></i>file edit (length = lines)</span><span><i style="background:#c084fc"></i>file write (length = bytes)</span>
+        <span><i style="background:#4ade80"></i>create</span><span><i style="background:#e11d48"></i>delete</span><span><i style="background:#94a3b8"></i>rename</span>
+        <span><i style="background:#fde68a"></i>mail</span>
+        <span><i style="background:#7dd3fc"></i>pane access</span>
         <span><i class="dot" style="background:#fb923c"></i>centre: files, threaded to the panes changing them</span><span><i class="dot" style="background:#f8fafc"></i>tip: last minute</span>
       </div></div>
   </div>
@@ -961,7 +961,7 @@ function pvIngestStatus(j){
         const lastOut = p.outSecsAgo == null ? 0 : Date.now() - p.outSecsAgo * 1000;
         panes.push({paneId: p.paneId, name, proc, cls, focused: !!p.focused, state: p.state || "", tab: tab.name || "",
           tabIdx: t, tabId: tab.tabId || "", split: p.splitLabel || "",
-          color: cls === "wb" ? null : pvPaneColor(tab.tabId, p.splitLabel),
+          color: cls === "wb" ? null : pvPaneColor(tab.tabId, p.splitLabel), url: web ? String(p.cwd || "") : "",
           bps: Number(p.outBps) || 0, lps: Number(p.outLps) || 0, lastOut});
         names[p.paneId] = name;
       } } }
@@ -1003,7 +1003,7 @@ function pvBuildNodes(){
   for (const p of PV.panes) {
     if (p.cls === "ag") PV.agentSeen.set(p.paneId, nowMs);
     const wasAgent = nowMs - (PV.agentSeen.get(p.paneId) || 0) < 600000;
-    nodes.set("pane:"+p.paneId, {id: "pane:"+p.paneId, label: p.name, pane: p.paneId, color: p.color,
+    nodes.set("pane:"+p.paneId, {id: "pane:"+p.paneId, label: p.name, pane: p.paneId, color: p.cls === "wb" ? PV_WEB_COLOR : p.color, url: p.url, wt: p.cls === "wb" ? PV_WEB_WT : 1,
       tabIdx: p.tabIdx, tabId: p.tabId, tabName: p.tab, split: p.split,
       kind: p.cls === "wb" ? "web" : wasAgent ? "agent" : "pane", sent: 0, received: 0, access: 0, alias: new Set()});
   }
@@ -1064,7 +1064,8 @@ function pvBuildNodes(){
   const order = [...list].sort((a, b) => tabOf(a) - tabOf(b) || String(a.split || "").localeCompare(String(b.split || "")) || slots.get(a.id).i - slots.get(b.id).i);
   const GAP = .7, at = new Map();
   let u = 0;
-  order.forEach((n, j) => { if (j && tabOf(n) !== tabOf(order[j - 1])) u += GAP; at.set(n.id, u); u += 1; });
+  // Web panes take a narrower slice.
+  order.forEach((n, j) => { const wt = n.wt || 1; if (j && tabOf(n) !== tabOf(order[j - 1])) u += GAP; at.set(n.id, u + (wt - 1) / 2); u += wt; });
   if (order.length > 1 && tabOf(order[0]) !== tabOf(order[order.length - 1])) u += GAP;
   PV.ringTotal = Math.max(6, u);
   // Tab groups for the perimeter rims.
@@ -1217,9 +1218,11 @@ function pvDrawRing(){
   pvDrawOutput(ctx, drawn, pos, R, k);
   pvDrawRadio(ctx, pos, R, cx, cy);
 
-  // Edge bars: one per real event. New ones grow out, expired ones shrink away.
+  // Edge bars: a stack per colour (kind) in front of each agent, side by side.
+  // New segments grow in; expired ones shrink out and the stack closes up.
   const wall = Date.now();
   const barColor = {...PV_OP_COLOR, mail: "#fde68a", system: "#e5e7eb", access: "#7dd3fc", consent: "#a7f3d0"};
+  const maxColHeight = 90, BAR_ORDER = ["edit", "write", "create", "delete", "rename", "mail", "system", "access", "consent"];
   for (const a of drawn) {
     const n = a.node;
     let bars = PV.fibAnim.get(n.id); if (!bars) { bars = new Map(); PV.fibAnim.set(n.id, bars); }
@@ -1231,17 +1234,63 @@ function pvDrawRing(){
       b.target = f.len; b.kind = f.kind; b.ts = f.ts;
     }
     const dimN = sel && n.id !== sel ? .28 : 1;
+    {
+      // Grey network strip across the slice, brighter with traffic.
+      const sp = PV.span * (n.wt || 1), ins = Math.min(.02, sp * .06), nl = pvNetLvl((a.nrx || 0) + (a.ntx || 0));
+      const q = [...pvBandArc(pos, a.theta - sp / 2 + ins, a.theta + sp / 2 - ins, R + PV_STRIP_IN),
+        ...pvBandArc(pos, a.theta + sp / 2 - ins, a.theta - sp / 2 + ins, R + PV_STRIP_IN + PV_STRIP_W)];
+      ctx.globalAlpha = (.25 + .5 * nl) * a.alpha * dimN; ctx.fillStyle = nl > .05 ? "#94a3b8" : "#475569";
+      ctx.beginPath(); q.forEach((p, j) => j ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath(); ctx.fill();
+    }
+    // Ease all bars, collect active ones for stacking.
+    const active = [];
     for (const [key, b] of bars) {
       if (!want.has(key)) b.target = 0;
       b.len += (b.target - b.len) * k;
       if (!want.has(key) && b.len < .5) { bars.delete(key); continue; }
-      const th = a.theta + b.u * PV.span * .92, depth = (Math.sin(th + rot) + 1) / 2;
-      const p1 = pos(th, R+2), p2 = pos(th, R+2+b.len*(.7+.3*depth));
-      ctx.globalAlpha = (.35 + .6*depth) * a.alpha * dimN;
-      ctx.strokeStyle = barColor[b.kind] || "#94a3b8"; ctx.lineWidth = PV_OP_COLOR[b.kind] ? 1.4 : 1.1;
-      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
-      if (wall - (b.ts || 0) < 60000) { ctx.fillStyle = "#f8fafc"; ctx.fillRect(p2.x-1.2, p2.y-1.2, 2.4, 2.4); }
+      active.push(b);
     }
+    a.stackTh = new Map();
+    if (active.length === 0) { a.colHeight = 0; continue; }
+    const byKind = new Map();
+    for (const b of active) { const kk = barColor[b.kind] ? b.kind : "other"; if (!byKind.has(kk)) byKind.set(kk, []); byKind.get(kk).push(b); }
+    const kinds = [...byKind.keys()].sort((x, y) => (BAR_ORDER.indexOf(x) + 99 * (BAR_ORDER.indexOf(x) < 0)) - (BAR_ORDER.indexOf(y) + 99 * (BAR_ORDER.indexOf(y) < 0)));
+    // The group spans the pane's whole slice and stays wider than tall; each
+    // event's height follows its size (lines, bytes), compressed when tall.
+    const nsp = PV.span * (n.wt || 1), inset = Math.min(.02, nsp * .06), groupW = nsp - 2 * inset, colW = groupW / kinds.length;
+    // Never past the slice's outer edge.
+    const maxH = Math.min(R * groupW * .5, PV_BAND_OUT - PV_STACK_R - 4);
+    const depth = (Math.sin(a.theta + rot) + 1) / 2;
+    let top = 0;
+    kinds.forEach((kk, ci) => {
+      const col = byKind.get(kk).sort((x, y) => (y.ts || 0) - (x.ts || 0));
+      const hs = col.map((b) => 1.2 + b.len * .12), raw = hs.reduce((t, h) => t + h + .8, 0);
+      const sc = raw <= maxH ? 1 : maxH / raw;
+      const t0 = a.theta - groupW / 2 + ci * colW + (ci ? colW * .04 : 0), t1 = a.theta - groupW / 2 + (ci + 1) * colW - (ci < kinds.length - 1 ? colW * .04 : 0);
+      ctx.globalAlpha = (.35 + .6*depth) * a.alpha * dimN;
+      ctx.fillStyle = barColor[kk] || "#94a3b8";
+      let acc = 0;
+      col.forEach((b, i) => {
+        const r1 = R + PV_STACK_R + acc, r2 = r1 + hs[i] * sc;
+        acc += (hs[i] + .8) * sc;
+        const q = [...pvBandArc(pos, t0, t1, r1), ...pvBandArc(pos, t1, t0, r2)];
+        ctx.beginPath(); q.forEach((p, j) => j ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath(); ctx.fill();
+      });
+      if (wall - (col[0].ts || 0) < 60000) { const p = pos((t0 + t1) / 2, R + PV_STACK_R - 1); ctx.fillStyle = "#f8fafc"; ctx.fillRect(p.x-1.2, p.y-1.2, 2.4, 2.4); }
+      // Label along the stack, at right angles to the rim.
+      const tm = (t0 + t1) / 2; a.stackTh.set(kk, tm);
+      const b0 = pos(tm, R + PV_STACK_R + 2), b1 = pos(tm, R + PV_STACK_R + 40);
+      let ang = Math.atan2(b1.y - b0.y, b1.x - b0.x), right = false;
+      if (Math.cos(ang) < 0) { ang += Math.PI; right = true; }
+      ctx.save(); ctx.translate(b0.x, b0.y); ctx.rotate(ang);
+      ctx.globalAlpha = (.55 + .45*depth) * a.alpha * dimN;
+      ctx.font = "8px " + PV_MONO; ctx.textBaseline = "middle"; ctx.textAlign = right ? "right" : "left";
+      ctx.lineWidth = 2.5; ctx.strokeStyle = "rgba(2,6,23,.85)"; ctx.fillStyle = "#f1f5f9";
+      const lbl = kk + " " + col.length; ctx.strokeText(lbl, 0, 0); ctx.fillText(lbl, 0, 0);
+      ctx.restore();
+      top = Math.max(top, acc);
+    });
+    a.colHeight = top;
   }
   ctx.globalAlpha = 1;
 
@@ -1265,7 +1314,7 @@ function pvDrawRing(){
     const placed = [];
     ctx.textBaseline = "middle";
     for (const a of order) {
-      const n = a.node, on = n.id === sel, p0 = pos(a.theta, R + 92);
+      const n = a.node, on = n.id === sel, p0 = pos(a.theta, Math.max(R + 92, R + 2 + (a.colHeight || 0) + 14));
       const p = {x: p0.x*vw.z + vw.x, y: p0.y*vw.z + vw.y};
       if (p.x < -200 || p.x > w + 200 || p.y < -20 || p.y > h + 20) continue;
       ctx.font = (on ? "700 10px " : "9px ")+PV_MONO;
@@ -1281,6 +1330,11 @@ function pvDrawRing(){
       ctx.fillStyle = on ? "#f8fafc" : n.color || (n.kind === "agent" ? "#fbbf24" : n.kind === "web" ? "#86efac" : n.kind === "system" ? "#e5e7eb" : "#7dd3fc");
       ctx.textAlign = left ? "right" : "left";
       ctx.fillText(text, p.x, p.y);
+      if (n.kind === "web" && n.url) {
+        ctx.font = "8px " + PV_MONO; ctx.fillStyle = "#94a3b8";
+        ctx.fillText(pvClip(ctx, pvWebWhere(n.url), Math.max(60, (left ? p.x : w - p.x) - 8)), p.x, p.y + 11);
+        box.y1 += 10; a.lbox.y1 = (box.y1 - vw.y) / vw.z;
+      }
       if ((a.out || 0) > .05) {
         pvHalo(ctx, a, left ? p.x - tw / 2 : p.x + tw / 2, p.y, tw, sel && !on ? .35 : 1);
         if (!PV_REDUCE) pvShimmer(ctx, text, p.x, p.y, tw, ctx.textAlign, a.out * a.alpha);
@@ -2060,6 +2114,13 @@ function edReplace(all){
 // names; each tab's panes sit together under a rim in their colours, with the
 // tab's name on it.
 const PV_BAND_OUT = 165;
+// Network strip along each slice's inner edge; the stacks stand on it.
+const PV_STRIP_IN = 2, PV_STRIP_W = 6, PV_STACK_R = PV_STRIP_IN + PV_STRIP_W + 2;
+// A thread starts at the base of its kind's stack in front of the pane.
+function pvStackBase(pos, n, kind, R){
+  const th = n.stackTh && n.stackTh.get(kind);
+  return th == null ? pos(n.theta, R*.97) : pos(th, R + PV_STACK_R);
+}
 function pvBandArc(pos, th0, th1, r){
   const pts = [], n = Math.max(3, Math.ceil(Math.abs(th1 - th0) / .04));
   for (let i = 0; i <= n; i++) pts.push(pos(th0 + (th1 - th0) * i / n, r));
@@ -2079,11 +2140,12 @@ function pvSliceAt(x, y){
   return null;
 }
 function pvDrawBand(ctx, pos, R){
-  const half = PV.span * .5, inset = Math.min(.02, PV.span * .06), r0 = R * 1.035, r1 = R + PV_BAND_OUT;
+  const r0 = R * 1.035, r1 = R + PV_BAND_OUT;
   const sel = PV.sel;
   PV.bandPolys = [];
   for (const a of PV.anim.values()) {
     const col = a.node.color; if (!col) continue;
+    const sp = PV.span * (a.node.wt || 1), half = sp * .5, inset = Math.min(.02, sp * .06);
     const dim = sel && a.node.id !== sel ? .45 : 1;
     const inner = pvBandArc(pos, a.theta - half + inset, a.theta + half - inset, r0);
     const outer = pvBandArc(pos, a.theta + half - inset, a.theta - half + inset, r1);
@@ -2099,6 +2161,7 @@ function pvDrawBand(ctx, pos, R){
     const as = g.ids.map((id) => PV.anim.get(id)).filter(Boolean); if (!as.length) continue;
     for (const a of as) {
       if (!a.node.color) continue;
+      const sp = PV.span * (a.node.wt || 1), half = sp * .5, inset = Math.min(.02, sp * .06);
       const rim = pvBandArc(pos, a.theta - half + inset, a.theta + half - inset, r1 + 3);
       ctx.globalAlpha = a.alpha * .85; ctx.strokeStyle = a.node.color; ctx.lineWidth = 3;
       ctx.beginPath(); rim.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
@@ -2117,6 +2180,45 @@ function pvDrawBand(ctx, pos, R){
 // showing its live screen text tinted in the pane's colour. Toggle: ▣ screens.
 const PVSC = {on: true, data: new Map(), timer: null, busy: false};
 const pvShownId = () => (PV.focus ? PV.focus.node : PV.hover || PV.sel);
+// ---- Web panes: each streams its rendered page (/ws/pixels, a JPEG only when
+// it changes) — a small thumbnail always, sharper when shown, sharpest focused.
+// Changing frames are the pane's activity.
+const PV_WEB_COLOR = "#86efac", PV_WEB_WT = .5, PVW = new Map();
+function pvWebWhere(url){
+  try { const u = new URL(url); return (u.host + u.pathname + u.hash).replace(/\/$/, ""); } catch (_e) { return String(url); }
+}
+function pvWebTick(){
+  const want = new Map();
+  if (PV.on && PV.mode === "live" && document.visibilityState === "visible") {
+    const shown = pvShownId() && PV.alias.get(pvShownId()), focus = PV.focus && PV.focus.pane;
+    for (const p of PV.panes) {
+      // Not the deck itself (a mirror of a mirror).
+      if (p.cls !== "wb" || /\/dashboard/.test(p.url || "")) continue;
+      want.set(p.paneId, p.paneId === focus ? "1280x800x4" : shown && shown.pane === p.paneId ? "640x400x2" : "320x200x1");
+    }
+  }
+  for (const [id, ws] of PVW) if (want.get(id) !== ws.spec) { try { ws.sock.close(); } catch (_e) {} if (!want.has(id)) PVW.delete(id); }
+  for (const [id, spec] of want) {
+    const cur = PVW.get(id); if (cur && cur.spec === spec && cur.sock.readyState <= 1) continue;
+    const [w, h, fps] = spec.split("x"), ws = cur || {bps: 0, fps: 0, last: 0};
+    ws.spec = spec;
+    ws.sock = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/pixels/" + encodeURIComponent(id) + "?w=" + w + "&h=" + h + "&fps=" + fps);
+    ws.sock.binaryType = "blob";
+    ws.sock.onmessage = async (ev) => {
+      if (typeof ev.data === "string") return;
+      const now = Date.now(), dt = Math.max(.5, (now - (ws.last || now - 1000)) / 1000);
+      ws.bps = ws.bps * .5 + (ev.data.size / dt) * .5; ws.fps = ws.fps * .5 + (1 / dt) * .5; ws.last = now;
+      try {
+        const img = await createImageBitmap(ev.data), d = PVSC.data.get(id) || {};
+        if (d.img && d.img.close) d.img.close();
+        d.img = img; d.color = PV_WEB_COLOR; d.dirty = true; d.at = now; PVSC.data.set(id, d);
+      } catch (_e) {}
+    };
+    PVW.set(id, ws);
+  }
+  for (const k of [...PVSC.data.keys()]) if (PVSC.data.get(k).img && !PVW.has(k)) PVSC.data.delete(k);
+}
+setInterval(pvWebTick, 1000);
 try { PVSC.on = localStorage.getItem("pv.screens") !== "off"; } catch (_e) {}
 async function pvScrollback(pane, lines){
   try {
@@ -2141,7 +2243,7 @@ async function pvScreensPoll(){
     } catch (_e) {}
   }));
   const live = new Set(panes.map((p) => p.paneId));
-  for (const k of [...PVSC.data.keys()]) if (!live.has(k)) PVSC.data.delete(k);
+  for (const k of [...PVSC.data.keys()]) if (!live.has(k) && !PVW.has(k)) PVSC.data.delete(k);
   PVSC.busy = false;
 }
 // Render a pane's text into its own small canvas (only when it changed).
@@ -2153,6 +2255,18 @@ function pvScreenCanvas(d, W = 360, H = 216){
   if (d.canvases[key]) return d.canvases[key];
   const c = document.createElement("canvas"); c.width = W; c.height = H;
   const x = c.getContext("2d"), col = d.color || "#7dd3fc";
+  if (d.img) {
+    // A web page: the live picture, cover-fit, with a light CRT finish.
+    x.fillStyle = "#03060b"; x.fillRect(0, 0, W, H);
+    const k = Math.max(W / d.img.width, H / d.img.height), iw = d.img.width * k, ih = d.img.height * k;
+    x.drawImage(d.img, (W - iw) / 2, 0, iw, ih);
+    x.fillStyle = "rgba(0,0,0,.10)"; for (let yy = 0; yy < H; yy += 3) x.fillRect(0, yy, W, 1);
+    const vg = x.createRadialGradient(W / 2, H / 2, H * .45, W / 2, H / 2, W * .7);
+    vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,.4)");
+    x.fillStyle = vg; x.fillRect(0, 0, W, H);
+    d.canvases[key] = c;
+    return c;
+  }
   x.fillStyle = "#03060b"; x.fillRect(0, 0, W, H);
   const glow = x.createRadialGradient(W / 2, H / 2, 10, W / 2, H / 2, W * .65);
   glow.addColorStop(0, col + "26"); glow.addColorStop(1, "#00000000");
@@ -2233,7 +2347,7 @@ function pvDrawScreens(ctx, R, focusPass){
   const f = PV.focus;
   for (const a of PV.anim.values()) {
     if (a.node.id !== pvShownId() && !(f && f.node === a.node.id)) continue;
-    const d = a.node.pane && PVSC.data.get(a.node.pane); if (!d || !d.text) continue;
+    const d = a.node.pane && PVSC.data.get(a.node.pane); if (!d || !(d.text || d.img)) continue;
     const col = a.node.color || "#7dd3fc", m = pvMonitorRect(a.theta, g.P3, R);
     const focused = !!(f && f.node === a.node.id);
     if (!focusPass) {
@@ -2369,7 +2483,8 @@ function pvDrawNet(ctx, R){
   const totLvl = pvNetLvl(totRx + totTx);
   // u: 0 = the container, SPLIT = the marble's centre, 1 = the uplink hub.
   const pathFor = (a) => {
-    const base = [Math.cos(a.theta) * R, 0, -Math.sin(a.theta) * R], ctl = [base[0] * .55, R * .78, base[2] * .55];
+    const rs0 = R + PV_STRIP_IN + PV_STRIP_W / 2;   // the pane's network strip
+    const base = [Math.cos(a.theta) * rs0, 0, -Math.sin(a.theta) * rs0], ctl = [base[0] * .55, R * .78, base[2] * .55];
     if (a.nsrc !== "container") {
       // Host agent: one curve, floor → hub, bowing outward.
       const hc = [base[0] * .9, R * 1.05, base[2] * .9];
@@ -2474,7 +2589,9 @@ function pvDrawNet(ctx, R){
 const PV_WORK_MS = 2500;
 function pvOut(n){
   if (PV.mode !== "live" || !n || !n.pane) return null;
-  return PV.panes.find((p) => p.paneId === n.pane) || null;
+  const p = PV.panes.find((x) => x.paneId === n.pane) || null, ws = p && p.cls === "wb" && PVW.get(p.paneId);
+  // A web page is "printing" while its picture keeps changing.
+  return ws ? {...p, lastOut: ws.last || 0, bps: ws.bps || 0, lps: ws.fps || 0} : p;
 }
 const pvWorking = (o) => !!o && o.lastOut > 0 && Date.now() - o.lastOut < PV_WORK_MS;
 function pvDrawOutput(ctx, drawn, pos, R, k){
@@ -2775,7 +2892,7 @@ function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
     const f = a.f, dep = pvDepth(a.z);
     for (const [nodeId, l] of f.links) {
       const n = PV.anim.get(nodeId); if (!n) continue;
-      const p = pos(n.theta, R*.97), o = lit(f, nodeId), fresh = now - l.last < 60000;
+      const p = pvStackBase(pos, n, l.kind, R), o = lit(f, nodeId), fresh = now - l.last < 60000;
       const onlyRead = !l.count;
       ctx.strokeStyle = PV_FILE_COLOR[l.kind] || "#94a3b8";
       ctx.globalAlpha = a.alpha * n.alpha * (o ? (fresh ? .75 : .38) * (.55 + .45 * dep) * (onlyRead ? .7 : 1) : .05);
@@ -2790,7 +2907,7 @@ function pvDrawFiles(ctx, pos, R, cx, cy, tilt, k){
   PV.fileFlashes = PV.fileFlashes.filter((fl) => t - fl.born < 900);
   for (const fl of PV.fileFlashes) {
     const a = PV.fileAnim.get(fl.path), n = PV.anim.get(fl.node); if (!a || !n) continue;
-    const p = pos(n.theta, R*.97), u = Math.min(1, (t - fl.born) / 700);
+    const p = pvStackBase(pos, n, fl.kind, R), u = Math.min(1, (t - fl.born) / 700);
     const mx = (a.x + p.x) / 2 + (cy - (a.y + p.y) / 2) * .12, my = (a.y + p.y) / 2 + ((a.x + p.x) / 2 - cx) * .12;
     const x = (1-u)*(1-u)*p.x + 2*(1-u)*u*mx + u*u*a.x, y = (1-u)*(1-u)*p.y + 2*(1-u)*u*my + u*u*a.y;
     const col = PV_FILE_COLOR[fl.kind] || "#f8fafc";
@@ -3061,12 +3178,17 @@ function pvRenderFiles(){
   const edits = fe.filter((e) => e.kind === "edit").length, ops = fe.length - edits;
   $("pv-ed-n").textContent = fe.length ? pvK(edits)+" edits · "+pvK(ops)+" ops" : "";
   const kv = $("pv-files"); kv.replaceChildren();
-  const pair = (k, v, cls) => { kv.appendChild(pvEl("span", null, k)); kv.appendChild(pvEl("b", cls || null, v)); };
+  // Label and number wear the colour of their ticks on the ring.
+  const pair = (k, v, cls, op) => {
+    const l = pvEl("span", null, k), n = pvEl("b", cls || null, v);
+    if (op) l.style.color = n.style.color = PV_OP_COLOR[op];
+    kv.appendChild(l); kv.appendChild(n);
+  };
   // Totals are since the sidecar started; the chart and ring follow the mode.
-  pair("edits", pvK(t.file_edits)); pair("writes", pvK(t.file_writes));
-  pair("creates", pvK(t.file_creates)); pair("deletes", pvK(t.file_deletes));
+  pair("edits", pvK(t.file_edits), null, "edit"); pair("writes", pvK(t.file_writes), null, "write");
+  pair("creates", pvK(t.file_creates), null, "create"); pair("deletes", pvK(t.file_deletes), null, "delete");
   pair("lines +", pvK(t.lines_added), "up"); pair("lines −", pvK(t.lines_removed), "dn");
-  pair("renames", pvK(t.file_renames)); pair("written", fmtB(t.file_bytes_written || 0));
+  pair("renames", pvK(t.file_renames), null, "rename"); pair("written", fmtB(t.file_bytes_written || 0), null, "write");
   const {ctx, w, h} = pvFit($("pv-hist"));
   const now = Date.now(), ed = new Array(30).fill(0), op = new Array(30).fill(0);
   for (const e of fe) { const m = Math.floor((now - e.ts) / 60000); if (m >= 0 && m < 30) (e.kind === "edit" ? ed : op)[29 - m]++; }

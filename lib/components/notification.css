@@ -1,0 +1,4 @@
+/* Fade-out while dismissing; the opacity transition is in notification.tsx's styled-jsx block. */
+.notification_indicator.hy-notif--dismissing {
+  opacity: 0;
+}

@@ -1,0 +1,18 @@
+.hy-pcb-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 20px;
+  height: 16px;
+  padding: 0 4px;
+  border: 1.5px solid var(--info-text, #6ea8fe);
+  border-top-width: 3px;
+  border-radius: 3px;
+  color: var(--info-text, #6ea8fe);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}

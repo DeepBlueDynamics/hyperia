@@ -14,9 +14,10 @@ use axum::http::{header, HeaderMap, StatusCode};
 use serde_json::{json, Map, Value};
 
 use crate::dashboard::DashboardState;
-use crate::telemetry::TelemetryEvent;
+use crate::telemetry::{FileOp, TelemetryEvent};
 
 const EDIT_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
+const READ_TOOLS: [&str; 1] = ["Read"];
 
 /// One mapped OTLP record: what to record locally, and what (if anything) to
 /// forward to n8.
@@ -99,6 +100,14 @@ fn tool_path(a: &Map<String, Value>) -> Option<String> {
     None
 }
 
+/// Extract the file path from a mapped telemetry event.
+fn path_of(ev: &TelemetryEvent) -> Option<&str> {
+    match ev {
+        TelemetryEvent::Edit { path, .. } | TelemetryEvent::FileOp { path, .. } => Some(path),
+        _ => None,
+    }
+}
+
 fn truthy(v: Option<&Value>) -> bool {
     match v {
         Some(Value::Bool(b)) => *b,
@@ -128,27 +137,39 @@ pub(crate) fn map_logs(body: &Value) -> Vec<Mapped> {
                         forward: None,
                     }),
                     "tool_result" => {
-                        let Some(tool) = text(&a, "tool_name").filter(|t| EDIT_TOOLS.contains(t)) else { continue };
+                        let Some(tool) = text(&a, "tool_name") else { continue };
                         if !truthy(a.get("success")) {
                             continue;
                         }
                         let Some(path) = tool_path(&a) else { continue };
-                        let tool = format!("claude_code:{tool}");
-                        out.push(Mapped {
-                            pane: pane.clone(),
-                            local: TelemetryEvent::Edit {
-                                path: path.clone(),
-                                tool: tool.clone(),
-                                lines_added: 0,
-                                lines_removed: 0,
-                                substitutions: 0,
-                                regions: Vec::new(),
-                                bytes_before: None,
-                                bytes_after: None,
-                            },
-                            forward: Some(json!({"kind": "edit", "tool": tool, "path": path,
-                                "lines_added": 0, "lines_removed": 0, "substitutions": 0, "regions": []})),
-                        });
+                        if READ_TOOLS.contains(&tool) {
+                            out.push(Mapped {
+                                pane: pane.clone(),
+                                local: TelemetryEvent::FileOp {
+                                    path: path.clone(),
+                                    op: FileOp::Read,
+                                    bytes: None,
+                                },
+                                forward: Some(json!({"kind": "fs", "path": path, "kind_detail": "read"})),
+                            });
+                        } else if EDIT_TOOLS.contains(&tool) {
+                            let tool = format!("claude_code:{tool}");
+                            out.push(Mapped {
+                                pane: pane.clone(),
+                                local: TelemetryEvent::Edit {
+                                    path: path.clone(),
+                                    tool: tool.clone(),
+                                    lines_added: 0,
+                                    lines_removed: 0,
+                                    substitutions: 0,
+                                    regions: Vec::new(),
+                                    bytes_before: None,
+                                    bytes_after: None,
+                                },
+                                forward: Some(json!({"kind": "edit", "tool": tool, "path": path,
+                                    "lines_added": 0, "lines_removed": 0, "substitutions": 0, "regions": []})),
+                            });
+                        }
                     }
                     _ => {}
                 }
@@ -180,6 +201,9 @@ pub async fn post_logs(State(state): State<DashboardState>, headers: HeaderMap, 
         return (StatusCode::BAD_REQUEST, "Bad OTLP JSON".into());
     };
     for m in map_logs(&v) {
+        if let Some(path) = path_of(&m.local) {
+            crate::host_telemetry::note_otel_file(&m.pane, path);
+        }
         if let Some(f) = m.forward {
             crate::host_telemetry::forward::enqueue(&m.pane, f);
         }
@@ -273,9 +297,27 @@ mod tests {
             mk("Bash", "true", Some(r#"{"command":"ls"}"#)),
             mk("Write", "false", Some(r#"{"file_path":"/x"}"#)),
             mk("Write", "true", None),
-            mk("Read", "true", Some(r#"{"file_path":"/x"}"#)),
         ];
         assert!(map_logs(&logs(Some("p"), recs)).is_empty());
+    }
+
+    #[test]
+    fn read_tool_result_maps_to_fileop_read() {
+        let params = json!({"file_path": "C:\\work\\src\\main.rs"}).to_string();
+        let rec = json!({"attributes": [
+            kv("event.name", json!({"stringValue": "claude_code.tool_result"})),
+            kv("tool_name", json!({"stringValue": "Read"})),
+            kv("success", json!({"stringValue": "true"})),
+            kv("tool_parameters", json!({"stringValue": params})),
+        ]});
+        let m = map_logs(&logs(Some("p3"), vec![rec]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].pane, "p3");
+        let f = m[0].forward.as_ref().unwrap();
+        assert_eq!(f["kind"], "fs");
+        assert_eq!(f["kind_detail"], "read");
+        assert_eq!(f["path"], "C:\\work\\src\\main.rs");
+        assert!(matches!(&m[0].local, TelemetryEvent::FileOp { path, op: FileOp::Read, bytes: None } if path == "C:\\work\\src\\main.rs"));
     }
 
     #[test]

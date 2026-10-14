@@ -10,6 +10,8 @@ import clsx from 'clsx';
 
 import type {SearchBoxProps} from '../../typings/hyper';
 
+import './searchBox.css';
+
 type SearchButtonColors = {
   foregroundColor: string;
   selectionColor: string;
@@ -146,7 +148,7 @@ const SearchBox = forwardRef<HTMLDivElement, SearchBoxProps>((props, ref) => {
         </SearchButton>
       </div>
 
-      <span style={{minWidth: '60px', marginLeft: '4px'}}>
+      <span className="hy-search-results">
         {results === undefined
           ? ''
           : results.resultCount === 0

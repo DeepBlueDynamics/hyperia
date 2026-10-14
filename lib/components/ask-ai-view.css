@@ -1,0 +1,184 @@
+/* Ask-AI pane (ask-ai-view.tsx) */
+.hy-askai-root {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  position: relative;
+  overflow: hidden;
+}
+
+.hy-askai-feed {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-sizing: border-box;
+}
+
+.hy-askai-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+}
+.hy-askai-row--user {
+  align-items: flex-end;
+}
+
+.hy-askai-bubble {
+  max-width: 85%;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 0.5px solid var(--border-neutral);
+  border-radius: 4px;
+  padding: 8px 12px;
+  box-sizing: border-box;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.hy-askai-bubble--user {
+  background: var(--info-bg);
+  color: var(--info-text);
+}
+
+.hy-askai-code {
+  font-family: var(--font-mono);
+  background: var(--bg-tertiary);
+  padding: 8px;
+  border-radius: 3px;
+  overflow-x: auto;
+  margin: 6px 0 0 0;
+  border: 0.5px solid var(--border-neutral);
+  text-align: left;
+}
+
+.hy-askai-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hy-askai-tool {
+  display: flex;
+  flex-direction: column;
+  border: 0.5px solid var(--border-neutral);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  padding: 6px 12px;
+  box-sizing: border-box;
+}
+
+.hy-askai-tool-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.hy-askai-tool-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hy-askai-status--running {
+  color: var(--warning-text);
+}
+.hy-askai-status--fail {
+  color: var(--danger-text);
+}
+.hy-askai-status--ok {
+  color: var(--success-text);
+}
+
+.hy-askai-tool-name {
+  color: var(--text-secondary);
+}
+.hy-askai-tool-name--running {
+  color: var(--text-primary);
+}
+
+.hy-askai-toggle {
+  background: transparent;
+  border: none;
+  color: var(--info-text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.hy-askai-tool-body {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+}
+
+.hy-askai-io-label {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+.hy-askai-io {
+  font-family: var(--font-mono);
+  background: var(--bg-tertiary);
+  padding: 6px;
+  margin: 0;
+  border-radius: 3px;
+  overflow-x: auto;
+  border: 0.5px solid var(--border-neutral);
+  font-size: 10px;
+}
+
+.hy-askai-inputbar {
+  padding: 12px 20px;
+  border-top: 0.5px solid var(--border-neutral);
+  background: var(--bg-secondary);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+}
+
+.hy-askai-spark {
+  font-size: 12px;
+  color: var(--color-ai-purple, #7f77dd);
+}
+
+.hy-askai-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  padding: 0;
+}
+
+.hy-askai-stop {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border: 0.5px solid var(--border-neutral);
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.hy-askai-enter {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}

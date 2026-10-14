@@ -2,6 +2,8 @@ import React from 'react';
 
 import type {AgentStatus} from '../../typings/hyper';
 
+import './status-bar.css';
+
 interface StatusBarProps {
   agentStatus?: AgentStatus;
   onHamburgerMenu?: (coords: {x: number; y: number}) => void;
@@ -17,7 +19,7 @@ const StatusBar: React.FC<StatusBarProps> = ({agentStatus, onHamburgerMenu}) => 
     }
   };
 
-  const dotColor = status.working ? '#ff3333' : status.connected ? '#00ff64' : '#666';
+  const dotState = status.working ? 'working' : status.connected ? 'connected' : 'idle';
   const humanPct = status.humanPercent ?? 100;
   const label = status.label || (status.working ? 'Agent working' : status.connected ? 'Agent connected' : 'No agent');
 
@@ -34,15 +36,7 @@ const StatusBar: React.FC<StatusBarProps> = ({agentStatus, onHamburgerMenu}) => 
           </div>
         )}
         <span
-          className={`statusbar_dot ${status.connected || status.working ? 'statusbar_glow' : ''}`}
-          style={{
-            backgroundColor: dotColor,
-            boxShadow: status.working
-              ? '0 0 8px 3px rgba(255,50,50,0.5)'
-              : status.connected
-                ? '0 0 6px 2px rgba(0,255,100,0.4)'
-                : 'none'
-          }}
+          className={`statusbar_dot hy-status-dot hy-status-dot--${dotState} ${status.connected || status.working ? 'statusbar_glow' : ''}`}
         />
         <span className="statusbar_label">{label}</span>
       </div>

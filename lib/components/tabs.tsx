@@ -16,6 +16,8 @@ import {newSuppressHolder, suppressWebPanes, useSuppressWebPanes} from '../utils
 import PaneCountBadge from './pane-count-badge';
 import Tab_ from './tab';
 
+import './tabs.css';
+
 const Tab = decorate(Tab_, 'Tab');
 const isMac = /Mac/.test(navigator.userAgent);
 
@@ -471,7 +473,6 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             rpc('new', {layoutPattern}) path (sessions.ts → openLayout), still wired. */}
         <div
           className="tabs_newTab_tooltip_trigger"
-          style={{position: 'relative', display: 'inline-flex'}}
           onMouseEnter={() => {
             requestWorkspaceList();
             setLayoutCloneDesc(describeCloneLaunch(activeTabLaunch()));
@@ -485,18 +486,8 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
           >
             +
           </button>
-          <div className="tabs_newTab_tooltip" style={{minWidth: '200px'}}>
-            <div
-              style={{
-                fontSize: '11px',
-                color: 'var(--text-primary)',
-                fontWeight: 600,
-                marginBottom: '8px',
-                textAlign: 'center'
-              }}
-            >
-              New Tab Layouts
-            </div>
+          <div className="tabs_newTab_tooltip hy-tabs-layoutTip">
+            <div className="hy-tabs-tipTitle hy-tabs-tipTitle--layouts">New Tab Layouts</div>
             <div className="tabs_layout_grid">
               <div
                 className="tabs_layout_item"
@@ -533,25 +524,13 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                 </div>
               </div>
             </div>
-            <div style={{fontSize: '10px', color: 'var(--text-secondary)', marginTop: '8px', textAlign: 'center'}}>
-              {layoutHint}
-            </div>
+            <div className="hy-tabs-tipHint">{layoutHint}</div>
             {/* Bookmark-style tab-workspaces (#183): saved via a tab's
                 right-click menu, restored ADDITIVELY into a new tab here. */}
             {savedTabWorkspaces.length > 0 && (
               <>
-                <div
-                  style={{
-                    fontSize: '11px',
-                    color: 'var(--text-primary)',
-                    fontWeight: 600,
-                    margin: '10px 0 6px',
-                    textAlign: 'center'
-                  }}
-                >
-                  Saved Tabs
-                </div>
-                <div style={{maxHeight: '160px', overflowY: 'auto'}}>
+                <div className="hy-tabs-tipTitle hy-tabs-tipTitle--saved">Saved Tabs</div>
+                <div className="hy-tabs-savedList">
                   {savedTabWorkspaces.map((ws) => (
                     <div
                       key={ws.name}
@@ -559,28 +538,10 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                       title={`Restore into a new tab · ${ws.panes} pane${ws.panes === 1 ? '' : 's'}${
                         ws.webPanes ? ` + ${ws.webPanes} web` : ''
                       }`}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        minHeight: '18px',
-                        padding: '4px 6px',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontSize: '11px',
-                        lineHeight: '18px',
-                        color: 'var(--text-primary)'
-                      }}
-                      onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--bg-tertiary)')}
-                      onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
+                      className="hy-tabs-savedRow"
                     >
-                      <i
-                        className="ti ti-bookmark"
-                        style={{fontSize: '12px', lineHeight: 1, color: 'var(--info-text)', flexShrink: 0}}
-                      />
-                      <span style={{flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
-                        {ws.name}
-                      </span>
+                      <i className="ti ti-bookmark hy-tabs-savedIcon" />
+                      <span className="hy-tabs-savedName">{ws.name}</span>
                       <PaneCountBadge count={ws.panes + ws.webPanes} webPanes={ws.webPanes} />
                       {confirmDeleteWs === ws.name ? (
                         <span
@@ -594,16 +555,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                             setConfirmDeleteWs(null);
                           }}
                           title="Confirm delete"
-                          style={{
-                            color: 'var(--danger-text, #ff5c57)',
-                            flexShrink: 0,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            height: '18px',
-                            whiteSpace: 'nowrap',
-                            cursor: 'pointer',
-                            fontWeight: 600
-                          }}
+                          className="hy-tabs-savedConfirm"
                         >
                           Delete?
                         </span>
@@ -614,18 +566,9 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                             setConfirmDeleteWs(ws.name);
                           }}
                           title="Delete this saved tab"
-                          style={{
-                            color: 'var(--text-secondary)',
-                            flexShrink: 0,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            width: '18px',
-                            height: '18px',
-                            cursor: 'pointer'
-                          }}
+                          className="hy-tabs-savedDel"
                         >
-                          <i className="ti ti-trash" style={{fontSize: '13px', lineHeight: 1}} />
+                          <i className="ti ti-trash hy-tabs-trashIcon" />
                         </span>
                       )}
                     </div>
@@ -700,94 +643,42 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
 
       {isModalOpen && (
         <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            width: '100vw',
-            height: '100vh',
-            background: 'rgba(0, 0, 0, 0.65)',
-            backdropFilter: 'blur(3px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 99999,
-            color: 'var(--text-primary)',
-            fontFamily: 'var(--font-sans)',
-            cursor: 'default'
-          }}
+          className="hy-tabs-modalBackdrop"
+          // position stays inline: the web-pane occluder test counts it here.
+          style={{position: 'fixed'}}
           onClick={() => setIsModalOpen(false)}
         >
-          <div
-            style={{
-              width: '460px',
-              background: 'var(--bg-secondary)',
-              border: '0.5px solid var(--border-focus)',
-              borderRadius: '6px',
-              padding: '20px',
-              boxShadow: '0 8px 30px rgba(0, 0, 0, 0.5)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '16px'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="hy-tabs-modal" onClick={(e) => e.stopPropagation()}>
             {/* Header */}
-            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-              <span style={{fontSize: '14px', fontWeight: 600}}>Create Custom Profile</span>
-              <button
-                type="button"
-                onClick={() => setIsModalOpen(false)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--text-tertiary)',
-                  cursor: 'pointer',
-                  fontSize: '16px'
-                }}
-              >
+            <div className="hy-tabs-modalHead">
+              <span className="hy-tabs-modalTitle">Create Custom Profile</span>
+              <button type="button" onClick={() => setIsModalOpen(false)} className="hy-tabs-modalX">
                 ×
               </button>
             </div>
 
             {/* Profile Name */}
-            <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-              <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Profile Name</label>
+            <div className="hy-tabs-field">
+              <label className="hy-tabs-fieldLbl">Profile Name</label>
               <input
                 type="text"
                 placeholder="e.g. My Shell"
                 value={profileName}
                 onChange={(e) => setProfileName(e.target.value)}
-                style={{
-                  background: 'var(--bg-primary)',
-                  border: '0.5px solid var(--border-neutral)',
-                  color: 'var(--text-primary)',
-                  borderRadius: '4px',
-                  padding: '8px 10px',
-                  fontSize: '12px'
-                }}
+                className="hy-tabs-input"
               />
             </div>
 
             {/* Shell Executable Path */}
-            <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-              <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>Shell Path</label>
-              <div style={{display: 'flex', gap: '6px'}}>
+            <div className="hy-tabs-field">
+              <label className="hy-tabs-fieldLbl">Shell Path</label>
+              <div className="hy-tabs-row">
                 <input
                   type="text"
                   placeholder="e.g. /bin/bash or C:\Windows\System32\cmd.exe"
                   value={shellPath}
                   onChange={(e) => setShellPath(e.target.value)}
-                  style={{
-                    flex: 1,
-                    background: 'var(--bg-primary)',
-                    border: '0.5px solid var(--border-neutral)',
-                    color: 'var(--text-primary)',
-                    borderRadius: '4px',
-                    padding: '8px 10px',
-                    fontSize: '12px',
-                    fontFamily: 'var(--font-mono)'
-                  }}
+                  className="hy-tabs-input hy-tabs-input--mono hy-tabs-input--grow"
                 />
                 <button
                   type="button"
@@ -801,15 +692,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                       }
                     })();
                   }}
-                  style={{
-                    background: 'var(--bg-tertiary)',
-                    border: '0.5px solid var(--border-neutral)',
-                    color: 'var(--text-primary)',
-                    borderRadius: '4px',
-                    padding: '0 10px',
-                    fontSize: '12px',
-                    cursor: 'pointer'
-                  }}
+                  className="hy-tabs-browseBtn"
                 >
                   Browse…
                 </button>
@@ -817,79 +700,35 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             </div>
 
             {/* Shell Arguments */}
-            <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-              <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>
-                Arguments (comma separated)
-              </label>
+            <div className="hy-tabs-field">
+              <label className="hy-tabs-fieldLbl">Arguments (comma separated)</label>
               <input
                 type="text"
                 placeholder="e.g. --login, -i"
                 value={shellArgs}
                 onChange={(e) => setShellArgs(e.target.value)}
-                style={{
-                  background: 'var(--bg-primary)',
-                  border: '0.5px solid var(--border-neutral)',
-                  color: 'var(--text-primary)',
-                  borderRadius: '4px',
-                  padding: '8px 10px',
-                  fontSize: '12px',
-                  fontFamily: 'var(--font-mono)'
-                }}
+                className="hy-tabs-input hy-tabs-input--mono"
               />
             </div>
 
             {/* Environment Variables (Secrets Manager) */}
-            <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
-              <label style={{fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)'}}>
-                Environment Variables
-              </label>
-              <div
-                style={{
-                  background: 'var(--bg-primary)',
-                  border: '0.5px solid var(--border-neutral)',
-                  borderRadius: '6px',
-                  padding: '10px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '6px'
-                }}
-              >
+            <div className="hy-tabs-field">
+              <label className="hy-tabs-fieldLbl">Environment Variables</label>
+              <div className="hy-tabs-envBox">
                 {/* Env list */}
-                <div
-                  style={{maxHeight: '80px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px'}}
-                >
+                <div className="hy-tabs-envList">
                   {envVars.length === 0 ? (
-                    <span style={{fontSize: '10px', color: 'var(--text-tertiary)', fontStyle: 'italic'}}>
-                      No environment variables added.
-                    </span>
+                    <span className="hy-tabs-envEmpty">No environment variables added.</span>
                   ) : (
                     envVars.map((v, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          background: 'var(--bg-secondary)',
-                          borderRadius: '4px',
-                          padding: '3px 8px',
-                          fontSize: '11px',
-                          fontFamily: 'var(--font-mono)'
-                        }}
-                      >
-                        <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
-                          <span style={{color: 'var(--info-text)'}}>{v.key}</span>={v.val}
+                      <div key={i} className="hy-tabs-envItem">
+                        <span className="hy-tabs-envText">
+                          <span className="hy-tabs-envKey">{v.key}</span>={v.val}
                         </span>
                         <button
                           type="button"
                           onClick={() => setEnvVars(envVars.filter((_, idx) => idx !== i))}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            color: 'var(--danger-text)',
-                            cursor: 'pointer',
-                            fontSize: '14px'
-                          }}
+                          className="hy-tabs-envDel"
                         >
                           ×
                         </button>
@@ -899,38 +738,20 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                 </div>
 
                 {/* Add inline form */}
-                <div style={{display: 'flex', gap: '6px'}}>
+                <div className="hy-tabs-row">
                   <input
                     type="text"
                     placeholder="KEY"
                     value={newKey}
                     onChange={(e) => setNewKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
-                    style={{
-                      flex: 1,
-                      background: 'var(--bg-secondary)',
-                      border: '0.5px solid var(--border-neutral)',
-                      color: 'var(--text-primary)',
-                      borderRadius: '4px',
-                      padding: '6px 8px',
-                      fontSize: '10px',
-                      fontFamily: 'var(--font-mono)'
-                    }}
+                    className="hy-tabs-envInput"
                   />
                   <input
                     type="text"
                     placeholder="VALUE"
                     value={newVal}
                     onChange={(e) => setNewVal(e.target.value)}
-                    style={{
-                      flex: 1.5,
-                      background: 'var(--bg-secondary)',
-                      border: '0.5px solid var(--border-neutral)',
-                      color: 'var(--text-primary)',
-                      borderRadius: '4px',
-                      padding: '6px 8px',
-                      fontSize: '10px',
-                      fontFamily: 'var(--font-mono)'
-                    }}
+                    className="hy-tabs-envInput hy-tabs-envInput--val"
                   />
                   <button
                     type="button"
@@ -943,15 +764,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                         setNewVal('');
                       }
                     }}
-                    style={{
-                      background: 'var(--info-text)',
-                      color: 'var(--bg-primary)',
-                      border: 'none',
-                      borderRadius: '4px',
-                      padding: '0 10px',
-                      fontSize: '10px',
-                      cursor: 'pointer'
-                    }}
+                    className="hy-tabs-envAdd"
                   >
                     Add
                   </button>
@@ -960,20 +773,8 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
             </div>
 
             {/* Actions */}
-            <div style={{display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px'}}>
-              <button
-                type="button"
-                onClick={() => setIsModalOpen(false)}
-                style={{
-                  background: 'var(--bg-primary)',
-                  border: '0.5px solid var(--border-neutral)',
-                  color: 'var(--text-secondary)',
-                  borderRadius: '4px',
-                  padding: '8px 14px',
-                  fontSize: '12px',
-                  cursor: 'pointer'
-                }}
-              >
+            <div className="hy-tabs-actions">
+              <button type="button" onClick={() => setIsModalOpen(false)} className="hy-tabs-cancelBtn">
                 Cancel
               </button>
               <button
@@ -1005,16 +806,7 @@ const Tabs = forwardRef<HTMLElement, TabsProps>((props, ref) => {
                     setEnvVars([]);
                   }
                 }}
-                style={{
-                  background: profileName.trim() && shellPath.trim() ? 'var(--info-text)' : 'var(--border-neutral)',
-                  color: 'var(--bg-primary)',
-                  border: 'none',
-                  borderRadius: '4px',
-                  padding: '8px 14px',
-                  fontSize: '12px',
-                  cursor: profileName.trim() && shellPath.trim() ? 'pointer' : 'default',
-                  opacity: profileName.trim() && shellPath.trim() ? 1 : 0.6
-                }}
+                className={`hy-tabs-saveBtn${profileName.trim() && shellPath.trim() ? ' hy-tabs-saveBtn--ready' : ''}`}
               >
                 Save Profile
               </button>

@@ -1,0 +1,204 @@
+/* Cross-pane consent prompt + waiting pill (consent-modal.tsx). fixed positioning
+   stays inline — test/unit/web-pane-occluders.test.ts counts it per .tsx file. */
+@keyframes hyConsentPill {
+  0%,
+  100% {
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 14px 2px var(--accent-primary, #6ea8fe);
+  }
+}
+@keyframes hyConsentBg {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes hyConsentIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.hy-consent-pill {
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 99998;
+  /* Parks INSIDE the frameless window's drag strip — without no-drag, clicks
+     start a WINDOW DRAG instead of dispatching DOM events. */
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-primary, #6ea8fe);
+  background: var(--bg-elevated, var(--bg-secondary, #1c1c22));
+  color: var(--text-primary, #e8e8ea);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  animation: hyConsentPill 2.4s ease-in-out infinite;
+}
+
+.hy-consent-pill-emoji {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.hy-consent-backdrop {
+  inset: 0;
+  z-index: 100000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(1.5px);
+  animation: hyConsentBg 140ms ease;
+}
+
+.hy-consent-card {
+  width: min(420px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 18px 20px;
+  background: var(--bg-elevated, var(--bg-secondary, #1c1c22));
+  border: 1px solid var(--accent-primary, #6ea8fe);
+  border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+  color: var(--text-primary, #e8e8ea);
+  font-family: var(--font-sans);
+  animation: hyConsentIn 160ms ease;
+}
+
+.hy-consent-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.hy-consent-head-emoji {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.hy-consent-head-text {
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+
+.hy-consent-muted {
+  color: var(--text-secondary, #9a9aa2);
+}
+
+.hy-consent-why {
+  margin-top: 8px;
+  padding: 6px 9px;
+  border-left: 2px solid var(--accent-primary, #6ea8fe);
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.04));
+  border-radius: 3px;
+  font-size: 12.5px;
+  color: var(--text-secondary, #9a9aa2);
+}
+
+.hy-consent-subject {
+  overflow-wrap: anywhere;
+}
+
+.hy-consent-why-label {
+  color: var(--text-primary, #e8e8ea);
+}
+
+/* Row: muted 54px label column + controls. */
+.hy-consent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.hy-consent-row--last {
+  margin-bottom: 18px;
+}
+
+.hy-consent-row-label {
+  font-size: 11px;
+  color: var(--text-secondary, #9a9aa2);
+  width: 54px;
+  flex-shrink: 0;
+}
+
+.hy-consent-seg-group {
+  display: flex;
+  gap: 5px;
+}
+
+/* Segmented-control pill (scope + duration rows). */
+.hy-consent-seg {
+  padding: 4px 11px;
+  font-size: 11px;
+  border-radius: 5px;
+  border: 1px solid;
+  border-color: var(--border-neutral, rgba(255, 255, 255, 0.12));
+  background: transparent;
+  color: var(--text-secondary, #9a9aa2);
+  font-weight: 400;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.hy-consent-seg--active {
+  border-color: var(--accent-primary, #6ea8fe);
+  background: var(--accent-primary, #6ea8fe);
+  color: #0b0b0f;
+  font-weight: 600;
+}
+/* The same pill, frozen: a fixed chip — not a button, no hover, no pointer. */
+.hy-consent-seg--fixed {
+  display: inline-block;
+  line-height: normal;
+  cursor: default;
+  user-select: none;
+}
+
+.hy-consent-error {
+  color: var(--accent-danger, #f85149);
+  margin-bottom: 12px;
+}
+
+.hy-consent-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.hy-consent-action {
+  padding: 7px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid;
+  border-color: var(--border-neutral, rgba(255, 255, 255, 0.15));
+  background: transparent;
+  color: var(--text-primary, #e8e8ea);
+  cursor: pointer;
+  opacity: 1;
+}
+.hy-consent-action--primary {
+  border-color: var(--accent-success, #3fb950);
+  background: var(--accent-success, #3fb950);
+  color: #06140a;
+}
+.hy-consent-action--busy {
+  cursor: default;
+  opacity: 0.55;
+}

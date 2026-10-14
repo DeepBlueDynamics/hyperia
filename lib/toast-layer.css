@@ -1,0 +1,8 @@
+/* Invisible no-drag box mirroring the native toast layer's rect (toast-layer.ts).
+   Geometry + display are set from JS; fixed positioning stays there for the
+   web-pane-occluders test. */
+#hy-toast-layer-no-drag {
+  z-index: 2147483647;
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}

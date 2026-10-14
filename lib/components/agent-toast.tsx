@@ -5,6 +5,8 @@ import {subscribeToasts, subscribeExpiredToasts, reviveToast, clearToast, type T
 import {onToastLayerAction, setLayerToasts, useToastLayer} from '../toast-layer';
 import type {ToastLayerItem} from '../toast-layer';
 
+import './agent-toast.css';
+
 // action → full verb phrase for the prompt ("wants to <phrase>").
 const CREATE_SURFACE: Record<string, string> = {
   create_pane: 'open a new pane',
@@ -86,28 +88,6 @@ export function layerItemsFor(reqs: ToastRequest[], expired: ToastRequest[]): To
   return items;
 }
 
-const btn: React.CSSProperties = {
-  padding: '5px 12px',
-  fontSize: '12px',
-  fontWeight: 600,
-  borderRadius: '6px',
-  border: '1px solid var(--border-neutral, rgba(255,255,255,0.15))',
-  background: 'transparent',
-  color: 'var(--text-primary, #e8e8ea)',
-  cursor: 'pointer'
-};
-const allowBtn: React.CSSProperties = {
-  ...btn,
-  borderColor: 'var(--accent-success, #3fb950)',
-  background: 'var(--accent-success, #3fb950)',
-  color: '#06140a'
-};
-const denyBtn: React.CSSProperties = {
-  ...btn,
-  borderColor: 'var(--accent-danger, #f85149)',
-  color: 'var(--accent-danger, #f85149)'
-};
-
 // Window-level create-consent toast. A new tab/window has no target pane, so
 // these can't live in a pane band — the cards stack mid-window over everything.
 //
@@ -171,100 +151,49 @@ export default function AgentToast(): React.ReactElement | null {
       <div
         onClick={() => reviveToast(first.id)}
         title="Click to review"
-        style={{
-          position: 'fixed',
-          top: 48,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 99998,
-          ['WebkitAppRegion' as any]: 'no-drag',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: '6px 14px',
-          borderRadius: '999px',
-          border: '1px solid var(--accent-primary, #6ea8fe)',
-          background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',
-          color: 'var(--text-primary, #e8e8ea)',
-          fontFamily: 'var(--font-sans)',
-          fontSize: '12px',
-          fontWeight: 500,
-          cursor: 'pointer',
-          boxShadow: '0 6px 20px rgba(0,0,0,0.45)',
-          animation: 'hyToastPill 2.4s ease-in-out infinite'
-        }}
+        className="hy-toast-agent-pill"
+        // position stays inline: the web-pane-occluders test counts it per file
+        style={{position: 'fixed'}}
       >
-        <style>{`@keyframes hyToastPill{0%,100%{box-shadow:0 6px 20px rgba(0,0,0,0.45)}50%{box-shadow:0 0 14px 2px var(--accent-primary, #6ea8fe)}}`}</style>
-        <span style={{fontSize: '14px', lineHeight: 1}}>🤖</span>
+        <span className="hy-toast-agent-pill-emoji">🤖</span>
         <span>{pillText(expired)}</span>
       </div>
     );
   }
   return (
-    <div
-      style={{
-        position: 'fixed',
-        top: '50%',
-        left: '50%',
-        transform: 'translate(-50%, -50%)',
-        zIndex: 99999,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '8px',
-        pointerEvents: 'none'
-      }}
-    >
-      <style>{`@keyframes hyToastIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}`}</style>
+    <div className="hy-toast-agent-stack" style={{position: 'fixed'}}>
       {reqs.map((r) => (
-        <div
-          key={r.id}
-          style={{
-            pointerEvents: 'auto',
-            // Top-center = the frameless window's drag strip; without no-drag,
-            // clicks on the card's TOP edge start a window drag instead of
-            // reaching the buttons (same bug as the consent pill).
-            ['WebkitAppRegion' as any]: 'no-drag',
-            background: 'var(--bg-elevated, var(--bg-secondary, #1c1c22))',
-            border: '1px solid var(--accent-primary, #6ea8fe)',
-            borderRadius: '10px',
-            boxShadow: '0 12px 28px rgba(0,0,0,0.5)',
-            padding: '12px 14px',
-            minWidth: '340px',
-            color: 'var(--text-primary, #e8e8ea)',
-            fontFamily: 'var(--font-sans)',
-            animation: 'hyToastIn 160ms ease'
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              marginBottom: '10px',
-              fontSize: '12.5px',
-              lineHeight: 1.35
-            }}
-          >
-            <span style={{fontSize: '15px'}}>🤖</span>
+        // The card is no-drag (see agent-toast.css): it sits in the window's drag strip.
+        <div key={r.id} className="hy-toast-agent-card">
+          <div className="hy-toast-agent-head">
+            <span className="hy-toast-agent-emoji">🤖</span>
             <span>
               <b>{r.requesterName || r.requester}</b>
-              <span style={{color: 'var(--text-secondary, #9a9aa2)'}}> wants to {actionPhrase(r.action)}.</span>
+              <span className="hy-toast-agent-muted"> wants to {actionPhrase(r.action)}.</span>
             </span>
           </div>
-          <div style={{display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap'}}>
-            <button type="button" style={denyBtn} onClick={() => respond(r.id, DECISIONS.deny)}>
+          <div className="hy-toast-agent-actions">
+            <button
+              type="button"
+              className="hy-toast-agent-btn hy-toast-agent-btn--deny"
+              onClick={() => respond(r.id, DECISIONS.deny)}
+            >
               Deny
             </button>
-            <button type="button" style={btn} onClick={() => respond(r.id, DECISIONS.once)}>
+            <button type="button" className="hy-toast-agent-btn" onClick={() => respond(r.id, DECISIONS.once)}>
               Just once
             </button>
-            <button type="button" style={btn} onClick={() => respond(r.id, DECISIONS['15m'])}>
+            <button type="button" className="hy-toast-agent-btn" onClick={() => respond(r.id, DECISIONS['15m'])}>
               15 min
             </button>
-            <button type="button" style={btn} onClick={() => respond(r.id, DECISIONS['1h'])}>
+            <button type="button" className="hy-toast-agent-btn" onClick={() => respond(r.id, DECISIONS['1h'])}>
               1 hour
             </button>
-            <button type="button" style={allowBtn} onClick={() => respond(r.id, DECISIONS.always)}>
+            <button
+              type="button"
+              className="hy-toast-agent-btn hy-toast-agent-btn--allow"
+              onClick={() => respond(r.id, DECISIONS.always)}
+            >
               Always
             </button>
           </div>

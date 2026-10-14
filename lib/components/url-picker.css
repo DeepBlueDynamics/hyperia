@@ -1,0 +1,170 @@
+/* Shared URL picker (pane Chooser): input + history dropdown. */
+.hy-urlpick {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 340px;
+}
+
+.hy-urlpick-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-neutral);
+  border-radius: var(--radius-6);
+  padding: 0 var(--space-10);
+  height: 36px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.hy-urlpick-field-icon {
+  font-size: 14px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.hy-urlpick-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  height: 100%;
+  padding: 0;
+  min-width: 0;
+}
+
+.hy-urlpick-enter {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: var(--space-2) var(--space-4);
+  border: 0.5px solid var(--border-neutral);
+  border-radius: var(--radius-3);
+  color: var(--text-tertiary);
+  user-select: none;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hy-urlpick-dropdown {
+  margin-top: var(--space-6);
+  border: 0.5px solid var(--border-neutral);
+  border-radius: var(--radius-6);
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.hy-urlpick-list {
+  max-height: 208px;
+  overflow-y: auto;
+}
+
+.hy-urlpick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.hy-urlpick-row.is-child {
+  padding: 5px 10px 5px 28px;
+}
+
+.hy-urlpick-row.is-focused {
+  background: var(--info-bg);
+}
+
+.hy-urlpick-chevron {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.hy-urlpick-fav {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hy-urlpick-fav-globe {
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.hy-urlpick-fav-img {
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.hy-urlpick-root-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.hy-urlpick-root-count {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.hy-urlpick-title {
+  flex: 0 1 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.hy-urlpick-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.hy-urlpick-clear {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-top: 0.5px solid var(--border-neutral);
+  color: var(--text-tertiary);
+}
+
+.hy-urlpick-clear-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.hy-urlpick-clear-label {
+  font-size: 11px;
+  font-family: var(--font-sans);
+}

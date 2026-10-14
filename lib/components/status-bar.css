@@ -1,0 +1,16 @@
+/* Dot colour/glow by agent state. Three classes so the glow beats the
+   styled-jsx .statusbar_glow rule, as the old inline style did. */
+.statusbar_dot.hy-status-dot.hy-status-dot--idle {
+  background-color: #666;
+  box-shadow: none;
+}
+
+.statusbar_dot.hy-status-dot.hy-status-dot--connected {
+  background-color: #00ff64;
+  box-shadow: 0 0 6px 2px rgba(0, 255, 100, 0.4);
+}
+
+.statusbar_dot.hy-status-dot.hy-status-dot--working {
+  background-color: #ff3333;
+  box-shadow: 0 0 8px 3px rgba(255, 50, 50, 0.5);
+}

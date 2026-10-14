@@ -1,0 +1,172 @@
+/* "Save Tab" card (workspace-save-toast.tsx). fixed positioning stays inline —
+   test/unit/web-pane-occluders.test.ts counts it per .tsx file. */
+.hy-toast-save-card {
+  top: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1200;
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-neutral);
+  border-radius: var(--radius-6, 8px);
+  padding: 12px 14px;
+  min-width: 340px;
+  max-width: min(520px, 90vw);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.hy-toast-save-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.hy-toast-save-name {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-neutral);
+  border-radius: 5px;
+  outline: none;
+}
+
+.hy-toast-save-section {
+  margin-top: 8px;
+}
+.hy-toast-save-section--resume {
+  margin-top: 10px;
+}
+
+.hy-toast-save-label {
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.hy-toast-save-existing {
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.hy-toast-save-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+}
+.hy-toast-save-row--selected,
+.hy-toast-save-row:hover {
+  background: var(--bg-tertiary);
+}
+
+.hy-toast-save-row-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+.hy-toast-save-row--selected .hy-toast-save-row-name {
+  font-weight: 600;
+}
+
+.hy-toast-save-cand {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.hy-toast-save-cand-label {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* Small pill after the pane name: red when the n8 resume will run with --danger. */
+.hy-toast-save-danger {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 0 7px;
+  font-size: 10px;
+  line-height: 16px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid;
+  border-color: var(--border-neutral, rgba(255, 255, 255, 0.15));
+  background: transparent;
+  color: var(--text-secondary);
+  opacity: 0.4;
+  cursor: default;
+}
+.hy-toast-save-danger--on {
+  border-color: var(--accent-danger, #f85149);
+  background: var(--accent-danger, #f85149);
+  color: #fff;
+}
+.hy-toast-save-danger--enabled {
+  opacity: 1;
+  cursor: pointer;
+}
+
+.hy-toast-save-cmd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hy-toast-save-n8 {
+  font-size: 10px;
+  color: var(--info-text);
+}
+
+.hy-toast-save-autosave {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  cursor: pointer;
+}
+
+.hy-toast-save-conflict {
+  margin-top: 8px;
+  color: var(--warning-text, #d9a300);
+}
+
+.hy-toast-save-error {
+  margin-top: 8px;
+  color: var(--danger-text, #ff5c57);
+}
+
+.hy-toast-save-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.hy-toast-save-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid;
+  border-color: var(--border-neutral, rgba(255, 255, 255, 0.15));
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.hy-toast-save-btn--primary {
+  border-color: var(--accent-success, #3fb950);
+  background: var(--accent-success, #3fb950);
+  color: #06140a;
+}
