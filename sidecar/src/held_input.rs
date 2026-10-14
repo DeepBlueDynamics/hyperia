@@ -1,10 +1,26 @@
 //! Agent input held because the human is in the target pane. The owning window
 //! shows a toast; "Send now" releases that one operation past the focus guard.
+//! Holds are keyed by delivery op ID, or by `mail_key(pane)` for a mail notice.
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 /// A release the queue couldn't use in this long lapses; the hold is shown again.
 pub const RELEASE_TTL: Duration = Duration::from_secs(30);
+
+pub static HELD: LazyLock<Mutex<Held>> = LazyLock::new(Default::default);
+
+const MAIL_PREFIX: &str = "mail:";
+
+/// Hold key for a pane's pending mail notice.
+pub fn mail_key(pane: &str) -> String {
+    format!("{MAIL_PREFIX}{pane}")
+}
+
+pub fn is_mail_key(key: &str) -> bool {
+    key.starts_with(MAIL_PREFIX)
+}
 
 #[derive(Default)]
 pub struct Held {
@@ -35,9 +51,13 @@ impl Held {
         }
     }
 
-    /// Forget a hold whose announcement didn't reach the window, so it retries.
-    pub fn forget(&mut self, op: &str) {
-        self.ops.remove(op);
+    /// Drop a hold (announcement failed, or it was delivered). True if one existed.
+    pub fn forget(&mut self, op: &str) -> bool {
+        self.ops.remove(op).is_some()
+    }
+
+    pub fn contains(&self, op: &str) -> bool {
+        self.ops.contains_key(op)
     }
 
     /// The human chose "Send now". False if the op isn't held (gone or delivered).
@@ -106,6 +126,13 @@ mod tests {
         assert_eq!(cleared, vec![("op1".to_string(), "pane-a".to_string())]);
         assert!(!h.release("op1", t0));
         assert!(h.release("op2", t0));
+    }
+
+    #[test]
+    fn mail_keys_are_distinct_from_op_ids() {
+        assert_eq!(mail_key("abc"), "mail:abc");
+        assert!(is_mail_key(&mail_key("abc")));
+        assert!(!is_mail_key("op_1a13b3a1408_ebb0"));
     }
 
     #[test]

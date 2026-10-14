@@ -6,13 +6,13 @@ use tokio::sync::{Mutex, OnceCell};
 use crate::{AppState, bridge::Bridge, delivery::{DeliveryStore, NewOperation, Operation, State}};
 use crate::messaging::{self, ApiError, MailActor, SendRequest};
 use crate::msgbus::mailbox::Principal;
+use crate::held_input::{self, HELD};
 
 pub static WORKFLOW: Mutex<()> = Mutex::const_new(());
 static STORE: OnceCell<DeliveryStore> = OnceCell::const_new();
 // Retry metadata persistence only; never repeat transport after an uncertain write.
 static COMPLETIONS: Mutex<Vec<(String, State, serde_json::Value)>> = Mutex::const_new(Vec::new());
 static PROMPTS: Mutex<Vec<(String, serde_json::Value)>> = Mutex::const_new(Vec::new());
-static HELD: std::sync::LazyLock<Mutex<crate::held_input::Held>> = std::sync::LazyLock::new(Default::default);
 
 async fn store() -> Result<&'static DeliveryStore, ApiError> {
     STORE.get_or_try_init(|| async {
@@ -395,7 +395,7 @@ async fn announce_held(bridge: &Bridge, op: &Operation, payload: &InputPayload) 
     let from = messaging::requester_prompt_name(bridge, &op.requester, &payload.sender.label).await;
     let preview = match op.kind.as_str() {
         "keys" => String::new(),
-        _ => crate::held_input::preview(&payload.text),
+        _ => held_input::preview(&payload.text),
     };
     bridge.notify(serde_json::json!({
         "type": "InputHeld", "opId": op.id, "pane": payload.pane, "kind": op.kind,
@@ -428,7 +428,8 @@ pub async fn tick(bridge: &Bridge) {
         }
     }
     let queue = match store.queued().await { Ok(queue) => queue, Err(error) => { tracing::error!("Delivery queue read failed: {error}"); return; } };
-    let cleared = HELD.lock().await.sweep(|id| queue.iter().any(|q| q.id == id));
+    let cleared = HELD.lock().await
+        .sweep(|id| held_input::is_mail_key(id) || queue.iter().any(|q| q.id == id));
     for (op, pane) in cleared {
         let _ = bridge.notify(serde_json::json!({"type": "InputHeldCleared", "opId": op, "pane": pane})).await;
     }

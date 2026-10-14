@@ -1,5 +1,5 @@
-// Top-right prompt when an agent's input is held because the human is in the
-// target pane. "Send now" releases it and takes the keyboard out of the pane so
+// Top-right prompt when an agent's input, or a mail notice, is held because the
+// human is in the target pane. "Send now" releases it and takes the keyboard out of the pane so
 // the human's typing can't land in the middle of it. "Later" keeps waiting:
 // the input goes in once the human leaves the pane, as before.
 import {ipcRenderer} from 'electron';
@@ -23,23 +23,26 @@ export interface HeldInput {
 const BLUR_AFTER_MS = 200;
 
 export function heldInputText(h: HeldInput): string {
+  // Mail: the agent gets a one-line "[Hyperia mail] …" notice, not the mail itself.
+  if (h.kind === 'mail') return h.preview ? `has mail for this pane: ${h.preview}` : 'has mail for this pane.';
   const verb = h.kind === 'keys' ? 'send keys to' : h.kind === 'shell' ? 'run a command in' : 'type into';
   return h.preview ? `wants to ${verb} this pane: “${h.preview}”` : `wants to ${verb} this pane.`;
 }
 
-const LAYER_BUTTONS: ToastLayerItem['buttons'] = [
-  {id: 'later', label: 'Later'},
-  {id: 'send', label: 'Send now', style: 'allow'}
-];
+export const sendLabel = (h: HeldInput) => (h.kind === 'mail' ? 'Deliver now' : 'Send now');
+const emojiFor = (h: HeldInput) => (h.kind === 'mail' ? '📨' : '⌨️');
 
 export function layerItemsFor(held: HeldInput[]): ToastLayerItem[] {
   return held.map((h) => ({
     id: h.opId,
     kind: 'card',
-    emoji: '⌨️',
+    emoji: emojiFor(h),
     who: h.from,
     text: heldInputText(h),
-    buttons: LAYER_BUTTONS
+    buttons: [
+      {id: 'later', label: 'Later'},
+      {id: 'send', label: sendLabel(h), style: 'allow'}
+    ]
   }));
 }
 
@@ -102,7 +105,7 @@ export default function HeldInputToast(): React.ReactElement | null {
       {held.map((h) => (
         <div key={h.opId} className="hy-held-input-card">
           <div className="hy-held-input-head">
-            <span>⌨️</span>
+            <span>{emojiFor(h)}</span>
             <span>
               <b>{h.from}</b> <span className="hy-held-input-muted">{heldInputText(h)}</span>
             </span>
@@ -116,7 +119,7 @@ export default function HeldInputToast(): React.ReactElement | null {
               className="hy-held-input-btn hy-held-input-btn--send"
               onClick={() => decide(h.opId, 'send')}
             >
-              Send now
+              {sendLabel(h)}
             </button>
           </div>
         </div>
