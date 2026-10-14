@@ -6,6 +6,7 @@ is committed but no installer has it yet.
 
 | # | Found | Bug | Cause | Fix | Status |
 |---|---|---|---|---|---|
+| 11 | 2026-10-14 | Inevitable Bobcat got 9 radio mails under call signs it never saw ("may be meant for me") | Signs rotate after every call, so by the time queued calls are read the pane holds a different sign; the mail never said the heard sign was this pane's | `radio_deliver` mail now opens with "You were called as “Golf India”, this pane's call sign at the time of the call…" | Fixed, unbuilt |
 | 10 | 2026-10-14 | Radio (hertz) mail to Stable Xerinae arrived ~1 min late | The mail notice is withheld while the human is in or typing in the pane; nothing tells them it's waiting | Held mail notices show a top-right "📨 … Deliver now / Later" toast (feat/held-input-toast) | Fixed, unbuilt |
 | 9 | 2026-10-14 | An agent's send into the pane the human is in waits silently until they leave | Focus protection defers it with no signal | Top-right "⌨️ … Send now / Later" toast; Send now releases that one send and blurs the pane (`a3290352`) | Fixed, unbuilt |
 | 8 | 2026-10-14 | Magnificent Vole called itself "Vulnerable Canid"; reply could go astray | Context compaction kept the old pane's name as a fact; Hyperia's own labels were correct | Proposed: stamp "You are X in pane Y" on the first tool result per MCP session and after a rename | Open |
