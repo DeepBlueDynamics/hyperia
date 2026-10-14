@@ -1335,6 +1335,12 @@ function pvDrawRing(){
         ctx.fillText(pvClip(ctx, pvWebWhere(n.url), Math.max(60, (left ? p.x : w - p.x) - 8)), p.x, p.y + 11);
         box.y1 += 10; a.lbox.y1 = (box.y1 - vw.y) / vw.z;
       }
+      const sign = PV.signs && PV.signs[pvPaneId(n.id)];
+      if (sign) {
+        ctx.font = "700 8px " + PV_MONO; ctx.fillStyle = "#fbbf24";
+        ctx.fillText(String(sign).toUpperCase(), p.x, p.y + (n.kind === "web" && n.url ? 21 : 11));
+        box.y1 += 10; a.lbox.y1 = (box.y1 - vw.y) / vw.z;
+      }
       if ((a.out || 0) > .05) {
         pvHalo(ctx, a, left ? p.x - tw / 2 : p.x + tw / 2, p.y, tw, sel && !on ? .35 : 1);
         if (!PV_REDUCE) pvShimmer(ctx, text, p.x, p.y, tw, ctx.textAlign, a.out * a.alpha);
@@ -1457,6 +1463,12 @@ async function pvRadioPoll(){
     const j = await r.json(), skew = Date.now() - (j.now || Date.now());
     PV.radio = (j.entries || []).map((e) => ({...e, start: e.ts + skew})); PV.radioErr = false;
   } catch (_e) { PV.radio = []; PV.radioErr = true; }
+  // Call signs, shown under pane names while the radio runs (older sidecars: none).
+  try {
+    const b = await fetch("/api/radio/badges");
+    const j = b.ok ? await b.json() : {};
+    PV.signs = j.running ? (j.signs || {}) : {};
+  } catch (_e) { PV.signs = {}; }
   const sig = PV.radio.map((e) => e.id + (pvRadioLive(e) ? "*" : "")).join(",") + "|" + PV.radioOpen + "|" + (PV.replay && PV.replay.id);
   if (sig !== PV.radioSig) { PV.radioSig = sig; pvRenderRadio(); }
 }
@@ -2442,6 +2454,9 @@ function pvFocusStep(){
 // container runtime (a blue marble), then branches out to each container;
 // particles stream down (received, cyan) and up (sent, amber) with it.
 const PVN = {parts: new Map(), last: 0};
+// Grey for host agents without the counting proxy: their figure is process I/O
+// (disk + network together), so it mustn't look like a download.
+const PV_EST = "#94a3b8";
 function pvBuildNet(){
   const ev = (PV.win && PV.win.telemetry && PV.win.telemetry.events) || [], now = Date.now(), m = new Map();
   for (const e of ev) {
@@ -2479,7 +2494,8 @@ function pvDrawNet(ctx, R){
   }
   if (!links.length) return;
   let totRx = 0, totTx = 0;
-  for (const a of links) { totRx += a.nrx; totTx += a.ntx; }
+  // The ~I/O estimate is mostly disk: it doesn't light the real network uplink.
+  for (const a of links) if (a.nsrc !== "approx") { totRx += a.nrx; totTx += a.ntx; }
   const totLvl = pvNetLvl(totRx + totTx);
   // u: 0 = the container, SPLIT = the marble's centre, 1 = the uplink hub.
   const pathFor = (a) => {
@@ -2503,7 +2519,7 @@ function pvDrawNet(ctx, R){
   for (const a of links) {
     const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1, at = pathFor(a); paths.set(a, at);
     const lvl = pvNetLvl(a.nrx + a.ntx);
-    ctx.globalAlpha = a.alpha * dim * (.12 + .35 * lvl); ctx.strokeStyle = n.color || "#38bdf8"; ctx.lineWidth = .8 + 3 * lvl;
+    ctx.globalAlpha = a.alpha * dim * (.12 + .35 * lvl); ctx.strokeStyle = a.nsrc === "approx" ? PV_EST : n.color || "#38bdf8"; ctx.lineWidth = .8 + 3 * lvl;
     const end = a.nsrc === "container" ? SPLIT : 1;
     if (a.nsrc === "approx") ctx.setLineDash([5, 5]);
     ctx.beginPath(); for (let i = 0; i <= 24; i++) { const p = at(end * i / 24); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); } ctx.stroke();
@@ -2547,7 +2563,7 @@ function pvDrawNet(ctx, R){
       while (ps.tx >= 1) { ps.tx--; if (ps.list.length < 160) ps.list.push({u: 0, d: 1, j: Math.random()}); }
       ps.list = ps.list.filter((q) => { q.u += q.d * dt * (.4 + .25 * q.j); return q.u >= 0 && q.u <= 1; });
       for (const q of ps.list) {
-        const p = at(q.u), c = q.d < 0 ? "#22d3ee" : "#f59e0b";
+        const p = at(q.u), c = a.nsrc === "approx" ? PV_EST : q.d < 0 ? "#22d3ee" : "#f59e0b";
         ctx.globalAlpha = a.alpha * dim * .95; ctx.fillStyle = c; ctx.shadowColor = c;
         ctx.beginPath(); ctx.arc(p.x, p.y, 1.4 + 1.2 * lvl, 0, Math.PI * 2); ctx.fill();
       }
@@ -2562,9 +2578,9 @@ function pvDrawNet(ctx, R){
     const tag = P3(Math.cos(a.theta) * R * .9, R * .1, -Math.sin(a.theta) * R * .9);
     ctx.globalAlpha = a.alpha * dim * .9;
     const approx = a.nsrc === "approx" ? "~" : "";
-    ctx.fillStyle = "#67e8f9"; ctx.fillText(approx + "↓" + pvRate(a.nrx), tag.x - 22, tag.y);
-    ctx.fillStyle = "#fbbf24"; ctx.fillText(approx + "↑" + pvRate(a.ntx), tag.x + 22, tag.y);
-    if (a.nsrc !== "container") { ctx.fillStyle = "#64748b"; ctx.fillText(a.nsrc === "exact" ? "HOST" : "HOST ~I/O", tag.x, tag.y + 10); }
+    ctx.fillStyle = approx ? PV_EST : "#67e8f9"; ctx.fillText(approx + "↓" + pvRate(a.nrx), tag.x - 22, tag.y);
+    ctx.fillStyle = approx ? PV_EST : "#fbbf24"; ctx.fillText(approx + "↑" + pvRate(a.ntx), tag.x + 22, tag.y);
+    if (a.nsrc !== "container") { ctx.fillStyle = "#64748b"; ctx.fillText(a.nsrc === "exact" ? "HOST" : "DISK+NET EST.", tag.x, tag.y + 10); }
   }
   // Marble label: the runtime and how many containers.
   const runtime = PV.panes.some((p) => /podman/i.test(p.proc)) ? "PODMAN" : "DOCKER", nc = links.filter((a) => a.nsrc === "container").length;

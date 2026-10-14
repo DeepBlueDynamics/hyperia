@@ -24,6 +24,7 @@ mod n8;
 mod messaging;
 mod delivery;
 mod delivery_service;
+mod held_input;
 mod perms;
 mod process;
 mod host_telemetry;
@@ -379,9 +380,10 @@ async fn post_tts(
     // Caller's spokenable callsign — resolved from the request identity (mirrors
     // maybe_attribute): a pane's friendly codename, or an external agent's name.
     let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
-    let caller_raw = match &id {
+    // Also the speaker's pane, so the deck sounds the voice from it, not the ring's top.
+    let (caller_raw, speaker_pane) = match &id {
         identity::CallerIdentity::Pane { pane, .. } => {
-            state.bridge.pane_display_name(pane).await.unwrap_or_default()
+            (state.bridge.pane_display_name(pane).await.unwrap_or_default(), Some(pane.clone()))
         }
         identity::CallerIdentity::Agent { name, .. } => {
             // Binding comes from authenticated residency, never request JSON.
@@ -399,11 +401,11 @@ async fn post_tts(
             let pane = store.bindings.pane_for_agent(agent).or_else(|| store.bindings.pane_for_agent(name));
             let fallback = || tts::agent_callsign(&id.label());
             match pane {
-                Some(pane) => state.bridge.pane_display_name(&pane).await.unwrap_or_else(fallback),
-                None => fallback(),
+                Some(pane) => (state.bridge.pane_display_name(&pane).await.unwrap_or_else(fallback), Some(pane)),
+                None => (fallback(), None),
             }
         },
-        _ => String::new(),
+        _ => (String::new(), None),
     };
     let caller = match tts::spokenable_name(&caller_raw) {
         s if s.is_empty() => "station".to_string(),
@@ -429,7 +431,7 @@ async fn post_tts(
     // Log the transmission as it goes on air (dashboard radio view + replay).
     let meta = radio_log::Meta {
         from: if caller_raw.is_empty() { caller.clone() } else { caller_raw.clone() },
-        from_pane: match &id { identity::CallerIdentity::Pane { pane, .. } => Some(pane.clone()), _ => None },
+        from_pane: speaker_pane,
         to: recipient.clone(),
         text: req.text.trim().to_string(),
         spoken: spoken.clone(),
@@ -1508,7 +1510,8 @@ async fn identity_mw(
     }
     // Approval decisions, enforcement switches and pane credentials belong to
     // the human UI (authenticated by Electron main), never an agent caller.
-    if matches!(path.as_str(), "/api/perms/respond" | "/api/perms/enforce" | "/api/perms/token" | "/ws" | "/api/ui/key")
+    if matches!(path.as_str(), "/api/perms/respond" | "/api/perms/enforce" | "/api/perms/token" | "/ws" | "/api/ui/key"
+        | "/api/delivery/release-held")
         && !id.is_system()
     {
         crate::audit::record_call(&label, kind, &method, &path, 403);
@@ -4765,6 +4768,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/files/render", axum::routing::post(file_edit::render))
         .route("/api/radio/callsigns", axum::routing::get(radio::get_callsigns))
         .route("/api/radio/deliver", axum::routing::post(radio::deliver))
+        .route("/api/radio/badges", axum::routing::get(radio::get_badges))
         .route("/api/audio/play", axum::routing::post(post_audio_play))
         .route("/api/audio/probe", axum::routing::post(post_audio_probe))
         .route("/api/audio/mute", axum::routing::post(post_audio_mute))
@@ -4805,6 +4809,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pane/send", axum::routing::post(delivery_service::pane_send))
         .route("/api/terminal/run", axum::routing::post(delivery_service::terminal_run))
         .route("/api/delivery/status", axum::routing::get(delivery_service::status))
+        .route("/api/delivery/release-held", axum::routing::post(delivery_service::release_held))
         .route("/api/msg/inbox", axum::routing::get(messaging::inbox))
         .route("/api/msg/read", axum::routing::post(messaging::read))
         .route("/api/msg/check", axum::routing::post(messaging::check))

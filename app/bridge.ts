@@ -528,6 +528,8 @@ function handleCommand(msg: Record<string, unknown>) {
           alive: () => trackedSessions.get(uid) === tracked && tracked.session.pty?.pid === pid,
           protected: () => {
             if (msg.control === true && msg.interrupt === true) return false;
+            // The human chose "Send now" on the held-input toast for this op.
+            if (msg.released === true) return false;
             return paneProtected(uid, tracked);
           },
           write: (bytes) => tracked.session.pty!.write(bytes),
@@ -767,6 +769,31 @@ function handleCommand(msg: Record<string, unknown>) {
       };
       for (const w of (app as any).getWindows?.() || []) {
         if (w?.rpc) w.rpc.emit('permission request', payload);
+      }
+      break;
+    }
+
+    case 'InputHeld': {
+      // An agent's input waits because the human is in that pane. Only the
+      // window that owns the pane shows the "Send now" toast.
+      const uid = String(msg.pane || '');
+      const tracked = trackedSessions.get(uid);
+      const win = tracked ? getHyperiaWindowById(tracked.windowId) : null;
+      if (win?.rpc) {
+        win.rpc.emit('input held', {
+          opId: String(msg.opId || ''),
+          pane: uid,
+          kind: String(msg.kind || 'pane'),
+          from: String(msg.from || 'An agent'),
+          preview: String(msg.preview || '')
+        });
+      }
+      break;
+    }
+
+    case 'InputHeldCleared': {
+      for (const w of (app as any).getWindows?.() || []) {
+        if (w?.rpc) w.rpc.emit('input held cleared', {opId: String(msg.opId || '')});
       }
       break;
     }

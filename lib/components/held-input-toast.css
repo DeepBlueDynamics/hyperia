@@ -1,0 +1,62 @@
+/* Held-input prompt, DOM fallback (held-input-toast.tsx). fixed positioning stays
+   inline — test/unit/web-pane-occluders.test.ts counts it per .tsx file. */
+.hy-held-input-stack {
+  top: 48px;
+  right: 16px;
+  z-index: 99999;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.hy-held-input-card {
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  max-width: 420px;
+  background: var(--bg-elevated, var(--bg-secondary, #1c1c22));
+  border: 1px solid var(--accent-primary, #6ea8fe);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+  padding: 12px 14px;
+  color: var(--text-primary, #e8e8ea);
+  font-family: var(--font-sans);
+  animation: hyToastIn 160ms ease;
+}
+
+.hy-held-input-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.hy-held-input-muted {
+  color: var(--text-secondary, #9a9aa2);
+}
+
+.hy-held-input-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.hy-held-input-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--border-neutral, rgba(255, 255, 255, 0.15));
+  background: transparent;
+  color: var(--text-primary, #e8e8ea);
+  cursor: pointer;
+}
+.hy-held-input-btn--send {
+  border-color: var(--accent-success, #3fb950);
+  background: var(--accent-success, #3fb950);
+  color: #06140a;
+}

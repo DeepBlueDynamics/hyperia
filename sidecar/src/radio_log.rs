@@ -168,7 +168,7 @@ fn write_wav(path: &std::path::Path, samples: &[f32], rate: u32) -> std::io::Res
     f.flush()
 }
 
-fn local_only(peer: &SocketAddr) -> Option<Response> {
+pub(crate) fn local_only(peer: &SocketAddr) -> Option<Response> {
     (!peer.ip().is_loopback()).then(|| (StatusCode::FORBIDDEN, "radio log is local-only").into_response())
 }
 

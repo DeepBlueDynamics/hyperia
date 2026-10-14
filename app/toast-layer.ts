@@ -24,10 +24,10 @@ import {BrowserWindow, WebContentsView, app, ipcMain} from 'electron';
 
 import isDev from 'electron-is-dev';
 
-import {bottomRightBounds, centerBounds, topCenterBounds} from './utils/toast-layer-bounds';
+import {bottomRightBounds, centerBounds, topCenterBounds, topRightBounds} from './utils/toast-layer-bounds';
 
 // 'center' holds the consent cards, matching the centered pane-access prompt.
-export type ToastLayerAnchor = 'top' | 'center' | 'bottom-right';
+export type ToastLayerAnchor = 'top' | 'center' | 'bottom-right' | 'top-right';
 
 export interface ToastLayerButton {
   id: string;
@@ -80,7 +80,7 @@ interface LayerEntry {
 const layers = new Map<string, LayerEntry>();
 const layerKey = (win: BrowserWindow, anchor: ToastLayerAnchor) => `${win.id}:${anchor}`;
 export const normalizeToastLayerAnchor = (a: unknown): ToastLayerAnchor =>
-  a === 'bottom-right' || a === 'center' ? a : 'top';
+  a === 'bottom-right' || a === 'center' || a === 'top-right' ? a : 'top';
 // Set once creating a layer throws (e.g. an Electron build where transparent
 // child views don't exist) — the renderer then keeps its DOM toasts.
 let broken = false;
@@ -102,7 +102,9 @@ function position(entry: LayerEntry): void {
       ? bottomRightBounds(width, height, entry.cssW, entry.cssH, entry.zoom)
       : entry.anchor === 'center'
         ? centerBounds(width, height, entry.cssW, entry.cssH, entry.zoom)
-        : topCenterBounds(width, entry.cssW, entry.cssH, entry.zoom)
+        : entry.anchor === 'top-right'
+          ? topRightBounds(width, height, entry.cssW, entry.cssH, entry.zoom)
+          : topCenterBounds(width, entry.cssW, entry.cssH, entry.zoom)
   );
   reportBounds(entry);
 }

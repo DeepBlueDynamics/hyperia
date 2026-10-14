@@ -124,6 +124,8 @@ export type MainEvents = {
   'agent toast': {id: string; requester: string; action: string};
   'audio notice': {id: string; name: string; active: boolean};
   'tab bell': {uid: string};
+  'input held': {opId: string; pane: string; kind: string; from: string; preview: string};
+  'input held cleared': {opId: string};
   unmaximize: never;
   'web-pane-reload': string;
   'web-pane-click-result': {uid: string; result: any};
@@ -275,6 +277,8 @@ export type RendererEvents = {
   'agent toast': {id: string; requester: string; action: string};
   'audio notice': {id: string; name: string; active: boolean};
   'tab bell': {uid: string};
+  'input held': {opId: string; pane: string; kind: string; from: string; preview: string};
+  'input held cleared': {opId: string};
   'windowGeometry change': {isMaximized: boolean};
   move: {bounds: {x: number; y: number}};
   'enter full screen': never;

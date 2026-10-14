@@ -23,6 +23,7 @@ import * as updaterActions from './actions/updater';
 import AgentToast from './components/agent-toast';
 import CloseConfirmModal, {showCloseConfirm} from './components/close-confirm-modal';
 import ConsentModal from './components/consent-modal';
+import HeldInputToast from './components/held-input-toast';
 import {activeTerminals} from './components/term';
 import ToastStack, {pushToast, pushStickyToast, dismissStickyToast} from './components/toast-stack';
 import WebDownloads from './components/web-downloads';
@@ -809,6 +810,7 @@ root.render(
     <HyperContainer />
     <WebPaneDialog />
     <AgentToast />
+    <HeldInputToast />
     <WorkspaceSaveToast />
     <ToastStack />
     <WebDownloads />

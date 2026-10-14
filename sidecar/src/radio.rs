@@ -5,8 +5,8 @@
 //! gold badges on those panes. hertz routes a call by sign, and delivering on
 //! a sign rotates it: a sign heard over the air (or replayed) never works twice.
 //! A pane otherwise keeps its sign while the grant lasts — brief not-an-agent
-//! blips don't churn it. Signs are only ever given to the human (badges) and
-//! to hertz-radio.
+//! blips don't churn it. Signs are only ever given to the human (badges and
+//! the local-only Control Deck) and to hertz-radio.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
@@ -146,6 +146,16 @@ async fn push(bridge: &Bridge, force: bool) {
     }
 }
 
+/// GET /api/radio/badges — local-only, for the Control Deck: each pane's sign,
+/// shown like the pane badges. Signs only let hertz-radio route a call.
+pub async fn get_badges(axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>) -> Response {
+    if let Some(r) = crate::radio_log::local_only(&peer) {
+        return r;
+    }
+    let body = with(|s| json!({"running": s.running, "visible": visible(s), "signs": s.signs}));
+    Json(body).into_response()
+}
+
 /// Keep an existing sign? A gone grant (or a pane with no live session, which
 /// refresh never offers as grant_ok) drops it at once; a pane that merely
 /// stopped looking like an agent keeps it for SIGN_GRACE since it last was one.
@@ -261,7 +271,8 @@ pub fn spawn(bridge: Bridge) {
 }
 
 /// Use a sign: the pane it names, after giving that pane a fresh sign.
-pub fn consume(sign: &str) -> Option<String> {
+/// Spend a heard sign: returns (pane, the sign as issued) and gives the pane a new one.
+pub fn consume(sign: &str) -> Option<(String, String)> {
     let want = normalize(sign);
     if want.split(' ').count() != 2 {
         return None;
@@ -269,7 +280,7 @@ pub fn consume(sign: &str) -> Option<String> {
     with(|s| {
         let uid = s.signs.iter().find(|(_, v)| normalize(v) == want).map(|(u, _)| u.clone())?;
         let old = s.signs.remove(&uid)?;
-        s.recent.push_back(old);
+        s.recent.push_back(old.clone());
         while s.recent.len() > RECENT {
             s.recent.pop_front();
         }
@@ -278,8 +289,17 @@ pub fn consume(sign: &str) -> Option<String> {
         s.signs.insert(uid.clone(), fresh);
         s.rotated = Some((uid.clone(), now_ms()));
         s.heard_at = Some(Instant::now());
-        Some(uid)
+        Some((uid, old))
     })
+}
+
+/// Signs rotate after every call, so by the time a queued call is read the pane
+/// holds a different one. Say up front that the heard sign was this pane's.
+pub fn addressed_body(sign: &str, body: &str) -> String {
+    format!(
+        "[radio] You were called as \u{201c}{sign}\u{201d}, this pane's call sign at the time of the call. \
+         Signs are single-use, so the next call will use a different one. This call is for you.\n\n{body}"
+    )
 }
 
 /// The caller is hertz-radio (or a session it owns).
@@ -321,7 +341,7 @@ pub async fn deliver(State(state): State<AppState>, headers: HeaderMap, Json(req
     if !is_radio_agent(&state, &headers).await {
         return (StatusCode::FORBIDDEN, Json(json!({"ok": false, "error": "only the radio agent can deliver by call sign"}))).into_response();
     }
-    let Some(pane) = consume(&req.callsign) else {
+    let Some((pane, sign)) = consume(&req.callsign) else {
         return (StatusCode::NOT_FOUND, Json(json!({"ok": false, "error": "no pane holds that call sign (it may have rotated)"}))).into_response();
     };
     push(&state.bridge, false).await;
@@ -331,7 +351,7 @@ pub async fn deliver(State(state): State<AppState>, headers: HeaderMap, Json(req
         pane: Some(pane),
         to_label: None,
         subject: req.subject,
-        body: req.body,
+        body: addressed_body(&sign, &req.body),
         idempotency_key: None,
     };
     crate::delivery_service::send_mail(State(state), headers, Json(send)).await.into_response()
@@ -342,6 +362,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn delivered_mail_names_the_sign_it_was_called_by() {
+        let body = addressed_body("Golf India", "Golf India, do you copy?");
+        assert!(body.starts_with("[radio] You were called as \u{201c}Golf India\u{201d}, this pane's call sign"));
+        assert!(body.ends_with("\n\nGolf India, do you copy?"));
+    }
+
+    #[test]
     fn signs_normalize_and_rotate_once() {
         assert_eq!(normalize("X-ray, Tango."), "xray tango");
         assert_eq!(normalize("xray tango"), normalize("X-ray Tango"));
@@ -349,7 +376,7 @@ mod tests {
             s.signs.clear();
             s.signs.insert("pane-a".into(), "Bravo Tango".into());
         });
-        assert_eq!(consume("bravo tango").as_deref(), Some("pane-a"));
+        assert_eq!(consume("bravo tango"), Some(("pane-a".to_string(), "Bravo Tango".to_string())));
         // The heard sign is spent; the pane has a new one.
         assert!(consume("Bravo Tango").is_none());
         let fresh = with(|s| s.signs.get("pane-a").cloned()).unwrap();

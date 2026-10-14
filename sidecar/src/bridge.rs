@@ -1377,7 +1377,16 @@ impl Bridge {
         };
         for (pane, armed_at) in notify_candidates {
             let Some(candidate) = self.classification_for(&pane).await else { continue };
-            if !matches!(candidate.notice, NoticeDisposition::Arm { .. }) { continue; }
+            let held_key = crate::held_input::mail_key(&pane);
+            let released = crate::held_input::HELD.lock().await.released(&held_key, now);
+            // Suppressed for focus: the window asks "Deliver now?" instead of waiting silently.
+            let focus_held = candidate.focus_protected && matches!(candidate.notice, NoticeDisposition::Suppress { .. });
+            if !matches!(candidate.notice, NoticeDisposition::Arm { .. }) && !(focus_held && released) {
+                if focus_held {
+                    self.hold_mail_notice(&pane, &held_key, now).await;
+                }
+                continue;
+            }
             let (unread, latest) = match crate::messaging::unread_for_pane(self, &pane).await {
                 Ok(found) => found,
                 Err(_) => continue, // Do not consume a notice on storage failure.
@@ -1385,14 +1394,7 @@ impl Bridge {
             let mut consumed = unread == 0;
             if unread > 0 {
                 let pid = self.inner.sessions.lock().await.get(&pane).map(|s| s.pid).unwrap_or(0);
-                let mut sender_name = String::new();
-                if let Some(m) = &latest {
-                    let name = match m.from_pane.as_str() {
-                        "" => None,
-                        uid => self.pane_display_name(uid).await,
-                    };
-                    sender_name = name.unwrap_or_else(|| m.from_label.clone());
-                }
+                let sender_name = self.mail_sender_name(latest.as_ref()).await;
                 let notice = mail_notice_text(
                     latest.as_ref().map(|m| NoticeMail {
                         from_name: &sender_name,
@@ -1404,7 +1406,7 @@ impl Bridge {
                 );
                 let response = self.guarded_input(&pane, serde_json::json!({
                     "type": "GuardedInput", "uid": pane, "pid": pid,
-                    "text": notice, "submit": true, "agent": true,
+                    "text": notice, "submit": true, "agent": true, "released": released,
                 })).await;
                 let definitely_not_sent = matches!(&response, Err(error)
                     if error == NO_CLIENT || error == NOT_SENT_DISCONNECTED);
@@ -1425,6 +1427,7 @@ impl Bridge {
                 }
             }
             if consumed {
+                self.clear_held_mail(&pane, &held_key).await;
                 let mut notif = self.inner.msg_notify.lock().await;
                 if let Some(st) = notif.get_mut(&pane) {
                     if st.armed_at == armed_at {
@@ -1464,6 +1467,52 @@ impl Bridge {
     /// Fire-and-forget a JSON message to Electron (no seq, no response wait).
     /// Used for sidecar-initiated pushes the renderer handles out-of-band
     /// (e.g. permission prompts, which reply over HTTP rather than the WS).
+    /// Display name for a mail's sender: its live pane name, else its label.
+    async fn mail_sender_name(&self, latest: Option<&crate::msgbus::mailbox::MessageEnvelope>) -> String {
+        let Some(m) = latest else { return String::new() };
+        let name = match m.from_pane.as_str() {
+            "" => None,
+            uid => self.pane_display_name(uid).await,
+        };
+        name.unwrap_or_else(|| m.from_label.clone())
+    }
+
+    /// The human is in `pane` with unread mail: show the window's "Deliver now"
+    /// toast once. Mail the agent already read closes it instead.
+    async fn hold_mail_notice(&self, pane: &str, key: &str, now: std::time::Instant) {
+        // Already showing: don't re-read the mailbox every tick.
+        if crate::held_input::HELD.lock().await.contains(key) { return; }
+        let (unread, latest) = match crate::messaging::unread_for_pane(self, pane).await {
+            Ok(found) => found,
+            Err(_) => return,
+        };
+        if unread == 0 {
+            self.clear_held_mail(pane, key).await;
+            return;
+        }
+        if !crate::held_input::HELD.lock().await.hold(key, pane, now) { return; }
+        let from = self.mail_sender_name(latest.as_ref()).await;
+        let subject = latest.as_ref().map(|m| m.subject.as_str()).unwrap_or_default();
+        let count = if unread == 1 { "1 message".to_string() } else { format!("{unread} messages") };
+        let preview = match crate::held_input::preview(subject) {
+            s if s.is_empty() => count,
+            s => format!("{count} · {s}"),
+        };
+        let sent = self.notify(serde_json::json!({
+            "type": "InputHeld", "opId": key, "pane": pane, "kind": "mail",
+            "from": if from.is_empty() { "Mail".to_string() } else { from }, "preview": preview,
+        })).await;
+        if sent.is_err() {
+            crate::held_input::HELD.lock().await.forget(key);
+        }
+    }
+
+    async fn clear_held_mail(&self, pane: &str, key: &str) {
+        if crate::held_input::HELD.lock().await.forget(key) {
+            let _ = self.notify(serde_json::json!({"type": "InputHeldCleared", "opId": key, "pane": pane})).await;
+        }
+    }
+
     pub async fn notify(&self, msg: serde_json::Value) -> Result<(), String> {
         let guard = self.inner.cmd_tx.lock().await;
         match guard.as_ref() {
