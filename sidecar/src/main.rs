@@ -25,6 +25,7 @@ mod messaging;
 mod delivery;
 mod delivery_service;
 mod held_input;
+mod deck_health;
 mod perms;
 mod process;
 mod host_telemetry;
@@ -4738,6 +4739,7 @@ async fn main() -> anyhow::Result<()> {
     host_telemetry::watcher::spawn(state.bridge.clone(), state.telemetry.clone());
     radio::spawn(state.bridge.clone());
     host_telemetry::netio::spawn(state.bridge.clone(), state.telemetry.clone());
+    deck_health::spawn();
     host_telemetry::proxy::spawn(state.telemetry.clone(), host_telemetry::proxy::port_for(args.port));
     // Grab lume handles before `state` is moved into the router below.
     let lume_for_flush = state.bridge.lume();
@@ -4769,6 +4771,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/radio/callsigns", axum::routing::get(radio::get_callsigns))
         .route("/api/radio/deliver", axum::routing::post(radio::deliver))
         .route("/api/radio/badges", axum::routing::get(radio::get_badges))
+        .route("/api/deck/health", axum::routing::get(deck_health::get_health))
         .route("/api/audio/play", axum::routing::post(post_audio_play))
         .route("/api/audio/probe", axum::routing::post(post_audio_probe))
         .route("/api/audio/mute", axum::routing::post(post_audio_mute))

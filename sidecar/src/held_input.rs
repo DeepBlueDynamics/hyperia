@@ -60,6 +60,12 @@ impl Held {
         self.ops.contains_key(op)
     }
 
+    /// (sends, mail notices) currently held for the human's focus.
+    pub fn counts(&self) -> (usize, usize) {
+        let mail = self.ops.keys().filter(|k| is_mail_key(k)).count();
+        (self.ops.len() - mail, mail)
+    }
+
     /// The human chose "Send now". False if the op isn't held (gone or delivered).
     pub fn release(&mut self, op: &str, now: Instant) -> bool {
         match self.ops.get_mut(op) {

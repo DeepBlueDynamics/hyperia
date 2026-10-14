@@ -146,6 +146,11 @@ async fn push(bridge: &Bridge, force: bool) {
     }
 }
 
+/// For the deck's health panel: is hertz up, how many signs, when last heard.
+pub fn summary() -> serde_json::Value {
+    with(|s| json!({"running": s.running, "signs": s.signs.len(), "heard_s_ago": s.heard_at.map(|t| t.elapsed().as_secs())}))
+}
+
 /// GET /api/radio/badges — local-only, for the Control Deck: each pane's sign,
 /// shown like the pane badges. Signs only let hertz-radio route a call.
 pub async fn get_badges(axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>) -> Response {
