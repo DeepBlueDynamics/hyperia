@@ -22,9 +22,10 @@ use serde_json::json;
 use crate::bridge::Bridge;
 use crate::AppState;
 
-const WORDS: [&str; 26] = [
+// No Quebec: both recognizers mishear it ("Tibet Gulf", "Cubac Golf", "Too big, Mike").
+const WORDS: [&str; 25] = [
     "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet", "Kilo", "Lima",
-    "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey",
+    "Mike", "November", "Oscar", "Papa", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey",
     "X-ray", "Yankee", "Zulu",
 ];
 /// Badges stay up this long after the last transmission heard.
@@ -82,15 +83,16 @@ fn hertz_url() -> Option<String> {
     (!u.is_empty() && !matches!(u.to_ascii_lowercase().as_str(), "off" | "none" | "disabled")).then_some(u)
 }
 
-/// Unbiased index in 0..26 from the OS CSPRNG.
+/// Unbiased index into WORDS from the OS CSPRNG.
 fn pick() -> usize {
+    let n = WORDS.len();
     loop {
         let mut b = [0u8; 1];
         if getrandom::getrandom(&mut b).is_err() {
             continue;
         }
-        if (b[0] as usize) < 26 * 9 {
-            return b[0] as usize % 26;
+        if (b[0] as usize) < 256 / n * n {
+            return b[0] as usize % n;
         }
     }
 }
@@ -376,6 +378,14 @@ mod tests {
         let body = addressed_body("Golf India", "Golf India, do you copy?");
         assert!(body.starts_with("[radio] You were called as \u{201c}Golf India\u{201d}, this pane's call sign"));
         assert!(body.ends_with("\n\nGolf India, do you copy?"));
+    }
+
+    #[test]
+    fn new_signs_never_use_quebec() {
+        let taken = HashSet::new();
+        for _ in 0..500 {
+            assert!(!new_sign(&taken, &VecDeque::new()).contains("Quebec"));
+        }
     }
 
     #[test]
