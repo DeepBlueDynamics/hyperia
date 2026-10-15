@@ -426,7 +426,8 @@ async fn post_tts(
     let spoken = if req.frame == Some(false) {
         req.text.trim().to_string()
     } else {
-        tts::radio_wrap(&recipient, &caller, &req.text)
+        let sign = speaker_pane.as_deref().and_then(radio::sign_for);
+        tts::radio_wrap(&recipient, &caller, sign.as_deref(), &req.text)
     };
     let requester = (!caller_raw.is_empty()).then_some(caller_raw.as_str());
     // Log the transmission as it goes on air (dashboard radio view + replay).

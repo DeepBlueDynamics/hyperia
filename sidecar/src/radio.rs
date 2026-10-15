@@ -146,6 +146,11 @@ async fn push(bridge: &Bridge, force: bool) {
     }
 }
 
+/// The pane's current call sign, while the radio runs (for the spoken sign-off).
+pub fn sign_for(pane: &str) -> Option<String> {
+    with(|s| s.running.then(|| s.signs.get(pane).cloned()).flatten())
+}
+
 /// For the deck's health panel: is hertz up, how many signs, when last heard.
 pub fn summary() -> serde_json::Value {
     with(|s| json!({"running": s.running, "signs": s.signs.len(), "heard_s_ago": s.heard_at.map(|t| t.elapsed().as_secs())}))
