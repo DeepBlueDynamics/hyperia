@@ -1086,6 +1086,7 @@ impl Bridge {
             shell_app_cmdline,
             window_id,
             pane_active,
+            tab_active,
             last_user_activity,
         ) = {
             let sessions = self.inner.sessions.lock().await;
@@ -1105,6 +1106,7 @@ impl Bridge {
                     .unwrap_or_default(),
                 info.window_id,
                 info.pane_active,
+                info.tab_active,
                 info.last_user_activity,
             )
         };
@@ -1130,7 +1132,8 @@ impl Bridge {
             .map(|t| t.elapsed().as_secs() < 15)
             .unwrap_or(false);
         let focus = FocusFacts {
-            pane_is_keyboard_focus: focused_window == Some(window_id) && pane_active,
+            // Same rule as main's paneProtected: the pane must be on the showing tab.
+            pane_is_keyboard_focus: focused_window == Some(window_id) && pane_active && tab_active,
             hyperia_foreground,
             actively_typed,
         };
@@ -3008,6 +3011,12 @@ mod tests {
             let background = bridge.classification_for("dead").await.expect("session");
             assert!(!background.focus_protected);
             assert!(matches!(background.pane_send, InputDisposition::Refuse { .. }));
+
+            // The active pane of a tab that isn't showing isn't where the human is.
+            *bridge.inner.app_foreground.lock().await = true;
+            bridge.inner.sessions.lock().await.get_mut("dead").unwrap().tab_active = false;
+            let hidden_tab = bridge.classification_for("dead").await.expect("session");
+            assert!(!hidden_tab.focus_protected);
         });
     }
 
