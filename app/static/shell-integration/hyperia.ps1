@@ -10,6 +10,11 @@ function prompt {
     $exitStatus = $global:LASTEXITCODE
     Write-Host -NoNewline "$([char]0x1b)]133;D;$exitStatus$([char]0x07)"
 
+    # A raw-mode program killed mid-run leaves Ctrl-C processing off, and
+    # PSReadLine restores that mode for every later command: ^C then queues
+    # as a keystroke instead of interrupting. Turn it back on each prompt.
+    try { [Console]::TreatControlCAsInput = $false } catch {}
+
     if ($env:HYPERIA_CTL_DIR -and (Test-Path "$env:HYPERIA_CTL_DIR\cd")) {
         $targetDir = Get-Content "$env:HYPERIA_CTL_DIR\cd" -Raw
         Remove-Item "$env:HYPERIA_CTL_DIR\cd" -Force -ErrorAction SilentlyContinue
