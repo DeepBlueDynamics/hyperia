@@ -114,7 +114,7 @@ pub struct GhostConfig {
     pub doors: crate::doors::DoorConfig,
     /// Hard context-window budget in tokens (`config.agent.context_tokens`,
     /// 0 = off). When >0 the compressor trims verbatim recent history so
-    /// system + tools + history fits (e.g. 8000 for Sailfish).
+    /// system + tools + history fits (e.g. 8000 for a small local model).
     pub context_tokens: usize,
     /// Maximus model configuration (optional, overrides environment/defaults)
     pub maximus_model: Option<String>,

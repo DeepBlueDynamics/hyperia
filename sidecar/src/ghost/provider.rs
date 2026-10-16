@@ -26,11 +26,6 @@ impl AnyProvider {
             "anthropic" => AnyProvider::Anthropic(AnthropicProvider::new(config)),
             "ollama" => AnyProvider::Ollama(OllamaProvider::new(config)),
             "openai" => AnyProvider::OpenAI(OpenAIProvider::new(config)),
-            // Sailfish is a local OpenAI-compatible endpoint (llama.cpp CUDA,
-            // http://localhost:22343/v1). It rides OpenAIProvider verbatim — the
-            // only difference is provider_name() reports "sailfish" (via the
-            // provider_label carried on OpenAIProvider from config.provider).
-            "sailfish" => AnyProvider::OpenAI(OpenAIProvider::new(config)),
             "gemini" => AnyProvider::Unsupported("gemini".into()),
             other => AnyProvider::Unsupported(other.to_string()),
         }
@@ -40,8 +35,7 @@ impl AnyProvider {
         match self {
             AnyProvider::Anthropic(_) => "anthropic",
             AnyProvider::Ollama(_) => "ollama",
-            // "openai" or "sailfish" — both ride OpenAIProvider; the label is
-            // carried from config.provider so doors/telemetry can tell them apart.
+            // Carried from config.provider, so doors/telemetry see the real id.
             AnyProvider::OpenAI(p) => &p.provider_label,
             AnyProvider::Unsupported(name) => name,
         }
@@ -1201,12 +1195,10 @@ pub struct OpenAIProvider {
     endpoint: String,
     /// Send `temperature: 0` on tool turns. True only when doors mode is active
     /// AND the endpoint is an OpenAI-compatible server (NOT api.openai.com) —
-    /// the Sailfish guide asks for temperature 0 on tool calls, and cloud
+    /// local models pick tools more reliably at temperature 0, and cloud
     /// OpenAI o-series models reject the `temperature` field outright.
     send_zero_temp: bool,
-    /// The configured provider id ("openai" or "sailfish"). Reported by
-    /// `AnyProvider::provider_name()` so a Sailfish run is distinguishable from
-    /// a stock OpenAI run even though they share this provider implementation.
+    /// The configured provider id, reported by `AnyProvider::provider_name()`.
     provider_label: String,
 }
 
@@ -1229,10 +1221,10 @@ impl OpenAIProvider {
             config.provider.clone()
         };
         Self {
-            // No request-level timeout on the client: the Sailfish appliance can
-            // take ~120 s to answer the first call after idle (model/graph warm,
-            // per HYPERIA_INTEGRATION.md). A reqwest timeout here would abort the
-            // warmup; instead we let the stream run and the shell shows progress.
+            // No request-level timeout on the client: a local model server can
+            // take minutes to answer the first call after idle (model warm-up).
+            // A reqwest timeout would abort that; the stream runs and the shell
+            // shows progress.
             client: reqwest::Client::new(),
             api_key: config.api_key.clone(),
             model,
@@ -1272,8 +1264,8 @@ impl OpenAIProvider {
         if max_tokens > 0 {
             // api.openai.com rejects `max_tokens` on reasoning/gpt-5.x models
             // ("use max_completion_tokens"); it accepts max_completion_tokens on
-            // all current chat models. OpenAI-COMPATIBLE servers (llama.cpp /
-            // Sailfish, vLLM, Ollama) generally only know `max_tokens`, so key
+            // all current chat models. OpenAI-COMPATIBLE servers (llama.cpp,
+            // vLLM, Ollama) generally only know `max_tokens`, so key
             // off the endpoint.
             if crate::models::uses_max_completion_tokens(&self.endpoint) {
                 body["max_completion_tokens"] = serde_json::json!(max_tokens);
@@ -1298,7 +1290,7 @@ impl OpenAIProvider {
                 .collect();
             body["tools"] = serde_json::json!(tool_defs);
 
-            // Sailfish/compat guide: deterministic tool selection wants
+            // Local/compatible servers: deterministic tool selection wants
             // temperature 0 on tool turns. Guarded to non-api.openai.com
             // endpoints (cloud o-series rejects `temperature`); see new().
             if self.send_zero_temp {
@@ -1321,7 +1313,7 @@ impl OpenAIProvider {
             let api_message = serde_json::from_str::<serde_json::Value>(&raw)
                 .ok()
                 .and_then(|j| j["error"]["message"].as_str().map(|s| s.to_string()));
-            // Name the ACTUAL provider, not "OpenAI" — Sailfish/vLLM/etc. ride
+            // Name the ACTUAL provider, not "OpenAI" — llama.cpp/vLLM/etc. ride
             // this same code path, and labeling every failure "OpenAI error"
             // makes a local model look like a cloud one. Include the host so
             // it's unambiguous which endpoint answered.

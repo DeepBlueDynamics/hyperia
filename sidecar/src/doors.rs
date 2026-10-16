@@ -3,7 +3,7 @@
 //!
 //! A **door** is a named category of tools. A small always-on **core** plus a
 //! bounded set of *open* doors is all a model ever sees at once, so a 4B local
-//! model (Sailfish, 8k context) or a token-billed cloud model never faces the
+//! model (8k context) or a token-billed cloud model never faces the
 //! full 100+ tool catalog.
 //!
 //! ## Two surfaces, one catalog
@@ -405,7 +405,7 @@ fn cap_from_env() -> usize {
 /// tool menu, a slim system prompt, and `temperature: 0`?
 ///
 /// True for Ollama, any OpenAI-compatible endpoint that is NOT `api.openai.com`
-/// (Sailfish, llama.cpp, vLLM, …), or a model whose name carries a small-
+/// (llama.cpp, vLLM, …), or a model whose name carries a small-
 /// parameter tag (`e4b`, `2b`, `3b`, `4b`, `mini-local`, …).
 pub fn is_small_model(provider: &str, model: &str, endpoint: &str) -> bool {
     // Single source of truth: crate::models (kept as a shim so existing
@@ -946,7 +946,7 @@ mod tests {
     fn is_small_model_matches_local_and_compat() {
         // Ollama is always small/local.
         assert!(is_small_model("ollama", "gemma2:9b", "http://localhost:11434"));
-        // OpenAI-compatible endpoint that isn't api.openai.com → Sailfish/compat.
+        // OpenAI-compatible endpoint that isn't api.openai.com → local/compat.
         assert!(is_small_model("openai", "gemma4-e4b", "http://localhost:22343"));
         // Small-parameter tags in the model name.
         assert!(is_small_model("anthropic", "some-2b-model", "https://api.anthropic.com"));
@@ -977,31 +977,8 @@ mod tests {
     }
 
     #[test]
-    fn resolve_auto_sailfish_endpoint_is_small() {
+    fn resolve_auto_local_compat_endpoint_is_small() {
         let dc = resolve_door_config_inner("auto", "openai", "gemma4-e4b", "http://localhost:22343", None, None);
-        assert!(dc.enabled);
-        assert!(dc.small);
-        assert_eq!(dc.cap, DEFAULT_TOOL_CAP);
-    }
-
-    #[test]
-    fn is_small_model_matches_sailfish_provider() {
-        // The "sailfish" provider id is always local/small regardless of model.
-        assert!(is_small_model("sailfish", "gemma4-e4b", "http://localhost:22343"));
-        assert!(is_small_model("sailfish", "anything", "http://localhost:22343"));
-    }
-
-    #[test]
-    fn resolve_auto_sailfish_provider_is_small_default_cap() {
-        // Phase 6: provider == "sailfish" classifies as small → tight cap 20.
-        let dc = resolve_door_config_inner(
-            "auto",
-            "sailfish",
-            "gemma4-e4b",
-            "http://localhost:22343",
-            None,
-            None,
-        );
         assert!(dc.enabled);
         assert!(dc.small);
         assert_eq!(dc.cap, DEFAULT_TOOL_CAP);

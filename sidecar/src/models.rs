@@ -27,11 +27,6 @@ pub fn default_model(provider: &str) -> &'static str {
         "openai" => "gpt-5-mini",
         "gemini" => "gemini-3-flash-preview",
         "ollama" => "gemma2:9b",
-        // Sailfish: the integration guide's reference client uses "gemma4-e4b"
-        // (gemma-4-E4B-it Q4_K_M). Only a fallback — the served id can swap
-        // (stock vs fine-tuned); authoritative source is GET /v1/models,
-        // probed live by ghost/api.rs get_agent_models.
-        "sailfish" => "gemma4-e4b",
         _ => "gemma2:9b",
     }
 }
@@ -44,7 +39,6 @@ pub fn model_defaults_json() -> serde_json::Value {
         "openai":    default_model("openai"),
         "gemini":    default_model("gemini"),
         "ollama":    default_model("ollama"),
-        "sailfish":  default_model("sailfish"),
     })
 }
 
@@ -86,7 +80,7 @@ pub fn needs_responses_api(model: &str) -> bool {
 
 /// api.openai.com rejects `max_tokens` on reasoning/gpt-5.x chat models
 /// ("use max_completion_tokens") but accepts max_completion_tokens on all
-/// current chat models. OpenAI-COMPATIBLE servers (llama.cpp / Sailfish,
+/// current chat models. OpenAI-COMPATIBLE servers (llama.cpp,
 /// vLLM, Ollama) generally only know `max_tokens` — key off the endpoint.
 pub fn uses_max_completion_tokens(endpoint: &str) -> bool {
     endpoint.contains("api.openai.com")
@@ -95,12 +89,12 @@ pub fn uses_max_completion_tokens(endpoint: &str) -> bool {
 /// Heuristic: is this a small / local model that benefits most from a tight
 /// tool menu, a slim system prompt, slimmed tool schemas, and temperature 0?
 ///
-/// True for Ollama and Sailfish, any OpenAI-compatible endpoint that is NOT
+/// True for Ollama, any OpenAI-compatible endpoint that is NOT
 /// api.openai.com (llama.cpp, vLLM, …), or a model name carrying a small-
 /// parameter tag.
 pub fn is_small_model(provider: &str, model: &str, endpoint: &str) -> bool {
     let p = provider.trim().to_lowercase();
-    if p == "ollama" || p == "sailfish" {
+    if p == "ollama" {
         return true;
     }
     if p == "openai" && !endpoint.contains("api.openai.com") {
@@ -134,7 +128,6 @@ mod tests {
 
     #[test]
     fn small_model_classification() {
-        assert!(is_small_model("sailfish", "gemma4-e4b", "http://localhost:22343"));
         assert!(is_small_model("ollama", "anything", "http://localhost:11434"));
         assert!(is_small_model("openai", "whatever", "http://localhost:8080"));
         assert!(!is_small_model("openai", "gpt-4o", "https://api.openai.com"));
@@ -143,7 +136,7 @@ mod tests {
 
     #[test]
     fn defaults_exist_for_all_providers() {
-        for p in ["anthropic", "openai", "gemini", "ollama", "sailfish"] {
+        for p in ["anthropic", "openai", "gemini", "ollama"] {
             assert!(!default_model(p).is_empty(), "no default for {p}");
         }
     }

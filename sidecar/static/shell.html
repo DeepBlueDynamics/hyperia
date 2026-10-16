@@ -2035,7 +2035,7 @@ async function bootCapabilities() {
 // wired at once (a frontier planner + a local model), and it's otherwise hard
 // to tell which is answering — so paint a blinking dot per enabled model, and
 // mark the ACTIVE agent provider so it's obvious what you're talking to.
-// Local liveness: sailfish from the services probe, ollama from caps. Frontier
+// Local liveness: ollama from caps. Frontier
 // liveness: keycheck (ok = usable key), the same authoritative signal the
 // config page dots use.
 async function renderModelLights(caps) {
@@ -2044,10 +2044,8 @@ async function renderModelLights(caps) {
   const active = (caps.agent && caps.agent.provider) ? caps.agent.provider : '';
   const chips = [];
   const ollama = caps.providers && caps.providers.ollama;
-  let sailfishUp = false, keys = {};
-  try { sailfishUp = !!((await (await fetch('/api/agent/services')).json()).services || {}).sailfish_api; } catch (_) {}
+  let keys = {};
   try { keys = (await (await fetch('/api/agent/keycheck')).json()).providers || {}; } catch (_) {}
-  if (sailfishUp) chips.push('sailfish');
   if (ollama && ollama.reachable && !ollama.disabled) chips.push('ollama');
   for (const p of ['anthropic', 'openai', 'gemini', 'grok']) {
     if (keys[p] === 'ok' || keys[p] === 'payment') chips.push(p);
@@ -2070,26 +2068,13 @@ async function printBootBanner(caps) {
   const provider = caps.agent && caps.agent.provider ? caps.agent.provider : '(none)';
   const model    = caps.agent && caps.agent.model    ? caps.agent.model    : '(none)';
 
-  // Local-provider status: ollama from caps, sailfish from the services probe.
+  // Local-provider status: ollama from caps.
   const ollama = caps.providers && caps.providers.ollama;
-  let sailfishUp = false;
-  try {
-    const svc = (await (await fetch('/api/agent/services')).json()).services || {};
-    sailfishUp = !!svc.sailfish_api;
-  } catch (_) {}
-
-  // Show the ACTIVE local provider's line first; only show the other if it's up.
   const line = (name, up, extra) => addRow('system', 'system=&gt;',
     `${name}: ${up ? '<em class="ok">reachable</em>' : '<em class="fail">unreachable</em>'}${up && extra ? ' at <code>' + escapeHtml(extra) + '</code>' : ''}`);
-  if (provider === 'sailfish') {
-    line('sailfish', sailfishUp, 'localhost:22343');
-    if (ollama && ollama.reachable) line('ollama', true, ollama.endpoint || '');
-  } else {
-    if (ollama && ollama.reachable) line('ollama', true, ollama.endpoint || '');
-    else if (ollama && ollama.disabled) addRow('system', 'system=&gt;', 'ollama: <em class="fail">disabled</em>');
-    else line('ollama', false);
-    if (sailfishUp) line('sailfish', true, 'localhost:22343');
-  }
+  if (ollama && ollama.reachable) line('ollama', true, ollama.endpoint || '');
+  else if (ollama && ollama.disabled) addRow('system', 'system=&gt;', 'ollama: <em class="fail">disabled</em>');
+  else line('ollama', false);
 
   addRow('system', 'system=&gt;', `agent: provider=<code>${escapeHtml(provider)}</code> model=<code>${escapeHtml(model)}</code>`);
   addRow('system', 'system=&gt;', `level: <em class="ok">${escapeHtml(caps.level)}</em>`);

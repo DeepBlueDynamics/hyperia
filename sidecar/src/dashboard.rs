@@ -483,18 +483,6 @@ async fn get_status_data(client: &reqwest::Client) -> serde_json::Value {
         .unwrap_or(crate::models::COMPRESSOR_DEFAULT_MODEL)
         .to_string();
 
-    // Sailfish (local inference) — configured via agent.services.sailfish.port.
-    let sailfish_port = raw_cfg["config"]["agent"]["services"]["sailfish"]["port"].as_u64();
-    let sailfish_reachable = match sailfish_port {
-        Some(p) => client
-            .get(format!("http://localhost:{p}/v1/models"))
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false),
-        None => false,
-    };
-
     serde_json::json!({
         "level": level,
         "vram_gb": vram,
@@ -508,11 +496,6 @@ async fn get_status_data(client: &reqwest::Client) -> serde_json::Value {
         "maximus": {
             "enabled": !ollama_disabled,
             "model": maximus_model,
-        },
-        "sailfish": {
-            "configured": sailfish_port.is_some(),
-            "port": sailfish_port,
-            "reachable": sailfish_reachable,
         },
         "agent": {
             "provider": active_provider,

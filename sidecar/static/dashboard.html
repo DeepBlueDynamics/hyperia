@@ -566,8 +566,6 @@ function renderServices(sys){
   si(fe.reachable?"up":"down","Ferricula",(fe.reachable?"up":"down")+" · "+(fe.base_url||"").replace(/^https?:\/\//,""));
   const kk = sys.kokoro||{};
   si(kk.model_present?"up":"na","Kokoro",kk.model_present?"ready":"model downloads on first use");
-  const sf = sys.sailfish||{};
-  if (sf.configured) si(sf.reachable?"up":"down","Sailfish",(sf.reachable?"up":"down")+" · :"+(sf.port||"?"));
   const tr = sys.transcription||{};
   si(tr.configured?(tr.reachable?"up":"down"):"na","Whisper",
      tr.configured?((tr.reachable?"up":"down")+" · "+(tr.target||"")):"not configured");
@@ -3252,12 +3250,11 @@ function pvRenderFiles(){
 
 function pvRenderPods(){
   const sys = (PV.win && PV.win.system) || {}, pr = sys.providers || {};
-  const tr = sys.transcription || {}, sf = sys.sailfish || {}, mx = sys.maximus || {};
+  const tr = sys.transcription || {}, mx = sys.maximus || {};
   const pods = [
     ["ollama", (pr.ollama || {}).reachable ? "up" : "dn"],
     ["ferricula", (sys.ferricula || {}).reachable ? "up" : "dn"],
     ["kokoro", (sys.kokoro || {}).model_present ? "up" : "na"],
-    ["sailfish", sf.configured ? (sf.reachable ? "up" : "dn") : "na"],
     ["whisper", tr.configured ? (tr.reachable ? "up" : "dn") : "na"],
     ["maximus", mx.enabled ? "up" : "na"],
     ["anthropic", (pr.anthropic || {}).has_token ? "up" : "na"],

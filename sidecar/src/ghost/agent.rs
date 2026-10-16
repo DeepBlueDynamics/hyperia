@@ -630,7 +630,7 @@ After cleanup, reply to the human and end the turn."
 
         // Effective context window. Explicit config (config.agent.context_tokens)
         // wins; otherwise assume the known small-model window (8k) for local/small
-        // providers (Sailfish/Ollama) so the budget guard actually engages — the
+        // providers (Ollama, local OpenAI-compatible) so the budget guard actually engages — the
         // config leaves this 0, which used to disable trimming entirely and let an
         // 8k model 400 with "exceeds context size". Cloud models have huge windows
         // and manage themselves, so they stay unbounded (0 = no trim).
