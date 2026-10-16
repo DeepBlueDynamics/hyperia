@@ -88,10 +88,11 @@ export async function ensureN8(): Promise<RunOutcome | undefined> {
 export async function pollAgentRun(
   triggerId: string,
   startedAt: number,
-  ctx: Pick<RunContext, 'sleep' | 'now'> = {}
+  ctx: Pick<RunContext, 'sleep' | 'now'> & {request?: typeof sidecarRequest} = {}
 ): Promise<RunOutcome> {
   const sleep = ctx.sleep || defaultSleep;
   const now = ctx.now || Date.now;
+  const request = ctx.request || sidecarRequest;
   let outcome: RunOutcome | undefined;
   while (!outcome) {
     if (now() - startedAt > N8_TIMEOUT_MS) {
@@ -99,10 +100,11 @@ export async function pollAgentRun(
       break;
     }
     await sleep(N8_POLL_MS);
-    const r = await sidecarRequest('GET', `/api/n8/run/${encodeURIComponent(triggerId)}`);
+    const r = await request('GET', `/api/n8/run/${encodeURIComponent(triggerId)}`);
     if (r.status === 404) {
       outcome = {status: 'failed', error: `nemesis8 lost trigger ${triggerId}`};
-    } else if (r.ok && r.data?.last_fired && r.data?.last_status) {
+    } else if (r.ok && r.data?.last_fired && r.data?.last_status && r.data.last_status !== 'running') {
+      // n8 marks a fired trigger 'running' until it finishes as 'ok' or 'error'.
       outcome =
         r.data.last_status === 'ok'
           ? {status: 'ok'}
@@ -110,7 +112,7 @@ export async function pollAgentRun(
     }
     // Other errors are treated as transient until the timeout.
   }
-  await sidecarRequest('DELETE', `/api/n8/run/${encodeURIComponent(triggerId)}`);
+  await request('DELETE', `/api/n8/run/${encodeURIComponent(triggerId)}`);
   return outcome;
 }
 
