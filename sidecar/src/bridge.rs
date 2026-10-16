@@ -301,6 +301,9 @@ impl MsgNotify {
 /// Min seconds between two message-notice fires for a pane. Short: it only merges
 /// a burst into one notice (which names the newest message and the unread count).
 const MSG_NOTIFY_COOLDOWN_SECS: u64 = 5;
+/// Focus protects a pane only this long after the human last clicked or typed
+/// there. Must match FOCUS_IDLE_RELEASE_MS in app/bridge.ts.
+const FOCUS_IDLE_RELEASE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 /// Retire completed notice bookkeeping after this interval. Pending notices survive
 /// focus delays; closing the pane removes its entry.
 const MSG_NOTIFY_TTL_SECS: u64 = 3600;
@@ -1131,9 +1134,11 @@ impl Bridge {
         let actively_typed = last_user_activity
             .map(|t| t.elapsed().as_secs() < 15)
             .unwrap_or(false);
+        // Clicked or typed in recently; a pane left selected while the human is away stops blocking.
+        let present = last_user_activity.is_some_and(|t| t.elapsed() < FOCUS_IDLE_RELEASE);
         let focus = FocusFacts {
             // Same rule as main's paneProtected: the pane must be on the showing tab.
-            pane_is_keyboard_focus: focused_window == Some(window_id) && pane_active && tab_active,
+            pane_is_keyboard_focus: present && focused_window == Some(window_id) && pane_active && tab_active,
             hyperia_foreground,
             actively_typed,
         };
@@ -2996,6 +3001,8 @@ mod tests {
                     cmdline: String::new(),
                     pid: 0,
                 });
+                // Clicked in a minute ago: still counts as present (not typing).
+                info.last_user_activity = Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
                 sessions.insert("dead".into(), info);
             }
             *bridge.inner.focused_window_id.lock().await = Some(10);
@@ -3017,6 +3024,16 @@ mod tests {
             bridge.inner.sessions.lock().await.get_mut("dead").unwrap().tab_active = false;
             let hidden_tab = bridge.classification_for("dead").await.expect("session");
             assert!(!hidden_tab.focus_protected);
+
+            // Left selected while the human is away: focus stops protecting it.
+            {
+                let mut sessions = bridge.inner.sessions.lock().await;
+                let info = sessions.get_mut("dead").unwrap();
+                info.tab_active = true;
+                info.last_user_activity = Some(std::time::Instant::now() - FOCUS_IDLE_RELEASE - std::time::Duration::from_secs(1));
+            }
+            let away = bridge.classification_for("dead").await.expect("session");
+            assert!(!away.focus_protected);
         });
     }
 

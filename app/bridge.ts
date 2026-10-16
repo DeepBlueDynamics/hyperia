@@ -294,10 +294,16 @@ function inputReserved(uid: string): boolean {
   return inputAttempts.has(uid);
 }
 
+// Focus alone protects a pane only while the human has clicked or typed there
+// recently; a pane left selected while they're away (on the radio) stops blocking.
+// Must match FOCUS_IDLE_RELEASE in sidecar/src/bridge.rs.
+const FOCUS_IDLE_RELEASE_MS = 5 * 60 * 1000;
+
 /** Human is typing in, or focused on, this pane: agent Enter must wait. */
 function paneProtected(uid: string, tracked: TrackedSession): boolean {
   const win = getHyperiaWindowById(tracked.windowId);
-  return isUserActive(uid) || !!(win?.isFocused() && tracked.tabActive && tracked.paneActive);
+  const present = Date.now() - (lastUserActivity.get(uid) || 0) < FOCUS_IDLE_RELEASE_MS;
+  return isUserActive(uid) || !!(present && win?.isFocused() && tracked.tabActive && tracked.paneActive);
 }
 
 // The sidecar counts a withheld Enter as consumed and never retries, so main
