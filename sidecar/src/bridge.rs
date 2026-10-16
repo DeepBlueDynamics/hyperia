@@ -454,6 +454,10 @@ struct BridgeInner {
     msg_notify: Mutex<HashMap<String, MsgNotify>>,
     /// Per-session output subscribers: uid → list of senders waiting for PTY bytes
     output_subs: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>,
+    /// Screen mirrors from the previous Electron link, by uid: (pid, screen).
+    /// A pane that re-registers with the same pid gets its screen back instead
+    /// of a blank one (an idle pane would otherwise read blank until it prints).
+    parked_screens: Mutex<HashMap<String, (u32, ScreenBuffer)>>,
     /// Lume-backed per-shell log store (BM25 search + pickle-to-disk).
     lume: crate::lume_store::LumeStore,
     /// Cross-pane access consent ledger (pending prompts + active grants).
@@ -505,6 +509,7 @@ impl Bridge {
                 idle_blocked: Mutex::new(HashMap::new()),
                 msg_notify: Mutex::new(HashMap::new()),
                 output_subs: Mutex::new(HashMap::new()),
+                parked_screens: Mutex::new(HashMap::new()),
                 lume: crate::lume_store::LumeStore::new(),
                 perms,
                 identity,
@@ -2171,6 +2176,20 @@ impl Bridge {
     }
 
     /// Handle an incoming message from Electron.
+    /// Clear the session table for a new Electron link, keeping each pane's
+    /// screen so a pane that re-registers with the same pid gets it back.
+    async fn park_sessions(&self) {
+        let mut sessions = self.inner.sessions.lock().await;
+        if sessions.is_empty() {
+            return;
+        }
+        tracing::info!("Clearing {} stale sessions from previous connection", sessions.len());
+        let parked: HashMap<String, (u32, ScreenBuffer)> =
+            sessions.drain().map(|(uid, info)| (uid, (info.pid, info.screen))).collect();
+        // Leftovers from the link before are dropped here.
+        *self.inner.parked_screens.lock().await = parked;
+    }
+
     async fn handle_message(&self, text: &str) {
         let msg: serde_json::Value = match serde_json::from_str(text) {
             Ok(v) => v,
@@ -2215,6 +2234,14 @@ impl Bridge {
                 if focused_window_id.is_none() {
                     *focused_window_id = Some(window_id);
                 }
+                drop(focused_window_id);
+                let screen = match self.inner.parked_screens.lock().await.remove(&uid) {
+                    Some((parked_pid, mut screen)) if parked_pid == pid && pid != 0 => {
+                        screen.resize(rows, cols);
+                        screen
+                    }
+                    _ => ScreenBuffer::new(rows, cols, 1000),
+                };
                 self.inner.sessions.lock().await.insert(
                     uid,
                     SessionInfo {
@@ -2232,7 +2259,7 @@ impl Bridge {
                         tab_order,
                         tab_active,
                         pane_active,
-                        screen: ScreenBuffer::new(rows, cols, 1000),
+                        screen,
                         // Honor the rect carried IN the register message (main
                         // sends the tracked session's current BSP). Hardcoding
                         // defaults here left any pane that (re)registered
@@ -2595,13 +2622,7 @@ async fn handle_socket(socket: WebSocket, bridge: Bridge) {
     let (mut ws_tx, ws_rx) = socket.split();
 
     // Clear stale sessions from any previous connection that didn't disconnect cleanly
-    {
-        let mut sessions = bridge.inner.sessions.lock().await;
-        if !sessions.is_empty() {
-            tracing::info!("Clearing {} stale sessions from previous connection", sessions.len());
-            sessions.clear();
-        }
-    }
+    bridge.park_sessions().await;
 
     // Create the command channel for this connection
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<String>();
@@ -2872,6 +2893,27 @@ mod tests {
         assert!(mail_notice_text(Some(mail("x", "", &long)), 1).contains("…"));
         assert_eq!(mail_notice_text(None, 2), "[Hyperia mail] New message (2 unread). Run msg_check to read.");
     }
+    #[test]
+    fn a_pane_that_re_registers_after_a_reconnect_keeps_its_screen() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let bridge = Bridge::new();
+            let b64 = |s: &str| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, s.as_bytes());
+            let reg = |pid: u32| serde_json::json!({"type": "SessionRegister", "uid": "p1", "pid": pid, "rows": 5, "cols": 20}).to_string();
+            bridge.handle_message(&reg(42)).await;
+            bridge.handle_message(&serde_json::json!({"type": "SessionData", "uid": "p1", "data": b64("PS C:> ")}).to_string()).await;
+            assert!(bridge.get_screen_text_by_uid("p1").await.contains("PS C:"));
+
+            bridge.park_sessions().await; // link reconnect
+            bridge.handle_message(&reg(42)).await;
+            assert!(bridge.get_screen_text_by_uid("p1").await.contains("PS C:"), "same pid keeps its screen");
+
+            bridge.park_sessions().await;
+            bridge.handle_message(&reg(43)).await; // a different process in that pane
+            assert!(!bridge.get_screen_text_by_uid("p1").await.contains("PS C:"), "new pid starts blank");
+        });
+    }
+
     fn session_info(window_id: u32, root_tab_uid: &str, split_label: &str, tab_active: bool, pane_active: bool) -> SessionInfo {
         SessionInfo {
             out_meter: Default::default(),
