@@ -33,6 +33,7 @@ mod lume_store;
 mod screen;
 mod stream;
 mod sticky_runs;
+mod stray_attach;
 mod util;
 mod workspace;
 mod settings;
@@ -5009,6 +5010,7 @@ async fn main() -> anyhow::Result<()> {
     // Idle monitor: ~2s tick. Watches panes that have an armed idle-callback
     // (and, later, pulses), classifies each from its cached screen, and fires on
     // a running->idle edge. Independent of any agent's loop.
+    stray_attach::spawn(bridge_for_monitor.clone());
     {
         let bridge = bridge_for_monitor;
         let delivery_bridge = bridge.clone();
