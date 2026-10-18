@@ -45,12 +45,13 @@ try {
             $line = $null
             $cursor = $null
             [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
-            if ($line -and $line.Trim()) {
+            # The marks must never stop Enter: a first word like "[Console]::Write(" is a bad wildcard to Get-Command.
+            if ($line -and $line.Trim()) { try {
                 Write-Host -NoNewline "$([char]0x1b)]133;C$([char]0x07)"
 
                 $argv0 = ($line -split '\s+')[0]
                 $appPath = ""
-                if ($argv0) {
+                if ($argv0 -and -not [System.Management.Automation.WildcardPattern]::ContainsWildcardCharacters($argv0)) {
                     $cmd = Get-Command $argv0 -ErrorAction SilentlyContinue
                     if ($cmd) {
                         $appPath = $cmd.Source
@@ -63,7 +64,7 @@ try {
                 $hyperia_pid = $PID
 
                 Write-Host -NoNewline "$([char]0x1b)]697;cmd=$b64Cmd;app=$b64App;argv0=$b64Argv0;pid=$hyperia_pid$([char]0x07)"
-            }
+            } catch {} }
             if ($oldEnterHandler) {
                 & $oldEnterHandler
             } else {
