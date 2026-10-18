@@ -2876,9 +2876,15 @@ export default class Term extends React.PureComponent<
 
   // A program that exits without undoing mouse/focus reporting leaves the shell
   // getting raw reports as typed text; switch them off once the prompt is back.
-  clearStrayInputModes() {
+  // On the step to idle, also leave an alt screen a dead full-screen program
+  // (e.g. a docker attach cut by sleep) never left.
+  clearStrayInputModes(justIdle = false) {
     const t = this.term;
-    if (!t || t.buffer.active.type === 'alternate') return;
+    if (!t) return;
+    if (t.buffer.active.type === 'alternate') {
+      if (!justIdle) return;
+      t.write('\x1b[?1049l\x1b[?1047l\x1b[?47l');
+    }
     if (t.modes.mouseTrackingMode === 'none' && !t.modes.sendFocusMode) return;
     t.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1004l');
   }
@@ -2887,7 +2893,9 @@ export default class Term extends React.PureComponent<
     // Keep the store's busy flag in sync (shellState prop or activeProgram state
     // may have just changed). Deduped inside publishBusy.
     this.publishBusy();
-    if (this.props.shellState?.state === 'idle') this.clearStrayInputModes();
+    if (this.props.shellState?.state === 'idle') {
+      this.clearStrayInputModes(prevProps.shellState?.state !== 'idle');
+    }
     const sessionCwd = (this.props as any).sessionCwd;
     const prevSessionCwd = (prevProps as any).sessionCwd;
     if (sessionCwd && sessionCwd !== prevSessionCwd) {
