@@ -2579,8 +2579,9 @@ impl Bridge {
             current
         };
         if current {
-            self.inner.sessions.lock().await.clear();
-            tracing::info!("Electron disconnected ({reason}); {failed} pending command(s) failed, sessions cleared");
+            // Park, not clear: the next link's re-registers get their screens back.
+            self.park_sessions().await;
+            tracing::info!("Electron disconnected ({reason}); {failed} pending command(s) failed, sessions parked");
         } else {
             // A newer socket already owns the bridge and re-registered its sessions.
             tracing::info!("Stale Electron socket closed ({reason}); {failed} pending command(s) failed");
@@ -2904,7 +2905,10 @@ mod tests {
             bridge.handle_message(&serde_json::json!({"type": "SessionData", "uid": "p1", "data": b64("PS C:> ")}).to_string()).await;
             assert!(bridge.get_screen_text_by_uid("p1").await.contains("PS C:"));
 
-            bridge.park_sessions().await; // link reconnect
+            // A real drop goes through on_disconnect, then the new link parks again.
+            let gen = bridge.inner.conn_gen.load(Ordering::SeqCst);
+            bridge.on_disconnect(gen, "test").await;
+            bridge.park_sessions().await;
             bridge.handle_message(&reg(42)).await;
             assert!(bridge.get_screen_text_by_uid("p1").await.contains("PS C:"), "same pid keeps its screen");
 
