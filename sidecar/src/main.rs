@@ -2237,6 +2237,10 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
                         // cost the whole 8s window and dropped the command.
                         state.bridge.resolve_create_early(&req.requester, true).await;
                     }
+                    // Both paths run the create without has_create, so use up a "Just once" here.
+                    if scope == "once" {
+                        state.bridge.perms().has_create(&req.requester).await;
+                    }
                 } else if state.bridge.take_create(&req.requester).await.is_none() {
                     state.bridge.resolve_create_early(&req.requester, false).await;
                 }
