@@ -16,6 +16,12 @@ test('pane access: interactive scope + duration rows, flashing-tab tail', (t) =>
   }
 });
 
+test("pane access to the pane you're in doesn't claim a flashing tab", (t) => {
+  const v = consentVariant('drive', true);
+  t.is(v.tail, "— that's the pane you're in. Approving releases the waiting operation.");
+  t.false(v.tail.includes('flashing'));
+});
+
 test('messaging: fixed "This recipient" chip, keeps the For row, delivery tail', (t) => {
   const v = consentVariant('message:agent:bob');
   t.is(v.kind, 'message');

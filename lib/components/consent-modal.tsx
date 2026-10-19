@@ -111,6 +111,8 @@ export default function ConsentModal(): React.ReactElement | null {
     const sess = s?.sessions?.sessions?.[req.targetPane];
     return consentTargetName(req, (sess && (sess.shellName || sess.title)) || undefined);
   });
+  // The pane you're in never flashes, so the prompt mustn't say it does.
+  const targetIsHere = useSelector((s: any) => !!req && s?.ui?.activeUid === req.targetPane);
 
   // No ACTIVE prompt — but pending (expired/snoozed) requests collapse into a
   // persistent pill instead of vanishing. Click re-opens the full prompt. The
@@ -134,7 +136,7 @@ export default function ConsentModal(): React.ReactElement | null {
   }
 
   // Wording + which rows apply (pane access / messaging / mailbox binding).
-  const variant = consentVariant(req.action);
+  const variant = consentVariant(req.action, targetIsHere);
   const subject = consentSubject(req);
 
   const act = (decision: 'allow' | 'deny') => {

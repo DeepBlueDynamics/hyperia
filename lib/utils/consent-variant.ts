@@ -16,7 +16,8 @@ export type ConsentVariant = {
   showDuration: boolean;
 };
 
-export function consentVariant(action?: string): ConsentVariant {
+/** `here`: the target is the pane the human is in (its tab doesn't flash). */
+export function consentVariant(action?: string, here = false): ConsentVariant {
   if (action?.startsWith('message:')) {
     return {
       kind: 'message',
@@ -49,7 +50,9 @@ export function consentVariant(action?: string): ConsentVariant {
   return {
     kind: 'access',
     verb: ' wants to control ',
-    tail: '— its tab is flashing 🔔. Approving releases the waiting operation.',
+    tail: here
+      ? "— that's the pane you're in. Approving releases the waiting operation."
+      : '— its tab is flashing 🔔. Approving releases the waiting operation.',
     accessChip: null,
     showDuration: true
   };
