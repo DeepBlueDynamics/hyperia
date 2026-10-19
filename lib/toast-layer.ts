@@ -42,6 +42,20 @@ export function probeToastLayer(): Promise<boolean> {
   return probe;
 }
 
+// Main gave up on the layer for this window: every toast goes back to the DOM.
+const readyListeners = new Set<(ok: boolean) => void>();
+try {
+  ipcRenderer.on('toast-layer:failed', () => {
+    if (available === false) return;
+    available = false;
+    probe = Promise.resolve(false);
+    setToastsOccludeWebPanes(true);
+    readyListeners.forEach((cb) => cb(false));
+  });
+} catch {
+  /* no ipc (tests) */
+}
+
 /** Synchronous view of the probe — false until it has resolved true. */
 export function toastLayerReady(): boolean {
   return available === true;
@@ -162,8 +176,10 @@ export function useToastLayer(): boolean {
     void probeToastLayer().then((ok) => {
       if (alive) setReady(ok);
     });
+    readyListeners.add(setReady);
     return () => {
       alive = false;
+      readyListeners.delete(setReady);
     };
   }, []);
   return ready;

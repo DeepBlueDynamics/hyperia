@@ -18,7 +18,9 @@
 // focus-never-steal: nothing here ever focuses the layer. A click on it does,
 // natively — so after any click we hand focus straight back to the host.
 
-import {resolve} from 'path';
+import {appendFileSync, mkdirSync} from 'fs';
+import {homedir} from 'os';
+import {join, resolve} from 'path';
 
 import {BrowserWindow, WebContentsView, app, ipcMain} from 'electron';
 
@@ -73,7 +75,37 @@ interface LayerEntry {
   cssH: number;
   zoom: number;
   hasItems: boolean;
+  // Whether the view is showing right now.
+  shown: boolean;
   onResize: () => void;
+}
+
+// How long a layer gets to show what it was sent before the host falls back to DOM.
+const SHOW_DEADLINE_MS = 2000;
+
+// Main's stdout goes nowhere on an installed build: keep layer failures on disk.
+let logWrites = 0;
+function logFailure(line: string): void {
+  console.warn(`[toast-layer] ${line}`);
+  if (logWrites++ >= 100) return;
+  try {
+    const dir = join(homedir(), '.hyperia', 'logs');
+    mkdirSync(dir, {recursive: true});
+    appendFileSync(
+      join(dir, 'renderer-errors.log'),
+      `${new Date().toISOString()} [toast-layer] ${line}
+`
+    );
+  } catch {
+    /* logging must never throw */
+  }
+}
+
+// The layer couldn't show this window's toasts: the host draws them itself.
+function fallBack(win: BrowserWindow, anchor: ToastLayerAnchor, reason: string): void {
+  logFailure(`${anchor} layer failed (${reason}); window ${win.id} falls back to DOM toasts`);
+  if (!win.isDestroyed() && !win.webContents.isDestroyed())
+    win.webContents.send('toast-layer:failed', {anchor, reason});
 }
 
 // Keyed by `${win.id}:${anchor}`.
@@ -111,6 +143,7 @@ function position(entry: LayerEntry): void {
 
 function applyVisible(entry: LayerEntry): void {
   const show = entry.hasItems && entry.loaded && entry.cssW > 0 && entry.cssH > 0;
+  entry.shown = show;
   entry.view.setVisible(show);
   reportBounds(entry);
 }
@@ -190,6 +223,7 @@ function ensureLayer(win: BrowserWindow, anchor: ToastLayerAnchor): LayerEntry |
       cssH: 0,
       zoom: win.webContents.getZoomFactor() || 1,
       hasItems: false,
+      shown: false,
       onResize: () => position(entry)
     };
     layers.set(key, entry);
@@ -202,8 +236,8 @@ function ensureLayer(win: BrowserWindow, anchor: ToastLayerAnchor): LayerEntry |
     wc.on('will-navigate', (e) => e.preventDefault());
     // The page has no devtools of its own — surface its errors in main's log.
     wc.on('console-message', (_e, level, message, line) => {
-      if (level >= 2)
-        console.warn(`[toast-layer] page ${level === 3 ? 'error' : 'warning'}: ${message} (line ${line})`);
+      if (level === 3) logFailure(`${anchor} page error: ${message} (line ${line})`);
+      else if (level === 2) console.warn(`[toast-layer] page warning: ${message} (line ${line})`);
     });
     wc.on('did-finish-load', () => {
       if (layers.get(key) !== entry) return;
@@ -222,7 +256,8 @@ function ensureLayer(win: BrowserWindow, anchor: ToastLayerAnchor): LayerEntry |
         if (!win.isDestroyed() && layers.get(key) === entry) win.webContents.focus();
       }, REFOCUS_MS);
     });
-    wc.on('render-process-gone', () => {
+    wc.on('render-process-gone', (_e, details) => {
+      logFailure(`${anchor} page gone: ${details?.reason || 'unknown'}`);
       // Rebuilt lazily on the next render; the renderer's DOM fallback is not
       // needed for a one-off crash.
       dropLayer(key);
@@ -230,12 +265,12 @@ function ensureLayer(win: BrowserWindow, anchor: ToastLayerAnchor): LayerEntry |
     win.on('resize', entry.onResize);
     win.once('closed', () => dropLayer(key));
     void wc.loadFile(resolveToastLayerHtmlPath()).catch((err) => {
-      console.warn('[toast-layer] load failed:', err);
+      logFailure(`${anchor} load failed: ${err}`);
       dropLayer(key);
     });
     return entry;
   } catch (err) {
-    console.warn('[toast-layer] unavailable, keeping DOM toasts:', err);
+    logFailure(`${anchor} view could not be created: ${err}`);
     broken = true;
     dropLayer(key);
     return null;
@@ -296,8 +331,18 @@ export function initToastLayer(): void {
     // Don't build a view just to tell it there's nothing to show.
     if (items.length === 0 && !layers.has(layerKey(win, anchor))) return;
     const entry = ensureLayer(win, anchor);
-    if (!entry) return;
+    if (!entry) {
+      if (items.length) fallBack(win, anchor, broken ? 'layers unavailable' : 'no view');
+      return;
+    }
     pushRender(entry, {items, theme: payload?.theme, zoom: payload?.zoom, anchor});
+    if (items.length) {
+      setTimeout(() => {
+        if (layers.get(entry.key) !== entry) return fallBack(win, anchor, 'view dropped');
+        if (entry.hasItems && !entry.shown)
+          fallBack(win, anchor, `never shown: loaded=${entry.loaded} size=${entry.cssW}x${entry.cssH}`);
+      }, SHOW_DEADLINE_MS);
+    }
   });
 
   // Layer → main: its rendered content size, in the layer's CSS px.
