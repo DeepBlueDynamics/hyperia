@@ -154,12 +154,35 @@ export async function runPane(note: NoteData, ctx: RunContext): Promise<RunOutco
       ? {status: 'halted', error: `Pane ${label} closed; schedule paused`, pause: true}
       : {status: 'halted', error: `Pane ${label} is closed`};
   }
-  const r = await sidecarRequest('POST', '/api/pane/send', {
-    pane: pane.uid,
+  return sendToPane(pane.uid, note, ctx);
+}
+
+/**
+ * Agent pane: the sticky prompt via pane_send. The sidecar refuses that (409) for
+ * a pane at a shell prompt; there the note's text runs as the command instead.
+ */
+export async function sendToPane(
+  uid: string,
+  note: NoteData,
+  ctx: Pick<RunContext, 'runId' | 'history'> & {request?: typeof sidecarRequest}
+): Promise<RunOutcome> {
+  const request = ctx.request || sidecarRequest;
+  const key = `sticky-${note.id}-${ctx.runId}`;
+  const r = await request('POST', '/api/pane/send', {
+    pane: uid,
     text: buildPanePrompt(note, ctx.history),
     submit: true,
-    idempotency_key: `sticky-${note.id}-${ctx.runId}`
+    idempotency_key: key
   });
-  if (!r.ok) return {status: 'failed', error: replyError(r)};
-  return {status: 'ok'};
+  if (r.ok) return {status: 'ok'};
+  const command = (note.text || '').trim();
+  if (r.status !== 409 || !command) return {status: 'failed', error: replyError(r)};
+  const run = await request('POST', '/api/terminal/run', {
+    pane: uid,
+    text: command,
+    submit: true,
+    idempotency_key: `${key}-shell`
+  });
+  if (run.ok) return {status: 'ok'};
+  return {status: 'failed', error: `${replyError(r)} / as a shell command: ${replyError(run)}`};
 }
