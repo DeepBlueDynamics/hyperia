@@ -73,6 +73,10 @@ const contextMenuTemplate = (
   menu.push({label: 'Clear Buffer', accelerator: commandKeys['editor:clearBuffer'], click: cmd('editor:clearBuffer')});
   menu.push({label: 'Find', accelerator: commandKeys['editor:search'], click: cmd('editor:search')});
 
+  // Paste again at the bottom: the menu is long, so it is near wherever it opens.
+  menu.push(separator);
+  menu.push({label: 'Paste', role: 'paste', accelerator: commandKeys['editor:paste']});
+
   return menu;
 };
 

@@ -85,7 +85,10 @@ export function showStickyContextMenu(
       ]
     : [];
 
+  // Paste first and last: the menu is long, so it is near wherever it opens.
   const template: Electron.MenuItemConstructorOptions[] = [
+    {label: 'Paste', role: 'paste'},
+    {type: 'separator'},
     {
       label: 'Color',
       submenu: [
@@ -144,10 +147,6 @@ export function showStickyContextMenu(
       label: 'Copy',
       enabled: hasSelection,
       role: 'copy'
-    },
-    {
-      label: 'Paste',
-      role: 'paste'
     },
     {
       label: 'Copy All',
@@ -212,7 +211,9 @@ export function showStickyContextMenu(
     {
       label: 'Delete',
       click: () => event.sender.send('sticky-delete')
-    }
+    },
+    {type: 'separator'},
+    {label: 'Paste', role: 'paste'}
   ];
 
   const menu = Menu.buildFromTemplate(link ? linkMenu : template);

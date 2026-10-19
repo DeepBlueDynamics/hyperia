@@ -492,7 +492,15 @@ function wireWebContents(initialUid: string, wc: WebContents) {
         {type: 'separator'}
       );
     }
+    // Paste first and last: the menu is long, so it is near wherever it opens.
+    const paste: Electron.MenuItemConstructorOptions = {
+      label: 'Paste',
+      enabled: !!params.editFlags?.canPaste,
+      click: () => wc.paste()
+    };
     items.push(
+      paste,
+      {type: 'separator'},
       {label: 'Back', enabled: wc.navigationHistory.canGoBack(), click: () => goHistory(wc, 'back')},
       {label: 'Forward', enabled: wc.navigationHistory.canGoForward(), click: () => goHistory(wc, 'forward')},
       {label: 'Reload', click: () => wc.reload()},
@@ -507,7 +515,6 @@ function wireWebContents(initialUid: string, wc: WebContents) {
     }
     items.push(
       {label: 'Copy', enabled: !!params.editFlags?.canCopy, click: () => wc.copy()},
-      {label: 'Paste', enabled: !!params.editFlags?.canPaste, click: () => wc.paste()},
       {label: 'Cut', enabled: !!params.editFlags?.canCut, click: () => wc.cut()},
       {label: 'Select All', click: () => wc.selectAll()},
       {type: 'separator'},
@@ -533,7 +540,9 @@ function wireWebContents(initialUid: string, wc: WebContents) {
           ]),
       {type: 'separator'},
       {label: 'New Stickys', click: () => void ipcMain.emit('new-sticky', {})},
-      {label: 'Search Stickys', click: () => void ipcMain.emit('search-stickies')}
+      {label: 'Search Stickys', click: () => void ipcMain.emit('search-stickies')},
+      {type: 'separator'},
+      paste
     );
     Menu.buildFromTemplate(items).popup({window: entry.win});
   });
