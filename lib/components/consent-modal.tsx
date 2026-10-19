@@ -13,6 +13,7 @@ import {
 } from '../permissions-bus';
 import {onToastLayerAction, setLayerToasts, useToastLayer} from '../toast-layer';
 import {consentSubject, consentTargetName, consentVariant} from '../utils/consent-variant';
+import {refocusTermIfLost} from '../utils/refocus-term';
 import {useSuppressWebPanes} from '../utils/web-pane-suppress';
 
 import './consent-modal.css';
@@ -142,10 +143,12 @@ export default function ConsentModal(): React.ReactElement | null {
   const act = (decision: 'allow' | 'deny') => {
     setBusy(true);
     setError('');
-    void respond(req, decision, scope, duration).catch((err: unknown) => {
-      setError(err instanceof Error ? err.message : 'Approval was not recorded. Please retry.');
-      setBusy(false);
-    });
+    void respond(req, decision, scope, duration)
+      .then(() => refocusTermIfLost())
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : 'Approval was not recorded. Please retry.');
+        setBusy(false);
+      });
   };
 
   return (
@@ -156,7 +159,10 @@ export default function ConsentModal(): React.ReactElement | null {
       // click anywhere in the window was killing agents' requests (and while
       // the prompt was up, this full-window layer ate every hover/click — the
       // "all the icons are broken" reports). Only the explicit buttons decide.
-      onClick={() => expireRequest(req.targetPane, req.id)}
+      onClick={() => {
+        expireRequest(req.targetPane, req.id);
+        refocusTermIfLost();
+      }}
     >
       <div onClick={(e) => e.stopPropagation()} className="hy-consent-card">
         {/* Who + what + where */}

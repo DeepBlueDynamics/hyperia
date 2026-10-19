@@ -8,6 +8,7 @@ import React from 'react';
 import rpc from '../rpc';
 import {onToastLayerAction, setLayerToasts, useToastLayer} from '../toast-layer';
 import type {ToastLayerItem} from '../toast-layer';
+import {refocusTermIfLost} from '../utils/refocus-term';
 
 import './held-input-toast.css';
 
@@ -81,6 +82,7 @@ export default function HeldInputToast(): React.ReactElement | null {
   const decide = React.useCallback(
     (opId: string, choice: string) => {
       if (choice === 'send') release(opId);
+      if (choice === 'later') refocusTermIfLost();
       if (choice === 'send' || choice === 'later') drop(opId);
     },
     [drop]
