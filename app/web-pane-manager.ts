@@ -237,8 +237,19 @@ export async function capturePaneJpeg(uid: string, w: number, h: number, quality
 // Whole-window screenshot: the renderer plus its on-screen web panes painted
 // at their bounds. Replaces desktopCapturer, which leaked ~33 threads and
 // ~140 MB of main-process memory per call on Windows.
+// capturePage waits for a frame, and a view that isn't painting never sends one.
+const CAPTURE_TIMEOUT_MS = 4000;
+function captureWithin(wc: Electron.WebContents, what: string): Promise<Electron.NativeImage> {
+  return Promise.race([
+    wc.capturePage(),
+    new Promise<never>((_r, reject) =>
+      setTimeout(() => reject(new Error(`${what} did not paint within ${CAPTURE_TIMEOUT_MS} ms`)), CAPTURE_TIMEOUT_MS)
+    )
+  ]);
+}
+
 export async function captureWindowImage(win: BrowserWindow, maxWidth: number): Promise<Electron.NativeImage> {
-  let img = await win.webContents.capturePage();
+  let img = await captureWithin(win.webContents, 'the window');
   if (img.isEmpty()) return img;
   const {width: W, height: H} = img.getSize();
   const content = win.getContentBounds();
@@ -252,7 +263,7 @@ export async function captureWindowImage(win: BrowserWindow, maxWidth: number): 
         if (b.width < 1 || b.height < 1 || b.x < -1000 || b.y < -1000) continue;
         const w = Math.round(b.width * sf);
         const h = Math.round(b.height * sf);
-        const pane = (await entry.view.webContents.capturePage()).resize({width: w, height: h});
+        const pane = (await captureWithin(entry.view.webContents, 'a web pane')).resize({width: w, height: h});
         const ps = pane.getSize();
         blitBitmap(bmp, W, H, pane.toBitmap(), ps.width, ps.height, Math.round(b.x * sf), Math.round(b.y * sf));
       } catch {
