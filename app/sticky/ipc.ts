@@ -10,10 +10,12 @@ import {N8_INSTALL_URL, n8ConfigPath} from './runs/runners';
 import {listOpenPanes, replyError, sidecarRequest} from './runs/sidecar';
 import {clearRun, pauseRun, runNow, setRun, startScheduler} from './scheduler';
 import {handleStickyHighlight} from './security';
-import {readAllNotes} from './store';
+import {readAllNotes, setResult} from './store';
 import {buildStickysSummary} from './summary';
 import type {StickyRun} from './types';
 import {applyStickyFit, closeStickyNote, createStickyNote, hideAllStickys, hideSticky, showAllStickys} from './window';
+
+const RESULT_MAX_BYTES = 256 * 1024;
 
 function registerRunIpc(): void {
   ipcMain.handle('sticky-run-set', (_event, id: string, run: StickyRun) => setRun(id, run, {human: true}));
@@ -23,6 +25,12 @@ function registerRunIpc(): void {
   ipcMain.handle('sticky-run-history', (_event, id: string, limit?: number) =>
     readHistory(id, Number.isInteger(limit) && (limit as number) > 0 ? (limit as number) : 50)
   );
+  // The human edited or cleared the result side (same cap as the sidecar's).
+  ipcMain.handle('sticky-result-set', (_event, id: string, result: string) => {
+    const text = typeof result === 'string' ? result : '';
+    if (Buffer.byteLength(text) > RESULT_MAX_BYTES) return false;
+    return setResult(id, text);
+  });
   ipcMain.handle('sticky-run-panes', async () => {
     const r = await listOpenPanes();
     return r.ok ? r.panes : [];

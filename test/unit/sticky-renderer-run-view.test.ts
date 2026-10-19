@@ -163,3 +163,58 @@ test('run-view: history renders newest-first records with markdown results', (t)
   s.view.renderHistory(empty, []);
   t.is(empty.textContent, 'No runs recorded yet.');
 });
+
+// Footer buttons in order, by label.
+const buttons = (footer: FakeEl) => footer.children.filter((c) => c.className === 'rf-btn');
+const click = (b: FakeEl) =>
+  b.listeners.click.forEach((fn) => fn({preventDefault: () => undefined, stopPropagation: () => undefined}));
+const byLabel = (footer: FakeEl, label: string) => buttons(footer).find((b) => b.textContent.startsWith(label))!;
+
+test('run-view: the result is its own side; the footer link flips to it and back', (t) => {
+  const s = setup({result: '**Done.**'});
+  t.is(s.resultEl.style.display, 'none');
+  t.is(s.footerEl.style.display, '');
+  click(byLabel(s.footerEl, '↻ result'));
+  t.is(s.resultEl.style.display, '');
+  t.true(s.body.classList.contains('side-result'));
+  t.truthy(byLabel(s.footerEl, 'edit'));
+  click(byLabel(s.footerEl, '↻ note'));
+  t.is(s.resultEl.style.display, 'none');
+  t.false(s.body.classList.contains('side-result'));
+});
+
+test('run-view: a new result while on the note side marks the flip link', (t) => {
+  const s = setup({});
+  t.is(s.footerEl.style.display, 'none');
+  s.handlers['sticky-result']({}, 'fresh');
+  t.is(byLabel(s.footerEl, '↻ result').textContent, '↻ result ●');
+  click(byLabel(s.footerEl, '↻ result'));
+  click(byLabel(s.footerEl, '↻ note'));
+  t.is(byLabel(s.footerEl, '↻ result').textContent, '↻ result');
+});
+
+test('run-view: the human can edit the result and save it', async (t) => {
+  const s = setup({result: 'old'});
+  s.view.flip('result');
+  click(byLabel(s.footerEl, 'edit'));
+  const editor = s.resultEl.children[0] as any;
+  t.is(editor.value, 'old');
+  editor.value = 'new';
+  click(byLabel(s.footerEl, 'save'));
+  await new Promise((r) => setImmediate(r));
+  t.deepEqual(s.invoked.at(-1), ['sticky-result-set', 'n-1', 'new']);
+  t.is(s.resultEl.innerHTML, '<p>new</p>');
+  t.truthy(byLabel(s.footerEl, 'edit'));
+});
+
+test('run-view: clear takes a second click, then flips back to the note', async (t) => {
+  const s = setup({result: 'old'});
+  s.view.flip('result');
+  click(byLabel(s.footerEl, 'clear'));
+  t.is(byLabel(s.footerEl, 'clear').textContent, 'clear? click again');
+  t.false(s.invoked.some((a) => a[0] === 'sticky-result-set'));
+  click(byLabel(s.footerEl, 'clear'));
+  await new Promise((r) => setImmediate(r));
+  t.deepEqual(s.invoked.at(-1), ['sticky-result-set', 'n-1', '']);
+  t.is(s.resultEl.style.display, 'none');
+});

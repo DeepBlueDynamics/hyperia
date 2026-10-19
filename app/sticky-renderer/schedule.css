@@ -94,16 +94,25 @@
 .hist-err { color: #c0392b; font-size: 11px; }
 .hist-empty { opacity: 0.6; font-style: italic; }
 
-/* Prompt / Result / Footer layout */
-body.has-result .note-find-wrap { flex: 1 1 35%; min-height: 2.4em; }
+/* Two sides: the prompt (note) or the result fills the sticky; the footer flips. */
+body.side-result .note-find-wrap { display: none; }
 .run-result {
-  flex: 1 1 65%; min-height: 0; overflow: auto;
-  border-top: 1px dashed rgba(0,0,0,0.25); margin-top: 4px; padding: 4px 2px 2px;
+  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 2px;
   font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
   font-size: calc(var(--sticky-font-size) * 0.7); line-height: 1.4;
   user-select: text; cursor: auto;
 }
-.run-result.empty { font-style: italic; opacity: 0.55; flex: 0 0 auto; }
+.run-result.empty { font-style: italic; opacity: 0.55; }
+.run-result-edit {
+  width: 100%; height: 100%; box-sizing: border-box; resize: none; border: none; outline: none;
+  background: rgba(0,0,0,0.04); border-radius: 4px; padding: 4px;
+  font: inherit; color: inherit; line-height: 1.4;
+}
+.content.flip-in { animation: sticky-flip-in 0.22s ease-out; }
+@keyframes sticky-flip-in {
+  from { transform: perspective(900px) rotateY(80deg); opacity: 0.4; }
+  to { transform: none; opacity: 1; }
+}
 .run-footer {
   flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px;
   border-top: 1px solid rgba(0,0,0,0.15); margin-top: 3px; padding-top: 3px;

@@ -40,6 +40,7 @@ const INVOKE = Object.freeze([
   'sticky-run-now',
   'sticky-run-pause',
   'sticky-run-history',
+  'sticky-result-set',
   'sticky-run-panes',
   'sticky-n8-status',
   'sticky-n8-start'

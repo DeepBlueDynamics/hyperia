@@ -126,6 +126,11 @@ function boot(opts) {
   fileBind.start();
   links.start(ctx);
   // Run state comes from the saved note first; sticky-run-state pushes update it.
+  try {
+    ctx.storage = win.localStorage;
+  } catch {
+    ctx.storage = null;
+  }
   ctx.runView = runViewMod.createRunView(ctx);
   scheduleUi.start(ctx);
   // Title copy/rename before mode dispatch — original sticky.html ~1516.
