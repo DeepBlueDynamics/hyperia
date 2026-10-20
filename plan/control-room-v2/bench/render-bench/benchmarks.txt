@@ -1,0 +1,37 @@
+=== CONTROL ROOM v2: RENDER & TRANSPORT BENCHMARK SUITE ===
+Host Platform: Linux x64 container / Intel Core Ultra 9 285K
+Compiler: rustc 1.98.1 (release profile, opt-level = 3)
+Wire Alignment: Explicit 32B FrameHeader + 16B SpanHeader + 16B BinaryCell16 (Little-Endian)
+Fidelity Mode: 100% equivalent color/attribute mapping across JSON and Binary
+Cargo Package: /workspace/3dterminal/scratch/control-room-v2/render-bench
+
+--- 0. ROUNDTRIP FIDELITY & CODEC AUDIT ---
+Roundtrip Test PASS: Decoded 240 cells. Hash = 0xd8d80c3472654467. No data loss.
+
+--- 1. WIRE FORMAT & SERIALIZATION BENCHMARKS ---
+SCENARIO A: 2 dirty rows/pane (16 panes = 32 rows = 3,840 cells)
+  - JSON: payload=110192 B (107.61 KB), encode=1.457 ms (91.083 us/pane), 60fps=6.31 MB/s (52.89 Mbps)
+  - Binary 16B: payload=61984 B (60.53 KB), encode=0.024 ms (1.518 us/pane), decode=0.007 ms (0.442 us/pane), 60fps=3.55 MB/s (29.75 Mbps) [Encode speedup: 60.0x]
+
+SCENARIO B: Full 40 rows/pane (16 panes = 640 rows = 76,800 cells - TUI Redraw)
+  - JSON: payload=2179056 B (2.08 MB), encode=45.384 ms (2.836 ms/pane), 60fps=124.69 MB/s (1045.95 Mbps)
+  - Binary 16B: payload=1239072 B (1.18 MB), encode=1.311 ms (81.910 us/pane), decode=0.119 ms (7.461 us/pane), 60fps=70.90 MB/s (594.75 Mbps) [Encode speedup: 34.6x]
+
+--- 2. FONT RASTERIZATION & ATLAS BENCHMARKS ---
+fontdue Font::from_bytes: 13.179 ms (one-time cold parse)
+fontdue rasterize 95 ASCII glyphs (size 16px): 0.038 ms total (0.395 us/glyph)
+font8x8 lookup 95 ASCII glyphs: 0.470 us total (4.951 ns/glyph) [dummy=15245000]
+
+--- 3. VT100 PARSER CPU BENCHMARK ---
+vt100 Parser::process(120 B): 0.621 us
+vt100 Parser::process(1.0 KB): 5.660 us
+vt100 Parser::process(4.0 KB): 22.743 us
+vt100 Parser::process(16.0 KB): 92.786 us
+vt100 formatted seed reproduction (contents_formatted + new parser refeed, 4071 B): 64.071 us
+  * NOTE: contents_formatted reproduces screen text/attributes, but drops partial escape states; atomic bootstrap requires a parser snapshot fork.
+
+--- 4. SERVER-SIDE CPU 4K COMPOSITING BENCHMARK ---
+CPU 4K buffer fill(0) (clear): 2.529 ms
+CPU 4K buffer copy_from_slice (memcpy): 7.786 ms
+CPU blit 2 dirty rows/pane (3,840 cells across all 16 panes): 0.314 ms total (19.600 us/pane)
+CPU blit full screen (76,800 cells across all 16 panes): 14.687 ms total

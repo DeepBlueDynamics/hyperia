@@ -1,0 +1,33 @@
+{
+  "command": "node scratch/control-room-v2/cell-wire-bench.mjs",
+  "date": "2026-09-24",
+  "node": "v24.21.0",
+  "platform": "linux",
+  "arch": "x64",
+  "cpu": "Intel(R) Core(TM) Ultra 9 285K",
+  "logicalCPUs": 24,
+  "warmup": 2000,
+  "iterations": 10000,
+  "results": [
+    {
+      "dirtyRows": 2,
+      "bytes": 61984,
+      "medianUs": 3.895,
+      "p99Us": 39.003,
+      "elapsedMs": 61.669051,
+      "cpuMs": 69.482,
+      "payloadMBps60": 3.71904
+    },
+    {
+      "dirtyRows": 40,
+      "bytes": 1239072,
+      "medianUs": 95.539,
+      "p99Us": 668.621,
+      "elapsedMs": 1334.400367,
+      "cpuMs": 1347.408,
+      "payloadMBps60": 74.34432
+    }
+  ],
+  "checksum": 46,
+  "caveat": "Synthetic Node preallocated pack+decode, established dictionary. Excludes VT parser, damage, buffer allocation, sockets, GPU and physical latency; no Rust CPU qualification."
+}
