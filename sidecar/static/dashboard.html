@@ -175,7 +175,7 @@
   body.proto > :not(.topbar):not(#proto):not(#pv-ed):not(script){display:none !important}
   body.proto .tb-right .ghost{display:none}
   body:not(.proto) #proto{display:none}
-  #proto{flex:1;min-height:0;overflow:hidden;display:grid;grid-template-rows:auto auto 128px minmax(0,1fr) 150px;grid-template-columns:minmax(0,1fr) 370px;gap:8px;padding:8px 10px 10px;
+  #proto{flex:1;min-height:0;overflow:hidden;display:grid;grid-template-rows:auto auto 128px minmax(0,1fr) 130px 24px;grid-template-columns:minmax(0,1fr) 370px;gap:8px;padding:8px 10px 10px;
     background:#05070b;font-family:var(--mono);color:#cbd5e1;align-content:start}
   .pv-p{border:1px solid #1b2433;background:#070a10;min-width:0}
   .pv-t{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#7c8aa0;padding:7px 10px 4px;
@@ -234,7 +234,9 @@
   .pv-key i.dot{width:6px;height:6px;border-radius:50%}
   /* Fits the window: fixed-height stat rows, the ring takes the rest. */
   .pv-toprow{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) minmax(0,1.2fr);gap:8px;min-height:0}
-  .pv-botrow{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:8px;min-height:0}
+  .pv-botrow{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr);gap:8px;min-height:0}
+  .pv-spark{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:0 10px;min-height:24px;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#7c8aa0;white-space:nowrap}
+  .pv-spark canvas{flex:1;min-width:0;height:16px;display:block}.pv-spark b{color:#7c8aa0;font-weight:500}.pv-spark i{font-style:normal}
   .pv-col{display:flex;flex-direction:column;min-height:0}
   .pv-col > canvas{flex:1;min-height:0;width:100%;display:block}
   .pv-fill{flex:1;min-height:0;display:flex}
@@ -385,17 +387,17 @@
       <div class="pv-key">
         <span><i style="background:#f59e0b"></i>mail</span><span><i style="background:#38bdf8"></i>pane access</span>
         <span><i style="background:#e5e7eb"></i>system mail</span><span><i class="dot" style="background:#ef4444"></i>edit &lt;60s</span>
-        <span><i style="background:#fb923c"></i>bar: file edit (length = lines)</span><span><i style="background:#c084fc"></i>bar: file write (length = bytes)</span>
-        <span><i style="background:#4ade80"></i>bar: create</span><span><i style="background:#e11d48"></i>bar: delete</span><span><i style="background:#94a3b8"></i>bar: rename</span>
-        <span><i style="background:#fde68a"></i>bar: mail</span>
-        <span><i style="background:#7dd3fc"></i>bar: pane access</span>
+        <span><i style="background:#fb923c"></i>file edit (length = lines)</span><span><i style="background:#c084fc"></i>file write (length = bytes)</span>
+        <span><i style="background:#4ade80"></i>create</span><span><i style="background:#e11d48"></i>delete</span><span><i style="background:#94a3b8"></i>rename</span>
+        <span><i style="background:#fde68a"></i>mail</span>
+        <span><i style="background:#7dd3fc"></i>pane access</span>
         <span><i class="dot" style="background:#fb923c"></i>centre: files, threaded to the panes changing them</span><span><i class="dot" style="background:#f8fafc"></i>tip: last minute</span>
       </div></div>
   </div>
   <div class="pv-botrow">
-    <div class="pv-p pv-col"><div class="pv-t"><span>Model token flow | in · out | 30 min</span><b id="pv-tokrate"></b></div><canvas id="pv-flow"></canvas></div>
     <div class="pv-p pv-col"><div class="pv-t"><span>Agent ↔ agent mail | by sender</span><span id="pv-mail-n"></span></div><canvas id="pv-donut"></canvas></div>
   </div>
+  <div class="pv-p pv-spark" title="Model tokens per 15 s, last 30 min. In above the line, out below (own scale)."><span>tokens <i style="color:#38bdf8">in</i>/<i style="color:#f59e0b">out</i></span><canvas id="pv-flow"></canvas><b id="pv-tokrate"></b></div>
 </section>
 
 <div class="svcbar" id="svcbar"><span class="empty">connecting to services…</span></div>
@@ -1217,9 +1219,11 @@ function pvDrawRing(){
   pvDrawOutput(ctx, drawn, pos, R, k);
   pvDrawRadio(ctx, pos, R, cx, cy);
 
-  // Edge bars: one per real event. New ones grow out, expired ones shrink away.
+  // Edge bars: one stacked column per agent. New segments grow in, expired
+  // ones shrink out and the stack closes up. Newest nearest the rim.
   const wall = Date.now();
   const barColor = {...PV_OP_COLOR, mail: "#fde68a", system: "#e5e7eb", access: "#7dd3fc", consent: "#a7f3d0"};
+  const maxColHeight = 90;
   for (const a of drawn) {
     const n = a.node;
     let bars = PV.fibAnim.get(n.id); if (!bars) { bars = new Map(); PV.fibAnim.set(n.id, bars); }
@@ -1231,17 +1235,34 @@ function pvDrawRing(){
       b.target = f.len; b.kind = f.kind; b.ts = f.ts;
     }
     const dimN = sel && n.id !== sel ? .28 : 1;
+    // Ease all bars, collect active ones for stacking.
+    const active = [];
     for (const [key, b] of bars) {
       if (!want.has(key)) b.target = 0;
       b.len += (b.target - b.len) * k;
       if (!want.has(key) && b.len < .5) { bars.delete(key); continue; }
-      const th = a.theta + b.u * PV.span * .92, depth = (Math.sin(th + rot) + 1) / 2;
-      const p1 = pos(th, R+2), p2 = pos(th, R+2+b.len*(.7+.3*depth));
-      ctx.globalAlpha = (.35 + .6*depth) * a.alpha * dimN;
-      ctx.strokeStyle = barColor[b.kind] || "#94a3b8"; ctx.lineWidth = PV_OP_COLOR[b.kind] ? 1.4 : 1.1;
-      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
-      if (wall - (b.ts || 0) < 60000) { ctx.fillStyle = "#f8fafc"; ctx.fillRect(p2.x-1.2, p2.y-1.2, 2.4, 2.4); }
+      active.push(b);
     }
+    if (active.length === 0) { a.colHeight = 0; continue; }
+    // Newest first (nearest the rim), older pushed outward.
+    active.sort((x, y) => (y.ts || 0) - (x.ts || 0));
+    // Log-ish cap so one huge write can't run off-screen.
+    const totalRaw = active.reduce((s, b) => s + b.len, 0);
+    const colScale = totalRaw <= maxColHeight ? 1 : maxColHeight * (1 + Math.log2(totalRaw / maxColHeight) * .5) / totalRaw;
+    const depth = (Math.sin(a.theta + rot) + 1) / 2, th = a.theta;
+    let acc = 0;
+    for (let i = 0; i < active.length; i++) {
+      const b = active[i];
+      const sl = b.len * colScale;
+      const r1 = R + 2 + acc, r2 = r1 + Math.max(0, sl - 1);
+      acc += sl + 1;
+      const p1 = pos(th, r1), p2 = pos(th, r2);
+      ctx.globalAlpha = (.35 + .6*depth) * a.alpha * dimN;
+      ctx.strokeStyle = barColor[b.kind] || "#94a3b8"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+      if (i === 0 && wall - (b.ts || 0) < 60000) { ctx.fillStyle = "#f8fafc"; ctx.fillRect(p1.x-1.2, p1.y-1.2, 2.4, 2.4); }
+    }
+    a.colHeight = acc;
   }
   ctx.globalAlpha = 1;
 
@@ -1265,7 +1286,7 @@ function pvDrawRing(){
     const placed = [];
     ctx.textBaseline = "middle";
     for (const a of order) {
-      const n = a.node, on = n.id === sel, p0 = pos(a.theta, R + 92);
+      const n = a.node, on = n.id === sel, p0 = pos(a.theta, Math.max(R + 92, R + 2 + (a.colHeight || 0) + 14));
       const p = {x: p0.x*vw.z + vw.x, y: p0.y*vw.z + vw.y};
       if (p.x < -200 || p.x > w + 200 || p.y < -20 || p.y > h + 20) continue;
       ctx.font = (on ? "700 10px " : "9px ")+PV_MONO;
@@ -3087,24 +3108,19 @@ function pvRenderPods(){
 
 function pvDrawFlow(){
   const {ctx, w, h} = pvFit($("pv-flow"));
-  const cut = Date.now() - 1800000, s = hist.filter((x) => x.t >= cut), rIn = [], rOut = [];
-  for (let i = 1; i < s.length; i++) { const dt = (s[i].t - s[i-1].t) / 60000;
-    rIn.push(dt > 0 ? Math.max(0, (s[i].in - s[i-1].in) / dt) : 0); rOut.push(dt > 0 ? Math.max(0, (s[i].out - s[i-1].out) / dt) : 0); }
-  if (rIn.length < 2) { $("pv-tokrate").textContent = ""; pvCanvasNote(ctx, w, h, "collecting token samples…"); return; }
-  const last = (rIn[rIn.length-1] || 0) + (rOut[rOut.length-1] || 0);
-  $("pv-tokrate").textContent = pvK(last)+" tok / min";
-  const max = Math.max(1, ...rIn, ...rOut);
-  const line = (pts, color, scale) => {
-    ctx.beginPath();
-    pts.forEach((v, i) => { const x = (i/(pts.length-1))*w, y = h - 6 - (v/max)*scale*(h-14); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-    ctx.strokeStyle = color; ctx.lineWidth = 1.3; ctx.stroke();
-  };
-  ctx.strokeStyle = "#0f1622"; ctx.beginPath(); ctx.moveTo(0, h-6); ctx.lineTo(w, h-6); ctx.stroke();
-  line(rIn, "#38bdf8", 1);
-  // Output is tiny next to input; draw it on its own scale so it's visible.
-  const maxOut = Math.max(1, ...rOut); line(rOut.map((v) => v*max/maxOut), "#f59e0b", .55);
-  ctx.font = "9px "+PV_MONO; ctx.fillStyle = "#38bdf8"; ctx.fillText("IN "+pvK(rIn[rIn.length-1])+"/min", 8, 12);
-  ctx.fillStyle = "#f59e0b"; ctx.fillText("OUT "+pvK(rOut[rOut.length-1])+"/min (own scale)", 120, 12);
+  const now = Date.now(), cut = now - 1800000, s = hist.filter((x) => x.t >= cut);
+  if (s.length < 3) { $("pv-tokrate").textContent = ""; pvCanvasNote(ctx, w, h, "collecting…"); return; }
+  // 15 s bins over 30 min; in rises, out hangs below, each on its own scale.
+  const N = 120, bIn = new Array(N).fill(0), bOut = new Array(N).fill(0);
+  for (let i = 1; i < s.length; i++) { const k = Math.min(N-1, Math.floor((s[i].t - cut) / 15000));
+    bIn[k] += Math.max(0, s[i].in - s[i-1].in); bOut[k] += Math.max(0, s[i].out - s[i-1].out); }
+  const sum = (a) => a.slice(-4).reduce((x, y) => x + y, 0);
+  $("pv-tokrate").textContent = pvK(sum(bIn))+" in · "+pvK(sum(bOut))+" out / min";
+  const mi = Math.max(1, ...bIn), mo = Math.max(1, ...bOut), bw = w / N, mid = Math.round(h*.62);
+  for (let i = 0; i < N; i++) { const x = i*bw, bwid = Math.max(1, bw - 1);
+    if (bIn[i]) { const v = Math.max(1, (bIn[i]/mi)*(mid-1)); ctx.fillStyle = "#38bdf8"; ctx.fillRect(x, mid - v, bwid, v); }
+    if (bOut[i]) { const v = Math.max(1, (bOut[i]/mo)*(h-mid-1)); ctx.fillStyle = "#f59e0b"; ctx.fillRect(x, mid + 1, bwid, v); }
+  }
 }
 
 function pvDrawDonut(){
