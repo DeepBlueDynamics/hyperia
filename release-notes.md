@@ -8,6 +8,7 @@ The dashboard's proto_viz becomes a live 3D overwatch of everything your agents 
 - **Files above the floor.** Files agents touched in the last 15 minutes float above the disk as a directory tree, with folders as junctions (`crates/` links its crates). Threads drop to the panes that changed them, and dotted threads to the panes that only read them. History mode shows the last 24 hours or 7 days.
 - **Edit in place.** Double-click a file to open it in an editor window: tabs, line numbers, syntax colours, find/replace, go to line. Saves are conflict-checked against changes an agent made meanwhile. Markdown (and text files that read as Markdown) has a **Rendered** view, including README HTML like `<div align="center">`. Links in it work.
 - **Screens.** Hover a pane's slice to see its live terminal on a little retro monitor at the rim. Click it and the camera flies in until the screen fills the view; the ring keeps turning below. Click again to fly out. **▣ screens** turns them off.
+- **Web panes on the ring.** A web pane stands on the floor like any other, with a live picture of the page, where it's browsing and when it's busy.
 - **Activity.** A working pane's name gets a halo that pulses with its output and spins while it prints.
 - **Network.** Containers hang off a blue marble (Docker or Podman) below a NET uplink. Received traffic drops down into the marble and branches out to each container; sent traffic rises. Agents running directly on your machine link straight to the uplink. Idle chatter looks idle; busy traffic stands out.
 - **Radio.** Every spoken transmission is logged with its audio. While one plays, waves and a live audio spectrum radiate from the agent that sent it. The radio panel lists them, newest first, with the summary and a replay button.
@@ -27,6 +28,9 @@ When hertz radio may reach an agent pane, the pane gets a two-word call sign (li
 
 - **Mail notices** no longer get held when you've left Hyperia for another app. Hyperia now reports whether it's in front every couple of seconds, so one missed focus change can't leave a pane's notices waiting.
 - **Shell state survives a sidecar reconnect.** A reconnect no longer wipes what each pane is running, which had stopped mail notices to agents.
+- **Web panes report the page they're on**, not an internal id, so a web-only tab reads as the site it's showing.
+- **A program that left mouse or focus reporting on** no longer strands the terminal in that mode after it exits.
+- **Host agent counts are right:** reads register, a save isn't counted as a new file, and nothing is counted twice.
 - **Pane names** survive a sidecar restart.
 - **Renaming a tab:** selecting text in the rename box no longer ends the rename.
 
