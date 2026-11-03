@@ -152,7 +152,8 @@ impl DashboardState {
 // Route handlers
 // ---------------------------------------------------------------------------
 
-/// Embedded seed page — written to disk on first serve, then DISK WINS. Editing
+/// Embedded seed page — written to disk on first serve and on upgrade, otherwise
+/// DISK WINS (see sync_dashboard_seed). Editing
 /// `~/.hyperia/dashboard/index.html` updates the live page (~1.5s reload poll)
 /// with no rebuild/reinstall (plan/dashboard-live.md).
 const DASHBOARD_SEED: &str = include_str!("../static/dashboard.html");
@@ -181,16 +182,54 @@ fn dashboard_disk_path() -> std::path::PathBuf {
     dirs_home().join(".hyperia").join("dashboard").join("index.html")
 }
 
-/// GET /dashboard — disk-first: serve ~/.hyperia/dashboard/index.html when
-/// present (seeding it from the embedded page on first run), embedded otherwise.
+/// FNV-1a 64 — stable across Rust versions (unlike DefaultHasher), so a stamp
+/// written by one build is comparable by the next.
+fn fnv1a64(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+/// Keep the disk page in step with the build. Disk wins only WITHIN a build:
+/// `.seed` records the hash of the seed last written. When the embedded seed
+/// changes (an upgrade), the disk page is replaced — after backing it up to
+/// `index.html.bak-<ms>` if it was hand-edited. Without this, the first-ever
+/// seed was served forever and upgrades never reached the dashboard.
+fn sync_dashboard_seed(disk: &std::path::Path) {
+    let Some(dir) = disk.parent() else { return };
+    let stamp_path = dir.join(".seed");
+    let seed_hash = fnv1a64(DASHBOARD_SEED.as_bytes());
+    let stamp = std::fs::read_to_string(&stamp_path).ok().map(|s| s.trim().to_string());
+    if disk.is_file() && stamp.as_deref() == Some(seed_hash.as_str()) {
+        return; // already on this build's seed; any edits since are the user's
+    }
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(cur) = std::fs::read(disk) {
+        let cur_hash = fnv1a64(&cur);
+        let pristine = cur_hash == seed_hash || stamp.as_deref() == Some(cur_hash.as_str());
+        if !pristine {
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            if std::fs::copy(disk, dir.join(format!("index.html.bak-{ms}"))).is_err() {
+                return; // never overwrite edits we couldn't back up
+            }
+        }
+    }
+    if std::fs::write(disk, DASHBOARD_SEED).is_ok() {
+        let _ = std::fs::write(&stamp_path, &seed_hash);
+    }
+}
+
+/// GET /dashboard — disk-first: serve ~/.hyperia/dashboard/index.html, re-seeded
+/// from the embedded page on first run and on upgrade (see sync_dashboard_seed).
 pub async fn get_dashboard(State(_state): State<DashboardState>) -> Html<String> {
     let disk = dashboard_disk_path();
-    if !disk.is_file() {
-        if let Some(dir) = disk.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(&disk, DASHBOARD_SEED);
-    }
+    sync_dashboard_seed(&disk);
     match std::fs::read_to_string(&disk) {
         Ok(page) => Html(page),
         Err(_) => Html(DASHBOARD_SEED.to_string()),
@@ -200,7 +239,11 @@ pub async fn get_dashboard(State(_state): State<DashboardState>) -> Html<String>
 /// GET /api/dashboard/version — mtime of the disk page; the page polls this and
 /// reloads itself when it changes (the live-edit loop).
 pub async fn get_dashboard_version() -> (StatusCode, String) {
-    let v = std::fs::metadata(dashboard_disk_path())
+    // Re-seed here too, so a page left open across an upgrade sees the mtime
+    // change and reloads itself onto the new build's page.
+    let disk = dashboard_disk_path();
+    sync_dashboard_seed(&disk);
+    let v = std::fs::metadata(&disk)
         .and_then(|m| m.modified())
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())

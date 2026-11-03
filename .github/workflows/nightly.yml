@@ -57,15 +57,23 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile --network-timeout 300000
 
+      # Linux: the sidecar's TTS stack (rodio → cpal) compiles against ALSA —
+      # without libasound2-dev the cargo build fails at alsa-sys. Mirrors build.yml.
+      - name: Install Linux sidecar build deps (ALSA for rodio/cpal)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+
       # Build sidecar — macOS uses --target so the binary lands where
       # bin/cp-sidecar.js reads from (target/<triple>/release/).
       - name: Build sidecar (release, default target)
         if: matrix.os != 'macos-latest'
         run: cargo build --release --manifest-path sidecar/Cargo.toml
 
+      # Intel mac: --no-default-features drops the `tts` feature — ort ships no
+      # prebuilt ONNX Runtime for x86_64-apple-darwin. Mirrors build.yml.
       - name: Build sidecar x86_64 (macOS)
         if: matrix.os == 'macos-latest'
-        run: cargo build --release --manifest-path sidecar/Cargo.toml --target x86_64-apple-darwin
+        run: cargo build --release --manifest-path sidecar/Cargo.toml --target x86_64-apple-darwin --no-default-features
 
       - name: Build sidecar ARM64 (macOS)
         if: matrix.os == 'macos-latest'
