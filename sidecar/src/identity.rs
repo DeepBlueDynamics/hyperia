@@ -232,19 +232,29 @@ impl IdentityStore {
     }
 
     fn load() -> Vec<AgentRecord> {
-        match std::fs::read_to_string(Self::path()) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-            Err(_) => Vec::new(),
+        let path = Self::path();
+        let Ok(s) = std::fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        match serde_json::from_str(&s) {
+            Ok(agents) => agents,
+            Err(e) => {
+                // Keep the unreadable file: the next persist would replace every identity.
+                let bad = path.with_extension("json.bad");
+                let _ = std::fs::copy(&path, &bad);
+                tracing::error!("agents.json is unreadable ({e}); kept a copy at {}", bad.display());
+                Vec::new()
+            }
         }
     }
 
     fn persist(agents: &[AgentRecord]) {
-        let path = Self::path();
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        if let Ok(json) = serde_json::to_string_pretty(agents) {
-            let _ = std::fs::write(&path, json);
+        // Atomic: a crash mid-write must not truncate every agent's credential.
+        let written = serde_json::to_value(agents)
+            .map_err(|e| e.to_string())
+            .and_then(|doc| crate::util::write_json_file_atomic(&Self::path(), &doc).map_err(|e| e.to_string()));
+        if let Err(e) = written {
+            tracing::warn!("agents.json persist failed: {e}");
         }
     }
 

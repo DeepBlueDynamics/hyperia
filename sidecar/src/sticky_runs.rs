@@ -451,14 +451,29 @@ pub fn prompt_locked(note: &serde_json::Value) -> bool {
 
 pub const LOCK_MESSAGE: &str = "Pause or unschedule this sticky before editing its prompt";
 
+pub const APPROVED_LOCK_MESSAGE: &str = "Unschedule this sticky to change its prompt: its run was approved \
+     for the prompt as written. Arming it again asks the human.";
+
+/// A run that drives an agent or types into a pane is approved for one prompt.
+fn approval_bound(note: &serde_json::Value) -> bool {
+    run_obj(note).is_some_and(|r| matches!(r.get("target").and_then(|t| t.as_str()), Some("agent" | "pane")))
+}
+
 /// The server-side lock: a changed prompt on an armed run is refused (409)
 /// for every caller but System. `result` is never locked.
 pub fn check_prompt_edit(note: &serde_json::Value, new_text: Option<&str>, is_system: bool) -> Result<(), &'static str> {
     let Some(t) = new_text else { return Ok(()) };
-    if is_system || !prompt_locked(note) || note["text"].as_str().unwrap_or("") == t {
+    if is_system || note["text"].as_str().unwrap_or("") == t {
         return Ok(());
     }
-    Err(LOCK_MESSAGE)
+    if prompt_locked(note) {
+        return Err(LOCK_MESSAGE);
+    }
+    // Pausing is not enough here: pause, edit, resume would run new text on the old approval.
+    if approval_bound(note) {
+        return Err(APPROVED_LOCK_MESSAGE);
+    }
+    Ok(())
 }
 
 /// A nemesis8 agent may touch this note without a prompt while its approved
@@ -666,6 +681,19 @@ mod tests {
         let paused = json!({"id":"n","text":"a","run":{"when":"now","target":"notify","paused":true}});
         assert!(check_prompt_edit(&paused, Some("b"), false).is_ok());
         assert!(check_prompt_edit(&json!({"id":"n","text":"a"}), Some("b"), false).is_ok());
+    }
+
+    #[test]
+    fn a_paused_agent_or_pane_run_keeps_its_approved_prompt() {
+        for target in ["agent", "pane"] {
+            let paused = json!({"id":"n","text":"weather in Tokyo",
+                "run":{"when":"now","target":target,"paused":true,"approved":{"at":1}}});
+            // Pause, edit, resume must not run new text on the old approval.
+            assert_eq!(check_prompt_edit(&paused, Some("rm -rf /"), false), Err(APPROVED_LOCK_MESSAGE), "{target}");
+            assert!(check_prompt_edit(&paused, Some("rm -rf /"), true).is_ok());
+            assert!(check_prompt_edit(&paused, Some("weather in Tokyo"), false).is_ok());
+            assert!(check_prompt_edit(&paused, None, false).is_ok());
+        }
     }
 
     #[test]

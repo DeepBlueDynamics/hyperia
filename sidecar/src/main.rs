@@ -241,9 +241,14 @@ struct WindowImageQuery {
 /// app-side via desktopCapturer. Read-class like terminal_screen.
 async fn get_window_image(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<WindowImageQuery>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
+    // Real pixels of everything on screen, logged-in web panes included.
+    if let Err(resp) = enforce_identified(&state, &headers).await {
+        return resp.into_response();
+    }
     let cmd = serde_json::json!({
         "type": "CaptureWindow",
         "windowId": q.window,
@@ -299,8 +304,8 @@ async fn get_tab_image(
         x: f32, y: f32, w: f32, h: f32,
     }
     let owned: Vec<Owned> = panes_json.iter().map(|p| Owned {
-        label: p["label"].as_str().unwrap_or("").to_string(),
-        kind: "shell".to_string(),
+        label: p["splitLabel"].as_str().unwrap_or("").to_string(),
+        kind: if p["kind"].as_str() == Some("web") { "web".to_string() } else { "shell".to_string() },
         title: p["title"].as_str().filter(|s| !s.is_empty())
             .or_else(|| p["process"].as_str().filter(|s| !s.is_empty()))
             .or_else(|| p["shell"].as_str())
@@ -1117,7 +1122,12 @@ async fn post_split(
         None => None,
     };
 
-    let url = parsed["url"].as_str().unwrap_or("").to_string();
+    let url = parsed["url"].as_str().unwrap_or("").trim().to_string();
+    if !url.is_empty() {
+        if let Err(resp) = gate_web_pane_url(&state, &headers, &url).await {
+            return resp;
+        }
+    }
 
     let cmd = serde_json::json!({
         "type": "Split",
@@ -1229,6 +1239,19 @@ async fn post_request_access(
     body: String,
 ) -> (StatusCode, String) {
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    // Audio isn't a pane: its denial text sends agents here with this sentinel.
+    if parsed["pane"].as_str() == Some(AUDIO_SENTINEL) {
+        let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+        state.bridge.perms().clear_denial(&id.principal_key(), AUDIO_SENTINEL).await;
+        return match enforce_audio(&state, &headers, bearer_token(&headers).as_deref()).await {
+            Ok(_) => (
+                StatusCode::OK,
+                serde_json::json!({"granted": true, "pane": AUDIO_SENTINEL, "message": "Audio access granted."})
+                    .to_string(),
+            ),
+            Err(resp) => resp,
+        };
+    }
     let uid = if parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string() {
         match state
             .bridge
@@ -1265,7 +1288,7 @@ async fn post_request_access(
             serde_json::json!({
                 "granted": true,
                 "pane": uid,
-                "message": "Access granted — you can now drive this pane (terminal_run / terminal_keys / split / close)."
+                "message": "Access granted — you can now send input to this pane (terminal_run / terminal_keys / pane_send)."
             })
             .to_string(),
         ),
@@ -1659,7 +1682,8 @@ async fn enforce_drive_with_purpose(
                     _ => {}
                 }
             }
-            Err(pending_202())
+            // No caller of this gate holds the action, so the call must be repeated.
+            Err(pending_retry_202())
         }
     }
 }
@@ -1779,6 +1803,28 @@ fn pending_202() -> (StatusCode, String) {
         })
         .to_string(),
     )
+}
+
+/// The 202 for a gate on a route that holds NOTHING: after the human approves,
+/// the caller has to repeat the call. (pending_202 promises an automatic run,
+/// which is only true where the route parks the command.)
+fn pending_retry_202() -> (StatusCode, String) {
+    (
+        StatusCode::ACCEPTED,
+        serde_json::json!({
+            "ok": false,
+            "pending": true,
+            "message": "The human hasn't answered the Hyperia approval prompt yet. Nothing is held: \
+                        once they approve, call this tool AGAIN and it will go through. Give them a \
+                        moment before retrying, and don't work around it."
+        })
+        .to_string(),
+    )
+}
+
+/// Swap the "held" 202 for the retry one on a route that doesn't park the action.
+fn not_held(resp: (StatusCode, String)) -> (StatusCode, String) {
+    if resp.0 == StatusCode::ACCEPTED { pending_retry_202() } else { resp }
 }
 
 /// Gate a CREATE action (split / new tab / window / web-pane / sticky) on the
@@ -1981,7 +2027,8 @@ async fn enforce_capability(
                     _ => {}
                 }
             }
-            Err(pending_202())
+            // Capability-gated routes hold nothing; the grant makes the retry pass.
+            Err(pending_retry_202())
         }
     }
 }
@@ -2483,8 +2530,12 @@ async fn post_pulse_clear(
     body: String,
 ) -> (StatusCode, String) {
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let addressed = parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string();
     let key = if let Some(id) = parsed["id"].as_str() {
         id.to_string()
+    } else if !addressed {
+        // No id and no address used to fall back to the focused pane and clear it.
+        return (StatusCode::BAD_REQUEST, "Pass id, or a window/tab/pane that resolves.".into());
     } else {
         let window = parsed["window"].as_u64().map(|v| v as u32);
         match state
@@ -3046,7 +3097,7 @@ async fn post_new_window(State(state): State<AppState>, headers: HeaderMap) -> (
     let first_window = state.bridge.has_no_windows().await;
     if !first_window {
         if let Err(resp) = enforce_create(&state, &headers, "create_window").await {
-            return resp;
+            return not_held(resp);
         }
     }
     let cmd = serde_json::json!({"type": "NewWindow", "firstWindow": first_window});
@@ -3444,26 +3495,78 @@ async fn post_workspace_rename(Json(body): Json<WorkspaceRenameBody>) -> (Status
     }
 }
 
+/// Check a URL an agent wants loaded in a web pane. http(s) and scheme-less
+/// input pass; file:// is a file read, so it needs the `files` capability; no
+/// other scheme loads. The human's own UI is not limited.
+async fn gate_web_pane_url(state: &AppState, headers: &HeaderMap, url: &str) -> Result<(), (StatusCode, String)> {
+    use browser_open::PaneUrl;
+    let kind = browser_open::pane_url_kind(url);
+    if kind == PaneUrl::Web {
+        return Ok(());
+    }
+    if state.bridge.resolve_caller(bearer_token(headers).as_deref()).await.is_system() {
+        return Ok(());
+    }
+    match kind {
+        PaneUrl::Web => Ok(()),
+        PaneUrl::File => enforce_capability(state, headers, "files").await,
+        PaneUrl::Other(scheme) => Err((
+            StatusCode::BAD_REQUEST,
+            format!("Web panes load http(s) pages (or file:// with the files capability); '{scheme}://' is not allowed."),
+        )),
+    }
+}
+
+/// Gate a file an agent wants rendered: documents pass, Hyperia's own state
+/// never does, anything else needs the `files` capability.
+async fn gate_render_path(
+    state: &AppState,
+    headers: &HeaderMap,
+    resolved: &std::path::Path,
+) -> Result<(), (StatusCode, String)> {
+    let state_dir = fsnav::home_dir().join(".hyperia");
+    let state_dir = state_dir.canonicalize().unwrap_or(state_dir);
+    match render::path_access(resolved, &state_dir) {
+        render::PathAccess::Document => Ok(()),
+        render::PathAccess::Private => Err((
+            StatusCode::FORBIDDEN,
+            "Files in Hyperia's own state directory (~/.hyperia) can't be rendered.".into(),
+        )),
+        render::PathAccess::NeedsFiles => enforce_capability(state, headers, "files").await,
+    }
+}
+
 async fn post_open_web_pane(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: String,
 ) -> (StatusCode, String) {
-    if let Err(resp) = enforce_create(&state, &headers, "create_web").await {
-        return resp;
-    }
+    // Check the request before asking the human about it.
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
-    let url = match parsed["url"].as_str() {
+    let url = match parsed["url"].as_str().map(str::trim) {
         Some(u) if !u.is_empty() => u.to_string(),
         _ => return (StatusCode::BAD_REQUEST, "url is required".into()),
     };
+    if let Err(resp) = gate_web_pane_url(&state, &headers, &url).await {
+        return resp;
+    }
     let cmd = serde_json::json!({"type": "OpenWebPane", "url": url});
+    // Held like a split: approving the prompt opens the pane.
+    if let Err(resp) = enforce_create(&state, &headers, "create_web").await {
+        if resp.0 == StatusCode::ACCEPTED {
+            let caller = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+            state.bridge.hold_create(&caller.principal_key(), cmd).await;
+        }
+        return resp;
+    }
     // The renderer creates the pane asynchronously — snapshot existing web
     // panes first, then wait for the NEW one to register so the reply can
     // carry its paneId. Without this, agents had no handle to address the
     // pane they just opened (the empty-{} → wrong-pane → timeout trap).
     let before = state.bridge.web_pane_uids().await;
     match state.bridge.send_command(cmd).await {
+        // Electron's refusals ("No focused window") arrive as plain text, not as Err.
+        Ok(r) if r != "ok" => (StatusCode::BAD_GATEWAY, r),
         Ok(_) => match state.bridge.await_new_web_pane(&before, &url, 4000).await {
             Some((pane_id, name)) => (
                 StatusCode::OK,
@@ -3684,11 +3787,22 @@ async fn post_render(
         );
     }
     let source = if !path.is_empty() {
+        // A path render reads the disk: anonymous callers learn nothing about it.
+        if let Err(resp) = enforce_identified(&state, &headers).await {
+            return resp;
+        }
         let pb = std::path::PathBuf::from(&path);
         if !pb.is_file() {
             return (StatusCode::NOT_FOUND, format!("No such file: {path}"));
         }
-        render::RenderSource::File(pb)
+        // Serve the resolved file, so what was checked is what is read.
+        let resolved = pb.canonicalize().unwrap_or(pb);
+        if !state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await.is_system() {
+            if let Err(resp) = gate_render_path(&state, &headers, &resolved).await {
+                return resp;
+            }
+        }
+        render::RenderSource::File(resolved)
     } else {
         render::RenderSource::Inline(content)
     };
@@ -3710,11 +3824,18 @@ async fn post_render(
         if resp.0 == StatusCode::ACCEPTED {
             let caller = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
             state.bridge.hold_create(&caller.principal_key(), cmd).await;
+        } else {
+            // Refused: don't keep (or serve) a document nobody will see.
+            state.render.remove(&id).await;
         }
         return resp;
     }
     let before = state.bridge.web_pane_uids().await;
     match state.bridge.send_command(cmd).await {
+        Ok(r) if r != "ok" => {
+            state.render.remove(&id).await;
+            (StatusCode::BAD_GATEWAY, r)
+        }
         Ok(_) => {
             // Same paneId handoff as open_web_pane — the render tab is a web
             // pane, and agents want to web_pane_content it later.
@@ -4097,7 +4218,7 @@ async fn post_note_create(
     body: String,
 ) -> (StatusCode, String) {
     if let Err(resp) = enforce_create(&state, &headers, "create_sticky").await {
-        return resp;
+        return not_held(resp);
     }
     use identity::CallerIdentity;
     let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
@@ -4961,7 +5082,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/radio/deliver", axum::routing::post(radio::deliver))
         .route("/api/radio/badges", axum::routing::get(radio::get_badges))
         .route("/api/deck/health", axum::routing::get(deck_health::get_health))
-        .route("/api/audio/play", axum::routing::post(post_audio_play))
+        // The handler caps at 32MB; without this axum's 2MB default refused first.
+        .route(
+            "/api/audio/play",
+            axum::routing::post(post_audio_play).layer(axum::extract::DefaultBodyLimit::max(33 * 1024 * 1024)),
+        )
         .route("/api/audio/probe", axum::routing::post(post_audio_probe))
         .route("/api/audio/mute", axum::routing::post(post_audio_mute))
         .route("/ws/audio", axum::routing::get(ws_audio))

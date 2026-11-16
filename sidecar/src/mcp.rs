@@ -1424,8 +1424,8 @@ impl HyperiaMcp {
         let owned: Vec<Owned> = panes_json
             .iter()
             .map(|p| Owned {
-                label: p["label"].as_str().unwrap_or("").to_string(),
-                kind: if p["webUrl"].is_string() { "web".into() } else { "shell".into() },
+                label: p["splitLabel"].as_str().unwrap_or("").to_string(),
+                kind: if p["kind"].as_str() == Some("web") { "web".into() } else { "shell".into() },
                 title: p["title"]
                     .as_str()
                     .filter(|s| !s.is_empty())
@@ -1503,20 +1503,37 @@ impl HyperiaMcp {
 
     // ---- named workspaces (epic #146) ------------------------------------
 
+    /// Does the sidecar recognise this caller? (whoami answers 401 for anonymous.)
+    async fn caller_identified(&self, ctx: &RequestContext<RoleServer>) -> bool {
+        let auth = forwarded_auth(ctx);
+        self.get_as("/api/identity/whoami", auth.as_deref())
+            .await
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .is_some_and(|w| whoami_identified(&w))
+    }
+
+    /// Config writes (settings, profiles) — the same "writes need identity" bar
+    /// as styles and workspaces. A profile is a command the human will launch.
+    async fn require_settings_identity(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+    ) -> Result<(), CallToolResult> {
+        if !self.caller_identified(ctx).await {
+            return Err(CallToolResult::error(vec![Content::text(
+                "Settings changes require identity (they write the shared config, including the commands profiles launch). Run request_token, wire the Bearer token into your MCP client, and retry. settings_get works without identity.",
+            )]));
+        }
+        Ok(())
+    }
+
     /// Workspace save/delete/rename write files under the user's home — the
     /// same "writes need identity" bar as style_create. List stays free.
     async fn require_workspace_identity(
         &self,
         ctx: &RequestContext<RoleServer>,
     ) -> Result<(), CallToolResult> {
-        let auth = forwarded_auth(ctx);
-        let who = self
-            .get_as("/api/identity/whoami", auth.as_deref())
-            .await
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-        let anonymous = who.map(|w| w["anonymous"].as_bool().unwrap_or(true)).unwrap_or(true);
-        if anonymous {
+        if !self.caller_identified(ctx).await {
             return Err(CallToolResult::success(vec![Content::text(
                 "Workspace changes require identity (they write files in the user's home). Run request_token, wire the Bearer token into your MCP client, and retry. workspace_list works without identity.",
             )]));
@@ -2335,14 +2352,17 @@ impl HyperiaMcp {
     async fn window_image(
         &self,
         Parameters(req): Parameters<WindowImageRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let mut path = format!("/api/window/image?max_width={}", req.max_width.unwrap_or(1200));
         if let Some(w) = req.window {
             path.push_str(&format!("&window={w}"));
         }
-        let resp = self
-            .client
-            .get(format!("{}{}", self.base_url, path))
+        let mut rb = self.client.get(format!("{}{}", self.base_url, path));
+        if let Some(auth) = forwarded_auth(&ctx) {
+            rb = rb.header(reqwest::header::AUTHORIZATION, auth);
+        }
+        let resp = rb
             .timeout(std::time::Duration::from_secs(20))
             .send()
             .await
@@ -2538,14 +2558,7 @@ impl HyperiaMcp {
         &self,
         ctx: &RequestContext<RoleServer>,
     ) -> Result<(), CallToolResult> {
-        let auth = forwarded_auth(ctx);
-        let who = self
-            .get_as("/api/identity/whoami", auth.as_deref())
-            .await
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-        let anonymous = who.map(|w| w["anonymous"].as_bool().unwrap_or(true)).unwrap_or(true);
-        if anonymous {
+        if !self.caller_identified(ctx).await {
             return Err(CallToolResult::success(vec![Content::text(
                 "Style changes require identity (they write shared config). Run request_token, wire the Bearer token into your MCP client, and retry. style_list works without identity.",
             )]));
@@ -2723,14 +2736,19 @@ impl HyperiaMcp {
     async fn settings_set(
         &self,
         Parameters(req): Parameters<SettingsSetRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        if let Err(refusal) = self.require_settings_identity(&ctx).await {
+            return Ok(refusal);
+        }
         if req.path.trim().is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
                 "Error: path is required (e.g. 'config.fontSize').",
             )]));
         }
         let mut cfg = self.read_config().await?;
-        let old = walk_path(&cfg, &req.path);
+        // Redacted like settings_get: a write must not hand back the secret it replaced.
+        let old = walk_path(&redact_secrets(&cfg), &req.path);
         // Guard against an MCP client that serialized a structured value to a
         // JSON string (a common footgun for untyped params): storing e.g.
         // config.profiles as the string "[{...}]" instead of an array crashes
@@ -2752,7 +2770,7 @@ impl HyperiaMcp {
                     "ok": true,
                     "path": req.path,
                     "old_value": old,
-                    "new_value": value,
+                    "new_value": walk_path(&redact_secrets(&cfg), &req.path),
                 });
                 Ok(CallToolResult::success(vec![Content::text(
                     serde_json::to_string_pretty(&summary).unwrap_or_default(),
@@ -2809,7 +2827,11 @@ impl HyperiaMcp {
     async fn settings_add_profile(
         &self,
         Parameters(req): Parameters<SettingsAddProfileRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        if let Err(refusal) = self.require_settings_identity(&ctx).await {
+            return Ok(refusal);
+        }
         let mut cfg = self.read_config().await?;
         
         let config_obj = cfg["config"]
@@ -2847,7 +2869,11 @@ impl HyperiaMcp {
     async fn settings_delete_profile(
         &self,
         Parameters(req): Parameters<SettingsDeleteProfileRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        if let Err(refusal) = self.require_settings_identity(&ctx).await {
+            return Ok(refusal);
+        }
         let mut cfg = self.read_config().await?;
         
         let profiles = cfg["config"]["profiles"]
@@ -3022,7 +3048,9 @@ impl HyperiaMcp {
     async fn shell_confirm(
         &self,
         Parameters(req): Parameters<ShellConfirmRequest>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        let auth = forwarded_auth(&ctx);
         // If a specific pane is targeted, resolve and handle just that one
         if req.window.is_some() || req.tab.is_some() || req.pane.is_some() {
             let screen = self.get(&self.pane_path("/api/screen", req.window, req.tab.as_deref(), req.pane.as_deref())).await
@@ -3030,10 +3058,14 @@ impl HyperiaMcp {
             let state = detect_shell_state(&screen);
 
             if let Some(keys) = &state.actionable {
-                self.post_text(&self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref()), keys).await?;
-                return Ok(CallToolResult::success(vec![Content::text(
-                    format!("Sent '{}' ({})", keys.replace('\r', "\\r"), state.detail)
-                )]));
+                let path = self.pane_path("/api/type", req.window, req.tab.as_deref(), req.pane.as_deref());
+                let sent = self.type_keys_as(&path, keys, auth.as_deref()).await?;
+                let text = format!("{} ({})", confirm_outcome(keys, &sent), state.detail);
+                return Ok(if sent.0.is_client_error() || sent.0.is_server_error() {
+                    CallToolResult::error(vec![Content::text(text)])
+                } else {
+                    CallToolResult::success(vec![Content::text(text)])
+                });
             } else {
                 return Ok(CallToolResult::success(vec![Content::text(
                     format!("No action needed ({})", state.kind)
@@ -3069,8 +3101,9 @@ impl HyperiaMcp {
                                 };
 
                                 if let Some(keys) = &state.actionable {
-                                    self.post_text(&self.pane_path("/api/type", Some(win_id), Some(tab_name), Some(pane_key)), keys).await?;
-                                    actions.push(format!("{}: sent '{}' ({})", pane_desc, keys.replace('\r', "\\r"), state.detail));
+                                    let path = self.pane_path("/api/type", Some(win_id), Some(tab_name), Some(pane_key));
+                                    let sent = self.type_keys_as(&path, keys, auth.as_deref()).await?;
+                                    actions.push(format!("{}: {} ({})", pane_desc, confirm_outcome(keys, &sent), state.detail));
                                 } else {
                                     actions.push(format!("{}: no action needed ({})", pane_desc, state.kind));
                                 }
@@ -3564,6 +3597,58 @@ fn unescape_keys(raw: &str) -> String {
 /// hands an API key or token to ANY caller. Matches by secret-ish key NAME or by
 /// known secret value PREFIX (sk-, hyp_, ghp_/gho_/ghs_, AIza, xox, "Bearer ").
 /// (#93)
+/// whoami's reply names a principal only for a recognised caller.
+fn whoami_identified(whoami: &serde_json::Value) -> bool {
+    whoami["principal"].as_str().is_some_and(|p| !p.is_empty())
+}
+
+/// What shell_confirm tells the model about one answer it tried to type.
+fn confirm_outcome(keys: &str, sent: &(reqwest::StatusCode, String)) -> String {
+    let shown = keys.replace('\r', "\\r");
+    let (status, body) = sent;
+    if !status.is_success() {
+        return format!("NOT sent '{shown}' (HTTP {}): {body}", status.as_u16());
+    }
+    // /api/type answers with the retained operation; its state is the truth.
+    let op = serde_json::from_str::<serde_json::Value>(body).ok().map(|v| v["operation"].clone());
+    let state = op.as_ref().and_then(|o| o["state"].as_str()).unwrap_or("");
+    let id = op.as_ref().and_then(|o| o["id"].as_str()).unwrap_or("");
+    match state {
+        "submitted" | "" => format!("sent '{shown}'"),
+        "queued" | "submitting" => format!("'{shown}' is queued; Hyperia delivers it (delivery_status {id})"),
+        "awaiting_approval" => format!("'{shown}' is waiting for the human's approval (delivery_status {id})"),
+        other => format!("NOT sent '{shown}' ({other}; delivery_status {id})"),
+    }
+}
+
+#[cfg(test)]
+mod confirm_outcome_tests {
+    use super::*;
+
+    fn out(status: u16, body: &str) -> String {
+        confirm_outcome("y\r", &(reqwest::StatusCode::from_u16(status).unwrap(), body.to_string()))
+    }
+
+    #[test]
+    fn a_refused_or_unfinished_answer_is_never_reported_as_sent() {
+        assert_eq!(out(200, r#"{"ok":true,"operation":{"id":"op_1","state":"submitted"}}"#), "sent 'y\\r'");
+        assert!(out(202, r#"{"ok":true,"operation":{"id":"op_1","state":"queued"}}"#).contains("queued"));
+        assert!(out(202, r#"{"ok":true,"operation":{"id":"op_1","state":"awaiting_approval"}}"#)
+            .contains("waiting for the human"));
+        assert!(out(200, r#"{"ok":true,"operation":{"id":"op_1","state":"denied"}}"#).starts_with("NOT sent"));
+        assert!(out(401, "Authentication required").starts_with("NOT sent"));
+        assert!(out(409, "shell prompt").starts_with("NOT sent"));
+    }
+
+    #[test]
+    fn only_a_reply_naming_a_principal_counts_as_identified() {
+        assert!(whoami_identified(&serde_json::json!({"principal": "agent:claude", "kind": "agent"})));
+        assert!(!whoami_identified(&serde_json::json!({"ok": false, "error": "Authentication required"})));
+        assert!(!whoami_identified(&serde_json::json!({"principal": ""})));
+        assert!(!whoami_identified(&serde_json::Value::Null));
+    }
+}
+
 pub(crate) fn redact_secrets(value: &serde_json::Value) -> serde_json::Value {
     fn secret_key(k: &str) -> bool {
         let k = k.to_ascii_lowercase();
@@ -4061,6 +4146,30 @@ impl HyperiaMcp {
         resp.text()
             .await
             .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))
+    }
+
+    /// POST text as the caller and keep the HTTP status, so a refusal isn't
+    /// reported as "sent".
+    async fn type_keys_as(
+        &self,
+        path: &str,
+        keys: &str,
+        auth: Option<&str>,
+    ) -> Result<(reqwest::StatusCode, String), ErrorData> {
+        let mut rb = self.client.post(format!("{}{}", self.base_url, path)).body(keys.to_string());
+        if let Some(a) = auth {
+            rb = rb.header(reqwest::header::AUTHORIZATION, a);
+        }
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))?;
+        Ok((status, text))
     }
 
     async fn post_json(&self, path: &str, body: &serde_json::Value) -> Result<String, ErrorData> {
