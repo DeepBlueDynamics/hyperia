@@ -6,7 +6,7 @@
 // Agent input is deferred while the user is actively typing/interacting
 // with a session. Per-session queues drain once the user goes idle.
 
-import {app, BrowserWindow} from 'electron';
+import {app, BrowserWindow, shell as electronShell} from 'electron';
 
 import isDev from 'electron-is-dev';
 import WebSocket from 'ws';
@@ -27,6 +27,7 @@ import {
   setResult,
   getNote
 } from './sticky';
+import {isWebPageUrl} from './sticky/external-url';
 import {SYSTEM_TOKEN} from './system-token';
 import {sessionReplayMessages} from './utils/session-replay';
 import {capturePaneJpeg, captureWindowImage} from './web-pane-manager';
@@ -771,7 +772,9 @@ function handleCommand(msg: Record<string, unknown>) {
         // Messaging extras (optional; older sidecars omit them): who the mail
         // is for, and its subject. The body is never sent to the prompt.
         recipientLabel: (msg.recipientLabel as string) || undefined,
-        subject: (msg.subject as string) || undefined
+        subject: (msg.subject as string) || undefined,
+        // open_in_browser only: the page the agent asks to open.
+        url: (msg.url as string) || undefined
       };
       for (const w of (app as any).getWindows?.() || []) {
         if (w?.rpc) w.rpc.emit('permission request', payload);
@@ -1172,6 +1175,22 @@ function handleCommand(msg: Record<string, unknown>) {
       } else {
         sendResult(seq, win ? 'No url provided' : 'No focused window');
       }
+      break;
+    }
+
+    case 'OpenExternal': {
+      // open_in_browser, after the human approved this page. The sidecar checked
+      // the URL; check again here so only a web page ever reaches the OS.
+      const url = String(msg.url || '');
+      if (!isWebPageUrl(url)) {
+        sendResult(seq, JSON.stringify({ok: false, error: 'Only http(s) pages can be opened'}));
+        break;
+      }
+      electronShell.openExternal(url).then(
+        () => sendResult(seq, JSON.stringify({ok: true})),
+        (err: unknown) =>
+          sendResult(seq, JSON.stringify({ok: false, error: err instanceof Error ? err.message : String(err)}))
+      );
       break;
     }
 

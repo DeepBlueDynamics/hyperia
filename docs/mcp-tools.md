@@ -77,6 +77,7 @@ A **pulse** is a recurring prompt the sidecar re-submits into a pane on its own 
 | Tool | Description |
 |------|-------------|
 | `open_web_pane` | Open a URL in its own **separate** web-pane tab (never a split — use `terminal_split` with `url` for side-by-side). Reply includes the new pane's `paneId` — save it and address web_pane_* calls with it (the tab opens in the background, so no-address defaults won't find it). |
+| `open_in_browser` | Ask the human to open one http(s) page in their **default system browser** (sign-in / OAuth / device-code pages, sites that block embedded views). **Every call prompts**; an approval opens that page once and is never remembered. Pass `url` and a short `purpose`. Returns `opened: true`, or `pending: true` if they haven't answered within a few seconds (the page still opens when they approve; calling again with the same URL reports the result). The agent can't see or drive that page — use `open_web_pane` for pages it needs to read. |
 | `web_pane_content` | Read the current page as clean reader-mode markdown. |
 | `web_pane_eval` | Run JavaScript in a web pane and return the result. |
 | `web_pane_mouse` | Move/click at pixel coordinates, with a visible ghost cursor. |

@@ -161,6 +161,7 @@ pub const DOORS: &[Door] = &[
         ],
         mcp_tools: &[
             "open_web_pane",
+            "open_in_browser",
             "render",
             "web_pane_content",
             "web_pane_eval",

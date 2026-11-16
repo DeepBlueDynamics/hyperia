@@ -4,6 +4,7 @@
 mod audio;
 mod audit;
 mod bridge;
+mod browser_open;
 mod bugs;
 mod consent_log;
 mod dashboard;
@@ -2211,6 +2212,9 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
             if req.action == sticky_runs::APPROVAL_ACTION {
                 resolve_sticky_run_approval(&state, &req.id, allow).await;
             }
+            if req.action == browser_open::ACTION {
+                resolve_browser_open(&state, &req, allow).await;
+            }
             // Retained terminal/mail operations are resolved above and executed by the worker.
             // A held CREATE (split/new-tab/web-pane) executes on approval — the
             // human said "ok, that's fine", so DO the thing, don't just grant
@@ -3482,6 +3486,185 @@ async fn post_open_web_pane(
     }
 }
 
+const BROWSER_OPEN_DENIED: &str =
+    "Opening browser pages was denied by the user. Don't retry — ask the human directly.";
+
+/// Hand a checked page to Electron, which opens it in the default browser.
+async fn open_in_default_browser(state: &AppState, target: &browser_open::Target) -> Result<(), String> {
+    let cmd = serde_json::json!({"type": "OpenExternal", "url": target.url});
+    let raw = state.bridge.send_command(cmd).await?;
+    match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(v) if v["ok"].as_bool() == Some(true) => Ok(()),
+        Ok(v) => Err(v["error"].as_str().unwrap_or("Hyperia could not open the page").to_string()),
+        // Plain text is an error (an older app answers "Unknown command: OpenExternal").
+        Err(_) if raw.is_empty() => Err("Hyperia could not open the page".into()),
+        Err(_) => Err(raw),
+    }
+}
+
+fn browser_open_reply(target: &browser_open::Target, outcome: browser_open::Outcome) -> (StatusCode, String) {
+    use browser_open::Outcome;
+    let err = |code: StatusCode, msg: &str| (code, serde_json::json!({"ok": false, "error": msg}).to_string());
+    match outcome {
+        Outcome::Opened => (
+            StatusCode::OK,
+            serde_json::json!({
+                "ok": true, "opened": true, "url": target.url,
+                "note": "Opened in the human's default browser. You cannot see or drive that page — ask them what they see."
+            })
+            .to_string(),
+        ),
+        Outcome::Denied => err(StatusCode::FORBIDDEN, BROWSER_OPEN_DENIED),
+        Outcome::Failed(e) => err(
+            StatusCode::BAD_GATEWAY,
+            &format!("The human approved, but the page could not be opened: {e}"),
+        ),
+        Outcome::Superseded => err(
+            StatusCode::CONFLICT,
+            "Replaced by your newer open_in_browser request — only one can wait for the human at a time.",
+        ),
+    }
+}
+
+/// POST /api/browser/open {url, purpose?} — open one page in the human's default
+/// browser. Backs `open_in_browser`. Every agent call raises its own prompt (even
+/// with enforcement off); an approval opens that page and grants nothing.
+async fn post_browser_open(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    let err = |code: StatusCode, msg: &str| (code, serde_json::json!({"ok": false, "error": msg}).to_string());
+    let parsed: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &format!("bad JSON: {e}")),
+    };
+    let target = match browser_open::parse_target(parsed["url"].as_str().unwrap_or("")) {
+        Ok(t) => t,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &e),
+    };
+    let purpose = browser_open::clean_purpose(parsed["purpose"].as_str().unwrap_or(""));
+    let caller = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+
+    // The human's own UI needs no prompt.
+    if caller.is_system() {
+        return match open_in_default_browser(&state, &target).await {
+            Ok(()) => browser_open_reply(&target, browser_open::Outcome::Opened),
+            Err(e) => err(StatusCode::BAD_GATEWAY, &e),
+        };
+    }
+    if caller.is_anonymous() {
+        return err(
+            StatusCode::UNAUTHORIZED,
+            &format!(
+                "Identity required to open a browser page, so the human can see who is asking. {}",
+                identity_recovery(&headers)
+            ),
+        );
+    }
+    let principal = caller.principal_key();
+    let perms = state.bridge.perms();
+
+    // The answer to an earlier call for this page that returned "pending".
+    if let Some(outcome) = browser_open::take_outcome_for(&principal, &target.url) {
+        return browser_open_reply(&target, outcome);
+    }
+    if perms.recently_denied(&principal, browser_open::ACTION).await {
+        return err(StatusCode::FORBIDDEN, BROWSER_OPEN_DENIED);
+    }
+    let who = sticky_requester_name(&state, &caller).await;
+    let requester_pane = match &caller {
+        identity::CallerIdentity::Pane { pane, .. } => pane.clone(),
+        _ => String::new(),
+    };
+    let prompt_target = format!("browser:{}", target.host);
+    // One waiting prompt per agent: the same page re-raises it, a new page replaces it.
+    let waiting = match browser_open::pending_for(&principal) {
+        // Its consent request is gone: nothing is waiting any more.
+        Some((id, _)) if perms.pending_request(&id).await.is_none() => {
+            browser_open::forget(&id);
+            None
+        }
+        other => other,
+    };
+    let perm_id = match waiting {
+        Some((id, waiting)) if waiting.url == target.url => id,
+        other => {
+            if let Some((stale, waiting)) = other {
+                browser_open::forget(&stale);
+                browser_open::finish(&stale, &principal, &waiting.url, browser_open::Outcome::Superseded);
+                dismiss_stale_prompt(&state, Some(stale)).await;
+            }
+            let req = perms
+                .create_request(&principal, &requester_pane, &prompt_target, browser_open::ACTION, &purpose)
+                .await;
+            browser_open::park(&req.id, &principal, target.clone());
+            // The log keeps the full URL; the prompt's Why line is the agent's own words.
+            let logged = if purpose.is_empty() { target.url.clone() } else { format!("{} — {purpose}", target.url) };
+            consent_log::record_request(&req.id, &req.requester, &who, caller.kind(), &req.action, &req.target_pane, &logged);
+            req.id
+        }
+    };
+    let _ = state
+        .bridge
+        .notify(serde_json::json!({
+            "type": "PermissionRequest",
+            "id": perm_id,
+            "requester": principal,
+            "requesterName": who,
+            "requesterPane": requester_pane,
+            "targetPane": prompt_target,
+            "action": browser_open::ACTION,
+            "purpose": purpose,
+            "recipientLabel": target.host,
+            "url": target.url,
+        }))
+        .await;
+
+    // Wait for the answer so the call completes when the human is right there.
+    for _ in 0..16 {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if let Some(outcome) = browser_open::take_outcome(&perm_id) {
+            return browser_open_reply(&target, outcome);
+        }
+    }
+    (
+        StatusCode::ACCEPTED,
+        serde_json::json!({
+            "ok": false,
+            "pending": true,
+            "url": target.url,
+            "approval": {"id": perm_id},
+            "message": "The human hasn't answered yet. The page opens AUTOMATICALLY when they approve — do not \
+                        work around it. Calling open_in_browser again with the SAME url reports the result (or \
+                        keeps waiting); a DIFFERENT url replaces this request."
+        })
+        .to_string(),
+    )
+}
+
+/// On the human's answer: approve → open the parked page; deny → drop it.
+async fn resolve_browser_open(state: &AppState, req: &perms::PermRequest, allow: bool) {
+    use browser_open::Outcome;
+    let Some(target) = browser_open::take(&req.id) else {
+        tracing::info!("open_browser approval {}: nothing parked (superseded)", req.id);
+        return;
+    };
+    let outcome = if !allow {
+        Outcome::Denied
+    } else {
+        match open_in_default_browser(state, &target).await {
+            Ok(()) => Outcome::Opened,
+            Err(e) => {
+                tracing::warn!("open_browser {} for {}: {e}", target.url, req.requester);
+                Outcome::Failed(e)
+            }
+        }
+    };
+    tracing::info!("open_browser {} for {}: {outcome:?}", target.url, req.requester);
+    browser_open::finish(&req.id, &req.requester, &target.url, outcome);
+}
+
 /// POST /api/render {path?|content?, title?} — register a markdown document
 /// (with the ==highlight== extension) and open its LIVE render page in a new
 /// web-pane tab. Backs the `render` MCP tool. Same create_web consent + held-
@@ -4165,7 +4348,7 @@ async fn post_note_run(
 
     // Clear: drop any pending prompt, then unschedule.
     if payload.get("clear").and_then(|c| c.as_bool()) == Some(true) {
-        dismiss_stale_sticky_prompt(&state, sticky_runs::drop_for_note(&note_id)).await;
+        dismiss_stale_prompt(&state, sticky_runs::drop_for_note(&note_id)).await;
         let cmd = serde_json::json!({"type": "NoteRun", "id": note_id, "clear": true});
         return reply(sticky_runs::parse_engine_reply(state.bridge.send_command(cmd).await));
     }
@@ -4212,7 +4395,7 @@ async fn post_note_run(
     }
 
     // A re-post supersedes any earlier prompt for this note.
-    dismiss_stale_sticky_prompt(&state, sticky_runs::drop_for_note(&note_id)).await;
+    dismiss_stale_prompt(&state, sticky_runs::drop_for_note(&note_id)).await;
     let cmd = serde_json::json!({"type": "NoteRun", "id": note_id, "run": run});
     let mut out = match sticky_runs::parse_engine_reply(state.bridge.send_command(cmd).await) {
         Ok(v) => v,
@@ -4261,8 +4444,8 @@ async fn post_note_run(
     (StatusCode::OK, out.to_string())
 }
 
-/// Consume a superseded sticky_run prompt so the UI drops it.
-async fn dismiss_stale_sticky_prompt(state: &AppState, perm_id: Option<String>) {
+/// Consume a superseded prompt (sticky run, browser open) so the UI drops it.
+async fn dismiss_stale_prompt(state: &AppState, perm_id: Option<String>) {
     let Some(perm_id) = perm_id else { return };
     if let Some(req) = state.bridge.perms().respond(&perm_id, false, "pane", None).await {
         state.bridge.perms().clear_denial(&req.requester, &req.action).await;
@@ -4845,6 +5028,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/workspace/export", axum::routing::post(post_workspace_export))
         .route("/api/workspace/import", axum::routing::post(post_workspace_import))
         .route("/api/web-pane", axum::routing::post(post_open_web_pane))
+        .route("/api/browser/open", axum::routing::post(post_browser_open))
         .route("/api/web-pane/reload", axum::routing::post(post_web_pane_reload))
         .route("/api/web-pane/click", axum::routing::post(post_web_pane_click))
         .route("/api/web-pane/content", axum::routing::post(post_web_pane_content))
@@ -5116,5 +5300,110 @@ mod delivery_message_tests {
         for state in [Queued, Submitting, Submitted, Failed, Denied, Expired, Cancelled, Indeterminate] {
             assert!(!delivery_message(state).contains("approval sends"), "{state:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod browser_open_tests {
+    use super::*;
+
+    fn state(name: &str) -> (AppState, HeaderMap, std::path::PathBuf) {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-fixtures")
+            .join(format!("browser-open-{name}-{}-{}", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let token = format!("hyp_agent_test_{name}");
+        let agents = vec![identity::AgentRecord {
+            token: token.clone(), name: name.into(), created_ms: 1, single_session: false,
+        }];
+        let bridge = Bridge::with_stores(identity::IdentityStore::for_tests(dir.join("sessions.json"), agents),
+            perms::PermStore::for_tests());
+        let mut headers = HeaderMap::new();
+        headers.insert(axum::http::header::AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
+        (AppState { bridge, log_buffer: logs::new_log_buffer(), telemetry: telemetry::TelemetryStore::new(),
+            render: render::RenderStore::new() }, headers, dir)
+    }
+
+    fn open(state: &AppState, headers: &HeaderMap, url: &str) -> tokio::task::JoinHandle<(StatusCode, String)> {
+        let body = serde_json::json!({"url": url, "purpose": "test"}).to_string();
+        tokio::spawn(post_browser_open(State(state.clone()), headers.clone(), body))
+    }
+
+    /// The prompt the handler raised for this caller, once it exists.
+    async fn prompt_for(state: &AppState, headers: &HeaderMap, url: &str) -> String {
+        let who = state.bridge.resolve_caller(bearer_token(headers).as_deref()).await.principal_key();
+        for _ in 0..100 {
+            if let Some((id, waiting)) = browser_open::pending_for(&who) {
+                if waiting.url == url {
+                    return id;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("no prompt was raised for {url}");
+    }
+
+    async fn answer(state: &AppState, id: &str, decision: &str) {
+        let body = serde_json::json!({"id": id, "decision": decision}).to_string();
+        let (status, resp) = post_perm_respond(State(state.clone()), body).await;
+        assert_eq!(status, StatusCode::OK, "{resp}");
+    }
+
+    #[tokio::test]
+    async fn a_bad_url_or_a_nameless_caller_never_reaches_the_human() {
+        let (state, headers, dir) = state("refused");
+        for bad in ["file:///C:/Windows/System32/calc.exe", "ms-settings:privacy", "https://bank.com@evil.example/", ""] {
+            let (status, resp) = open(&state, &headers, bad).await.unwrap();
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {resp}");
+        }
+        let (status, _) = open(&state, &HeaderMap::new(), "https://example.com/anon").await.unwrap();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let snap = state.bridge.perms().snapshot().await;
+        assert!(snap["pending"].as_array().unwrap().is_empty(), "no prompt may be raised: {snap}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn every_call_asks_and_an_approval_is_not_remembered() {
+        let (state, headers, dir) = state("asks");
+        let url = "https://example.com/asks";
+        // No Hyperia window is attached in tests, so an approved open reports the failure.
+        let first = open(&state, &headers, url);
+        answer(&state, &prompt_for(&state, &headers, url).await, "allow").await;
+        let (status, resp) = first.await.unwrap();
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{resp}");
+        assert!(resp.contains("approved"), "{resp}");
+
+        // The same page again: asked again, nothing was granted.
+        let second = open(&state, &headers, url);
+        let again = prompt_for(&state, &headers, url).await;
+        let snap = state.bridge.perms().snapshot().await;
+        assert!(snap["grants"].as_array().unwrap().is_empty() && snap["createGrants"].as_array().unwrap().is_empty());
+        answer(&state, &again, "deny").await;
+        let (status, _) = second.await.unwrap();
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        // After a "no", the next call is refused without bothering the human.
+        let (status, _) = open(&state, &headers, "https://example.com/other").await.unwrap();
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(state.bridge.perms().snapshot().await["pending"].as_array().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_new_page_replaces_the_waiting_one() {
+        let (state, headers, dir) = state("replaces");
+        let (a, b) = ("https://example.com/a", "https://example.com/b");
+        let first = open(&state, &headers, a);
+        let first_id = prompt_for(&state, &headers, a).await;
+        let second = open(&state, &headers, b);
+        let second_id = prompt_for(&state, &headers, b).await;
+        assert_ne!(first_id, second_id);
+        let (status, resp) = first.await.unwrap();
+        assert_eq!(status, StatusCode::CONFLICT, "{resp}");
+        // Only the newer prompt is left to answer.
+        assert!(state.bridge.perms().pending_request(&first_id).await.is_none());
+        answer(&state, &second_id, "deny").await;
+        assert_eq!(second.await.unwrap().0, StatusCode::FORBIDDEN);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

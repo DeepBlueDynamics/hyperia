@@ -626,6 +626,14 @@ pub struct OpenWebPaneRequest {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct OpenInBrowserRequest {
+    /// Full http:// or https:// URL to open in the human's default browser.
+    pub url: String,
+    /// One short line on why the human should open it — shown on the approval prompt.
+    pub purpose: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct RenderRequest {
     /// Path to a markdown file on disk. The rendered tab LIVE-RELOADS ~1.5s
     /// after the file changes — edit the file to update the analysis in place.
@@ -1866,6 +1874,35 @@ impl HyperiaMcp {
         Ok(CallToolResult::success(vec![Content::text(resp)]))
     }
 
+    #[tool(description = "Open a web page in the human's DEFAULT SYSTEM BROWSER (Chrome, Edge, Firefox…) on the machine Hyperia runs on — outside Hyperia. Use it when a page needs the human's real browser: sign-in / OAuth / device-code pages, sites that block embedded views, or something they asked to see there. For a page YOU need to read or drive, use open_web_pane instead — you cannot see or control the system browser. Pass a full http(s) `url` (any other scheme is refused) and a short `purpose`, shown on the prompt. EVERY call asks the human to approve that one page; an approval is never remembered. The call waits a few seconds for their answer: `opened: true` means the page opened; `pending: true` means they haven't answered yet — the page opens automatically when they approve, and calling again with the SAME url reports the result. Calling with a DIFFERENT url replaces the waiting request. A denial means stop and ask the human.")]
+    async fn open_in_browser(
+        &self,
+        Parameters(req): Parameters<OpenInBrowserRequest>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let body = serde_json::json!({"url": req.url, "purpose": req.purpose});
+        let mut rb = self.client.post(format!("{}/api/browser/open", self.base_url)).json(&body);
+        if let Some(auth) = forwarded_auth(&ctx) {
+            rb = rb.header(reqwest::header::AUTHORIZATION, auth);
+        }
+        // The route holds the call ~8s for the human; allow for the open itself.
+        let resp = rb
+            .timeout(std::time::Duration::from_secs(20))
+            .send()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("HTTP error: {e}"), None))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("Read error: {e}"), None))?;
+        // A refusal is an error to the model; 202 "pending" is not.
+        if status.is_client_error() || status.is_server_error() {
+            return Ok(CallToolResult::error(vec![Content::text(text)]));
+        }
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
     #[tool(description = "Render a markdown document into a NEW Hyperia tab for the human. Supports full markdown (tables, task lists, strikethrough, footnotes) PLUS a highlight extension for joint human+agent analysis: ==text== marks a passage yellow; =={red}text== uses a named color (yellow, red, green, blue, purple, orange, pink, cyan); =={#7af}text== uses any hex color. Highlights inside code blocks/spans are left literal. Pass `path` for a markdown FILE — the tab LIVE-RELOADS ~1.5s after the file changes, so you can keep editing highlights into the file and the human sees them appear in place (ideal for marking up a doc while discussing it). Pass `content` for a one-shot inline render. The tab opens in the BACKGROUND (never steals the human's view); tell them it's there.")]
     async fn render(
         &self,
@@ -2410,8 +2447,8 @@ impl HyperiaMcp {
             },
             {
                 "name": "web",
-                "description": "Open and operate embedded web panes: navigate to a URL, read rendered page content, click, move the mouse, and evaluate JS in the page.",
-                "tools": ["open_web_pane", "web_pane_content", "web_pane_eval", "web_pane_mouse", "terminal_web_click", "terminal_web_reload"]
+                "description": "Open and operate embedded web panes: navigate to a URL, read rendered page content, click, move the mouse, and evaluate JS in the page. open_in_browser hands one page to the human's own default browser (asks every time).",
+                "tools": ["open_web_pane", "open_in_browser", "web_pane_content", "web_pane_eval", "web_pane_mouse", "terminal_web_click", "terminal_web_reload"]
             },
             {
                 "name": "stickies",

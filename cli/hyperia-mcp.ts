@@ -489,6 +489,17 @@ async function cmdOpen(pos: string[], wantJson: boolean): Promise<number> {
   return invoke('open_web_pane', {url}, wantJson);
 }
 
+async function cmdBrowser(pos: string[], flags: Flags, wantJson: boolean): Promise<number> {
+  const url = pos[0];
+  if (!url) {
+    throw new CliError(
+      'usage: hyperia browser <url> [--why <reason>]   (asks the human to open the page in their default browser; for a page YOU read, use `hyperia open`)'
+    );
+  }
+  const purpose = typeof flags.why === 'string' ? flags.why : undefined;
+  return invoke('open_in_browser', {url, ...(purpose ? {purpose} : {})}, wantJson);
+}
+
 async function cmdSplit(flags: Flags, wantJson: boolean): Promise<number> {
   const args: Record<string, unknown> = {...target(flags)};
   if (typeof flags.url === 'string') args.url = flags.url;
@@ -746,6 +757,7 @@ COMMON
   hyperia run "<cmd>" --pane <id>   run a command in a pane
   hyperia cd <dir> --pane <id>      change a pane's dir (applies when idle)
   hyperia open <url>                web pane in a NEW tab
+  hyperia browser <url> [--why ..]  ask the human to open it in their default browser
   hyperia split --url <url>         web pane in the CURRENT tab
   hyperia split --command "<cmd>"   new shell split
   hyperia screen --pane <id>        read a pane's screen
@@ -791,6 +803,7 @@ export const MCP_COMMANDS = new Set([
   'keys',
   'cd',
   'open',
+  'browser',
   'split',
   'screen',
   'close',
@@ -831,6 +844,8 @@ export async function runMcpCli(argv: string[]): Promise<number> {
         return await cmdCd(pos, flags, wantJson);
       case 'open':
         return await cmdOpen(pos, wantJson);
+      case 'browser':
+        return await cmdBrowser(pos, flags, wantJson);
       case 'split':
         return await cmdSplit(flags, wantJson);
       case 'screen':

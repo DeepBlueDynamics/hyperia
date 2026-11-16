@@ -2462,6 +2462,8 @@ impl Bridge {
                 // and close their prompts in the UI right away. The source OR
                 // destination pane is gone, so there is nothing left to decide.
                 for req in self.inner.perms.cleanup_pane(uid).await {
+                    // Its page will never be answered now; don't keep it parked.
+                    crate::browser_open::forget(&req.id);
                     let bridge = self.clone();
                     tokio::spawn(async move {
                         let _ = bridge.notify(serde_json::json!({

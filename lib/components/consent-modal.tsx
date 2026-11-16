@@ -12,7 +12,7 @@ import {
   type PermRequest
 } from '../permissions-bus';
 import {onToastLayerAction, setLayerToasts, useToastLayer} from '../toast-layer';
-import {consentSubject, consentTargetName, consentVariant} from '../utils/consent-variant';
+import {consentSubject, consentTargetName, consentUrl, consentVariant} from '../utils/consent-variant';
 import {refocusTermIfLost} from '../utils/refocus-term';
 import {useSuppressWebPanes} from '../utils/web-pane-suppress';
 
@@ -139,6 +139,7 @@ export default function ConsentModal(): React.ReactElement | null {
   // Wording + which rows apply (pane access / messaging / mailbox binding).
   const variant = consentVariant(req.action, targetIsHere);
   const subject = consentSubject(req);
+  const page = consentUrl(req);
 
   const act = (decision: 'allow' | 'deny') => {
     setBusy(true);
@@ -173,6 +174,11 @@ export default function ConsentModal(): React.ReactElement | null {
             <span className="hy-consent-muted">{variant.verb}</span>
             <b>{paneName}</b>
             <span className="hy-consent-muted"> {variant.tail}</span>
+            {page ? (
+              <div className="hy-consent-why hy-consent-url" title={page.full}>
+                <span className="hy-consent-why-label">Page:</span> {page.text}
+              </div>
+            ) : null}
             {subject || req.purpose ? (
               <div className="hy-consent-why">
                 {/* Messaging shows the mail's subject (never its body) in place of Why. */}

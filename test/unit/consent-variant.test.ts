@@ -1,6 +1,12 @@
 import test from 'ava';
 
-import {SUBJECT_MAX, consentSubject, consentTargetName, consentVariant} from '../../lib/utils/consent-variant';
+import {
+  SUBJECT_MAX,
+  consentSubject,
+  consentTargetName,
+  consentUrl,
+  consentVariant
+} from '../../lib/utils/consent-variant';
 
 // The consent prompt has three variants keyed off `action`. They share one
 // row layout; these tests pin which rows each shows and its wording.
@@ -50,6 +56,35 @@ test('sticky run: fixed "This run" chip, no For row, names the sticky', (t) => {
     consentTargetName({targetPane: 'sticky:note-1-abcd', action: 'sticky_run', recipientLabel: 'Weather Tokyo'}),
     "'Weather Tokyo'"
   );
+});
+
+test('browser page: fixed "This page, once" chip, no For row, names the site', (t) => {
+  const v = consentVariant('open_browser');
+  t.is(v.kind, 'open_browser');
+  t.is(v.verb, ' wants to open ');
+  t.is(v.accessChip, 'This page, once');
+  t.false(v.showDuration);
+  t.true(v.tail.includes('default browser'));
+  const req = {targetPane: 'browser:github.com', action: 'open_browser', url: 'https://github.com/login/device'};
+  t.is(consentTargetName({...req, recipientLabel: 'github.com'}, 'ignored pane'), 'github.com');
+  // Older sidecar without the label: the host from the URL, never a pane id.
+  t.is(consentTargetName(req), 'github.com');
+  t.is(consentTargetName({...req, url: undefined}), 'a web page');
+});
+
+test('browser page: the full URL is shown, long ones cut with the full text kept', (t) => {
+  t.deepEqual(consentUrl({action: 'open_browser', url: ' https://example.com/a?b=1 '}), {
+    text: 'https://example.com/a?b=1',
+    full: 'https://example.com/a?b=1'
+  });
+  t.is(consentUrl({action: 'open_browser'}), null);
+  t.is(consentUrl({action: 'drive', url: 'https://example.com'}), null);
+  const long = 'https://example.com/' + 'a'.repeat(500);
+  const cut = consentUrl({action: 'open_browser', url: long}, 40);
+  t.is(cut!.full, long);
+  t.is(Array.from(cut!.text).length, 40);
+  t.true(cut!.text.startsWith('https://example.com/'));
+  t.true(cut!.text.endsWith('…'));
 });
 
 test('target name: messaging prefers the recipient agent label over the pane', (t) => {
