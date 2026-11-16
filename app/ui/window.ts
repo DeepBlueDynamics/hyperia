@@ -44,6 +44,7 @@ import {decorateSessionOptions, decorateSessionClass} from '../plugins';
 import createRPC from '../rpc';
 import Session from '../session';
 import {startSessionLog, writeSessionLog, endSessionLog} from '../session-logger';
+import {isSafeExternalUrl} from '../sticky/external-url';
 import {destroyToastLayerForWindow, initToastLayer} from '../toast-layer';
 import {getAppIcon} from '../utils/icon';
 import {setRendererType, unsetRendererType} from '../utils/renderer-utils';
@@ -907,7 +908,7 @@ export function newWindow(
     setRendererType(uid, type);
   });
   rpc.on('open external', ({url}) => {
-    void shell.openExternal(url);
+    if (isSafeExternalUrl(url)) void shell.openExternal(url);
   });
   rpc.on('open context menu', (selection) => {
     const {createWindow} = app;

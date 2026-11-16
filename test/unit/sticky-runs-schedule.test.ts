@@ -4,10 +4,11 @@ process.env.TZ = 'America/New_York';
 
 import test from 'ava';
 
-import {isSafeExternalUrl} from '../../app/sticky/external-url';
+import {isSafeExternalUrl, isWebPageUrl} from '../../app/sticky/external-url';
 import {buildAgentPrompt, buildPanePrompt} from '../../app/sticky/runs/prompt';
 import {cronNext, firstRun, needsApproval, nextEvery, parseCron, validateRun} from '../../app/sticky/runs/schedule';
 import type {NoteData, RunRecord, StickyRun} from '../../app/sticky/types';
+import {isSafeExternalUrl as isSafeTerminalLink} from '../../lib/utils/external-url';
 
 const local = (y: number, mo: number, d: number, h = 0, mi = 0) => new Date(y, mo - 1, d, h, mi).getTime();
 const HOUR = 3600000;
@@ -222,5 +223,25 @@ test('external links: only http, https and mailto reach the OS', (t) => {
     42
   ]) {
     t.false(isSafeExternalUrl(bad), String(bad));
+    // A link printed in a terminal gets the same check before it reaches the OS.
+    t.false(isSafeTerminalLink(bad), String(bad));
+  }
+  t.true(isSafeTerminalLink('https://example.com/a'));
+});
+
+test('open_in_browser: only a plain web page reaches the OS', (t) => {
+  for (const ok of ['https://example.com/a?b=1', 'http://localhost:3000/']) t.true(isWebPageUrl(ok), ok);
+  for (const bad of [
+    'mailto:a@example.com',
+    'file:///C:/Windows/System32/calc.exe',
+    'javascript:alert(1)',
+    'ms-settings:privacy',
+    'https://bank.com@evil.example/',
+    'https://user:pw@example.com/',
+    'example.com',
+    '',
+    undefined
+  ]) {
+    t.false(isWebPageUrl(bad), String(bad));
   }
 });

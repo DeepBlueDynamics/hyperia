@@ -22,6 +22,7 @@ import rpc from '../rpc';
 import terms from '../terms';
 import {altArrowSequence} from '../utils/alt-arrow-sequence';
 import {ctrlCaretSequence} from '../utils/ctrl-caret';
+import {isSafeExternalUrl} from '../utils/external-url';
 import {fileBrowserLabel, isLocalDir} from '../utils/file-browser';
 import {acceleratorFor} from '../utils/keymaps';
 import {isPlainShell, pickNativeShell} from '../utils/native-shell';
@@ -75,11 +76,11 @@ function openUrl(uri: string): void {
       hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0' || hostname === '::1';
     if (isLocal) {
       rpc.emitter.emit('open web pane req', {url: uri});
-    } else {
+    } else if (isSafeExternalUrl(uri)) {
       void shell.openExternal(uri);
     }
   } catch {
-    void shell.openExternal(uri);
+    // Not a URL: nothing to open.
   }
 }
 
