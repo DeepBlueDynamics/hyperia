@@ -908,8 +908,9 @@ function handleCommand(msg: Record<string, unknown>) {
         const tracked = trackedSessions.get(targetUid);
         const win = tracked ? getHyperiaWindowById(tracked.windowId) : null;
         if (win) {
-          win.rpc.emit('session set active', {uid: targetUid});
-          setTimeout(() => win.rpc.emit('termgroup close req'), 80);
+          // By id, without selecting it first: no focus moves, and a pane that
+          // can't be found is left alone rather than closing the active one.
+          win.rpc.emit('termgroup close pane req', {uid: targetUid});
           sendResult(seq, 'ok');
         } else {
           sendResult(seq, 'No tab at that uid');

@@ -248,6 +248,7 @@ export type RendererEvents = {
   'clone request horizontal': any;
   'termgroup add req': {activeUid?: string | null; profile?: string | null; isAgentInitiated?: boolean; cwd?: string};
   'termgroup close req': never;
+  'termgroup close pane req': {uid: string};
   'web-pane-reload': string;
   'session add': Session;
   'session data': string;

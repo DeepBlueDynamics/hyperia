@@ -42,6 +42,7 @@ import {toNavigableUrl} from './utils/navigable-url';
 import {readLastUsedShell, reportLastUsedShell} from './utils/picker-shell';
 import {installLayoutScrollPin} from './utils/pin-layout-scroll';
 import * as plugins from './utils/plugins';
+import {groupForPane} from './utils/term-groups';
 import {syncWebUrls} from './utils/web-url-sync';
 
 // On Linux, the default zoom was somehow changed with Electron 3 (or maybe 2).
@@ -345,6 +346,15 @@ rpc.on('audio notice', ({id, name, active}: {id: string; name: string; active: b
 
 rpc.on('termgroup close req', () => {
   store_.dispatch(termGroupActions.exitActiveTermGroup());
+});
+
+// Close one named pane (terminal_close). Closing "the active pane" after
+// selecting it closed the human's pane instead whenever the selection didn't
+// take, which it never does for a web pane.
+rpc.on('termgroup close pane req', ({uid}: {uid: string}) => {
+  const groupUid = groupForPane(store_.getState().termGroups, uid);
+  if (groupUid) store_.dispatch(termGroupActions.userExitTermGroup(groupUid) as any);
+  else console.warn(`[close] no pane ${uid} in this window; nothing closed`);
 });
 
 rpc.on('session clear req', () => {
