@@ -45,6 +45,10 @@ type PaneBandProps = {
   onSplitLeft?: () => void;
   onSplitUp?: () => void;
   onClose: () => void;
+  /** Kill this pane's shell and start the same profile fresh in its folder. */
+  onResetShell?: () => void;
+  /** Responsive collapse (narrow panes): drop the reset-shell button. */
+  hideResetShell?: boolean;
   /** Responsive collapse (narrow panes): drop the quick-layout button. */
   hideQuickLayout?: boolean;
   /**
@@ -105,6 +109,8 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
       onSplitLeft,
       onSplitUp,
       onClose,
+      onResetShell,
+      hideResetShell = false,
       hideQuickLayout = false,
       squeeze = 0,
       onClick,
@@ -197,11 +203,17 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
 
     const [confirmClose, setConfirmClose] = React.useState(false);
     const confirmCloseTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+    // A reset kills whatever runs in the shell, so a busy pane asks twice (like close).
+    const [confirmReset, setConfirmReset] = React.useState(false);
+    const confirmResetTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
     React.useEffect(() => {
       return () => {
         if (confirmCloseTimeoutRef.current) {
           clearTimeout(confirmCloseTimeoutRef.current);
+        }
+        if (confirmResetTimeoutRef.current) {
+          clearTimeout(confirmResetTimeoutRef.current);
         }
       };
     }, []);
@@ -524,7 +536,7 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
         {/* Controls Cluster — splits + close, anchored to the right. */}
         <div
           className="pane-band-controls-cluster hy-band-controls"
-          style={{gap: sq(10, 3)}}
+          style={{gap: sq(6, 2)}}
           onClick={(e) => e.stopPropagation()}
         >
           {radioSign && (
@@ -536,6 +548,49 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
               {radioSign}
             </span>
           )}
+          {/* Reset shell: same profile, same folder, fresh process. First to go
+              on the width ladder. */}
+          {onResetShell && paneType === 'shell' && !isPlaceholder && !hideResetShell && (
+            <span
+              className="pane-band-control-icon pane-band-tooltip-trigger hy-band-ctl hy-band-reset"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (isBusy && !confirmReset) {
+                  setConfirmReset(true);
+                  if (confirmResetTimeoutRef.current) clearTimeout(confirmResetTimeoutRef.current);
+                  confirmResetTimeoutRef.current = setTimeout(() => setConfirmReset(false), 3000);
+                  return;
+                }
+                setConfirmReset(false);
+                onResetShell();
+              }}
+            >
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3 12a9 9 0 1 0 3-6.7" />
+                <polyline points="3 3 3 9 9 9" />
+              </svg>
+              <div className="pane-band-tooltip pane-band-reset-tooltip">
+                <div className="hy-band-tipTitle">Reset shell</div>
+                <div className="hy-band-tipSub">
+                  {isBusy ? 'Stops what is running, then starts a fresh shell here' : 'Start a fresh shell here'}
+                </div>
+              </div>
+              {confirmReset && (
+                <div className="pane-band-confirm-close-toast hy-band-confirmToast">Click again to reset</div>
+              )}
+            </span>
+          )}
+
           {/* Pulse (re-poke watchdog) — clock toggle, mirrors the sticky timer icon.
               Pulses (animates) while a pulse is active so it's obvious it's running.
               Shell sessions only (per Kord): hidden on the picker until a shell is
@@ -995,6 +1050,12 @@ export const PaneBand = React.forwardRef<HTMLDivElement, PaneBandProps>(
           }
 
           .pane-band-pulse-tooltip {
+            right: -6px;
+            left: auto;
+            min-width: 200px;
+          }
+
+          .pane-band-reset-tooltip {
             right: -6px;
             left: auto;
             min-width: 200px;
