@@ -157,6 +157,15 @@ export function setLayerToasts(
   hubFor(anchor).set(source, order, items);
 }
 
+/** Pin the top-right layer to a pane box (host CSS px), or null for the window corner. */
+export function setLayerRegion(region: {x: number; y: number; width: number} | null): void {
+  try {
+    ipcRenderer.send('toast-layer:region', {anchor: 'top-right', region});
+  } catch {
+    /* main not ready */
+  }
+}
+
 export type ToastLayerAction = {toastId: string; buttonId: string};
 
 /** Subscribe to clicks relayed from the layer. Returns the unsubscribe. */

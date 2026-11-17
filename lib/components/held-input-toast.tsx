@@ -1,13 +1,16 @@
-// Top-right prompt when an agent's input, or a mail notice, is held because the
-// human is in the target pane. "Send now" releases it and takes the keyboard out of the pane so
+// Prompt at the target pane's top-right when an agent's input, or a mail notice,
+// is held because the human is in that pane. "Send now" releases it and takes the keyboard out of the pane so
 // the human's typing can't land in the middle of it. "Later" keeps waiting:
 // the input goes in once the human leaves the pane, as before.
 import {ipcRenderer} from 'electron';
 import React from 'react';
 
 import rpc from '../rpc';
-import {onToastLayerAction, setLayerToasts, useToastLayer} from '../toast-layer';
+import terms from '../terms';
+import {onToastLayerAction, setLayerRegion, setLayerToasts, useToastLayer} from '../toast-layer';
 import type {ToastLayerItem} from '../toast-layer';
+import {paneBoxFrom, pinnedPane, samePaneBox} from '../utils/held-input-pane';
+import type {PaneBox} from '../utils/held-input-pane';
 import {refocusTermIfLost} from '../utils/refocus-term';
 
 import './held-input-toast.css';
@@ -22,6 +25,38 @@ export interface HeldInput {
 
 // Wait out the layer handing focus back to the host before blurring the pane.
 const BLUR_AFTER_MS = 200;
+// Splits move panes without resizing the window, so re-measure while a prompt is up.
+const TRACK_MS = 200;
+
+function measurePane(uid: string): PaneBox | null {
+  const root = terms[uid]?.termOuterRef.current;
+  if (!root?.isConnected) return null;
+  const band = root.querySelector('.pane-band-container');
+  return paneBoxFrom(root.getBoundingClientRect(), band ? band.getBoundingClientRect() : null);
+}
+
+// The pane's box while `uid` is set; null when unset or not on screen.
+function usePaneBox(uid: string | null): PaneBox | null {
+  const [box, setBox] = React.useState<PaneBox | null>(null);
+  React.useLayoutEffect(() => {
+    if (!uid) {
+      setBox(null);
+      return undefined;
+    }
+    const update = () => {
+      const next = measurePane(uid);
+      setBox((prev) => (samePaneBox(prev, next) ? prev : next));
+    };
+    update();
+    const timer = setInterval(update, TRACK_MS);
+    window.addEventListener('resize', update);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('resize', update);
+    };
+  }, [uid]);
+  return box;
+}
 
 export function heldInputText(h: HeldInput): string {
   // Mail: the agent gets a one-line "[Hyperia mail] …" notice, not the mail itself.
@@ -88,6 +123,16 @@ export default function HeldInputToast(): React.ReactElement | null {
     [drop]
   );
 
+  const box = usePaneBox(pinnedPane(held));
+
+  // Before the items, so the layer's first placement is already on the pane.
+  React.useEffect(() => {
+    if (!layer) return undefined;
+    setLayerRegion(box);
+    return undefined;
+  }, [layer, box]);
+  React.useEffect(() => (layer ? () => setLayerRegion(null) : undefined), [layer]);
+
   React.useEffect(() => {
     if (!layer) return undefined;
     setLayerToasts('held-input', 0, layerItemsFor(held), 'top-right');
@@ -102,8 +147,10 @@ export default function HeldInputToast(): React.ReactElement | null {
   }, [layer, held, decide]);
 
   if (layer || !held.length) return null;
+  // Pane-relative when measured; the CSS keeps the window corner otherwise.
+  const place = box ? {top: box.y + 8, right: Math.max(16, window.innerWidth - (box.x + box.width) + 16)} : undefined;
   return (
-    <div className="hy-held-input-stack" style={{position: 'fixed'}}>
+    <div className="hy-held-input-stack" style={{position: 'fixed', ...place}}>
       {held.map((h) => (
         <div key={h.opId} className="hy-held-input-card">
           <div className="hy-held-input-head">

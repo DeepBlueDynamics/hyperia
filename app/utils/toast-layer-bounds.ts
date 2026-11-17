@@ -58,7 +58,7 @@ export function centerBounds(
 // Below the tab strip (CSS px), so the view never covers the window buttons.
 export const TOP_RIGHT_INSET = 40;
 
-// Top-right, for prompts about the pane the human is in.
+// Window top-right: where pane prompts go when their pane can't be measured.
 export function topRightBounds(
   contentWidth: number,
   contentHeight: number,
@@ -69,4 +69,33 @@ export function topRightBounds(
   const {w, h, z, width, height} = fit(contentWidth, contentHeight, cssW, cssH, zoom);
   const y = Math.min(Math.round(TOP_RIGHT_INSET * z), h - height);
   return {x: w - width, y, width, height};
+}
+
+/** A pane's box in host CSS px; `y` is the bottom of its top bar. */
+export interface PaneRegion {
+  x: number;
+  y: number;
+  width: number;
+}
+
+export function isPaneRegion(r: unknown): r is PaneRegion {
+  const o = r as PaneRegion | null;
+  return !!o && [o.x, o.y, o.width].every((n) => typeof n === 'number' && Number.isFinite(n)) && o.width > 0;
+}
+
+// Top-right of one pane, under its top bar. A view wider than the pane runs
+// left past the pane's edge; it always stays inside the window.
+export function paneTopRightBounds(
+  contentWidth: number,
+  contentHeight: number,
+  cssW: number,
+  cssH: number,
+  zoom: number,
+  region: PaneRegion
+): LayerRect {
+  const {w, h, z, width, height} = fit(contentWidth, contentHeight, cssW, cssH, zoom);
+  const right = Math.round((region.x + region.width) * z);
+  const x = Math.max(0, Math.min(right - width, w - width));
+  const y = Math.max(0, Math.min(Math.round(region.y * z), h - height));
+  return {x, y, width, height};
 }

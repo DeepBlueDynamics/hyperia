@@ -26,7 +26,15 @@ import {BrowserWindow, WebContentsView, app, ipcMain} from 'electron';
 
 import isDev from 'electron-is-dev';
 
-import {bottomRightBounds, centerBounds, topCenterBounds, topRightBounds} from './utils/toast-layer-bounds';
+import {
+  bottomRightBounds,
+  centerBounds,
+  isPaneRegion,
+  paneTopRightBounds,
+  topCenterBounds,
+  topRightBounds
+} from './utils/toast-layer-bounds';
+import type {PaneRegion} from './utils/toast-layer-bounds';
 
 // 'center' holds the consent cards, matching the centered pane-access prompt.
 export type ToastLayerAnchor = 'top' | 'center' | 'bottom-right' | 'top-right';
@@ -111,6 +119,10 @@ function fallBack(win: BrowserWindow, anchor: ToastLayerAnchor, reason: string):
 // Keyed by `${win.id}:${anchor}`.
 const layers = new Map<string, LayerEntry>();
 const layerKey = (win: BrowserWindow, anchor: ToastLayerAnchor) => `${win.id}:${anchor}`;
+// The pane a 'top-right' layer's prompts are about, same keys. Kept apart from
+// the layer so it survives the view being rebuilt.
+const regions = new Map<string, PaneRegion>();
+const regionWindows = new WeakSet<BrowserWindow>();
 export const normalizeToastLayerAnchor = (a: unknown): ToastLayerAnchor =>
   a === 'bottom-right' || a === 'center' || a === 'top-right' ? a : 'top';
 // Set once creating a layer throws (e.g. an Electron build where transparent
@@ -129,14 +141,17 @@ export function resolveToastLayerHtmlPath(isDevMode: boolean = isDev, appPath?: 
 function position(entry: LayerEntry): void {
   if (entry.win.isDestroyed()) return;
   const {width, height} = entry.win.getContentBounds();
+  const region = entry.anchor === 'top-right' ? regions.get(entry.key) : undefined;
   entry.view.setBounds(
-    entry.anchor === 'bottom-right'
-      ? bottomRightBounds(width, height, entry.cssW, entry.cssH, entry.zoom)
-      : entry.anchor === 'center'
-        ? centerBounds(width, height, entry.cssW, entry.cssH, entry.zoom)
-        : entry.anchor === 'top-right'
-          ? topRightBounds(width, height, entry.cssW, entry.cssH, entry.zoom)
-          : topCenterBounds(width, entry.cssW, entry.cssH, entry.zoom)
+    region
+      ? paneTopRightBounds(width, height, entry.cssW, entry.cssH, entry.zoom, region)
+      : entry.anchor === 'bottom-right'
+        ? bottomRightBounds(width, height, entry.cssW, entry.cssH, entry.zoom)
+        : entry.anchor === 'center'
+          ? centerBounds(width, height, entry.cssW, entry.cssH, entry.zoom)
+          : entry.anchor === 'top-right'
+            ? topRightBounds(width, height, entry.cssW, entry.cssH, entry.zoom)
+            : topCenterBounds(width, entry.cssW, entry.cssH, entry.zoom)
   );
   reportBounds(entry);
 }
@@ -343,6 +358,27 @@ export function initToastLayer(): void {
           fallBack(win, anchor, `never shown: loaded=${entry.loaded} size=${entry.cssW}x${entry.cssH}`);
       }, SHOW_DEADLINE_MS);
     }
+  });
+
+  // Host renderer → main: pin the top-right layer to a pane (null = window corner).
+  ipcMain.on('toast-layer:region', (e, payload: {anchor?: unknown; region?: unknown}) => {
+    const win = winOf(e);
+    if (!win || win.isDestroyed()) return;
+    const anchor = normalizeToastLayerAnchor(payload?.anchor);
+    if (anchor !== 'top-right') return;
+    const key = layerKey(win, anchor);
+    const region = payload?.region;
+    if (isPaneRegion(region)) {
+      if (!regionWindows.has(win)) {
+        regionWindows.add(win);
+        win.once('closed', () => regions.delete(key));
+      }
+      regions.set(key, {x: region.x, y: region.y, width: region.width});
+    } else {
+      regions.delete(key);
+    }
+    const entry = layers.get(key);
+    if (entry) position(entry);
   });
 
   // Layer → main: its rendered content size, in the layer's CSS px.
