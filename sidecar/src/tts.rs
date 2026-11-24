@@ -913,13 +913,17 @@ pub fn agent_callsign(label: &str) -> String {
 /// (It used to say "Oh ver" to dodge the old CMUdict G2P dropping over's ER
 /// vowel; the misaki G2P pronounces "over" correctly, and the respelling was
 /// heard literally.)
-pub fn radio_wrap(recipient: &str, caller: &str, text: &str) -> String {
+/// `sign` is the speaker pane's current radio call sign: signs rotate on every
+/// call, and saying the new one on the local speaker tells only the room.
+pub fn radio_wrap(recipient: &str, caller: &str, sign: Option<&str>, text: &str) -> String {
     // Strip trailing sentence punctuation from the body so the frame reads
     // cleanly ("… transmitting. <text>. This is …").
     let body = text.trim().trim_end_matches(['.', ',', '!', '?', ';', ':', ' ']);
-    format!(
-        "{recipient}, {recipient}, this is {caller} transmitting. {body}. This is {caller}. Over and out."
-    )
+    let sign_off = match sign.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(sign) => format!("This is {caller}, call sign {sign}."),
+        None => format!("This is {caller}."),
+    };
+    format!("{recipient}, {recipient}, this is {caller} transmitting. {body}. {sign_off} Over and out.")
 }
 
 /// Write mono `f32` samples as a 16-bit PCM WAV at [`SAMPLE_RATE`] (no deps —
@@ -1016,9 +1020,16 @@ mod tests {
 
     #[test]
     fn radio_frame_signs_off_with_plain_over() {
-        let spoken = radio_wrap("base", "Continued Alpaca", "Antigravity online.");
+        let spoken = radio_wrap("base", "Continued Alpaca", None, "Antigravity online.");
         assert!(spoken.ends_with("This is Continued Alpaca. Over and out."), "{spoken}");
         assert!(!spoken.to_lowercase().contains("oh ver"));
+    }
+
+    #[test]
+    fn radio_frame_ends_with_the_current_call_sign() {
+        let spoken = radio_wrap("base", "Stable Xerinae", Some("Kilo Yankee"), "Done.");
+        assert!(spoken.ends_with("This is Stable Xerinae, call sign Kilo Yankee. Over and out."), "{spoken}");
+        assert_eq!(radio_wrap("base", "X", Some("  "), "Hi"), radio_wrap("base", "X", None, "Hi"));
     }
 
     fn test_voice_names() -> Vec<String> {

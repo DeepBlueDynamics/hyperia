@@ -1,7 +1,7 @@
 # Tool Doors — progressive disclosure for Hyperia's tool catalog
 
 Hyperia exposes 100+ agent tools. Showing all of them to a model on every turn is
-expensive: a 4B local model (Sailfish, ~8k context) drowns in the schema, and a
+expensive: a 4B local model (~8k context) drowns in the schema, and a
 token-billed cloud model pays for a giant `tools` array it mostly ignores. **Doors**
 are the fix — a progressive-disclosure model where a model only ever sees a small
 **core** plus a bounded set of **open doors**.

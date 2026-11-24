@@ -112,7 +112,8 @@
   color: var(--text-secondary, #9a9aa2);
 }
 
-.hy-consent-subject {
+.hy-consent-subject,
+.hy-consent-url {
   overflow-wrap: anywhere;
 }
 

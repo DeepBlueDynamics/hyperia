@@ -232,7 +232,7 @@ impl ContextCompressor {
     /// schemas). Tokens are estimated at 4 chars/token. When the estimate blows
     /// the budget, the number of verbatim recent messages kept is stepped down
     /// from the default (6) toward a floor of 2 so system + tools + history fit
-    /// (e.g. an 8k Sailfish window).
+    /// (e.g. an 8k local-model window).
     pub async fn compress_messages_budgeted(
         &self,
         messages: &[Value],

@@ -6,7 +6,7 @@
 // Agent input is deferred while the user is actively typing/interacting
 // with a session. Per-session queues drain once the user goes idle.
 
-import {app, BrowserWindow} from 'electron';
+import {app, BrowserWindow, shell as electronShell} from 'electron';
 
 import isDev from 'electron-is-dev';
 import WebSocket from 'ws';
@@ -27,9 +27,10 @@ import {
   setResult,
   getNote
 } from './sticky';
+import {isWebPageUrl} from './sticky/external-url';
 import {SYSTEM_TOKEN} from './system-token';
 import {sessionReplayMessages} from './utils/session-replay';
-import {capturePaneJpeg} from './web-pane-manager';
+import {capturePaneJpeg, captureWindowImage} from './web-pane-manager';
 import {captureAllWindows, restoreWorkspace} from './workspace';
 
 const RECONNECT_BASE_MS = 2000;
@@ -294,10 +295,16 @@ function inputReserved(uid: string): boolean {
   return inputAttempts.has(uid);
 }
 
+// Focus alone protects a pane only while the human has clicked or typed there
+// recently; a pane left selected while they're away (on the radio) stops blocking.
+// Must match FOCUS_IDLE_RELEASE in sidecar/src/bridge.rs.
+const FOCUS_IDLE_RELEASE_MS = 5 * 60 * 1000;
+
 /** Human is typing in, or focused on, this pane: agent Enter must wait. */
 function paneProtected(uid: string, tracked: TrackedSession): boolean {
   const win = getHyperiaWindowById(tracked.windowId);
-  return isUserActive(uid) || !!(win?.isFocused() && tracked.tabActive && tracked.paneActive);
+  const present = Date.now() - (lastUserActivity.get(uid) || 0) < FOCUS_IDLE_RELEASE_MS;
+  return isUserActive(uid) || !!(present && win?.isFocused() && tracked.tabActive && tracked.paneActive);
 }
 
 // The sidecar counts a withheld Enter as consumed and never retries, so main
@@ -528,6 +535,8 @@ function handleCommand(msg: Record<string, unknown>) {
           alive: () => trackedSessions.get(uid) === tracked && tracked.session.pty?.pid === pid,
           protected: () => {
             if (msg.control === true && msg.interrupt === true) return false;
+            // The human chose "Send now" on the held-input toast for this op.
+            if (msg.released === true) return false;
             return paneProtected(uid, tracked);
           },
           write: (bytes) => tracked.session.pty!.write(bytes),
@@ -763,10 +772,37 @@ function handleCommand(msg: Record<string, unknown>) {
         // Messaging extras (optional; older sidecars omit them): who the mail
         // is for, and its subject. The body is never sent to the prompt.
         recipientLabel: (msg.recipientLabel as string) || undefined,
-        subject: (msg.subject as string) || undefined
+        subject: (msg.subject as string) || undefined,
+        // open_in_browser only: the page the agent asks to open.
+        url: (msg.url as string) || undefined
       };
       for (const w of (app as any).getWindows?.() || []) {
         if (w?.rpc) w.rpc.emit('permission request', payload);
+      }
+      break;
+    }
+
+    case 'InputHeld': {
+      // An agent's input waits because the human is in that pane. Only the
+      // window that owns the pane shows the "Send now" toast.
+      const uid = String(msg.pane || '');
+      const tracked = trackedSessions.get(uid);
+      const win = tracked ? getHyperiaWindowById(tracked.windowId) : null;
+      if (win?.rpc) {
+        win.rpc.emit('input held', {
+          opId: String(msg.opId || ''),
+          pane: uid,
+          kind: String(msg.kind || 'pane'),
+          from: String(msg.from || 'An agent'),
+          preview: String(msg.preview || '')
+        });
+      }
+      break;
+    }
+
+    case 'InputHeldCleared': {
+      for (const w of (app as any).getWindows?.() || []) {
+        if (w?.rpc) w.rpc.emit('input held cleared', {opId: String(msg.opId || '')});
       }
       break;
     }
@@ -811,44 +847,28 @@ function handleCommand(msg: Record<string, unknown>) {
     }
 
     case 'CaptureWindow': {
-      // Real-pixels screenshot of an ENTIRE Hyperia window — chrome, terminals,
-      // stickies, AND native WebContentsViews (web panes), which a plain
-      // webContents.capturePage would miss (they paint outside the renderer).
-      // desktopCapturer grabs the OS window itself, matched by media source id.
+      // Screenshot of a whole Hyperia window, web panes included.
       const winId = msg.windowId as number | undefined;
       const maxW = Math.max(320, Math.min(3840, (msg.maxWidth as number) || 1200));
       void (async () => {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const {desktopCapturer, screen} = require('electron') as typeof import('electron');
           const wins: any[] = Array.from((app as any).getWindows?.() || []);
           const target = winId ? wins.find((w) => w.id === winId) : wins.find((w) => w.isFocused()) || wins[0];
           if (!target || target.isDestroyed()) {
             sendResult(seq, JSON.stringify({ok: false, error: 'no matching window'}));
             return;
           }
-          const b = target.getBounds();
-          const sf = screen.getDisplayMatching(b).scaleFactor || 1;
-          const scale = Math.min(1, maxW / b.width);
-          const sources = await desktopCapturer.getSources({
-            types: ['window'],
-            thumbnailSize: {
-              width: Math.round(b.width * sf * scale),
-              height: Math.round(b.height * sf * scale)
-            }
-          });
-          const mediaId = typeof target.getMediaSourceId === 'function' ? target.getMediaSourceId() : '';
-          const src = sources.find((s) => s.id === mediaId) || sources.find((s) => s.name === target.getTitle());
-          if (!src || src.thumbnail.isEmpty()) {
-            sendResult(seq, JSON.stringify({ok: false, error: 'window not found in capture sources (minimized?)'}));
+          const img = await captureWindowImage(target, maxW);
+          if (img.isEmpty()) {
+            sendResult(seq, JSON.stringify({ok: false, error: 'window capture was empty (minimized?)'}));
             return;
           }
-          const size = src.thumbnail.getSize();
+          const size = img.getSize();
           sendResult(
             seq,
             JSON.stringify({
               ok: true,
-              png_base64: src.thumbnail.toPNG().toString('base64'),
+              png_base64: img.toPNG().toString('base64'),
               width: size.width,
               height: size.height,
               windowId: target.id
@@ -888,8 +908,9 @@ function handleCommand(msg: Record<string, unknown>) {
         const tracked = trackedSessions.get(targetUid);
         const win = tracked ? getHyperiaWindowById(tracked.windowId) : null;
         if (win) {
-          win.rpc.emit('session set active', {uid: targetUid});
-          setTimeout(() => win.rpc.emit('termgroup close req'), 80);
+          // By id, without selecting it first: no focus moves, and a pane that
+          // can't be found is left alone rather than closing the active one.
+          win.rpc.emit('termgroup close pane req', {uid: targetUid});
           sendResult(seq, 'ok');
         } else {
           sendResult(seq, 'No tab at that uid');
@@ -1155,6 +1176,22 @@ function handleCommand(msg: Record<string, unknown>) {
       } else {
         sendResult(seq, win ? 'No url provided' : 'No focused window');
       }
+      break;
+    }
+
+    case 'OpenExternal': {
+      // open_in_browser, after the human approved this page. The sidecar checked
+      // the URL; check again here so only a web page ever reaches the OS.
+      const url = String(msg.url || '');
+      if (!isWebPageUrl(url)) {
+        sendResult(seq, JSON.stringify({ok: false, error: 'Only http(s) pages can be opened'}));
+        break;
+      }
+      electronShell.openExternal(url).then(
+        () => sendResult(seq, JSON.stringify({ok: true})),
+        (err: unknown) =>
+          sendResult(seq, JSON.stringify({ok: false, error: err instanceof Error ? err.message : String(err)}))
+      );
       break;
     }
 

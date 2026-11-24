@@ -44,10 +44,12 @@ import {decorateSessionOptions, decorateSessionClass} from '../plugins';
 import createRPC from '../rpc';
 import Session from '../session';
 import {startSessionLog, writeSessionLog, endSessionLog} from '../session-logger';
+import {isSafeExternalUrl} from '../sticky/external-url';
 import {destroyToastLayerForWindow, initToastLayer} from '../toast-layer';
 import {getAppIcon} from '../utils/icon';
 import {setRendererType, unsetRendererType} from '../utils/renderer-utils';
 import {pickStartDirectory} from '../utils/start-dir';
+import {isTerminalReport} from '../utils/terminal-reports';
 import toElectronBackgroundColor from '../utils/to-electron-background-color';
 import {initWebPaneManager, destroyPanesForWindow, setWindowWebPanesSuppressed} from '../web-pane-manager';
 import {
@@ -826,7 +828,9 @@ export function newWindow(
     }
   });
   rpc.on('data', ({uid, data, escaped}) => {
-    if (uid) notifyUserActivity(uid);
+    // Mouse/focus reports and query replies aren't typing; counting them held
+    // agent input and mail whenever the pointer crossed a mouse-tracking pane.
+    if (uid && !(typeof data === 'string' && isTerminalReport(data))) notifyUserActivity(uid);
     const session = uid && sessions.get(uid);
     if (session) {
       if (escaped) {
@@ -904,7 +908,7 @@ export function newWindow(
     setRendererType(uid, type);
   });
   rpc.on('open external', ({url}) => {
-    void shell.openExternal(url);
+    if (isSafeExternalUrl(url)) void shell.openExternal(url);
   });
   rpc.on('open context menu', (selection) => {
     const {createWindow} = app;

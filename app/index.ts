@@ -222,6 +222,7 @@ async function consentFetch(event: Electron.IpcMainInvokeEvent, apiPath: string,
   return response.json();
 }
 ipcMain.handle('consent:respond', (event, body) => consentFetch(event, '/api/perms/respond', body));
+ipcMain.handle('input-held:release', (event, body) => consentFetch(event, '/api/delivery/release-held', body));
 // The renderer reports the shell the human last launched from a picker (and once
 // at startup), so main-side fallbacks (getDefaultProfile) launch the same shell.
 ipcMain.on('last-used-shell', (_event, name: unknown) => setLastUsedShell(name));

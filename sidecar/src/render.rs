@@ -14,7 +14,7 @@
 //! into the file updates the analysis in place while the human watches.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
@@ -37,6 +37,30 @@ pub struct RenderDoc {
     pub source: RenderSource,
 }
 
+/// What rendering a file by path asks for.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PathAccess {
+    /// A text document: what the tool is for.
+    Document,
+    /// Inside Hyperia's own state directory (tokens, grants): never.
+    Private,
+    /// Any other file: reading it needs the `files` capability.
+    NeedsFiles,
+}
+
+/// Decide by the resolved path, so a link named notes.md can't stand in for a secret.
+pub fn path_access(resolved: &Path, state_dir: &Path) -> PathAccess {
+    if resolved.starts_with(state_dir) {
+        return PathAccess::Private;
+    }
+    let ext = resolved.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkd" | "mdx" | "txt") {
+        PathAccess::Document
+    } else {
+        PathAccess::NeedsFiles
+    }
+}
+
 #[derive(Clone)]
 pub struct RenderStore {
     inner: Arc<Mutex<HashMap<String, RenderDoc>>>,
@@ -57,6 +81,11 @@ impl RenderStore {
         let id = crate::util::random_token(5).await;
         self.inner.lock().await.insert(id.clone(), doc);
         id
+    }
+
+    /// Drop a document whose tab was refused, so it isn't served or kept.
+    pub async fn remove(&self, id: &str) {
+        self.inner.lock().await.remove(id);
     }
 
     async fn read(&self, id: &str) -> Option<(String, String, u64)> {
@@ -296,5 +325,25 @@ pub async fn get_render_version(
     match state.render.version(&id).await {
         Some(v) => (StatusCode::OK, format!("{{\"v\":\"{v}\"}}")),
         None => (StatusCode::NOT_FOUND, "{\"error\":\"no such render\"}".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod path_access_tests {
+    use super::*;
+
+    #[test]
+    fn documents_pass_state_is_private_and_the_rest_needs_files() {
+        let state = Path::new("/home/u/.hyperia");
+        for doc in ["/home/u/notes/plan.md", "/home/u/README.MARKDOWN", "/tmp/log.txt"] {
+            assert_eq!(path_access(Path::new(doc), state), PathAccess::Document, "{doc}");
+        }
+        // Tokens and grants live here; the extension doesn't matter.
+        for private in ["/home/u/.hyperia/agents.json", "/home/u/.hyperia/perms.json", "/home/u/.hyperia/notes/x.md"] {
+            assert_eq!(path_access(Path::new(private), state), PathAccess::Private, "{private}");
+        }
+        for other in ["/home/u/.ssh/id_ed25519", "/home/u/app/.env", "/home/u/app/config.json", "/home/u/.hyperia-backup/a.json"] {
+            assert_eq!(path_access(Path::new(other), state), PathAccess::NeedsFiles, "{other}");
+        }
     }
 }

@@ -12,7 +12,8 @@ import {
   type PermRequest
 } from '../permissions-bus';
 import {onToastLayerAction, setLayerToasts, useToastLayer} from '../toast-layer';
-import {consentSubject, consentTargetName, consentVariant} from '../utils/consent-variant';
+import {consentSubject, consentTargetName, consentUrl, consentVariant} from '../utils/consent-variant';
+import {refocusTermIfLost} from '../utils/refocus-term';
 import {useSuppressWebPanes} from '../utils/web-pane-suppress';
 
 import './consent-modal.css';
@@ -111,6 +112,8 @@ export default function ConsentModal(): React.ReactElement | null {
     const sess = s?.sessions?.sessions?.[req.targetPane];
     return consentTargetName(req, (sess && (sess.shellName || sess.title)) || undefined);
   });
+  // The pane you're in never flashes, so the prompt mustn't say it does.
+  const targetIsHere = useSelector((s: any) => !!req && s?.ui?.activeUid === req.targetPane);
 
   // No ACTIVE prompt — but pending (expired/snoozed) requests collapse into a
   // persistent pill instead of vanishing. Click re-opens the full prompt. The
@@ -134,16 +137,19 @@ export default function ConsentModal(): React.ReactElement | null {
   }
 
   // Wording + which rows apply (pane access / messaging / mailbox binding).
-  const variant = consentVariant(req.action);
+  const variant = consentVariant(req.action, targetIsHere);
   const subject = consentSubject(req);
+  const page = consentUrl(req);
 
   const act = (decision: 'allow' | 'deny') => {
     setBusy(true);
     setError('');
-    void respond(req, decision, scope, duration).catch((err: unknown) => {
-      setError(err instanceof Error ? err.message : 'Approval was not recorded. Please retry.');
-      setBusy(false);
-    });
+    void respond(req, decision, scope, duration)
+      .then(() => refocusTermIfLost())
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : 'Approval was not recorded. Please retry.');
+        setBusy(false);
+      });
   };
 
   return (
@@ -154,7 +160,10 @@ export default function ConsentModal(): React.ReactElement | null {
       // click anywhere in the window was killing agents' requests (and while
       // the prompt was up, this full-window layer ate every hover/click — the
       // "all the icons are broken" reports). Only the explicit buttons decide.
-      onClick={() => expireRequest(req.targetPane, req.id)}
+      onClick={() => {
+        expireRequest(req.targetPane, req.id);
+        refocusTermIfLost();
+      }}
     >
       <div onClick={(e) => e.stopPropagation()} className="hy-consent-card">
         {/* Who + what + where */}
@@ -165,6 +174,11 @@ export default function ConsentModal(): React.ReactElement | null {
             <span className="hy-consent-muted">{variant.verb}</span>
             <b>{paneName}</b>
             <span className="hy-consent-muted"> {variant.tail}</span>
+            {page ? (
+              <div className="hy-consent-why hy-consent-url" title={page.full}>
+                <span className="hy-consent-why-label">Page:</span> {page.text}
+              </div>
+            ) : null}
             {subject || req.purpose ? (
               <div className="hy-consent-why">
                 {/* Messaging shows the mail's subject (never its body) in place of Why. */}

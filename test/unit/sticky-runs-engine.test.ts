@@ -196,7 +196,7 @@ test.serial('non-2xx from the sidecar is a failed run with the body as the error
   const f = createStickyFixture(t, {autoInit: false});
   mockSidecar(t, (m, p) => {
     if (p === '/api/status') return {status: 200, body: {windows: [{id: 1, tabs: [{panes: [{paneId: 'here'}]}]}]}};
-    if (p === '/api/pane/send') return {status: 409, body: {error: 'Pane is a shell prompt.'}};
+    if (p === '/api/pane/send') return {status: 500, body: {error: 'Bridge unavailable.'}};
     return undefined;
   });
   seed(f, [{id: 'n1', text: 'a'}]);
@@ -205,7 +205,7 @@ test.serial('non-2xx from the sidecar is a failed run with the body as the error
   await settle();
   const st = readNotes(f)[0].run_state;
   t.is(st.last_status, 'failed');
-  t.is(st.last_error, 'HTTP 409: Pane is a shell prompt.');
+  t.is(st.last_error, 'HTTP 500: Bridge unavailable.');
 });
 
 test.serial('agent: n8 not installed halts and appends a notice to the result', async (t) => {

@@ -71,7 +71,12 @@ if [ "$OS" = "Linux" ]; then
     appimage) TMP_FILE="$HOME/.local/bin/Hyperia-${VERSION}.AppImage" ;;
   esac
   mkdir -p "$(dirname "$TMP_FILE")"
-  curl -L --progress-bar "$DOWNLOAD_URL" -o "$TMP_FILE"
+  # No --progress-bar: curl's fixed-width bar wraps/spams a line per redraw in
+  # embedded terminals (e.g. updating from inside a Hyperia pane). Quiet
+  # download with staged messages instead.
+  echo "==> Downloading Hyperia ${VERSION} (${EXT})... this can take a minute"
+  curl -fsSL "$DOWNLOAD_URL" -o "$TMP_FILE"
+  echo "==> Downloaded $(du -h "$TMP_FILE" 2>/dev/null | cut -f1 || echo ok)"
 
   case "$INSTALL_KIND" in
     deb)
@@ -97,18 +102,35 @@ if [ "$OS" = "Linux" ]; then
 fi
 
 # --- macOS path ---
-# BSD mktemp (macOS) only substitutes X's at the end of the template.
-# Use -t to get a safe base path, then append .dmg.
-TMP_BASE=$(mktemp -t hyperia)
-TMP_DMG="${TMP_BASE}.dmg"
-mv "$TMP_BASE" "$TMP_DMG"
+# One private temp dir holds the dmg and its mount point. A template ending in
+# X's works with stock BSD mktemp and with GNU mktemp (Homebrew coreutils);
+# `mktemp -t hyperia` fails under GNU ("too few X's in template").
+TMP_ROOT="${TMPDIR:-/tmp}"
+WORK_DIR=$(mktemp -d "${TMP_ROOT%/}/hyperia.XXXXXX")
+TMP_DMG="$WORK_DIR/Hyperia.dmg"
+MOUNT_POINT="$WORK_DIR/mount"
+MOUNTED=""
+# Runs on any exit, so a failed install doesn't leave the image attached.
+# rmdir, never rm -rf: nothing is deleted through a still-mounted image.
+cleanup() {
+  if [ -n "$MOUNTED" ]; then
+    hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null || true
+  fi
+  rm -f "$TMP_DMG"
+  rmdir "$MOUNT_POINT" "$WORK_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT
 
-curl -L --progress-bar "$DOWNLOAD_URL" -o "$TMP_DMG"
+# Quiet download (see Linux note above — the bar misbehaves in embedded panes).
+echo "==> Downloading Hyperia ${VERSION} (dmg)... this can take a minute"
+curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DMG"
+echo "==> Downloaded $(du -h "$TMP_DMG" 2>/dev/null | cut -f1 || echo ok)"
 
 echo "==> Mounting disk image..."
 # Use -mountpoint so we control the path — avoids parsing volume names with spaces.
-MOUNT_POINT=$(mktemp -d -t hyperia-mount)
+mkdir -p "$MOUNT_POINT"
 hdiutil attach "$TMP_DMG" -nobrowse -mountpoint "$MOUNT_POINT" -quiet
+MOUNTED=1
 
 echo "==> Installing to /Applications..."
 # Resolve the actual .app bundle inside the image. Its name follows productName
@@ -118,8 +140,6 @@ echo "==> Installing to /Applications..."
 APP_PATH=$(find "$MOUNT_POINT" -maxdepth 1 -name "*.app" | head -1)
 if [ -z "$APP_PATH" ]; then
   echo "No .app found in the downloaded image — aborting."
-  hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null || true
-  rm -f "$TMP_DMG"
   exit 1
 fi
 APP_NAME=$(basename "$APP_PATH")
@@ -136,9 +156,8 @@ done
 cp -R "$APP_PATH" /Applications/
 
 echo "==> Cleaning up..."
-hdiutil detach "$MOUNT_POINT" -quiet
-rm -f "$TMP_DMG"
-rmdir "$MOUNT_POINT" 2>/dev/null || true
+cleanup
+trap - EXIT
 
 echo ""
 echo "Hyperia $VERSION installed successfully."

@@ -775,7 +775,7 @@ pub async fn get_agent_config() -> Json<serde_json::Value> {
     let provider = agent["provider"].as_str().unwrap_or("").to_string();
     let model = agent["model"].as_str().unwrap_or("").to_string();
     // Configured = provider+model chosen, and (local provider OR its key set).
-    let local = provider == "ollama" || provider == "sailfish";
+    let local = provider == "ollama";
     let configured = !provider.is_empty() && !model.is_empty() && (local || has_key(&provider));
     Json(serde_json::json!({
         "ok": true,
@@ -922,7 +922,7 @@ pub async fn get_agent_keycheck() -> Json<serde_json::Value> {
 }
 
 /// GET /api/agent/services — detect DBD services on this host: docker
-/// containers (shivvr / grub / transcription / sailfish / nemesis8) by
+/// containers (shivvr / grub / transcription / nemesis8) by
 /// name+image match, the nemesis8 binary, and its local MCP endpoint.
 pub async fn get_agent_services() -> Json<serde_json::Value> {
     // docker ps (5s guard) — absent/timed-out docker = everything undetected.
@@ -982,9 +982,7 @@ pub async fn get_agent_services() -> Json<serde_json::Value> {
         .map(|(name, _, _, _)| name.clone())
         .collect();
 
-    // Ollama runs native (not docker) — probe its HTTP port. Sailfish exposes
-    // an OpenAI-compatible endpoint; probe its configured port for "connection
-    // up" readiness beyond mere container presence.
+    // Ollama runs native (not docker) — probe its HTTP port.
     let cfgj = read_shared_config();
     let port_of = |name: &str, def: u16| -> u16 {
         cfgj["config"]["agent"]["services"][name]["port"].as_u64().map(|p| p as u16).unwrap_or(def)
@@ -1002,21 +1000,16 @@ pub async fn get_agent_services() -> Json<serde_json::Value> {
             .is_some()
         }
     };
-    let (ollama_up, sailfish_up) = tokio::join!(
-        http_up(port_of("ollama", 11434), "/api/version"),
-        http_up(port_of("sailfish", 22343), "/v1/models")
-    );
+    let ollama_up = http_up(port_of("ollama", 11434), "/api/version").await;
 
     Json(serde_json::json!({
         "ok": true,
         "docker": docker.is_some(),
         "services": {
             "ollama": {"running": ollama_up, "container": if ollama_up { "daemon" } else { "" }},
-            "sailfish_api": sailfish_up,
             "shivvr": find(&["shivvr"]).unwrap_or_else(|| off.clone()),
             "grub": find(&["grub"]).unwrap_or_else(|| off.clone()),
             "transcription": find(&["transcri", "whisper"]).unwrap_or_else(|| off.clone()),
-            "sailfish": find(&["sailfish", "llama.cpp", "llama-cpp"]).unwrap_or_else(|| off.clone()),
             "nemesis8": {
                 "running": n8_bin || !n8_containers.is_empty(),
                 "binary": n8_bin,
@@ -1038,53 +1031,13 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
     static CACHE: OnceLock<Mutex<Option<(Instant, serde_json::Value)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(None));
 
-    // The nemesis8 catalog (frontier + curated ollama) is cached for 1h. Sailfish
-    // is NOT cached — its availability flips as the local container starts/stops
-    // and warms up, so we probe it fresh on every call and inject after the cache
-    // lookup. `inject_sailfish` funnels both the cache-hit and fresh paths.
-    async fn inject_sailfish(mut val: serde_json::Value) -> serde_json::Value {
-        let sf_port = read_shared_config()["config"]["agent"]["services"]["sailfish"]["port"]
-            .as_u64()
-            .unwrap_or(22343);
-        let probed = async {
-            let resp = reqwest::Client::new()
-                .get(format!("http://localhost:{}/v1/models", sf_port))
-                .timeout(Duration::from_secs(2))
-                .send()
-                .await
-                .ok()?;
-            if !resp.status().is_success() {
-                return None;
-            }
-            resp.json::<serde_json::Value>().await.ok()
-        }
-        .await;
-        let models: Vec<serde_json::Value> = probed
-            .as_ref()
-            .and_then(|j| j["data"].as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|m| {
-                        let id = m["id"].as_str()?;
-                        Some(serde_json::json!({"id": id, "label": id}))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let default = models
-            .first()
-            .and_then(|m| m["id"].as_str())
-            .unwrap_or("")
-            .to_string();
-        val["providers"]["sailfish"] = serde_json::json!({
-            "ok": !models.is_empty(),
-            "default": default,
-            "models": models,
-        });
+    // The nemesis8 catalog (frontier + curated ollama) is cached for 1h; the
+    // locally installed Ollama cloud tags are probed fresh on every call and
+    // injected after the cache lookup, on both the cache-hit and fresh paths.
+    async fn inject_live(mut val: serde_json::Value) -> serde_json::Value {
         // Ollama cloud tags: ANY installed model with a cloud tag (…:cloud or
         // …-cloud, e.g. nemotron-3-super:cloud, deepseek-v4-pro:cloud) joins
-        // the curated list automatically. Probed fresh per request — like the
-        // sailfish block above — so a new `ollama pull x:cloud` shows up in
+        // the curated list automatically. Probed fresh per request, so a new `ollama pull x:cloud` shows up in
         // the picker immediately, never stale behind the 1h catalog cache.
         let ollama_ep = super::default_endpoint("ollama");
         let tags = async {
@@ -1135,7 +1088,7 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
         }
     };
     if let Some(val) = cached {
-        return Json(inject_sailfish(val).await);
+        return Json(inject_live(val).await);
     }
     let fetched = async {
         let resp = reqwest::Client::new()
@@ -1148,7 +1101,7 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
     }
     .await;
     // When the nemesis8 catalog is unreachable we still return a usable payload
-    // (curated ollama + a fresh sailfish probe below) rather than a hard error,
+    // (curated ollama + the fresh local probes below) rather than a hard error,
     // so the picker keeps working for the local providers.
     let mut val = fetched.unwrap_or_else(|| serde_json::json!({"providers": {}}));
     // Ollama: the curated list IS the list (not an intersection with the
@@ -1188,8 +1141,7 @@ pub async fn get_agent_models() -> Json<serde_json::Value> {
         val["providers"]["codex"]["models"] = serde_json::json!(plain);
     }
     val["ok"] = serde_json::json!(true);
-    // Cache the nemesis8-derived catalog WITHOUT sailfish, then inject a fresh
-    // sailfish probe so its availability is never stale behind the 1h TTL.
+    // Cache the nemesis8-derived catalog, then inject the fresh local probes.
     *cache.lock().unwrap() = Some((Instant::now(), val.clone()));
-    Json(inject_sailfish(val).await)
+    Json(inject_live(val).await)
 }

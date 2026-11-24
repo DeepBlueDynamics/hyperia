@@ -4,6 +4,7 @@
 mod audio;
 mod audit;
 mod bridge;
+mod browser_open;
 mod bugs;
 mod consent_log;
 mod dashboard;
@@ -24,6 +25,8 @@ mod n8;
 mod messaging;
 mod delivery;
 mod delivery_service;
+mod held_input;
+mod deck_health;
 mod perms;
 mod process;
 mod host_telemetry;
@@ -31,6 +34,7 @@ mod lume_store;
 mod screen;
 mod stream;
 mod sticky_runs;
+mod stray_attach;
 mod util;
 mod workspace;
 mod settings;
@@ -237,9 +241,14 @@ struct WindowImageQuery {
 /// app-side via desktopCapturer. Read-class like terminal_screen.
 async fn get_window_image(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<WindowImageQuery>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
+    // Real pixels of everything on screen, logged-in web panes included.
+    if let Err(resp) = enforce_identified(&state, &headers).await {
+        return resp.into_response();
+    }
     let cmd = serde_json::json!({
         "type": "CaptureWindow",
         "windowId": q.window,
@@ -295,8 +304,8 @@ async fn get_tab_image(
         x: f32, y: f32, w: f32, h: f32,
     }
     let owned: Vec<Owned> = panes_json.iter().map(|p| Owned {
-        label: p["label"].as_str().unwrap_or("").to_string(),
-        kind: "shell".to_string(),
+        label: p["splitLabel"].as_str().unwrap_or("").to_string(),
+        kind: if p["kind"].as_str() == Some("web") { "web".to_string() } else { "shell".to_string() },
         title: p["title"].as_str().filter(|s| !s.is_empty())
             .or_else(|| p["process"].as_str().filter(|s| !s.is_empty()))
             .or_else(|| p["shell"].as_str())
@@ -379,9 +388,10 @@ async fn post_tts(
     // Caller's spokenable callsign — resolved from the request identity (mirrors
     // maybe_attribute): a pane's friendly codename, or an external agent's name.
     let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
-    let caller_raw = match &id {
+    // Also the speaker's pane, so the deck sounds the voice from it, not the ring's top.
+    let (caller_raw, speaker_pane) = match &id {
         identity::CallerIdentity::Pane { pane, .. } => {
-            state.bridge.pane_display_name(pane).await.unwrap_or_default()
+            (state.bridge.pane_display_name(pane).await.unwrap_or_default(), Some(pane.clone()))
         }
         identity::CallerIdentity::Agent { name, .. } => {
             // Binding comes from authenticated residency, never request JSON.
@@ -399,11 +409,11 @@ async fn post_tts(
             let pane = store.bindings.pane_for_agent(agent).or_else(|| store.bindings.pane_for_agent(name));
             let fallback = || tts::agent_callsign(&id.label());
             match pane {
-                Some(pane) => state.bridge.pane_display_name(&pane).await.unwrap_or_else(fallback),
-                None => fallback(),
+                Some(pane) => (state.bridge.pane_display_name(&pane).await.unwrap_or_else(fallback), Some(pane)),
+                None => (fallback(), None),
             }
         },
-        _ => String::new(),
+        _ => (String::new(), None),
     };
     let caller = match tts::spokenable_name(&caller_raw) {
         s if s.is_empty() => "station".to_string(),
@@ -423,13 +433,14 @@ async fn post_tts(
     let spoken = if req.frame == Some(false) {
         req.text.trim().to_string()
     } else {
-        tts::radio_wrap(&recipient, &caller, &req.text)
+        let sign = speaker_pane.as_deref().and_then(radio::sign_for);
+        tts::radio_wrap(&recipient, &caller, sign.as_deref(), &req.text)
     };
     let requester = (!caller_raw.is_empty()).then_some(caller_raw.as_str());
     // Log the transmission as it goes on air (dashboard radio view + replay).
     let meta = radio_log::Meta {
         from: if caller_raw.is_empty() { caller.clone() } else { caller_raw.clone() },
-        from_pane: match &id { identity::CallerIdentity::Pane { pane, .. } => Some(pane.clone()), _ => None },
+        from_pane: speaker_pane,
         to: recipient.clone(),
         text: req.text.trim().to_string(),
         spoken: spoken.clone(),
@@ -1111,7 +1122,12 @@ async fn post_split(
         None => None,
     };
 
-    let url = parsed["url"].as_str().unwrap_or("").to_string();
+    let url = parsed["url"].as_str().unwrap_or("").trim().to_string();
+    if !url.is_empty() {
+        if let Err(resp) = gate_web_pane_url(&state, &headers, &url).await {
+            return resp;
+        }
+    }
 
     let cmd = serde_json::json!({
         "type": "Split",
@@ -1223,6 +1239,19 @@ async fn post_request_access(
     body: String,
 ) -> (StatusCode, String) {
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    // Audio isn't a pane: its denial text sends agents here with this sentinel.
+    if parsed["pane"].as_str() == Some(AUDIO_SENTINEL) {
+        let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+        state.bridge.perms().clear_denial(&id.principal_key(), AUDIO_SENTINEL).await;
+        return match enforce_audio(&state, &headers, bearer_token(&headers).as_deref()).await {
+            Ok(_) => (
+                StatusCode::OK,
+                serde_json::json!({"granted": true, "pane": AUDIO_SENTINEL, "message": "Audio access granted."})
+                    .to_string(),
+            ),
+            Err(resp) => resp,
+        };
+    }
     let uid = if parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string() {
         match state
             .bridge
@@ -1259,7 +1288,7 @@ async fn post_request_access(
             serde_json::json!({
                 "granted": true,
                 "pane": uid,
-                "message": "Access granted — you can now drive this pane (terminal_run / terminal_keys / split / close)."
+                "message": "Access granted — you can now send input to this pane (terminal_run / terminal_keys / pane_send)."
             })
             .to_string(),
         ),
@@ -1508,7 +1537,8 @@ async fn identity_mw(
     }
     // Approval decisions, enforcement switches and pane credentials belong to
     // the human UI (authenticated by Electron main), never an agent caller.
-    if matches!(path.as_str(), "/api/perms/respond" | "/api/perms/enforce" | "/api/perms/token" | "/ws" | "/api/ui/key")
+    if matches!(path.as_str(), "/api/perms/respond" | "/api/perms/enforce" | "/api/perms/token" | "/ws" | "/api/ui/key"
+        | "/api/delivery/release-held")
         && !id.is_system()
     {
         crate::audit::record_call(&label, kind, &method, &path, 403);
@@ -1652,7 +1682,8 @@ async fn enforce_drive_with_purpose(
                     _ => {}
                 }
             }
-            Err(pending_202())
+            // No caller of this gate holds the action, so the call must be repeated.
+            Err(pending_retry_202())
         }
     }
 }
@@ -1772,6 +1803,28 @@ fn pending_202() -> (StatusCode, String) {
         })
         .to_string(),
     )
+}
+
+/// The 202 for a gate on a route that holds NOTHING: after the human approves,
+/// the caller has to repeat the call. (pending_202 promises an automatic run,
+/// which is only true where the route parks the command.)
+fn pending_retry_202() -> (StatusCode, String) {
+    (
+        StatusCode::ACCEPTED,
+        serde_json::json!({
+            "ok": false,
+            "pending": true,
+            "message": "The human hasn't answered the Hyperia approval prompt yet. Nothing is held: \
+                        once they approve, call this tool AGAIN and it will go through. Give them a \
+                        moment before retrying, and don't work around it."
+        })
+        .to_string(),
+    )
+}
+
+/// Swap the "held" 202 for the retry one on a route that doesn't park the action.
+fn not_held(resp: (StatusCode, String)) -> (StatusCode, String) {
+    if resp.0 == StatusCode::ACCEPTED { pending_retry_202() } else { resp }
 }
 
 /// Gate a CREATE action (split / new tab / window / web-pane / sticky) on the
@@ -1974,7 +2027,8 @@ async fn enforce_capability(
                     _ => {}
                 }
             }
-            Err(pending_202())
+            // Capability-gated routes hold nothing; the grant makes the retry pass.
+            Err(pending_retry_202())
         }
     }
 }
@@ -2205,6 +2259,9 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
             if req.action == sticky_runs::APPROVAL_ACTION {
                 resolve_sticky_run_approval(&state, &req.id, allow).await;
             }
+            if req.action == browser_open::ACTION {
+                resolve_browser_open(&state, &req, allow).await;
+            }
             // Retained terminal/mail operations are resolved above and executed by the worker.
             // A held CREATE (split/new-tab/web-pane) executes on approval — the
             // human said "ok, that's fine", so DO the thing, don't just grant
@@ -2230,6 +2287,10 @@ async fn post_perm_respond(State(state): State<AppState>, body: String) -> (Stat
                         // create itself within 500ms. Without this, a fast click
                         // cost the whole 8s window and dropped the command.
                         state.bridge.resolve_create_early(&req.requester, true).await;
+                    }
+                    // Both paths run the create without has_create, so use up a "Just once" here.
+                    if scope == "once" {
+                        state.bridge.perms().has_create(&req.requester).await;
                     }
                 } else if state.bridge.take_create(&req.requester).await.is_none() {
                     state.bridge.resolve_create_early(&req.requester, false).await;
@@ -2469,8 +2530,12 @@ async fn post_pulse_clear(
     body: String,
 ) -> (StatusCode, String) {
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
+    let addressed = parsed["window"].is_u64() || parsed["tab"].is_string() || parsed["pane"].is_string();
     let key = if let Some(id) = parsed["id"].as_str() {
         id.to_string()
+    } else if !addressed {
+        // No id and no address used to fall back to the focused pane and clear it.
+        return (StatusCode::BAD_REQUEST, "Pass id, or a window/tab/pane that resolves.".into());
     } else {
         let window = parsed["window"].as_u64().map(|v| v as u32);
         match state
@@ -3032,7 +3097,7 @@ async fn post_new_window(State(state): State<AppState>, headers: HeaderMap) -> (
     let first_window = state.bridge.has_no_windows().await;
     if !first_window {
         if let Err(resp) = enforce_create(&state, &headers, "create_window").await {
-            return resp;
+            return not_held(resp);
         }
     }
     let cmd = serde_json::json!({"type": "NewWindow", "firstWindow": first_window});
@@ -3430,26 +3495,78 @@ async fn post_workspace_rename(Json(body): Json<WorkspaceRenameBody>) -> (Status
     }
 }
 
+/// Check a URL an agent wants loaded in a web pane. http(s) and scheme-less
+/// input pass; file:// is a file read, so it needs the `files` capability; no
+/// other scheme loads. The human's own UI is not limited.
+async fn gate_web_pane_url(state: &AppState, headers: &HeaderMap, url: &str) -> Result<(), (StatusCode, String)> {
+    use browser_open::PaneUrl;
+    let kind = browser_open::pane_url_kind(url);
+    if kind == PaneUrl::Web {
+        return Ok(());
+    }
+    if state.bridge.resolve_caller(bearer_token(headers).as_deref()).await.is_system() {
+        return Ok(());
+    }
+    match kind {
+        PaneUrl::Web => Ok(()),
+        PaneUrl::File => enforce_capability(state, headers, "files").await,
+        PaneUrl::Other(scheme) => Err((
+            StatusCode::BAD_REQUEST,
+            format!("Web panes load http(s) pages (or file:// with the files capability); '{scheme}://' is not allowed."),
+        )),
+    }
+}
+
+/// Gate a file an agent wants rendered: documents pass, Hyperia's own state
+/// never does, anything else needs the `files` capability.
+async fn gate_render_path(
+    state: &AppState,
+    headers: &HeaderMap,
+    resolved: &std::path::Path,
+) -> Result<(), (StatusCode, String)> {
+    let state_dir = fsnav::home_dir().join(".hyperia");
+    let state_dir = state_dir.canonicalize().unwrap_or(state_dir);
+    match render::path_access(resolved, &state_dir) {
+        render::PathAccess::Document => Ok(()),
+        render::PathAccess::Private => Err((
+            StatusCode::FORBIDDEN,
+            "Files in Hyperia's own state directory (~/.hyperia) can't be rendered.".into(),
+        )),
+        render::PathAccess::NeedsFiles => enforce_capability(state, headers, "files").await,
+    }
+}
+
 async fn post_open_web_pane(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: String,
 ) -> (StatusCode, String) {
-    if let Err(resp) = enforce_create(&state, &headers, "create_web").await {
-        return resp;
-    }
+    // Check the request before asking the human about it.
     let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
-    let url = match parsed["url"].as_str() {
+    let url = match parsed["url"].as_str().map(str::trim) {
         Some(u) if !u.is_empty() => u.to_string(),
         _ => return (StatusCode::BAD_REQUEST, "url is required".into()),
     };
+    if let Err(resp) = gate_web_pane_url(&state, &headers, &url).await {
+        return resp;
+    }
     let cmd = serde_json::json!({"type": "OpenWebPane", "url": url});
+    // Held like a split: approving the prompt opens the pane.
+    if let Err(resp) = enforce_create(&state, &headers, "create_web").await {
+        if resp.0 == StatusCode::ACCEPTED {
+            let caller = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+            state.bridge.hold_create(&caller.principal_key(), cmd).await;
+        }
+        return resp;
+    }
     // The renderer creates the pane asynchronously — snapshot existing web
     // panes first, then wait for the NEW one to register so the reply can
     // carry its paneId. Without this, agents had no handle to address the
     // pane they just opened (the empty-{} → wrong-pane → timeout trap).
     let before = state.bridge.web_pane_uids().await;
     match state.bridge.send_command(cmd).await {
+        // Electron's refusals ("No focused window") arrive as plain text, not as Err.
+        Ok(r) if r != "ok" => (StatusCode::BAD_GATEWAY, r),
         Ok(_) => match state.bridge.await_new_web_pane(&before, &url, 4000).await {
             Some((pane_id, name)) => (
                 StatusCode::OK,
@@ -3472,6 +3589,185 @@ async fn post_open_web_pane(
     }
 }
 
+const BROWSER_OPEN_DENIED: &str =
+    "Opening browser pages was denied by the user. Don't retry — ask the human directly.";
+
+/// Hand a checked page to Electron, which opens it in the default browser.
+async fn open_in_default_browser(state: &AppState, target: &browser_open::Target) -> Result<(), String> {
+    let cmd = serde_json::json!({"type": "OpenExternal", "url": target.url});
+    let raw = state.bridge.send_command(cmd).await?;
+    match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(v) if v["ok"].as_bool() == Some(true) => Ok(()),
+        Ok(v) => Err(v["error"].as_str().unwrap_or("Hyperia could not open the page").to_string()),
+        // Plain text is an error (an older app answers "Unknown command: OpenExternal").
+        Err(_) if raw.is_empty() => Err("Hyperia could not open the page".into()),
+        Err(_) => Err(raw),
+    }
+}
+
+fn browser_open_reply(target: &browser_open::Target, outcome: browser_open::Outcome) -> (StatusCode, String) {
+    use browser_open::Outcome;
+    let err = |code: StatusCode, msg: &str| (code, serde_json::json!({"ok": false, "error": msg}).to_string());
+    match outcome {
+        Outcome::Opened => (
+            StatusCode::OK,
+            serde_json::json!({
+                "ok": true, "opened": true, "url": target.url,
+                "note": "Opened in the human's default browser. You cannot see or drive that page — ask them what they see."
+            })
+            .to_string(),
+        ),
+        Outcome::Denied => err(StatusCode::FORBIDDEN, BROWSER_OPEN_DENIED),
+        Outcome::Failed(e) => err(
+            StatusCode::BAD_GATEWAY,
+            &format!("The human approved, but the page could not be opened: {e}"),
+        ),
+        Outcome::Superseded => err(
+            StatusCode::CONFLICT,
+            "Replaced by your newer open_in_browser request — only one can wait for the human at a time.",
+        ),
+    }
+}
+
+/// POST /api/browser/open {url, purpose?} — open one page in the human's default
+/// browser. Backs `open_in_browser`. Every agent call raises its own prompt (even
+/// with enforcement off); an approval opens that page and grants nothing.
+async fn post_browser_open(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> (StatusCode, String) {
+    let err = |code: StatusCode, msg: &str| (code, serde_json::json!({"ok": false, "error": msg}).to_string());
+    let parsed: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &format!("bad JSON: {e}")),
+    };
+    let target = match browser_open::parse_target(parsed["url"].as_str().unwrap_or("")) {
+        Ok(t) => t,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &e),
+    };
+    let purpose = browser_open::clean_purpose(parsed["purpose"].as_str().unwrap_or(""));
+    let caller = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
+
+    // The human's own UI needs no prompt.
+    if caller.is_system() {
+        return match open_in_default_browser(&state, &target).await {
+            Ok(()) => browser_open_reply(&target, browser_open::Outcome::Opened),
+            Err(e) => err(StatusCode::BAD_GATEWAY, &e),
+        };
+    }
+    if caller.is_anonymous() {
+        return err(
+            StatusCode::UNAUTHORIZED,
+            &format!(
+                "Identity required to open a browser page, so the human can see who is asking. {}",
+                identity_recovery(&headers)
+            ),
+        );
+    }
+    let principal = caller.principal_key();
+    let perms = state.bridge.perms();
+
+    // The answer to an earlier call for this page that returned "pending".
+    if let Some(outcome) = browser_open::take_outcome_for(&principal, &target.url) {
+        return browser_open_reply(&target, outcome);
+    }
+    if perms.recently_denied(&principal, browser_open::ACTION).await {
+        return err(StatusCode::FORBIDDEN, BROWSER_OPEN_DENIED);
+    }
+    let who = sticky_requester_name(&state, &caller).await;
+    let requester_pane = match &caller {
+        identity::CallerIdentity::Pane { pane, .. } => pane.clone(),
+        _ => String::new(),
+    };
+    let prompt_target = format!("browser:{}", target.host);
+    // One waiting prompt per agent: the same page re-raises it, a new page replaces it.
+    let waiting = match browser_open::pending_for(&principal) {
+        // Its consent request is gone: nothing is waiting any more.
+        Some((id, _)) if perms.pending_request(&id).await.is_none() => {
+            browser_open::forget(&id);
+            None
+        }
+        other => other,
+    };
+    let perm_id = match waiting {
+        Some((id, waiting)) if waiting.url == target.url => id,
+        other => {
+            if let Some((stale, waiting)) = other {
+                browser_open::forget(&stale);
+                browser_open::finish(&stale, &principal, &waiting.url, browser_open::Outcome::Superseded);
+                dismiss_stale_prompt(&state, Some(stale)).await;
+            }
+            let req = perms
+                .create_request(&principal, &requester_pane, &prompt_target, browser_open::ACTION, &purpose)
+                .await;
+            browser_open::park(&req.id, &principal, target.clone());
+            // The log keeps the full URL; the prompt's Why line is the agent's own words.
+            let logged = if purpose.is_empty() { target.url.clone() } else { format!("{} — {purpose}", target.url) };
+            consent_log::record_request(&req.id, &req.requester, &who, caller.kind(), &req.action, &req.target_pane, &logged);
+            req.id
+        }
+    };
+    let _ = state
+        .bridge
+        .notify(serde_json::json!({
+            "type": "PermissionRequest",
+            "id": perm_id,
+            "requester": principal,
+            "requesterName": who,
+            "requesterPane": requester_pane,
+            "targetPane": prompt_target,
+            "action": browser_open::ACTION,
+            "purpose": purpose,
+            "recipientLabel": target.host,
+            "url": target.url,
+        }))
+        .await;
+
+    // Wait for the answer so the call completes when the human is right there.
+    for _ in 0..16 {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if let Some(outcome) = browser_open::take_outcome(&perm_id) {
+            return browser_open_reply(&target, outcome);
+        }
+    }
+    (
+        StatusCode::ACCEPTED,
+        serde_json::json!({
+            "ok": false,
+            "pending": true,
+            "url": target.url,
+            "approval": {"id": perm_id},
+            "message": "The human hasn't answered yet. The page opens AUTOMATICALLY when they approve — do not \
+                        work around it. Calling open_in_browser again with the SAME url reports the result (or \
+                        keeps waiting); a DIFFERENT url replaces this request."
+        })
+        .to_string(),
+    )
+}
+
+/// On the human's answer: approve → open the parked page; deny → drop it.
+async fn resolve_browser_open(state: &AppState, req: &perms::PermRequest, allow: bool) {
+    use browser_open::Outcome;
+    let Some(target) = browser_open::take(&req.id) else {
+        tracing::info!("open_browser approval {}: nothing parked (superseded)", req.id);
+        return;
+    };
+    let outcome = if !allow {
+        Outcome::Denied
+    } else {
+        match open_in_default_browser(state, &target).await {
+            Ok(()) => Outcome::Opened,
+            Err(e) => {
+                tracing::warn!("open_browser {} for {}: {e}", target.url, req.requester);
+                Outcome::Failed(e)
+            }
+        }
+    };
+    tracing::info!("open_browser {} for {}: {outcome:?}", target.url, req.requester);
+    browser_open::finish(&req.id, &req.requester, &target.url, outcome);
+}
+
 /// POST /api/render {path?|content?, title?} — register a markdown document
 /// (with the ==highlight== extension) and open its LIVE render page in a new
 /// web-pane tab. Backs the `render` MCP tool. Same create_web consent + held-
@@ -3491,11 +3787,22 @@ async fn post_render(
         );
     }
     let source = if !path.is_empty() {
+        // A path render reads the disk: anonymous callers learn nothing about it.
+        if let Err(resp) = enforce_identified(&state, &headers).await {
+            return resp;
+        }
         let pb = std::path::PathBuf::from(&path);
         if !pb.is_file() {
             return (StatusCode::NOT_FOUND, format!("No such file: {path}"));
         }
-        render::RenderSource::File(pb)
+        // Serve the resolved file, so what was checked is what is read.
+        let resolved = pb.canonicalize().unwrap_or(pb);
+        if !state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await.is_system() {
+            if let Err(resp) = gate_render_path(&state, &headers, &resolved).await {
+                return resp;
+            }
+        }
+        render::RenderSource::File(resolved)
     } else {
         render::RenderSource::Inline(content)
     };
@@ -3517,11 +3824,18 @@ async fn post_render(
         if resp.0 == StatusCode::ACCEPTED {
             let caller = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
             state.bridge.hold_create(&caller.principal_key(), cmd).await;
+        } else {
+            // Refused: don't keep (or serve) a document nobody will see.
+            state.render.remove(&id).await;
         }
         return resp;
     }
     let before = state.bridge.web_pane_uids().await;
     match state.bridge.send_command(cmd).await {
+        Ok(r) if r != "ok" => {
+            state.render.remove(&id).await;
+            (StatusCode::BAD_GATEWAY, r)
+        }
         Ok(_) => {
             // Same paneId handoff as open_web_pane — the render tab is a web
             // pane, and agents want to web_pane_content it later.
@@ -3904,7 +4218,7 @@ async fn post_note_create(
     body: String,
 ) -> (StatusCode, String) {
     if let Err(resp) = enforce_create(&state, &headers, "create_sticky").await {
-        return resp;
+        return not_held(resp);
     }
     use identity::CallerIdentity;
     let id = state.bridge.resolve_caller(bearer_token(&headers).as_deref()).await;
@@ -4155,7 +4469,7 @@ async fn post_note_run(
 
     // Clear: drop any pending prompt, then unschedule.
     if payload.get("clear").and_then(|c| c.as_bool()) == Some(true) {
-        dismiss_stale_sticky_prompt(&state, sticky_runs::drop_for_note(&note_id)).await;
+        dismiss_stale_prompt(&state, sticky_runs::drop_for_note(&note_id)).await;
         let cmd = serde_json::json!({"type": "NoteRun", "id": note_id, "clear": true});
         return reply(sticky_runs::parse_engine_reply(state.bridge.send_command(cmd).await));
     }
@@ -4202,7 +4516,7 @@ async fn post_note_run(
     }
 
     // A re-post supersedes any earlier prompt for this note.
-    dismiss_stale_sticky_prompt(&state, sticky_runs::drop_for_note(&note_id)).await;
+    dismiss_stale_prompt(&state, sticky_runs::drop_for_note(&note_id)).await;
     let cmd = serde_json::json!({"type": "NoteRun", "id": note_id, "run": run});
     let mut out = match sticky_runs::parse_engine_reply(state.bridge.send_command(cmd).await) {
         Ok(v) => v,
@@ -4251,8 +4565,8 @@ async fn post_note_run(
     (StatusCode::OK, out.to_string())
 }
 
-/// Consume a superseded sticky_run prompt so the UI drops it.
-async fn dismiss_stale_sticky_prompt(state: &AppState, perm_id: Option<String>) {
+/// Consume a superseded prompt (sticky run, browser open) so the UI drops it.
+async fn dismiss_stale_prompt(state: &AppState, perm_id: Option<String>) {
     let Some(perm_id) = perm_id else { return };
     if let Some(req) = state.bridge.perms().respond(&perm_id, false, "pane", None).await {
         state.bridge.perms().clear_denial(&req.requester, &req.action).await;
@@ -4735,6 +5049,7 @@ async fn main() -> anyhow::Result<()> {
     host_telemetry::watcher::spawn(state.bridge.clone(), state.telemetry.clone());
     radio::spawn(state.bridge.clone());
     host_telemetry::netio::spawn(state.bridge.clone(), state.telemetry.clone());
+    deck_health::spawn();
     host_telemetry::proxy::spawn(state.telemetry.clone(), host_telemetry::proxy::port_for(args.port));
     // Grab lume handles before `state` is moved into the router below.
     let lume_for_flush = state.bridge.lume();
@@ -4765,7 +5080,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/files/render", axum::routing::post(file_edit::render))
         .route("/api/radio/callsigns", axum::routing::get(radio::get_callsigns))
         .route("/api/radio/deliver", axum::routing::post(radio::deliver))
-        .route("/api/audio/play", axum::routing::post(post_audio_play))
+        .route("/api/radio/badges", axum::routing::get(radio::get_badges))
+        .route("/api/deck/health", axum::routing::get(deck_health::get_health))
+        // The handler caps at 32MB; without this axum's 2MB default refused first.
+        .route(
+            "/api/audio/play",
+            axum::routing::post(post_audio_play).layer(axum::extract::DefaultBodyLimit::max(33 * 1024 * 1024)),
+        )
         .route("/api/audio/probe", axum::routing::post(post_audio_probe))
         .route("/api/audio/mute", axum::routing::post(post_audio_mute))
         .route("/ws/audio", axum::routing::get(ws_audio))
@@ -4805,6 +5126,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/pane/send", axum::routing::post(delivery_service::pane_send))
         .route("/api/terminal/run", axum::routing::post(delivery_service::terminal_run))
         .route("/api/delivery/status", axum::routing::get(delivery_service::status))
+        .route("/api/delivery/release-held", axum::routing::post(delivery_service::release_held))
         .route("/api/msg/inbox", axum::routing::get(messaging::inbox))
         .route("/api/msg/read", axum::routing::post(messaging::read))
         .route("/api/msg/check", axum::routing::post(messaging::check))
@@ -4831,6 +5153,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/workspace/export", axum::routing::post(post_workspace_export))
         .route("/api/workspace/import", axum::routing::post(post_workspace_import))
         .route("/api/web-pane", axum::routing::post(post_open_web_pane))
+        .route("/api/browser/open", axum::routing::post(post_browser_open))
         .route("/api/web-pane/reload", axum::routing::post(post_web_pane_reload))
         .route("/api/web-pane/click", axum::routing::post(post_web_pane_click))
         .route("/api/web-pane/content", axum::routing::post(post_web_pane_content))
@@ -5000,6 +5323,7 @@ async fn main() -> anyhow::Result<()> {
     // Idle monitor: ~2s tick. Watches panes that have an armed idle-callback
     // (and, later, pulses), classifies each from its cached screen, and fires on
     // a running->idle edge. Independent of any agent's loop.
+    stray_attach::spawn(bridge_for_monitor.clone());
     {
         let bridge = bridge_for_monitor;
         let delivery_bridge = bridge.clone();
@@ -5101,5 +5425,110 @@ mod delivery_message_tests {
         for state in [Queued, Submitting, Submitted, Failed, Denied, Expired, Cancelled, Indeterminate] {
             assert!(!delivery_message(state).contains("approval sends"), "{state:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod browser_open_tests {
+    use super::*;
+
+    fn state(name: &str) -> (AppState, HeaderMap, std::path::PathBuf) {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-fixtures")
+            .join(format!("browser-open-{name}-{}-{}", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let token = format!("hyp_agent_test_{name}");
+        let agents = vec![identity::AgentRecord {
+            token: token.clone(), name: name.into(), created_ms: 1, single_session: false,
+        }];
+        let bridge = Bridge::with_stores(identity::IdentityStore::for_tests(dir.join("sessions.json"), agents),
+            perms::PermStore::for_tests());
+        let mut headers = HeaderMap::new();
+        headers.insert(axum::http::header::AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
+        (AppState { bridge, log_buffer: logs::new_log_buffer(), telemetry: telemetry::TelemetryStore::new(),
+            render: render::RenderStore::new() }, headers, dir)
+    }
+
+    fn open(state: &AppState, headers: &HeaderMap, url: &str) -> tokio::task::JoinHandle<(StatusCode, String)> {
+        let body = serde_json::json!({"url": url, "purpose": "test"}).to_string();
+        tokio::spawn(post_browser_open(State(state.clone()), headers.clone(), body))
+    }
+
+    /// The prompt the handler raised for this caller, once it exists.
+    async fn prompt_for(state: &AppState, headers: &HeaderMap, url: &str) -> String {
+        let who = state.bridge.resolve_caller(bearer_token(headers).as_deref()).await.principal_key();
+        for _ in 0..100 {
+            if let Some((id, waiting)) = browser_open::pending_for(&who) {
+                if waiting.url == url {
+                    return id;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("no prompt was raised for {url}");
+    }
+
+    async fn answer(state: &AppState, id: &str, decision: &str) {
+        let body = serde_json::json!({"id": id, "decision": decision}).to_string();
+        let (status, resp) = post_perm_respond(State(state.clone()), body).await;
+        assert_eq!(status, StatusCode::OK, "{resp}");
+    }
+
+    #[tokio::test]
+    async fn a_bad_url_or_a_nameless_caller_never_reaches_the_human() {
+        let (state, headers, dir) = state("refused");
+        for bad in ["file:///C:/Windows/System32/calc.exe", "ms-settings:privacy", "https://bank.com@evil.example/", ""] {
+            let (status, resp) = open(&state, &headers, bad).await.unwrap();
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {resp}");
+        }
+        let (status, _) = open(&state, &HeaderMap::new(), "https://example.com/anon").await.unwrap();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let snap = state.bridge.perms().snapshot().await;
+        assert!(snap["pending"].as_array().unwrap().is_empty(), "no prompt may be raised: {snap}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn every_call_asks_and_an_approval_is_not_remembered() {
+        let (state, headers, dir) = state("asks");
+        let url = "https://example.com/asks";
+        // No Hyperia window is attached in tests, so an approved open reports the failure.
+        let first = open(&state, &headers, url);
+        answer(&state, &prompt_for(&state, &headers, url).await, "allow").await;
+        let (status, resp) = first.await.unwrap();
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{resp}");
+        assert!(resp.contains("approved"), "{resp}");
+
+        // The same page again: asked again, nothing was granted.
+        let second = open(&state, &headers, url);
+        let again = prompt_for(&state, &headers, url).await;
+        let snap = state.bridge.perms().snapshot().await;
+        assert!(snap["grants"].as_array().unwrap().is_empty() && snap["createGrants"].as_array().unwrap().is_empty());
+        answer(&state, &again, "deny").await;
+        let (status, _) = second.await.unwrap();
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        // After a "no", the next call is refused without bothering the human.
+        let (status, _) = open(&state, &headers, "https://example.com/other").await.unwrap();
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(state.bridge.perms().snapshot().await["pending"].as_array().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_new_page_replaces_the_waiting_one() {
+        let (state, headers, dir) = state("replaces");
+        let (a, b) = ("https://example.com/a", "https://example.com/b");
+        let first = open(&state, &headers, a);
+        let first_id = prompt_for(&state, &headers, a).await;
+        let second = open(&state, &headers, b);
+        let second_id = prompt_for(&state, &headers, b).await;
+        assert_ne!(first_id, second_id);
+        let (status, resp) = first.await.unwrap();
+        assert_eq!(status, StatusCode::CONFLICT, "{resp}");
+        // Only the newer prompt is left to answer.
+        assert!(state.bridge.perms().pending_request(&first_id).await.is_none());
+        answer(&state, &second_id, "deny").await;
+        assert_eq!(second.await.unwrap().0, StatusCode::FORBIDDEN);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

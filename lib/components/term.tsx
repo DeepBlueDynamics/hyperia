@@ -22,6 +22,7 @@ import rpc from '../rpc';
 import terms from '../terms';
 import {altArrowSequence} from '../utils/alt-arrow-sequence';
 import {ctrlCaretSequence} from '../utils/ctrl-caret';
+import {isSafeExternalUrl} from '../utils/external-url';
 import {fileBrowserLabel, isLocalDir} from '../utils/file-browser';
 import {acceleratorFor} from '../utils/keymaps';
 import {isPlainShell, pickNativeShell} from '../utils/native-shell';
@@ -75,11 +76,11 @@ function openUrl(uri: string): void {
       hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0' || hostname === '::1';
     if (isLocal) {
       rpc.emitter.emit('open web pane req', {url: uri});
-    } else {
+    } else if (isSafeExternalUrl(uri)) {
       void shell.openExternal(uri);
     }
   } catch {
-    void shell.openExternal(uri);
+    // Not a URL: nothing to open.
   }
 }
 
@@ -2876,9 +2877,15 @@ export default class Term extends React.PureComponent<
 
   // A program that exits without undoing mouse/focus reporting leaves the shell
   // getting raw reports as typed text; switch them off once the prompt is back.
-  clearStrayInputModes() {
+  // On the step to idle, also leave an alt screen a dead full-screen program
+  // (e.g. a docker attach cut by sleep) never left.
+  clearStrayInputModes(justIdle = false) {
     const t = this.term;
-    if (!t || t.buffer.active.type === 'alternate') return;
+    if (!t) return;
+    if (t.buffer.active.type === 'alternate') {
+      if (!justIdle) return;
+      t.write('\x1b[?1049l\x1b[?1047l\x1b[?47l');
+    }
     if (t.modes.mouseTrackingMode === 'none' && !t.modes.sendFocusMode) return;
     t.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1004l');
   }
@@ -2887,7 +2894,9 @@ export default class Term extends React.PureComponent<
     // Keep the store's busy flag in sync (shellState prop or activeProgram state
     // may have just changed). Deduped inside publishBusy.
     this.publishBusy();
-    if (this.props.shellState?.state === 'idle') this.clearStrayInputModes();
+    if (this.props.shellState?.state === 'idle') {
+      this.clearStrayInputModes(prevProps.shellState?.state !== 'idle');
+    }
     const sessionCwd = (this.props as any).sessionCwd;
     const prevSessionCwd = (prevProps as any).sessionCwd;
     if (sessionCwd && sessionCwd !== prevSessionCwd) {
@@ -3143,14 +3152,15 @@ export default class Term extends React.PureComponent<
     // End state: ">" (session icon) + folder icon + the close X. Thresholds
     // live in one place so they're tunable as a set.
     const w = this.state.paneWidth;
-    // Collapse order as the pane narrows (per Kord's spec): the split buttons go
-    // first, then the quick-layout picker, then the screenshot; only after that
+    // Collapse order as the pane narrows (per Kord's spec): reset-shell goes
+    // first, then the split buttons, then the quick-layout picker, then the screenshot; only after that
     // does the session name shrink (full → short → just its ">" / globe icon).
     // The nav arrows and the clear-buffer button are the LAST to go — they're
     // never dropped while there's room for them. The pulse has no threshold: it
     // is always shown on shell panes (pane-band gates it off pickers and
     // web/ai panes). Higher threshold = removed sooner.
     const LADDER = {
+      resetShell: 420,
       splitRightLeft: 380,
       splitUpDown: 360,
       quickLayout: 340,
@@ -3169,6 +3179,7 @@ export default class Term extends React.PureComponent<
     // ~1 char) right before the icon-only collapse.
     const dirMinWidth = Math.round(Math.max(26, Math.min(80, 26 + ((w - LADDER.dirIconOnly) * 54) / 210)));
     const hideQuickLayout = w < LADDER.quickLayout;
+    const hideResetShell = w < LADDER.resetShell;
     const hideSplitRightLeft = w < LADDER.splitRightLeft;
     const hideSplitUpDown = w < LADDER.splitUpDown;
     // A picker pane has no terminal: nothing to navigate, clear or screenshot,
@@ -3356,6 +3367,21 @@ export default class Term extends React.PureComponent<
                     });
                   }
             }
+            onResetShell={
+              isPicker
+                ? undefined
+                : () => {
+                    // Same in-place swap as Switch Shell, back onto this pane's own profile.
+                    rpc.emit('new', {
+                      isNewGroup: false,
+                      cwd: (this.props as any).sessionCwd || (this.props as any).cwd,
+                      activeUid: this.props.uid,
+                      profile: sessionProfile,
+                      groupUid: this.props.groupUid
+                    });
+                  }
+            }
+            hideResetShell={hideResetShell}
             isSplitRightDisabled={hideSplitRightLeft}
             isSplitDownDisabled={isSplitDownDisabled || hideSplitUpDown}
             hideQuickLayout={hideQuickLayout}

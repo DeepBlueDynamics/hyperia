@@ -1,4 +1,6 @@
 // Result (rendered Markdown), footer, armed/lock state and the history overlay.
+// A note has two sides: the prompt (note) and the result. One shows at a time;
+// the footer link flips between them, and either can be edited.
 // The run model starts from the saved note so armed state shows before any push.
 'use strict';
 
@@ -16,12 +18,23 @@ function createRunView(ctx) {
     run: saved.run || null,
     state: saved.run_state || {},
     result: typeof saved.result === 'string' ? saved.result : '',
-    historyCount: null
+    historyCount: null,
+    side: 'note',
+    unseen: false
   };
+  const sideKey = `sticky-side:${ctx.state.noteId}`;
+  try {
+    if (ctx.storage && ctx.storage.getItem(sideKey) === 'result') model.side = 'result';
+  } catch {
+    /* side is a convenience */
+  }
   let textarea = null;
   let resultEl = null;
   let footerEl = null;
   let lockHint = null;
+  let contentEl = null;
+  let editor = null;
+  let clearArmedUntil = 0;
   let lastCountedRun = undefined;
 
   const el = (tag, cls, text) => {
@@ -31,15 +44,89 @@ function createRunView(ctx) {
     return e;
   };
 
+  const hasResult = () => !!String(model.result || '').trim();
+
   function renderResult() {
     if (!resultEl) return;
     const text = String(model.result || '');
     const has = !!text.trim();
-    resultEl.style.display = has || model.run ? '' : 'none';
+    const onResult = model.side === 'result';
+    if (onResult) model.unseen = false;
+    resultEl.style.display = onResult ? '' : 'none';
+    doc.body.classList.toggle('side-result', onResult);
+    if (editor) return;
     resultEl.classList.toggle('empty', !has);
-    doc.body.classList.toggle('has-result', has);
     if (has) resultEl.innerHTML = renderMarkdown(text);
-    else resultEl.textContent = model.run ? 'No result yet.' : '';
+    else resultEl.textContent = model.run ? 'No result yet.' : 'No result. Write one with edit.';
+  }
+
+  function flip(side) {
+    model.side = side || (model.side === 'result' ? 'note' : 'result');
+    try {
+      if (ctx.storage) ctx.storage.setItem(sideKey, model.side);
+    } catch {
+      /* side is a convenience */
+    }
+    if (model.side === 'note') stopEditing();
+    if (contentEl) {
+      contentEl.classList.toggle('flip-in', false);
+      void contentEl.offsetWidth; // restart the animation
+      contentEl.classList.toggle('flip-in', true);
+    }
+    renderResult();
+    renderFooter();
+    if (model.side === 'note' && textarea && textarea.focus) textarea.focus();
+  }
+
+  function startEditing() {
+    if (!resultEl || editor) return;
+    editor = el('textarea', 'run-result-edit');
+    editor.value = String(model.result || '');
+    editor.spellcheck = false;
+    editor.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        stopEditing();
+      } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        void saveResult(editor.value);
+      }
+    });
+    resultEl.textContent = '';
+    resultEl.classList.toggle('empty', false);
+    resultEl.appendChild(editor);
+    if (editor.focus) editor.focus();
+    renderFooter();
+  }
+
+  function stopEditing() {
+    if (!editor) return;
+    editor = null;
+    renderResult();
+    renderFooter();
+  }
+
+  async function saveResult(text) {
+    try {
+      const ok = await ipc.invoke('sticky-result-set', ctx.state.noteId, text);
+      if (ok === false) throw new Error('note not found');
+      model.result = text;
+      stopEditing();
+    } catch (e) {
+      links.showToast(doc, `Couldn't save the result: ${e.message || e}`);
+    }
+  }
+
+  function clearResult() {
+    if (now() > clearArmedUntil) {
+      clearArmedUntil = now() + 3000;
+      renderFooter();
+      timers.setTimeout(() => renderFooter(), 3100);
+      return;
+    }
+    clearArmedUntil = 0;
+    void saveResult('').then(() => flip('note'));
   }
 
   function footerButton(label, title, onClick) {
@@ -56,9 +143,30 @@ function createRunView(ctx) {
   function renderFooter() {
     if (!footerEl) return;
     const f = fmt.formatFooter(model.run, model.state, now());
-    footerEl.style.display = f.visible ? '' : 'none';
+    const visible = f.visible || hasResult() || model.side === 'result';
+    footerEl.style.display = visible ? '' : 'none';
     footerEl.textContent = '';
-    if (!f.visible) return;
+    if (!visible) return;
+    const onResult = model.side === 'result';
+    footerEl.appendChild(
+      footerButton(
+        onResult ? '↻ note' : `↻ result${model.unseen ? ' ●' : ''}`,
+        onResult ? 'Flip to the note' : 'Flip to the result',
+        () => flip()
+      )
+    );
+    if (onResult && editor) {
+      footerEl.appendChild(footerButton('save', 'Save the result (Ctrl+Enter)', () => void saveResult(editor.value)));
+      footerEl.appendChild(footerButton('cancel', 'Discard changes (Esc)', () => stopEditing()));
+    } else if (onResult) {
+      footerEl.appendChild(footerButton('edit', 'Edit the result', () => startEditing()));
+      if (hasResult()) {
+        const armed = now() <= clearArmedUntil;
+        footerEl.appendChild(
+          footerButton(armed ? 'clear? click again' : 'clear', 'Clear the result', () => clearResult())
+        );
+      }
+    }
     if (f.last) footerEl.appendChild(el('span', `rf-last rf-${model.state.last_status || 'none'}`, f.last));
     if (f.next) footerEl.appendChild(el('span', 'rf-next', f.next));
     if (f.target) footerEl.appendChild(el('span', 'rf-target', f.target));
@@ -211,6 +319,7 @@ function createRunView(ctx) {
   function mount(opts) {
     textarea = opts.textarea;
     const content = opts.content;
+    contentEl = content;
     lockHint = el('div', 'prompt-lock-hint', 'Pause to edit');
     lockHint.style.display = 'none';
     if (opts.promptWrap) opts.promptWrap.appendChild(lockHint);
@@ -234,8 +343,11 @@ function createRunView(ctx) {
     render();
   });
   ipc.on('sticky-result', (_e, result) => {
-    model.result = typeof result === 'string' ? result : '';
+    const next = typeof result === 'string' ? result : '';
+    if (next !== model.result && next.trim() && model.side !== 'result') model.unseen = true;
+    model.result = next;
     renderResult();
+    renderFooter();
   });
 
   // Called by the panel after set/clear so the UI updates before the push arrives.
@@ -246,7 +358,7 @@ function createRunView(ctx) {
     render();
   }
 
-  return {mount, render, setRun, openHistory, renderHistory, model};
+  return {mount, render, setRun, openHistory, renderHistory, flip, startEditing, model};
 }
 
 module.exports = {createRunView};

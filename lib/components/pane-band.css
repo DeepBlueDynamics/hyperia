@@ -120,7 +120,8 @@
   justify-content: center;
 }
 
-.hy-band-close {
+.hy-band-close,
+.hy-band-reset {
   flex-shrink: 0;
   position: relative;
 }

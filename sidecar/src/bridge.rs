@@ -301,6 +301,9 @@ impl MsgNotify {
 /// Min seconds between two message-notice fires for a pane. Short: it only merges
 /// a burst into one notice (which names the newest message and the unread count).
 const MSG_NOTIFY_COOLDOWN_SECS: u64 = 5;
+/// Focus protects a pane only this long after the human last clicked or typed
+/// there. Must match FOCUS_IDLE_RELEASE_MS in app/bridge.ts.
+const FOCUS_IDLE_RELEASE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 /// Retire completed notice bookkeeping after this interval. Pending notices survive
 /// focus delays; closing the pane removes its entry.
 const MSG_NOTIFY_TTL_SECS: u64 = 3600;
@@ -451,6 +454,10 @@ struct BridgeInner {
     msg_notify: Mutex<HashMap<String, MsgNotify>>,
     /// Per-session output subscribers: uid → list of senders waiting for PTY bytes
     output_subs: Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>,
+    /// Screen mirrors from the previous Electron link, by uid: (pid, screen).
+    /// A pane that re-registers with the same pid gets its screen back instead
+    /// of a blank one (an idle pane would otherwise read blank until it prints).
+    parked_screens: Mutex<HashMap<String, (u32, ScreenBuffer)>>,
     /// Lume-backed per-shell log store (BM25 search + pickle-to-disk).
     lume: crate::lume_store::LumeStore,
     /// Cross-pane access consent ledger (pending prompts + active grants).
@@ -502,6 +509,7 @@ impl Bridge {
                 idle_blocked: Mutex::new(HashMap::new()),
                 msg_notify: Mutex::new(HashMap::new()),
                 output_subs: Mutex::new(HashMap::new()),
+                parked_screens: Mutex::new(HashMap::new()),
                 lume: crate::lume_store::LumeStore::new(),
                 perms,
                 identity,
@@ -1086,6 +1094,7 @@ impl Bridge {
             shell_app_cmdline,
             window_id,
             pane_active,
+            tab_active,
             last_user_activity,
         ) = {
             let sessions = self.inner.sessions.lock().await;
@@ -1105,6 +1114,7 @@ impl Bridge {
                     .unwrap_or_default(),
                 info.window_id,
                 info.pane_active,
+                info.tab_active,
                 info.last_user_activity,
             )
         };
@@ -1129,8 +1139,11 @@ impl Bridge {
         let actively_typed = last_user_activity
             .map(|t| t.elapsed().as_secs() < 15)
             .unwrap_or(false);
+        // Clicked or typed in recently; a pane left selected while the human is away stops blocking.
+        let present = last_user_activity.is_some_and(|t| t.elapsed() < FOCUS_IDLE_RELEASE);
         let focus = FocusFacts {
-            pane_is_keyboard_focus: focused_window == Some(window_id) && pane_active,
+            // Same rule as main's paneProtected: the pane must be on the showing tab.
+            pane_is_keyboard_focus: present && focused_window == Some(window_id) && pane_active && tab_active,
             hyperia_foreground,
             actively_typed,
         };
@@ -1377,7 +1390,16 @@ impl Bridge {
         };
         for (pane, armed_at) in notify_candidates {
             let Some(candidate) = self.classification_for(&pane).await else { continue };
-            if !matches!(candidate.notice, NoticeDisposition::Arm { .. }) { continue; }
+            let held_key = crate::held_input::mail_key(&pane);
+            let released = crate::held_input::HELD.lock().await.released(&held_key, now);
+            // Suppressed for focus: the window asks "Deliver now?" instead of waiting silently.
+            let focus_held = candidate.focus_protected && matches!(candidate.notice, NoticeDisposition::Suppress { .. });
+            if !matches!(candidate.notice, NoticeDisposition::Arm { .. }) && !(focus_held && released) {
+                if focus_held {
+                    self.hold_mail_notice(&pane, &held_key, now).await;
+                }
+                continue;
+            }
             let (unread, latest) = match crate::messaging::unread_for_pane(self, &pane).await {
                 Ok(found) => found,
                 Err(_) => continue, // Do not consume a notice on storage failure.
@@ -1385,14 +1407,7 @@ impl Bridge {
             let mut consumed = unread == 0;
             if unread > 0 {
                 let pid = self.inner.sessions.lock().await.get(&pane).map(|s| s.pid).unwrap_or(0);
-                let mut sender_name = String::new();
-                if let Some(m) = &latest {
-                    let name = match m.from_pane.as_str() {
-                        "" => None,
-                        uid => self.pane_display_name(uid).await,
-                    };
-                    sender_name = name.unwrap_or_else(|| m.from_label.clone());
-                }
+                let sender_name = self.mail_sender_name(latest.as_ref()).await;
                 let notice = mail_notice_text(
                     latest.as_ref().map(|m| NoticeMail {
                         from_name: &sender_name,
@@ -1404,7 +1419,7 @@ impl Bridge {
                 );
                 let response = self.guarded_input(&pane, serde_json::json!({
                     "type": "GuardedInput", "uid": pane, "pid": pid,
-                    "text": notice, "submit": true, "agent": true,
+                    "text": notice, "submit": true, "agent": true, "released": released,
                 })).await;
                 let definitely_not_sent = matches!(&response, Err(error)
                     if error == NO_CLIENT || error == NOT_SENT_DISCONNECTED);
@@ -1425,6 +1440,7 @@ impl Bridge {
                 }
             }
             if consumed {
+                self.clear_held_mail(&pane, &held_key).await;
                 let mut notif = self.inner.msg_notify.lock().await;
                 if let Some(st) = notif.get_mut(&pane) {
                     if st.armed_at == armed_at {
@@ -1464,6 +1480,52 @@ impl Bridge {
     /// Fire-and-forget a JSON message to Electron (no seq, no response wait).
     /// Used for sidecar-initiated pushes the renderer handles out-of-band
     /// (e.g. permission prompts, which reply over HTTP rather than the WS).
+    /// Display name for a mail's sender: its live pane name, else its label.
+    async fn mail_sender_name(&self, latest: Option<&crate::msgbus::mailbox::MessageEnvelope>) -> String {
+        let Some(m) = latest else { return String::new() };
+        let name = match m.from_pane.as_str() {
+            "" => None,
+            uid => self.pane_display_name(uid).await,
+        };
+        name.unwrap_or_else(|| m.from_label.clone())
+    }
+
+    /// The human is in `pane` with unread mail: show the window's "Deliver now"
+    /// toast once. Mail the agent already read closes it instead.
+    async fn hold_mail_notice(&self, pane: &str, key: &str, now: std::time::Instant) {
+        // Already showing: don't re-read the mailbox every tick.
+        if crate::held_input::HELD.lock().await.contains(key) { return; }
+        let (unread, latest) = match crate::messaging::unread_for_pane(self, pane).await {
+            Ok(found) => found,
+            Err(_) => return,
+        };
+        if unread == 0 {
+            self.clear_held_mail(pane, key).await;
+            return;
+        }
+        if !crate::held_input::HELD.lock().await.hold(key, pane, now) { return; }
+        let from = self.mail_sender_name(latest.as_ref()).await;
+        let subject = latest.as_ref().map(|m| m.subject.as_str()).unwrap_or_default();
+        let count = if unread == 1 { "1 message".to_string() } else { format!("{unread} messages") };
+        let preview = match crate::held_input::preview(subject) {
+            s if s.is_empty() => count,
+            s => format!("{count} · {s}"),
+        };
+        let sent = self.notify(serde_json::json!({
+            "type": "InputHeld", "opId": key, "pane": pane, "kind": "mail",
+            "from": if from.is_empty() { "Mail".to_string() } else { from }, "preview": preview,
+        })).await;
+        if sent.is_err() {
+            crate::held_input::HELD.lock().await.forget(key);
+        }
+    }
+
+    async fn clear_held_mail(&self, pane: &str, key: &str) {
+        if crate::held_input::HELD.lock().await.forget(key) {
+            let _ = self.notify(serde_json::json!({"type": "InputHeldCleared", "opId": key, "pane": pane})).await;
+        }
+    }
+
     pub async fn notify(&self, msg: serde_json::Value) -> Result<(), String> {
         let guard = self.inner.cmd_tx.lock().await;
         match guard.as_ref() {
@@ -2114,6 +2176,20 @@ impl Bridge {
     }
 
     /// Handle an incoming message from Electron.
+    /// Clear the session table for a new Electron link, keeping each pane's
+    /// screen so a pane that re-registers with the same pid gets it back.
+    async fn park_sessions(&self) {
+        let mut sessions = self.inner.sessions.lock().await;
+        if sessions.is_empty() {
+            return;
+        }
+        tracing::info!("Clearing {} stale sessions from previous connection", sessions.len());
+        let parked: HashMap<String, (u32, ScreenBuffer)> =
+            sessions.drain().map(|(uid, info)| (uid, (info.pid, info.screen))).collect();
+        // Leftovers from the link before are dropped here.
+        *self.inner.parked_screens.lock().await = parked;
+    }
+
     async fn handle_message(&self, text: &str) {
         let msg: serde_json::Value = match serde_json::from_str(text) {
             Ok(v) => v,
@@ -2158,6 +2234,14 @@ impl Bridge {
                 if focused_window_id.is_none() {
                     *focused_window_id = Some(window_id);
                 }
+                drop(focused_window_id);
+                let screen = match self.inner.parked_screens.lock().await.remove(&uid) {
+                    Some((parked_pid, mut screen)) if parked_pid == pid && pid != 0 => {
+                        screen.resize(rows, cols);
+                        screen
+                    }
+                    _ => ScreenBuffer::new(rows, cols, 1000),
+                };
                 self.inner.sessions.lock().await.insert(
                     uid,
                     SessionInfo {
@@ -2175,7 +2259,7 @@ impl Bridge {
                         tab_order,
                         tab_active,
                         pane_active,
-                        screen: ScreenBuffer::new(rows, cols, 1000),
+                        screen,
                         // Honor the rect carried IN the register message (main
                         // sends the tracked session's current BSP). Hardcoding
                         // defaults here left any pane that (re)registered
@@ -2378,6 +2462,8 @@ impl Bridge {
                 // and close their prompts in the UI right away. The source OR
                 // destination pane is gone, so there is nothing left to decide.
                 for req in self.inner.perms.cleanup_pane(uid).await {
+                    // Its page will never be answered now; don't keep it parked.
+                    crate::browser_open::forget(&req.id);
                     let bridge = self.clone();
                     tokio::spawn(async move {
                         let _ = bridge.notify(serde_json::json!({
@@ -2495,8 +2581,9 @@ impl Bridge {
             current
         };
         if current {
-            self.inner.sessions.lock().await.clear();
-            tracing::info!("Electron disconnected ({reason}); {failed} pending command(s) failed, sessions cleared");
+            // Park, not clear: the next link's re-registers get their screens back.
+            self.park_sessions().await;
+            tracing::info!("Electron disconnected ({reason}); {failed} pending command(s) failed, sessions parked");
         } else {
             // A newer socket already owns the bridge and re-registered its sessions.
             tracing::info!("Stale Electron socket closed ({reason}); {failed} pending command(s) failed");
@@ -2538,13 +2625,7 @@ async fn handle_socket(socket: WebSocket, bridge: Bridge) {
     let (mut ws_tx, ws_rx) = socket.split();
 
     // Clear stale sessions from any previous connection that didn't disconnect cleanly
-    {
-        let mut sessions = bridge.inner.sessions.lock().await;
-        if !sessions.is_empty() {
-            tracing::info!("Clearing {} stale sessions from previous connection", sessions.len());
-            sessions.clear();
-        }
-    }
+    bridge.park_sessions().await;
 
     // Create the command channel for this connection
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<String>();
@@ -2815,6 +2896,30 @@ mod tests {
         assert!(mail_notice_text(Some(mail("x", "", &long)), 1).contains("…"));
         assert_eq!(mail_notice_text(None, 2), "[Hyperia mail] New message (2 unread). Run msg_check to read.");
     }
+    #[test]
+    fn a_pane_that_re_registers_after_a_reconnect_keeps_its_screen() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let bridge = Bridge::new();
+            let b64 = |s: &str| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, s.as_bytes());
+            let reg = |pid: u32| serde_json::json!({"type": "SessionRegister", "uid": "p1", "pid": pid, "rows": 5, "cols": 20}).to_string();
+            bridge.handle_message(&reg(42)).await;
+            bridge.handle_message(&serde_json::json!({"type": "SessionData", "uid": "p1", "data": b64("PS C:> ")}).to_string()).await;
+            assert!(bridge.get_screen_text_by_uid("p1").await.contains("PS C:"));
+
+            // A real drop goes through on_disconnect, then the new link parks again.
+            let gen = bridge.inner.conn_gen.load(Ordering::SeqCst);
+            bridge.on_disconnect(gen, "test").await;
+            bridge.park_sessions().await;
+            bridge.handle_message(&reg(42)).await;
+            assert!(bridge.get_screen_text_by_uid("p1").await.contains("PS C:"), "same pid keeps its screen");
+
+            bridge.park_sessions().await;
+            bridge.handle_message(&reg(43)).await; // a different process in that pane
+            assert!(!bridge.get_screen_text_by_uid("p1").await.contains("PS C:"), "new pid starts blank");
+        });
+    }
+
     fn session_info(window_id: u32, root_tab_uid: &str, split_label: &str, tab_active: bool, pane_active: bool) -> SessionInfo {
         SessionInfo {
             out_meter: Default::default(),
@@ -2944,6 +3049,8 @@ mod tests {
                     cmdline: String::new(),
                     pid: 0,
                 });
+                // Clicked in a minute ago: still counts as present (not typing).
+                info.last_user_activity = Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
                 sessions.insert("dead".into(), info);
             }
             *bridge.inner.focused_window_id.lock().await = Some(10);
@@ -2959,6 +3066,22 @@ mod tests {
             let background = bridge.classification_for("dead").await.expect("session");
             assert!(!background.focus_protected);
             assert!(matches!(background.pane_send, InputDisposition::Refuse { .. }));
+
+            // The active pane of a tab that isn't showing isn't where the human is.
+            *bridge.inner.app_foreground.lock().await = true;
+            bridge.inner.sessions.lock().await.get_mut("dead").unwrap().tab_active = false;
+            let hidden_tab = bridge.classification_for("dead").await.expect("session");
+            assert!(!hidden_tab.focus_protected);
+
+            // Left selected while the human is away: focus stops protecting it.
+            {
+                let mut sessions = bridge.inner.sessions.lock().await;
+                let info = sessions.get_mut("dead").unwrap();
+                info.tab_active = true;
+                info.last_user_activity = Some(std::time::Instant::now() - FOCUS_IDLE_RELEASE - std::time::Duration::from_secs(1));
+            }
+            let away = bridge.classification_for("dead").await.expect("session");
+            assert!(!away.focus_protected);
         });
     }
 

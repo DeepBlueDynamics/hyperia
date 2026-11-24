@@ -86,7 +86,7 @@
     older conversation history and extracts just the relevant part of big tool outputs (terminal
     screens, files) <i>before</i> they reach the agent above — fewer tokens, lower cost, faster turns.
     When <b>disabled it does not run at all</b>: full, untouched tokens go straight to your agent.
-    Runs free on your hardware (Ollama / Sailfish); your primary agent choice above is unaffected.
+    Runs free on your hardware (Ollama); your primary agent choice above is unaffected.
   </div>
   <label style="display:flex;align-items:center;gap:8px;margin:6px 0 8px;cursor:pointer">
     <input type="checkbox" id="mxEnabled" checked> <span>enabled</span>
@@ -117,12 +117,10 @@ const PROVIDERS = [
   {id:'openai',    label:'OpenAI',    cat:'codex',   key:true},
   {id:'grok',      label:'Grok',      cat:'grok',    key:true},
   {id:'gemini',    label:'Gemini',    cat:'gemini',  key:true},
-  {id:'ollama',    label:'Ollama (local)', cat:'ollama', key:false},
-  {id:'sailfish',  label:'Sailfish (local)', cat:'sailfish', key:false}
+  {id:'ollama',    label:'Ollama (local)', cat:'ollama', key:false}
 ];
 // Best-in-class cheapest agentic runner per provider (user-changeable).
-// Sailfish serves one model at a time (gemma4-e4b) — match anything → first id.
-const CHEAP_PICK = {claude:/haiku/i, codex:/mini/i, gemini:/flash/i, grok:/build/i, ollama:/e4b|ornith/i, sailfish:/.*/};
+const CHEAP_PICK = {claude:/haiku/i, codex:/mini/i, gemini:/flash/i, grok:/build/i, ollama:/e4b|ornith/i};
 let cfg = {provider:'', model:'', keys:{}};
 let catalog = null;
 let sel = '';
@@ -153,7 +151,7 @@ function renderProviders() {
       d.title = DOT_TIP[keyStatus[p.id]] || '';
       d.appendChild(s);
     } else if (!p.key && localStatus[p.id] !== undefined) {
-      // Local providers (Ollama / Sailfish): live endpoint reachability.
+      // Local providers (Ollama): live endpoint reachability.
       const s = document.createElement('span');
       s.textContent = ' ●';
       s.style.color = localStatus[p.id] ? '#3fb950' : '#f85149';
@@ -203,10 +201,6 @@ function renderModels() {
   m.value = ids.includes(cfg.model) ? cfg.model : (cheap || prov.default || ids[0] || '');
   $('modelNote').textContent = p.id === 'ollama'
     ? 'Curated: small, fast, tool-capable local models (E4B-class + Ornith). Extend via config.agent.ollama_allow.'
-    : p.id === 'sailfish'
-    ? (models.length
-        ? 'Local OpenAI-compatible endpoint (llama.cpp CUDA). First call after idle can take ~120s to warm up.'
-        : 'Sailfish not reachable on :22343 — start the appliance (Services → Sailfish) then reopen.')
     : (cheap && m.value === cheap ? 'Defaulted to the cheapest capable runner — change freely.' : '');
 }
 
@@ -218,7 +212,6 @@ const SVC_DEFS = [
   {id:'shivvr', label:'Shivvr', desc:'embeddings', port:8085, install:'shivvr'},
   {id:'grub', label:'Grub crawler', desc:'', port:6792, install:'grub'},
   {id:'transcription', label:'Transcription', desc:'', port:8765, install:'transcription'},
-  {id:'sailfish', label:'Sailfish', desc:'optimized local Gemma (Docker, ≥16 GB GPU)', port:22343, install:'sailfish'},
 ];
 const installLine = (name) => name === 'ollama'
   ? (IS_WIN ? 'winget install Ollama.Ollama' : 'curl -fsSL https://ollama.com/install.sh | sh')
@@ -311,9 +304,8 @@ async function loadServices() {
   try {
     const s = await (await fetch('/api/agent/services')).json();
     svcState = s.services || {};
-    // Provider status lights: ollama daemon + sailfish OpenAI-compat API.
+    // Provider status light: the ollama daemon.
     localStatus.ollama = !!(svcState.ollama || {}).running;
-    localStatus.sailfish = !!svcState.sailfish_api;
     renderProviders();
     renderServices();
   } catch { /* keep last state */ }
@@ -373,8 +365,7 @@ function renderMaximus() {
   const sel2 = $('mxModel');
   sel2.innerHTML = '';
   const opts = [];
-  // Ollama tags only for now — the compressor speaks the Ollama API; wiring
-  // the Sailfish appliance (OpenAI-compat) as a Maximus engine is next.
+  // Ollama tags only — the compressor speaks the Ollama API.
   const ol = catalog && catalog.providers && catalog.providers.ollama;
   if (ol) for (const m of (ol.models || [])) opts.push({v: m.id, label: 'ollama · ' + m.id});
   // Always offer the known-small defaults even if the catalog is down.

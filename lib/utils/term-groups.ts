@@ -7,6 +7,18 @@ export default function findBySession(termGroupState: ITermState, sessionUid: st
     .find((group) => group.sessionUid === sessionUid);
 }
 
+/**
+ * The group to close for a pane id, or null. A terminal pane is found by its
+ * session; a web pane has no session, so its id IS its group's id. Never
+ * guesses: a caller that gets null must close nothing.
+ */
+export function groupForPane(termGroupState: ITermState, paneUid: string): string | null {
+  if (!paneUid) return null;
+  const own = termGroupState.termGroups[paneUid];
+  if (own && !(own.children && own.children.length)) return own.uid;
+  return findBySession(termGroupState, paneUid)?.uid ?? null;
+}
+
 export function countHorizontalStacks(groupUid: string, termGroups: Record<string, any>): number {
   const group = termGroups[groupUid];
   if (!group) return 0;

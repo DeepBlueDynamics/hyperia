@@ -2,7 +2,7 @@
 // (components/consent-modal.tsx). Kept free of Electron/React so the three
 // variants — pane access, messaging, mailbox binding — are unit-testable.
 
-export type ConsentKind = 'access' | 'message' | 'bind' | 'sticky_run';
+export type ConsentKind = 'access' | 'message' | 'bind' | 'sticky_run' | 'open_browser';
 
 export type ConsentVariant = {
   kind: ConsentKind;
@@ -16,7 +16,8 @@ export type ConsentVariant = {
   showDuration: boolean;
 };
 
-export function consentVariant(action?: string): ConsentVariant {
+/** `here`: the target is the pane the human is in (its tab doesn't flash). */
+export function consentVariant(action?: string, here = false): ConsentVariant {
   if (action?.startsWith('message:')) {
     return {
       kind: 'message',
@@ -36,6 +37,16 @@ export function consentVariant(action?: string): ConsentVariant {
       showDuration: false
     };
   }
+  if (action === 'open_browser') {
+    return {
+      kind: 'open_browser',
+      verb: ' wants to open ',
+      tail: '— in your default browser. Approving opens this page once.',
+      accessChip: 'This page, once',
+      // Asked every time: nothing to remember, so nothing to time-box.
+      showDuration: false
+    };
+  }
   if (action?.startsWith('bind:')) {
     return {
       kind: 'bind',
@@ -49,7 +60,9 @@ export function consentVariant(action?: string): ConsentVariant {
   return {
     kind: 'access',
     verb: ' wants to control ',
-    tail: '— its tab is flashing 🔔. Approving releases the waiting operation.',
+    tail: here
+      ? "— that's the pane you're in. Approving releases the waiting operation."
+      : '— its tab is flashing 🔔. Approving releases the waiting operation.',
     accessChip: null,
     showDuration: true
   };
@@ -61,6 +74,8 @@ export type ConsentTarget = {
   action?: string;
   /** Sidecar-supplied friendly recipient (agent label or pane name), messaging only. */
   recipientLabel?: string;
+  /** open_browser: the page to open. */
+  url?: string;
 };
 
 /**
@@ -71,6 +86,8 @@ export type ConsentTarget = {
 export function consentTargetName(req: ConsentTarget, sessionName?: string): string {
   // Sentinel targets aren't panes: __audio__ gates host audio (epic #162).
   if (req.targetPane === '__audio__') return '🔊 audio on this machine';
+  // A browser page is named by its site (sidecar-supplied, punycode for lookalikes).
+  if (req.action === 'open_browser') return req.recipientLabel?.trim() || hostOf(req.url) || 'a web page';
   // Sticky runs name the sticky (sidecar-supplied), not the pane.
   if (req.action === 'sticky_run' && req.recipientLabel?.trim()) return `'${req.recipientLabel.trim()}'`;
   if (consentVariant(req.action).kind === 'message') {
@@ -81,6 +98,26 @@ export function consentTargetName(req: ConsentTarget, sessionName?: string): str
   }
   if (sessionName) return sessionName;
   return `pane ${req.targetPane.replace(/^(pane|agent):/, '').slice(0, 8)}`;
+}
+
+function hostOf(url?: string): string {
+  try {
+    return url ? new URL(url).host : '';
+  } catch {
+    return '';
+  }
+}
+
+/** Longest URL shown on the prompt before the ellipsis (full text stays in a tooltip). */
+export const URL_MAX = 240;
+
+/** The "Page: …" line for an open_browser prompt, or null for every other kind. */
+export function consentUrl(req: {action?: string; url?: string}, max = URL_MAX): {text: string; full: string} | null {
+  if (req.action !== 'open_browser') return null;
+  const full = (req.url || '').trim();
+  if (!full) return null;
+  const chars = Array.from(full);
+  return {text: chars.length > max ? chars.slice(0, max - 1).join('') + '…' : full, full};
 }
 
 /** Longest subject shown before the ellipsis (full text stays in a tooltip). */

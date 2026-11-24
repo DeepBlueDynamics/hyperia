@@ -162,6 +162,14 @@ impl ScreenBuffer {
     /// Resize the screen buffer
     pub fn resize(&mut self, rows: u16, cols: u16) {
         let (rows, cols) = clamp_size(rows, cols);
+        // vt100 keeps the TOP rows on a shrink; xterm keeps the cursor's row and
+        // pushes the top into scrollback. Match xterm, or programs that redraw
+        // relative to the cursor (Claude Code) land on the wrong rows here.
+        let (cur_row, _) = self.parser.screen().cursor_position();
+        let shift = (cur_row + 1).saturating_sub(rows);
+        if shift > 0 {
+            self.parser.process(format!("\x1b[{shift}S\x1b[{shift}A").as_bytes());
+        }
         self.parser.set_size(rows, cols);
         self.last_snapshot = None; // Invalidate snapshot on resize
     }
@@ -250,6 +258,35 @@ fn unicode_width(s: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn text(b: &ScreenBuffer) -> Vec<String> {
+        b.screen_dump().lines.into_iter().map(|l| l.text.trim_end().to_string()).collect()
+    }
+
+    #[test]
+    fn shrinking_keeps_the_cursor_row_like_xterm() {
+        let mut b = ScreenBuffer::new(68, 154, 1000);
+        for i in 0..60 {
+            b.process(format!("line {i}\r\n").as_bytes());
+        }
+        b.resize(32, 154);
+        let rows = text(&b);
+        // Lines 29..59 stay visible above the cursor, which is still on the empty row after them.
+        assert_eq!(rows[0], "line 29");
+        assert_eq!(rows[30], "line 59");
+        assert_eq!(b.parser.screen().cursor_position(), (31, 0));
+        // A redraw relative to the cursor (3 up, rewrite) lands on the right line.
+        b.process(b"\x1b[3A\rLINE 57 EDITED\x1b[K");
+        assert_eq!(text(&b)[28], "LINE 57 EDITED");
+    }
+
+    #[test]
+    fn shrinking_with_the_cursor_near_the_top_keeps_the_top() {
+        let mut b = ScreenBuffer::new(68, 80, 1000);
+        b.process(b"only line");
+        b.resize(32, 80);
+        assert_eq!(text(&b)[0], "only line");
+    }
 
     #[test]
     fn degenerate_sizes_do_not_panic() {

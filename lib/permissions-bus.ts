@@ -21,6 +21,8 @@ export type PermRequest = {
   recipientLabel?: string;
   /** Messaging only: the mail's subject line (never the body). */
   subject?: string;
+  /** open_browser only: the page the agent asks to open in the default browser. */
+  url?: string;
 };
 
 type Listener = (req: PermRequest | null) => void;

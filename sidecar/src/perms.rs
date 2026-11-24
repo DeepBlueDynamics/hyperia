@@ -21,6 +21,9 @@ pub const CREATE_KEY: &str = "__create__";
 /// Consent action for a sticky run awaiting approval (main.rs resolves it).
 pub const STICKY_RUN_ACTION: &str = "sticky_run";
 
+/// Consent action for opening one page in the default browser (browser_open.rs).
+pub const OPEN_BROWSER_ACTION: &str = "open_browser";
+
 /// A pending consent prompt awaiting a human decision.
 #[derive(Clone)]
 pub struct PermRequest {
@@ -517,18 +520,20 @@ impl PermStore {
         let is_bind = req.action.starts_with("bind:");
         // A sticky run approval arms that run only; it must never become a drive grant.
         let is_sticky_run = req.action == STICKY_RUN_ACTION;
+        // One page, once: an approval must never become a grant of any kind.
+        let is_open_browser = req.action == OPEN_BROWSER_ACTION;
         // Denials/grants key: create on the sentinel, cap on its action string,
         // drive on the target pane.
         let key = if is_create {
             CREATE_KEY.to_string()
-        } else if is_cap || message_recipient.is_some() || is_bind || is_sticky_run {
+        } else if is_cap || message_recipient.is_some() || is_bind || is_sticky_run || is_open_browser {
             req.action.clone()
         } else {
             req.target_pane.clone()
         };
         if allow {
-            if is_bind || is_sticky_run {
-                // Binding approval is consumed by the mailbox service. It grants no drive access.
+            if is_bind || is_sticky_run || is_open_browser {
+                // Consumed by its own service (mailbox / sticky engine / browser open). No grant.
             } else if is_cap {
                 let cap = req.action.strip_prefix("cap:").unwrap_or("");
                 self.grant_cap(&req.requester, cap).await;
@@ -883,6 +888,24 @@ mod pane_close_tests {
         assert!(perms.respond(&req.id, true, "any", None).await.is_some());
         let snap = perms.snapshot().await;
         assert!(snap["grants"].as_array().unwrap().is_empty(), "sticky_run must not create a drive grant: {snap}");
+    }
+
+    #[tokio::test]
+    async fn approving_a_browser_open_grants_nothing_and_a_denial_cools_down() {
+        let perms = PermStore::for_tests();
+        let req = perms.create_request("agent:latin-flea", "", "browser:example.com", OPEN_BROWSER_ACTION, "").await;
+        assert!(perms.respond(&req.id, true, "any", None).await.is_some());
+        let snap = perms.snapshot().await;
+        assert!(snap["grants"].as_array().unwrap().is_empty(), "open_browser must not create a grant: {snap}");
+        assert!(snap["createGrants"].as_array().unwrap().is_empty());
+        assert!(!perms.has_cap("agent:latin-flea", OPEN_BROWSER_ACTION).await);
+        assert!(!perms.recently_denied("agent:latin-flea", OPEN_BROWSER_ACTION).await);
+
+        let again = perms.create_request("agent:latin-flea", "", "browser:example.com", OPEN_BROWSER_ACTION, "").await;
+        assert!(perms.respond(&again.id, false, "pane", None).await.is_some());
+        assert!(perms.recently_denied("agent:latin-flea", OPEN_BROWSER_ACTION).await);
+        // The "no" is about browser pages only.
+        assert!(!perms.recently_denied("agent:latin-flea", "browser:example.com").await);
     }
 
     #[tokio::test]

@@ -16,11 +16,12 @@ import {mkdirSync, writeFileSync} from 'fs';
 import {homedir} from 'os';
 import {join} from 'path';
 
-import {BrowserWindow, WebContentsView, ipcMain, session, shell, Menu, clipboard} from 'electron';
+import {BrowserWindow, WebContentsView, ipcMain, nativeImage, session, shell, Menu, clipboard} from 'electron';
 import type {Session, WebContents} from 'electron';
 
 import {getConfig} from './config';
 import {raiseToastLayer} from './toast-layer';
+import {blitBitmap} from './utils/bitmap-blit';
 import {fullPageClip} from './utils/fullpage-clip';
 import {ERR_ABORTED, initialLoadState, nextLoadState} from './utils/web-pane-loading';
 import type {WebPaneLoadEvent, WebPaneLoadState} from './utils/web-pane-loading';
@@ -231,6 +232,47 @@ export async function capturePaneJpeg(uid: string, w: number, h: number, quality
   } catch {
     return '';
   }
+}
+
+// Whole-window screenshot: the renderer plus its on-screen web panes painted
+// at their bounds. Replaces desktopCapturer, which leaked ~33 threads and
+// ~140 MB of main-process memory per call on Windows.
+// capturePage waits for a frame, and a view that isn't painting never sends one.
+const CAPTURE_TIMEOUT_MS = 4000;
+function captureWithin(wc: Electron.WebContents, what: string): Promise<Electron.NativeImage> {
+  return Promise.race([
+    wc.capturePage(),
+    new Promise<never>((_r, reject) =>
+      setTimeout(() => reject(new Error(`${what} did not paint within ${CAPTURE_TIMEOUT_MS} ms`)), CAPTURE_TIMEOUT_MS)
+    )
+  ]);
+}
+
+export async function captureWindowImage(win: BrowserWindow, maxWidth: number): Promise<Electron.NativeImage> {
+  let img = await captureWithin(win.webContents, 'the window');
+  if (img.isEmpty()) return img;
+  const {width: W, height: H} = img.getSize();
+  const content = win.getContentBounds();
+  const sf = content.width > 0 ? W / content.width : 1;
+  const live = [...panes.values()].filter((e) => e.win === win && !viewGone(e) && nativeVisible(e));
+  if (live.length) {
+    const bmp = img.toBitmap();
+    for (const entry of live) {
+      try {
+        const b = entry.view.getBounds();
+        if (b.width < 1 || b.height < 1 || b.x < -1000 || b.y < -1000) continue;
+        const w = Math.round(b.width * sf);
+        const h = Math.round(b.height * sf);
+        const pane = (await captureWithin(entry.view.webContents, 'a web pane')).resize({width: w, height: h});
+        const ps = pane.getSize();
+        blitBitmap(bmp, W, H, pane.toBitmap(), ps.width, ps.height, Math.round(b.x * sf), Math.round(b.y * sf));
+      } catch {
+        /* leave that pane's area as the renderer painted it */
+      }
+    }
+    img = nativeImage.createFromBitmap(bmp, {width: W, height: H, scaleFactor: sf});
+  }
+  return W > maxWidth ? img.resize({width: maxWidth, quality: 'good'}) : img;
 }
 
 // Spinner state tracks the main frame only, so never-settling iframes can't pin it on.
@@ -461,7 +503,15 @@ function wireWebContents(initialUid: string, wc: WebContents) {
         {type: 'separator'}
       );
     }
+    // Paste first and last: the menu is long, so it is near wherever it opens.
+    const paste: Electron.MenuItemConstructorOptions = {
+      label: 'Paste',
+      enabled: !!params.editFlags?.canPaste,
+      click: () => wc.paste()
+    };
     items.push(
+      paste,
+      {type: 'separator'},
       {label: 'Back', enabled: wc.navigationHistory.canGoBack(), click: () => goHistory(wc, 'back')},
       {label: 'Forward', enabled: wc.navigationHistory.canGoForward(), click: () => goHistory(wc, 'forward')},
       {label: 'Reload', click: () => wc.reload()},
@@ -476,7 +526,6 @@ function wireWebContents(initialUid: string, wc: WebContents) {
     }
     items.push(
       {label: 'Copy', enabled: !!params.editFlags?.canCopy, click: () => wc.copy()},
-      {label: 'Paste', enabled: !!params.editFlags?.canPaste, click: () => wc.paste()},
       {label: 'Cut', enabled: !!params.editFlags?.canCut, click: () => wc.cut()},
       {label: 'Select All', click: () => wc.selectAll()},
       {type: 'separator'},
@@ -502,7 +551,9 @@ function wireWebContents(initialUid: string, wc: WebContents) {
           ]),
       {type: 'separator'},
       {label: 'New Stickys', click: () => void ipcMain.emit('new-sticky', {})},
-      {label: 'Search Stickys', click: () => void ipcMain.emit('search-stickies')}
+      {label: 'Search Stickys', click: () => void ipcMain.emit('search-stickies')},
+      {type: 'separator'},
+      paste
     );
     Menu.buildFromTemplate(items).popup({window: entry.win});
   });

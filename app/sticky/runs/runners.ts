@@ -88,10 +88,11 @@ export async function ensureN8(): Promise<RunOutcome | undefined> {
 export async function pollAgentRun(
   triggerId: string,
   startedAt: number,
-  ctx: Pick<RunContext, 'sleep' | 'now'> = {}
+  ctx: Pick<RunContext, 'sleep' | 'now'> & {request?: typeof sidecarRequest} = {}
 ): Promise<RunOutcome> {
   const sleep = ctx.sleep || defaultSleep;
   const now = ctx.now || Date.now;
+  const request = ctx.request || sidecarRequest;
   let outcome: RunOutcome | undefined;
   while (!outcome) {
     if (now() - startedAt > N8_TIMEOUT_MS) {
@@ -99,10 +100,11 @@ export async function pollAgentRun(
       break;
     }
     await sleep(N8_POLL_MS);
-    const r = await sidecarRequest('GET', `/api/n8/run/${encodeURIComponent(triggerId)}`);
+    const r = await request('GET', `/api/n8/run/${encodeURIComponent(triggerId)}`);
     if (r.status === 404) {
       outcome = {status: 'failed', error: `nemesis8 lost trigger ${triggerId}`};
-    } else if (r.ok && r.data?.last_fired && r.data?.last_status) {
+    } else if (r.ok && r.data?.last_fired && r.data?.last_status && r.data.last_status !== 'running') {
+      // n8 marks a fired trigger 'running' until it finishes as 'ok' or 'error'.
       outcome =
         r.data.last_status === 'ok'
           ? {status: 'ok'}
@@ -110,7 +112,7 @@ export async function pollAgentRun(
     }
     // Other errors are treated as transient until the timeout.
   }
-  await sidecarRequest('DELETE', `/api/n8/run/${encodeURIComponent(triggerId)}`);
+  await request('DELETE', `/api/n8/run/${encodeURIComponent(triggerId)}`);
   return outcome;
 }
 
@@ -152,12 +154,35 @@ export async function runPane(note: NoteData, ctx: RunContext): Promise<RunOutco
       ? {status: 'halted', error: `Pane ${label} closed; schedule paused`, pause: true}
       : {status: 'halted', error: `Pane ${label} is closed`};
   }
-  const r = await sidecarRequest('POST', '/api/pane/send', {
-    pane: pane.uid,
+  return sendToPane(pane.uid, note, ctx);
+}
+
+/**
+ * Agent pane: the sticky prompt via pane_send. The sidecar refuses that (409) for
+ * a pane at a shell prompt; there the note's text runs as the command instead.
+ */
+export async function sendToPane(
+  uid: string,
+  note: NoteData,
+  ctx: Pick<RunContext, 'runId' | 'history'> & {request?: typeof sidecarRequest}
+): Promise<RunOutcome> {
+  const request = ctx.request || sidecarRequest;
+  const key = `sticky-${note.id}-${ctx.runId}`;
+  const r = await request('POST', '/api/pane/send', {
+    pane: uid,
     text: buildPanePrompt(note, ctx.history),
     submit: true,
-    idempotency_key: `sticky-${note.id}-${ctx.runId}`
+    idempotency_key: key
   });
-  if (!r.ok) return {status: 'failed', error: replyError(r)};
-  return {status: 'ok'};
+  if (r.ok) return {status: 'ok'};
+  const command = (note.text || '').trim();
+  if (r.status !== 409 || !command) return {status: 'failed', error: replyError(r)};
+  const run = await request('POST', '/api/terminal/run', {
+    pane: uid,
+    text: command,
+    submit: true,
+    idempotency_key: `${key}-shell`
+  });
+  if (run.ok) return {status: 'ok'};
+  return {status: 'failed', error: `${replyError(r)} / as a shell command: ${replyError(run)}`};
 }

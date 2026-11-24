@@ -119,6 +119,11 @@ body {
 .hy-tl-root[data-anchor='center'] {
   padding: 24px;
 }
+/* Top-right: prompts about the pane the human is in. */
+.hy-tl-root[data-anchor='top-right'] {
+  align-items: flex-end;
+  padding: 8px 16px 24px 24px;
+}
 /* Bottom-right notice stack — matches the DOM toast-stack it replaces. */
 .hy-tl-root[data-anchor='bottom-right'] {
   align-items: flex-end;

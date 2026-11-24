@@ -505,6 +505,7 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
             ['--tab-pulse-color' as any]: paneColors[0] || 'var(--text-info)'
           }}
         />
+        {isActive && <div className="tab_uplight" style={{background: indicatorColor}} />}
         {props.customChildrenBefore}
         <span
           className={`tab_text ${isLast ? 'tab_textLast' : ''} ${isActive ? 'tab_textActive' : ''}`}
@@ -718,6 +719,20 @@ const Tab = forwardRef<HTMLLIElement, TabProps>((props, ref) => {
           color: var(--text-primary);
           background: var(--bg-primary);
           font-weight: 500;
+          /* Own stacking context so the uplight sits above the background, below the text. */
+          isolation: isolate;
+        }
+
+        /* Uplight: the tab's colour strip washes faintly up from a hidden source
+           below the tab, brightest at the bottom centre. */
+        .tab_uplight {
+          position: absolute;
+          inset: 0;
+          z-index: -1;
+          pointer-events: none;
+          opacity: 0.18;
+          -webkit-mask-image: radial-gradient(130% 150% at 50% 120%, #000 0%, rgba(0, 0, 0, 0.5) 38%, transparent 72%);
+          mask-image: radial-gradient(130% 150% at 50% 120%, #000 0%, rgba(0, 0, 0, 0.5) 38%, transparent 72%);
         }
         .tab_active:hover {
           color: var(--text-primary);

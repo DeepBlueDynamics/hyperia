@@ -205,6 +205,31 @@
   .pv-row{cursor:pointer}
   .pv-row .mix{color:#64748b;font-size:9.5px}
   .pv-ring{position:relative;min-height:0}
+  /* LCARS corner readouts on the main viewer: elbows hug the viewer's corners. */
+  .lc{position:absolute;width:228px;box-sizing:border-box;pointer-events:none;z-index:2;--lc:#ff9966;
+    font-family:"Antonio","Arial Narrow","Roboto Condensed","Helvetica Neue Condensed",sans-serif;font-stretch:condensed;
+    text-transform:uppercase;letter-spacing:.06em;color:#ffcc99;font-size:12px;line-height:15px;background:rgba(7,10,16,.78)}
+  .lc-tl{top:6px;left:6px;border-top:11px solid var(--lc);border-left:40px solid var(--lc);border-top-left-radius:30px;padding:6px 10px 8px}
+  .lc-tr{top:6px;right:6px;border-top:11px solid var(--lc);border-right:40px solid var(--lc);border-top-right-radius:30px;padding:6px 10px 8px}
+  .lc-bl{bottom:6px;left:6px;border-bottom:11px solid var(--lc);border-left:40px solid var(--lc);border-bottom-left-radius:30px;padding:8px 10px 6px}
+  .lc-br{bottom:6px;right:6px;border-bottom:11px solid var(--lc);border-right:40px solid var(--lc);border-bottom-right-radius:30px;padding:8px 10px 6px}
+  .lc-h{position:absolute;right:10px;padding:0 6px;background:#070a10;color:var(--lc);font-size:12px;line-height:11px;letter-spacing:.12em;font-weight:700}
+  .lc-tl .lc-h,.lc-tr .lc-h{top:-11px}.lc-bl .lc-h,.lc-br .lc-h{bottom:-11px}
+  .lc-tr .lc-h,.lc-br .lc-h{right:auto;left:10px}
+  .lc-n{position:absolute;width:40px;text-align:center;color:#05070b;font-size:10px;font-weight:700;letter-spacing:0}
+  .lc-tl .lc-n,.lc-bl .lc-n{left:-40px}.lc-tr .lc-n,.lc-br .lc-n{right:-40px}
+  .lc-tl .lc-n,.lc-tr .lc-n{bottom:4px}.lc-bl .lc-n,.lc-br .lc-n{top:4px}
+  .lc-r{display:flex;justify-content:space-between;gap:8px;white-space:nowrap}
+  .lc-r span{overflow:hidden;text-overflow:ellipsis}
+  .lc-r b{color:#f8fafc;font-weight:600}
+  .lc-r.alert,.lc-r.alert b{color:#ff5f5f}
+  .lc-r.alert b{animation:lcBlink 1.2s steps(2) infinite}
+  @keyframes lcBlink{50%{opacity:.35}}
+  .lc-bar{height:6px;margin:2px 0 4px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden}
+  .lc-bar i{display:block;height:100%;background:var(--lc);border-radius:3px}
+  .lc-bar i.hot{background:#ff5f5f}
+  .lc-dim{color:#7c879a}
+  .lc-off .lc{display:none}
   #pv-ring{position:absolute;inset:0;width:100%;height:100%;display:block}
   .pv-right{display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;overflow:hidden}
   .pv-rows{padding:2px 10px 8px;font-size:10.5px}
@@ -375,7 +400,12 @@
     <div class="pv-p pv-col"><div class="pv-t"><span>Activity by pane | lines ± · file ops</span><span id="pv-bp-n"></span></div><canvas id="pv-bypane"></canvas></div>
     <div class="pv-p pv-col"><div class="pv-t"><span>File types | pareto</span><span id="pv-pa-n"></span></div><canvas id="pv-pareto"></canvas></div>
   </div>
-  <div class="pv-p pv-ring"><canvas id="pv-ring"></canvas></div>
+  <div class="pv-p pv-ring" id="pv-ringbox"><canvas id="pv-ring"></canvas>
+    <div class="lc lc-tl" id="lc-ops" style="--lc:#ff9966"><span class="lc-h">OPS</span><span class="lc-n">01</span><div class="lc-b"></div></div>
+    <div class="lc lc-tr" id="lc-gpu" style="--lc:#cc99ff"><span class="lc-h">GPU</span><span class="lc-n">02</span><div class="lc-b"></div></div>
+    <div class="lc lc-bl" id="lc-host" style="--lc:#9999ff"><span class="lc-h">HOST</span><span class="lc-n">03</span><div class="lc-b"></div></div>
+    <div class="lc lc-br" id="lc-radio" style="--lc:#ffcc66"><span class="lc-h">RADIO</span><span class="lc-n">04</span><div class="lc-b"></div></div>
+  </div>
   <div class="pv-right">
     <div class="pv-p pv-grow"><div class="pv-t"><span>Top comms | sorted</span><b id="pv-top-n"></b></div><div class="pv-rows" id="pv-top"></div></div>
     <div class="pv-p pv-grow"><div class="pv-t"><span>Radio | transmissions</span><span id="pv-radio-n"></span></div><div class="pv-rows" id="pv-radio" style="overflow:auto;max-height:100%"></div></div>
@@ -536,8 +566,6 @@ function renderServices(sys){
   si(fe.reachable?"up":"down","Ferricula",(fe.reachable?"up":"down")+" · "+(fe.base_url||"").replace(/^https?:\/\//,""));
   const kk = sys.kokoro||{};
   si(kk.model_present?"up":"na","Kokoro",kk.model_present?"ready":"model downloads on first use");
-  const sf = sys.sailfish||{};
-  if (sf.configured) si(sf.reachable?"up":"down","Sailfish",(sf.reachable?"up":"down")+" · :"+(sf.port||"?"));
   const tr = sys.transcription||{};
   si(tr.configured?(tr.reachable?"up":"down"):"na","Whisper",
      tr.configured?((tr.reachable?"up":"down")+" · "+(tr.target||"")):"not configured");
@@ -1335,6 +1363,12 @@ function pvDrawRing(){
         ctx.fillText(pvClip(ctx, pvWebWhere(n.url), Math.max(60, (left ? p.x : w - p.x) - 8)), p.x, p.y + 11);
         box.y1 += 10; a.lbox.y1 = (box.y1 - vw.y) / vw.z;
       }
+      const sign = PV.signs && PV.signs[pvPaneId(n.id)];
+      if (sign) {
+        ctx.font = "700 8px " + PV_MONO; ctx.fillStyle = "#fbbf24";
+        ctx.fillText(String(sign).toUpperCase(), p.x, p.y + (n.kind === "web" && n.url ? 21 : 11));
+        box.y1 += 10; a.lbox.y1 = (box.y1 - vw.y) / vw.z;
+      }
       if ((a.out || 0) > .05) {
         pvHalo(ctx, a, left ? p.x - tw / 2 : p.x + tw / 2, p.y, tw, sel && !on ? .35 : 1);
         if (!PV_REDUCE) pvShimmer(ctx, text, p.x, p.y, tw, ctx.textAlign, a.out * a.alpha);
@@ -1362,7 +1396,7 @@ function pvDrawRing(){
     ctx.font = "10px "+PV_MONO;
     const bw = Math.min(w - 28, Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 20), bh = 36;
     const right = p.x > cx, low = p.y > cy;
-    const bx = right ? w - bw - 14 : 14, by = low ? h - bh - 14 : 30;
+    const lc = pvLcarsH(), bx = right ? w - bw - 14 : 14, by = low ? h - bh - 14 - lc : 30 + lc;
     ctx.globalAlpha = pick.alpha;
     ctx.strokeStyle = sel ? "#f8fafc" : "#f59e0b"; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(right ? bx + bw*.3 : bx + bw*.7, low ? by : by + bh); ctx.lineTo(p.x, p.y); ctx.stroke();
@@ -1377,7 +1411,9 @@ function pvDrawRing(){
   if (PV.focus) { ctx.setTransform(dpr*vw.z, 0, 0, dpr*vw.z, dpr*vw.x, dpr*vw.y); pvDrawScreens(ctx, R, true); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
   pvRadioBanner(ctx, w);
   ctx.font = "9px "+PV_MONO; ctx.fillStyle = "#475569";
-  ctx.fillText("SCROLL TO ZOOM · DRAG TO MOVE"+(PV.dim === "3d" ? " · CTRL+DRAG TO TIP" : "")+" · HOVER A PANE FOR ITS SCREEN, CLICK IT TO ZOOM · DOUBLE-CLICK A FILE TO EDIT"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), 14, h - 10);
+  ctx.textAlign = pvLcarsH() ? "center" : "left";
+  ctx.fillText("SCROLL TO ZOOM · DRAG TO MOVE"+(PV.dim === "3d" ? " · CTRL+DRAG TO TIP" : "")+" · HOVER A PANE FOR ITS SCREEN, CLICK IT TO ZOOM · DOUBLE-CLICK A FILE TO EDIT"+(vw.z !== 1 ? " · "+vw.z.toFixed(1)+"×" : ""), pvLcarsH() ? w / 2 : 14, h - 10);
+  ctx.textAlign = "left";
   ctx.fillText(PV.nodes.length+" NODES · "+PV.edgeAnim.size+" LINKS · "+(PV.mode === "live" ? "LIVE · LAST HOUR" : "HISTORY · "+(PV.range > 86400000 ? "7 DAYS" : "24 HOURS")), 14, 18);
 }
 
@@ -1457,6 +1493,12 @@ async function pvRadioPoll(){
     const j = await r.json(), skew = Date.now() - (j.now || Date.now());
     PV.radio = (j.entries || []).map((e) => ({...e, start: e.ts + skew})); PV.radioErr = false;
   } catch (_e) { PV.radio = []; PV.radioErr = true; }
+  // Call signs, shown under pane names while the radio runs (older sidecars: none).
+  try {
+    const b = await fetch("/api/radio/badges");
+    const j = b.ok ? await b.json() : {};
+    PV.signs = j.running ? (j.signs || {}) : {};
+  } catch (_e) { PV.signs = {}; }
   const sig = PV.radio.map((e) => e.id + (pvRadioLive(e) ? "*" : "")).join(",") + "|" + PV.radioOpen + "|" + (PV.replay && PV.replay.id);
   if (sig !== PV.radioSig) { PV.radioSig = sig; pvRenderRadio(); }
 }
@@ -2442,6 +2484,9 @@ function pvFocusStep(){
 // container runtime (a blue marble), then branches out to each container;
 // particles stream down (received, cyan) and up (sent, amber) with it.
 const PVN = {parts: new Map(), last: 0};
+// Grey for host agents without the counting proxy: their figure is process I/O
+// (disk + network together), so it mustn't look like a download.
+const PV_EST = "#94a3b8";
 function pvBuildNet(){
   const ev = (PV.win && PV.win.telemetry && PV.win.telemetry.events) || [], now = Date.now(), m = new Map();
   for (const e of ev) {
@@ -2479,7 +2524,8 @@ function pvDrawNet(ctx, R){
   }
   if (!links.length) return;
   let totRx = 0, totTx = 0;
-  for (const a of links) { totRx += a.nrx; totTx += a.ntx; }
+  // The ~I/O estimate is mostly disk: it doesn't light the real network uplink.
+  for (const a of links) if (a.nsrc !== "approx") { totRx += a.nrx; totTx += a.ntx; }
   const totLvl = pvNetLvl(totRx + totTx);
   // u: 0 = the container, SPLIT = the marble's centre, 1 = the uplink hub.
   const pathFor = (a) => {
@@ -2503,7 +2549,7 @@ function pvDrawNet(ctx, R){
   for (const a of links) {
     const n = a.node, dim = PV.sel && n.id !== PV.sel ? .25 : 1, at = pathFor(a); paths.set(a, at);
     const lvl = pvNetLvl(a.nrx + a.ntx);
-    ctx.globalAlpha = a.alpha * dim * (.12 + .35 * lvl); ctx.strokeStyle = n.color || "#38bdf8"; ctx.lineWidth = .8 + 3 * lvl;
+    ctx.globalAlpha = a.alpha * dim * (.12 + .35 * lvl); ctx.strokeStyle = a.nsrc === "approx" ? PV_EST : n.color || "#38bdf8"; ctx.lineWidth = .8 + 3 * lvl;
     const end = a.nsrc === "container" ? SPLIT : 1;
     if (a.nsrc === "approx") ctx.setLineDash([5, 5]);
     ctx.beginPath(); for (let i = 0; i <= 24; i++) { const p = at(end * i / 24); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); } ctx.stroke();
@@ -2547,7 +2593,7 @@ function pvDrawNet(ctx, R){
       while (ps.tx >= 1) { ps.tx--; if (ps.list.length < 160) ps.list.push({u: 0, d: 1, j: Math.random()}); }
       ps.list = ps.list.filter((q) => { q.u += q.d * dt * (.4 + .25 * q.j); return q.u >= 0 && q.u <= 1; });
       for (const q of ps.list) {
-        const p = at(q.u), c = q.d < 0 ? "#22d3ee" : "#f59e0b";
+        const p = at(q.u), c = a.nsrc === "approx" ? PV_EST : q.d < 0 ? "#22d3ee" : "#f59e0b";
         ctx.globalAlpha = a.alpha * dim * .95; ctx.fillStyle = c; ctx.shadowColor = c;
         ctx.beginPath(); ctx.arc(p.x, p.y, 1.4 + 1.2 * lvl, 0, Math.PI * 2); ctx.fill();
       }
@@ -2562,9 +2608,9 @@ function pvDrawNet(ctx, R){
     const tag = P3(Math.cos(a.theta) * R * .9, R * .1, -Math.sin(a.theta) * R * .9);
     ctx.globalAlpha = a.alpha * dim * .9;
     const approx = a.nsrc === "approx" ? "~" : "";
-    ctx.fillStyle = "#67e8f9"; ctx.fillText(approx + "↓" + pvRate(a.nrx), tag.x - 22, tag.y);
-    ctx.fillStyle = "#fbbf24"; ctx.fillText(approx + "↑" + pvRate(a.ntx), tag.x + 22, tag.y);
-    if (a.nsrc !== "container") { ctx.fillStyle = "#64748b"; ctx.fillText(a.nsrc === "exact" ? "HOST" : "HOST ~I/O", tag.x, tag.y + 10); }
+    ctx.fillStyle = approx ? PV_EST : "#67e8f9"; ctx.fillText(approx + "↓" + pvRate(a.nrx), tag.x - 22, tag.y);
+    ctx.fillStyle = approx ? PV_EST : "#fbbf24"; ctx.fillText(approx + "↑" + pvRate(a.ntx), tag.x + 22, tag.y);
+    if (a.nsrc !== "container") { ctx.fillStyle = "#64748b"; ctx.fillText(a.nsrc === "exact" ? "HOST" : "DISK+NET EST.", tag.x, tag.y + 10); }
   }
   // Marble label: the runtime and how many containers.
   const runtime = PV.panes.some((p) => /podman/i.test(p.proc)) ? "PODMAN" : "DOCKER", nc = links.filter((a) => a.nsrc === "container").length;
@@ -3204,12 +3250,11 @@ function pvRenderFiles(){
 
 function pvRenderPods(){
   const sys = (PV.win && PV.win.system) || {}, pr = sys.providers || {};
-  const tr = sys.transcription || {}, sf = sys.sailfish || {}, mx = sys.maximus || {};
+  const tr = sys.transcription || {}, mx = sys.maximus || {};
   const pods = [
     ["ollama", (pr.ollama || {}).reachable ? "up" : "dn"],
     ["ferricula", (sys.ferricula || {}).reachable ? "up" : "dn"],
     ["kokoro", (sys.kokoro || {}).model_present ? "up" : "na"],
-    ["sailfish", sf.configured ? (sf.reachable ? "up" : "dn") : "na"],
     ["whisper", tr.configured ? (tr.reachable ? "up" : "dn") : "na"],
     ["maximus", mx.enabled ? "up" : "na"],
     ["anthropic", (pr.anthropic || {}).has_token ? "up" : "na"],
@@ -3339,6 +3384,65 @@ function pvRenderAll(){
   if (PV_REDUCE || !PV.raf) pvDrawRing();
 }
 
+// ---- LCARS corners: delivery/mail, GPU, host, radio (GET /api/deck/health).
+const PVH = {timer: null, data: null, missing: false};
+// Height the corners take, so canvas callouts sit clear of them (0 when hidden).
+function pvLcarsH(){
+  const box = $("pv-ringbox"); return box && !box.classList.contains("lc-off") ? 128 : 0;
+}
+async function pvHealthPoll(){
+  if (!PV.on) return;
+  try {
+    const r = await fetch("/api/deck/health");
+    if (r.status === 404) { PVH.missing = true; PVH.data = null; }
+    else if (r.ok) { PVH.missing = false; PVH.data = await r.json(); }
+  } catch (_e) { PVH.data = null; }
+  pvRenderLcars();
+}
+const lcRow = (k, v, alert) => '<div class="lc-r'+(alert ? " alert" : "")+'"><span>'+esc(String(k ?? ""))+'</span><b>'+esc(String(v ?? ""))+'</b></div>';
+const lcBar = (frac, hot) => '<div class="lc-bar"><i class="'+(hot ? "hot" : "")+'" style="width:'+Math.round(100*Math.max(0, Math.min(1, frac || 0)))+'%"></i></div>';
+const lcDim = (t) => '<div class="lc-r lc-dim"><span>'+esc(t)+'</span></div>';
+const lcAgo = (s) => s == null ? "—" : s < 60 ? Math.round(s)+"S" : s < 3600 ? Math.round(s/60)+"M" : Math.floor(s/3600)+"H "+Math.round((s%3600)/60)+"M";
+function pvRenderLcars(){
+  const box = $("pv-ringbox"); if (!box) return;
+  box.classList.toggle("lc-off", box.clientWidth < 760 || box.clientHeight < 420);
+  const d = PVH.data || {}, sys = (PV.win && PV.win.system) || {};
+  const put = (id, html) => { const b = $(id).querySelector(".lc-b"); if (b.innerHTML !== html) b.innerHTML = html; };
+  const need = lcDim(PVH.missing ? "NEEDS SIDECAR 0.21.14" : "NO SIGNAL");
+  // 01 OPS: what's waiting on the human, or stuck.
+  if (d.delivery) {
+    const x = d.delivery, un = d.unread_mail || [];
+    put("lc-ops", lcRow("HELD · SENDS", x.held_sends, x.held_sends > 0) + lcRow("HELD · MAIL", x.held_mail, x.held_mail > 0)
+      + lcRow("AWAITING APPROVAL", x.awaiting_approval, x.awaiting_approval > 0) + lcRow("QUEUED", x.queued)
+      + lcRow("FAILED · 1H", x.failed_1h, x.failed_1h > 0) + lcRow("DELIVERED · 1H", x.submitted_1h)
+      + (un.length ? un.slice(0, 3).map((u) => lcRow("UNREAD 3M+ " + u.to, u.count, true)).join("") : lcRow("UNREAD 3M+", "NONE")));
+  } else put("lc-ops", need);
+  // 02 GPU: load, and who holds the VRAM.
+  const g = d.gpu || {}, vu = g.vram_used_gb ?? sys.vram_used_gb, vt = g.vram_total_gb ?? sys.vram_gb;
+  if (vt) {
+    const full = vu != null && vu / vt > .92;
+    let h = (g.name ? lcRow(String(g.name).replace(/^NVIDIA (GeForce )?/i, ""), g.util != null ? Math.round(g.util)+"%" : "") + lcBar((g.util || 0) / 100, g.util > 90) : "")
+      + lcRow("VRAM", vu != null ? vu.toFixed(1)+" / "+Number(vt).toFixed(0)+" GB" : vt+" GB", full) + lcBar(vu != null ? vu / vt : 0, full)
+      + (g.temp != null ? lcRow("TEMP · POWER", Math.round(g.temp)+"°C · "+Math.round(g.power_w || 0)+" W", g.temp > 83) : "");
+    h += (d.gpu_procs || []).slice(0, 3).map((p) => lcRow(p.name, p.gb.toFixed(1)+" GB")).join("") || (PVH.missing ? need : "");
+    put("lc-gpu", h);
+  } else put("lc-gpu", lcDim("NO GPU REPORTED"));
+  // 03 HOST: the box, and the sidecar itself.
+  if (d.host && d.host.ram_total_gb) {
+    const h = d.host, sc = d.sidecar || {}, ram = h.ram_used_gb / h.ram_total_gb;
+    put("lc-host", lcRow("CPU · "+(h.cores || "")+" CORES", Math.round(h.cpu)+"%") + lcBar(h.cpu / 100, h.cpu > 90)
+      + lcRow("RAM", h.ram_used_gb.toFixed(1)+" / "+h.ram_total_gb.toFixed(0)+" GB", ram > .92) + lcBar(ram, ram > .92)
+      + lcRow("SIDECAR "+(sc.version || ""), "UP "+lcAgo(sc.uptime_s))
+      + lcRow("WARN · ERR · 1H", (sc.warn_1h ?? "—")+" · "+(sc.error_1h ?? "—"), sc.error_1h > 0));
+  } else put("lc-host", need);
+  // 04 RADIO: hertz, and the last transmission (the log works on any sidecar).
+  const rd = d.radio, last = (PV.radio || [])[0];
+  let r = rd ? lcRow("HERTZ", rd.running ? "ONLINE" : "OFFLINE", !rd.running) + lcRow("CALL SIGNS", rd.signs)
+    + lcRow("LAST HEARD", rd.heard_s_ago == null ? "—" : lcAgo(rd.heard_s_ago)+" AGO") : need;
+  if (last) r += lcRow(String(last.from).replace(/[^\p{L}\p{N} ]/gu, "").trim().slice(0, 16)+" → "+String(last.to).slice(0, 8), lcAgo((Date.now() - last.start) / 1000)+" AGO");
+  put("lc-radio", r);
+}
+
 async function pvPoll(){
   if (!PV.on) return;
   const get = (u) => fetch(u).then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); });
@@ -3366,10 +3470,12 @@ function pvSetMode(){
     on ? a.getAttribute("href") === "#proto_viz" : a.getAttribute("href") === "/dashboard"));
   clearInterval(PV.timer); PV.timer = null;
   clearInterval(PV.radioTimer); PV.radioTimer = null;
+  clearInterval(PVH.timer); PVH.timer = null;
   if (!on) { if (PV.replay) { PV.replay.audio.pause(); PV.replay = null; } return; }
   pvPoll(); PV.timer = setInterval(pvPoll, 3000);
   clearInterval(PVSC.timer); pvScreensPoll(); PVSC.timer = setInterval(pvScreensPoll, 2000);
   pvRadioPoll(); PV.radioTimer = setInterval(pvRadioPoll, 1000);
+  clearInterval(PVH.timer); pvHealthPoll(); PVH.timer = setInterval(pvHealthPoll, 3000);
   if (!PV_REDUCE && !PV.raf) { PV.lastFrame = 0; PV.raf = requestAnimationFrame(pvLoop); }
 }
 window.addEventListener("hashchange", pvSetMode);

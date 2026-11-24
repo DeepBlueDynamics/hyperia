@@ -1,6 +1,13 @@
 import test from 'ava';
 
-import {bottomRightBounds, centerBounds, topCenterBounds} from '../../app/utils/toast-layer-bounds';
+import {
+  bottomRightBounds,
+  centerBounds,
+  isPaneRegion,
+  paneTopRightBounds,
+  topCenterBounds,
+  topRightBounds
+} from '../../app/utils/toast-layer-bounds';
 
 test('topCenterBounds: centers the content-sized view at the top edge', (t) => {
   t.deepEqual(topCenterBounds(1000, 400, 120, 1), {x: 300, y: 0, width: 400, height: 120});
@@ -31,4 +38,47 @@ test('centerBounds: centers the content-sized view in the window', (t) => {
   t.deepEqual(centerBounds(1000, 800, 400, 200, 1), {x: 300, y: 300, width: 400, height: 200});
   t.deepEqual(centerBounds(1200, 800, 400, 100, 1.2), {x: 360, y: 340, width: 480, height: 120});
   t.deepEqual(centerBounds(300, 200, 400, 400, 1), {x: 0, y: 0, width: 300, height: 200});
+});
+
+test('topRightBounds: pins to the right edge below the tab strip', (t) => {
+  t.deepEqual(topRightBounds(1000, 800, 400, 120, 1), {x: 600, y: 40, width: 400, height: 120});
+  t.deepEqual(topRightBounds(1200, 800, 400, 100, 1.2), {x: 720, y: 48, width: 480, height: 120});
+  // A window too short for the inset still keeps the whole view inside it.
+  t.deepEqual(topRightBounds(500, 100, 400, 90, 1), {x: 100, y: 10, width: 400, height: 90});
+});
+
+test('paneTopRightBounds: pins to the pane right edge, under its top bar', (t) => {
+  // Left half of a 1000px window; the bar ends at y=70.
+  t.deepEqual(paneTopRightBounds(1000, 800, 300, 120, 1, {x: 0, y: 70, width: 500}), {
+    x: 200,
+    y: 70,
+    width: 300,
+    height: 120
+  });
+  t.deepEqual(paneTopRightBounds(1200, 800, 300, 100, 1.2, {x: 0, y: 50, width: 500}), {
+    x: 240,
+    y: 60,
+    width: 360,
+    height: 120
+  });
+});
+
+test('paneTopRightBounds: a pane narrower than the prompt lets it run left, never off the window', (t) => {
+  t.deepEqual(paneTopRightBounds(1000, 800, 400, 120, 1, {x: 700, y: 40, width: 200}), {
+    x: 500,
+    y: 40,
+    width: 400,
+    height: 120
+  });
+  t.deepEqual(paneTopRightBounds(1000, 800, 400, 120, 1, {x: 0, y: 40, width: 150}).x, 0);
+  t.deepEqual(paneTopRightBounds(1000, 800, 400, 120, 1, {x: 800, y: 40, width: 400}).x, 600, 'right edge clamps');
+  t.deepEqual(paneTopRightBounds(1000, 300, 400, 120, 1, {x: 0, y: 250, width: 1000}).y, 180, 'bottom clamps');
+});
+
+test('isPaneRegion: only finite boxes with a width', (t) => {
+  t.true(isPaneRegion({x: 0, y: 40, width: 300}));
+  t.false(isPaneRegion(null));
+  t.false(isPaneRegion({x: 0, y: 40, width: 0}));
+  t.false(isPaneRegion({x: Number.NaN, y: 40, width: 300}));
+  t.false(isPaneRegion({x: '0', y: 40, width: 300}));
 });
